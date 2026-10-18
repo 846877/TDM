@@ -1,6 +1,7 @@
 """Tests de l'API HTTP (mode d'exécution local, sans Docker)."""
 
 import json
+import os
 import subprocess
 
 import pytest
@@ -74,7 +75,8 @@ def test_terminal_python_local(tmp_path, monkeypatch):
     monkeypatch.setattr("app.config.SANDBOX_MODE", "local")
     with client.websocket_connect("/ws/python/003-addition?client=test") as ws:
         ws.send_text(json.dumps({"type": "file", "name": "solution.py", "content": "print(6 * 7)\n"}))
-        ws.send_text(json.dumps({"type": "input", "data": "python3 solution.py; exit\n"}))
+        python = "python" if os.name == "nt" else "python3"
+        ws.send_text(json.dumps({"type": "input", "data": f"{python} solution.py; exit\r"}))
         output = ""
         while "42" not in output:
             output += ws.receive_text()

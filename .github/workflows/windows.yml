@@ -1,0 +1,48 @@
+name: Application Windows
+
+on:
+  push:
+    branches: [main, claude/training-platform-prasza]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tests sous Windows
+        run: |
+          python -m pip install -r backend/requirements-dev.txt pywinpty
+          cd backend
+          python -m pytest -q
+      - name: Construction de TDM.exe
+        run: powershell -ExecutionPolicy Bypass -File desktop\build.ps1
+      - name: Essai de TDM.exe (serveur, moulinette Python, terminal)
+        run: python desktop\smoke_test.py dist\TDM.exe
+      - name: Essai de la fenêtre
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $p = Start-Process dist\TDM.exe -ArgumentList '--window-test','--port','8767' -Wait -PassThru
+          Get-Content "$env:LOCALAPPDATA\TDM\tdm.log" -ErrorAction SilentlyContinue | Select-Object -Last 30
+          if ($p.ExitCode -ne 0) { exit 1 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TDM-windows
+          path: dist/TDM.exe
+      - name: Publication de la préversion
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release delete windows-preview --yes --cleanup-tag || true
+          gh release create windows-preview dist/TDM.exe --prerelease --target "$GITHUB_SHA" \
+            --title "TDM pour Windows (préversion)" \
+            --notes "Télécharge TDM.exe et double-clique dessus. Construit depuis ${GITHUB_SHA::7}."

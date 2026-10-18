@@ -88,7 +88,8 @@ def _require_docker() -> None:
 
 def _run(cmd: list[str], timeout: float = 600, cwd: str | None = None) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+        return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=timeout, cwd=cwd)
     except subprocess.TimeoutExpired as exc:
         raise LabError(f"Commande trop longue : {' '.join(cmd)}") from exc
 

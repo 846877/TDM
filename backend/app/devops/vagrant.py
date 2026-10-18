@@ -23,7 +23,9 @@ _KEYS_DIR = Path(tempfile.gettempdir()) / "tdm-vagrant-keys"
 
 
 class AgentError(RuntimeError):
-    pass
+    def __init__(self, message: str, reachable: bool = False):
+        super().__init__(message)
+        self.reachable = reachable  # l'agent a répondu, mais avec une erreur
 
 
 def agent_url() -> str:
@@ -49,7 +51,7 @@ def _request(method: str, path: str, params: dict[str, str] | None = None, timeo
             detail = json.loads(exc.read()).get("detail", str(exc))
         except ValueError:
             detail = str(exc)
-        raise AgentError(f"Agent Vagrant : {detail}") from exc
+        raise AgentError(f"Agent Vagrant : {detail}", reachable=True) from exc
     except (urllib.error.URLError, OSError) as exc:
         raise AgentError(
             "L'agent Vagrant ne répond pas. Lance-le sur ta machine (start.bat le fait si Vagrant est installé)."
@@ -67,8 +69,8 @@ def available() -> bool:
 def status(lab: dict[str, Any]) -> tuple[str, str]:
     try:
         data = _request("GET", "/status", {"lab": lab["vagrant"]}, timeout=60)
-    except AgentError:
-        return "unavailable", ""
+    except AgentError as exc:
+        return ("error", str(exc)) if exc.reachable else ("unavailable", "")
     return data.get("status", "stopped"), data.get("log", "")
 
 
@@ -87,10 +89,14 @@ def reset(lab: dict[str, Any]) -> str:
 def ssh_argv(lab: dict[str, Any], command: str | None = None, machine: str | None = None) -> list[str]:
     """Commande ``ssh`` vers la VM : interactive si ``command`` est None."""
     info = _request("GET", "/ssh", {"lab": lab["vagrant"], "machine": machine or lab.get("machine", "")})
-    _KEYS_DIR.mkdir(mode=0o700, exist_ok=True)
-    key_path = _KEYS_DIR / (lab["id"] + (f"-{machine}" if machine else ""))
-    key_path.write_text(info["key"], encoding="utf-8")
-    key_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    if info.get("key_path") and agent_host() in ("127.0.0.1", "localhost") and Path(info["key_path"]).exists():
+        # Même machine que l'agent : la clé de Vagrant a déjà les bons droits (important sous Windows).
+        key_path = Path(info["key_path"])
+    else:
+        _KEYS_DIR.mkdir(mode=0o700, exist_ok=True)
+        key_path = _KEYS_DIR / (lab["id"] + (f"-{machine}" if machine else ""))
+        key_path.write_text(info["key"], encoding="utf-8")
+        key_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
     argv = ["ssh", "-i", str(key_path), "-p", str(info["port"]),
             "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
             "-o", "ConnectTimeout=10", f"{info['user']}@{agent_host()}"]

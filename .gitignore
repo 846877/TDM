@@ -4,3 +4,6 @@ __pycache__/
 .workspaces/
 .pytest_cache/
 .env
+build/
+dist/
+*.spec

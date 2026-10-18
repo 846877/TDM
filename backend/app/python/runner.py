@@ -89,6 +89,8 @@ def run_stdio_tests(workdir, cases):
                 input=case.get("input", ""),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=CASE_TIMEOUT,
             )
         except subprocess.TimeoutExpired:

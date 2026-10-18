@@ -13,7 +13,6 @@ import os
 import secrets
 import shlex
 import subprocess
-import sys
 import tarfile
 import tempfile
 from dataclasses import dataclass
@@ -45,6 +44,16 @@ def _limit_resources() -> None:  # pragma: no cover - exécuté dans le processu
         except (ValueError, OSError):
             pass
     os.setsid()
+
+
+def _local_env(workdir: Path) -> dict[str, str]:
+    env = {"PATH": os.environ.get("PATH", ""), "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1",
+           "HOME": str(workdir)}
+    if os.name == "nt":  # variables sans lesquelles Python ne démarre pas correctement sous Windows
+        for key in ("SYSTEMROOT", "SYSTEMDRIVE", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "COMSPEC"):
+            if key in os.environ:
+                env[key] = os.environ[key]
+    return env
 
 
 def _docker_limits() -> list[str]:
@@ -86,12 +95,13 @@ def run_python(files: dict[str, str], argv: list[str], stdin: str = "", timeout:
         workdir = Path(tmp)
         for name, content in files.items():
             (workdir / name).write_text(content, encoding="utf-8")
-        cmd = [sys.executable, *(a.replace("{workdir}", str(workdir)) for a in argv)]
+        cmd = [*config.python_command(), *(a.replace("{workdir}", str(workdir)) for a in argv)]
         try:
             proc = subprocess.run(
-                cmd, input=stdin, capture_output=True, text=True, timeout=timeout, cwd=workdir,
-                preexec_fn=_limit_resources,
-                env={"PATH": os.environ.get("PATH", ""), "PYTHONIOENCODING": "utf-8", "HOME": str(workdir)},
+                cmd, input=stdin, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=timeout, cwd=workdir, env=_local_env(workdir),
+                # Pas de limites « resource » sous Windows : seul le délai maximal s'applique.
+                preexec_fn=_limit_resources if os.name == "posix" else None,
             )
         except subprocess.TimeoutExpired as exc:
             return RunResult(-1, _decode(exc.stdout), _decode(exc.stderr), timed_out=True)

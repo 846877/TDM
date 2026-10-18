@@ -170,14 +170,21 @@ async def _local_python_terminal(websocket: WebSocket, exercise_id: str, client:
         if safe:
             (workspace / safe).write_text(content, encoding="utf-8")
 
-    args = ["bash", "--noprofile", "--norc", "-i"] if shutil.which("bash") else ["sh", "-i"]
-    env = {
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": str(workspace),
-        "TERM": "xterm-256color",
-        "LANG": "C.UTF-8",
-        "PS1": r"\[\e[32m\]tdm\[\e[0m\]:\[\e[34m\]\W\[\e[0m\]$ ",
-    }
+    python_dir = str(Path(config.python_command()[0]).parent)
+    if os.name == "nt":
+        # PowerShell, avec le Python de la plateforme en tête du PATH (« python solution.py »).
+        args = ["powershell.exe", "-NoLogo", "-NoProfile", "-NoExit", "-Command",
+                "function prompt { \"tdm:$(Split-Path -Leaf (Get-Location))> \" }"]
+        env = {**os.environ, "PATH": python_dir + os.pathsep + os.environ.get("PATH", ""), "PYTHONUTF8": "1"}
+    else:
+        args = ["bash", "--noprofile", "--norc", "-i"] if shutil.which("bash") else ["sh", "-i"]
+        env = {
+            "PATH": python_dir + os.pathsep + os.environ.get("PATH", ""),
+            "HOME": str(workspace),
+            "TERM": "xterm-256color",
+            "LANG": "C.UTF-8",
+            "PS1": r"\[\e[32m\]tdm\[\e[0m\]:\[\e[34m\]\W\[\e[0m\]$ ",
+        }
     await terminal.bridge(websocket, args, cwd=workspace, env=env, on_file=write_file)
 
 

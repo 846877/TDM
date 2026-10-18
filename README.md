@@ -10,7 +10,19 @@ Une plateforme web pour s'entraîner **en pratiquant**, organisée en catégorie
 
 Chaque catégorie a quatre niveaux : **Débutant, Intermédiaire, Avancé, Expert**. La progression est mémorisée dans le navigateur.
 
-## Démarrer sous Windows
+## Application Windows (TDM.exe)
+
+Télécharge `TDM.exe` dans la [préversion Windows](https://github.com/846877/TDM/releases/tag/windows-preview)
+et double-clique dessus : la plateforme s'ouvre dans sa propre fenêtre, sans installation.
+
+- Les exercices **Python** et **Réseaux** marchent tout de suite (Python est embarqué dans l'application).
+- Les labs **Vagrant** utilisent Vagrant et VirtualBox installés sur le PC ; le dossier des labs se règle
+  dans `%APPDATA%\TDM\tdm.env` (détecté automatiquement s'il est dans `Bureau\INFORMATIQUE\devops\vagrant`).
+- Les labs **Docker** demandent Docker Desktop démarré.
+
+Pour la construire soi-même : `powershell -ExecutionPolicy Bypass -File desktop\build.ps1` (crée `dist\TDM.exe`).
+
+## Démarrer sous Windows avec Docker
 
 Prérequis : **Docker Desktop** démarré. Pour les labs en machine virtuelle : **Vagrant**, **VirtualBox**
 et **Python 3** (pour le petit agent qui pilote Vagrant).

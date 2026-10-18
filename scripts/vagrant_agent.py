@@ -69,14 +69,19 @@ class Job:
 
 
 class Agent:
-    def __init__(self, root: Path, vagrant: str):
+    def __init__(self, root: Path, vagrant: str, relay: bool = True):
         self.root = root.resolve()
         self.vagrant = vagrant
+        self.use_relay = relay  # False quand la plateforme tourne sur la même machine (application Windows)
         self.jobs: dict[str, Job] = {}
         self.relays: dict[int, int] = {}  # port SSH de la VM -> port du relais
         self.lock = threading.Lock()
 
     def lab_dir(self, lab: str) -> Path:
+        if not shutil.which(self.vagrant):
+            raise ValueError("Vagrant n'est pas installé (ou pas dans le PATH).")
+        if not self.root.is_dir():
+            raise ValueError(f"dossier des labs Vagrant introuvable : {self.root}")
         path = (self.root / lab).resolve()
         if self.root not in path.parents and path != self.root:
             raise ValueError("chemin hors du dossier des labs")
@@ -85,7 +90,8 @@ class Agent:
         return path
 
     def _vagrant(self, path: Path, *args: str, timeout: float = 120) -> subprocess.CompletedProcess:
-        return subprocess.run([self.vagrant, *args], cwd=path, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run([self.vagrant, *args], cwd=path, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=timeout)
 
     def run_job(self, lab: str, action: str, *commands: list[str]) -> None:
         path = self.lab_dir(lab)
@@ -119,9 +125,12 @@ class Agent:
             parts = line.strip().split(None, 1)
             if len(parts) == 2 and parts[0] not in config:
                 config[parts[0]] = parts[1].strip('"')
-        key = Path(config["IdentityFile"]).read_text(encoding="utf-8")
+        key_path = Path(config["IdentityFile"])
         port = int(config["Port"])
-        return {"port": self.relay(config.get("HostName", "127.0.0.1"), port), "user": config["User"], "key": key}
+        if self.use_relay:
+            port = self.relay(config.get("HostName", "127.0.0.1"), port)
+        return {"port": port, "user": config["User"], "key": key_path.read_text(encoding="utf-8"),
+                "key_path": str(key_path)}
 
     def relay(self, host: str, port: int) -> int:
         """Ouvre (une fois) un relais 0.0.0.0:<libre> -> host:port et renvoie le port local."""
