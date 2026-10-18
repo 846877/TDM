@@ -1,0 +1,181 @@
+title: Scripting Bash
+level: debutant
+order: 5
+tags: [bash, shell, scripts, automatisation, shellcheck]
+summary: Arguments, conditions, boucles, codes de retour, traitement de texte, getopts, scripts robustes et shellcheck.
+user: eleve
+workdir: /home/eleve/scripts
+description: |
+  Un conteneur Ubuntu (utilisateur `eleve`, `sudo` sans mot de passe) avec `bash` et `shellcheck`.
+  Tous tes scripts vont dans **`~/scripts`** et doivent être **exécutables** (`chmod +x`) avec la ligne
+  `#!/bin/bash` en tête : les vérifications les lancent directement (`~/scripts/bonjour.sh Alice`).
+
+  Le parcours va du premier script avec un argument jusqu'aux réflexes d'un script de production :
+  codes de retour, messages d'erreur sur la sortie d'erreur, options avec `getopts`, `set -euo pipefail`,
+  nettoyage avec `trap`, et un code propre validé par `shellcheck`.
+
+  Des données d'exemple sont dans `~/donnees` (`access.log` : journal d'un serveur web).
+exercises:
+  - id: premier-script
+    title: Premier script avec un argument
+    description: |
+      Écris `~/scripts/bonjour.sh` :
+      - `bonjour.sh Alice` affiche `Bonjour Alice` ;
+      - sans argument, il affiche `Bonjour inconnu`.
+    hint: "La variable $1 contient le premier argument ; ${1:-inconnu} donne une valeur par défaut"
+    checks:
+      - desc: "Le script est exécutable et commence par #!/bin/bash"
+        run: test -x /home/eleve/scripts/bonjour.sh && head -1 /home/eleve/scripts/bonjour.sh | grep -q '^#!.*bash'
+      - desc: bonjour.sh Alice affiche « Bonjour Alice »
+        run: test "$(/home/eleve/scripts/bonjour.sh Alice)" = "Bonjour Alice"
+      - desc: Sans argument, il affiche « Bonjour inconnu »
+        run: test "$(/home/eleve/scripts/bonjour.sh)" = "Bonjour inconnu"
+  - id: conditions
+    title: Conditions et codes de retour
+    description: |
+      Écris `~/scripts/type-fichier.sh CHEMIN` qui affiche :
+      - `fichier` si le chemin est un fichier ordinaire (code de sortie `0`) ;
+      - `dossier` si c'est un dossier (code `0`) ;
+      - `absent` s'il n'existe pas (code de sortie **`1`**).
+
+      Le code de sortie permet d'enchaîner : `type-fichier.sh /etc && echo existe`.
+    hint: "if [ -f \"$1\" ]; then … elif [ -d \"$1\" ]; then … else …; exit 1; fi"
+    checks:
+      - desc: Un fichier est reconnu
+        run: test "$(/home/eleve/scripts/type-fichier.sh /etc/passwd)" = fichier
+      - desc: Un dossier est reconnu
+        run: test "$(/home/eleve/scripts/type-fichier.sh /etc)" = dossier
+      - desc: Un chemin absent donne « absent » et le code 1
+        run: out=$(/home/eleve/scripts/type-fichier.sh /nexiste/pas); test $? -eq 1 && test "$out" = absent
+      - desc: Les chemins avec des espaces fonctionnent
+        run: mkdir -p "/tmp/un dossier" && test "$(/home/eleve/scripts/type-fichier.sh '/tmp/un dossier')" = dossier
+  - id: boucles
+    title: Boucler sur des fichiers
+    description: |
+      Écris `~/scripts/inventaire.sh DOSSIER` qui affiche, pour chaque **fichier ordinaire** directement dans
+      `DOSSIER` (pas les sous-dossiers), une ligne `nom nombre_de_lignes`, triée par nom. Exemple :
+
+      ```
+      a.txt 3
+      b.log 1
+      ```
+    hint: "for f in \"$1\"/*; do [ -f \"$f\" ] || continue; echo \"$(basename \"$f\") $(wc -l < \"$f\")\"; done"
+    checks:
+      - desc: L'inventaire est exact et ignore les dossiers
+        run: |
+          rm -rf /tmp/inv && mkdir -p /tmp/inv/sous && printf '1\n2\n3\n' > /tmp/inv/a.txt && printf 'x\n' > /tmp/inv/b.log && printf 'y\n' > /tmp/inv/sous/c.txt && test "$(/home/eleve/scripts/inventaire.sh /tmp/inv | tr -s ' ')" = "$(printf 'a.txt 3\nb.log 1')"
+      - desc: Les noms de fichiers avec espaces fonctionnent
+        run: |
+          rm -rf /tmp/inv2 && mkdir -p /tmp/inv2 && printf '1\n2\n' > '/tmp/inv2/mon fichier.txt' && test "$(/home/eleve/scripts/inventaire.sh /tmp/inv2 | tr -s ' ')" = "mon fichier.txt 2"
+  - id: sauvegarde
+    title: Script de sauvegarde avec gestion d'erreurs
+    description: |
+      Écris `~/scripts/sauvegarde.sh SOURCE DESTINATION` qui crée l'archive
+      `DESTINATION/<nom de SOURCE>-AAAA-MM-JJ.tar.gz` (date du jour) et affiche son chemin. Il doit :
+      - sans les deux arguments : afficher un message d'utilisation sur la **sortie d'erreur** et quitter avec le code `1` ;
+      - si `SOURCE` n'est pas un dossier : afficher une erreur sur la sortie d'erreur et quitter avec le code `2` ;
+      - créer `DESTINATION` si elle n'existe pas.
+    hint: "echo \"Usage : $0 SOURCE DEST\" >&2 ; exit 1 — et la date : $(date +%F)"
+    checks:
+      - desc: L'archive est créée avec le bon nom
+        run: |
+          rm -rf /tmp/sv && mkdir -p /tmp/sv/projet && echo ok > /tmp/sv/projet/f.txt && /home/eleve/scripts/sauvegarde.sh /tmp/sv/projet /tmp/sv/archives >/dev/null && tar -tzf "/tmp/sv/archives/projet-$(date +%F).tar.gz" | grep -q 'f.txt'
+      - desc: Sans argument, code 1 et message sur la sortie d'erreur
+        run: |
+          test -x /home/eleve/scripts/sauvegarde.sh || exit 1; out=$(/home/eleve/scripts/sauvegarde.sh 2>/tmp/sv-err); test $? -eq 1 && test -z "$out" && test -s /tmp/sv-err
+      - desc: Source absente, code 2
+        run: |
+          test -x /home/eleve/scripts/sauvegarde.sh || exit 1; /home/eleve/scripts/sauvegarde.sh /nexiste/pas /tmp/sv/archives 2>/dev/null >/dev/null; test $? -eq 2
+  - id: traitement-texte
+    title: Analyser un journal web
+    description: |
+      Écris `~/scripts/top-ip.sh FICHIER N` qui affiche les **N adresses IP** les plus fréquentes du journal
+      (1ʳᵉ colonne), de la plus fréquente à la moins fréquente, au format `nombre ip` :
+
+      ```
+      61 10.0.0.1
+      43 10.0.0.2
+      ```
+
+      Teste-le sur `~/donnees/access.log`. Bonus : un second script `codes.sh FICHIER` qui compte les codes HTTP.
+    hint: "awk '{print $1}' | sort | uniq -c | sort -rn | head -n \"$2\" (puis awk pour retirer les espaces de uniq -c)"
+    checks:
+      - desc: top-ip.sh access.log 3 est exact
+        run: |
+          test "$(/home/eleve/scripts/top-ip.sh /home/eleve/donnees/access.log 3 | awk '{print $1" "$2}')" = "$(awk '{print $1}' /home/eleve/donnees/access.log | sort | uniq -c | sort -rn | head -n 3 | awk '{print $1" "$2}')"
+      - desc: N est bien respecté
+        run: test "$(/home/eleve/scripts/top-ip.sh /home/eleve/donnees/access.log 5 | wc -l)" = 5
+  - id: robustesse
+    title: Script robuste avec set -euo pipefail et trap
+    description: |
+      Écris `~/scripts/deploie.sh` qui illustre les bonnes pratiques :
+      - `set -euo pipefail` en tête : le script s'arrête à la première erreur ;
+      - il crée un dossier temporaire avec `mktemp -d /tmp/deploie.XXXXXX` et **affiche son chemin en première ligne** ;
+      - un `trap` sur `EXIT` supprime ce dossier **dans tous les cas**, même en cas d'erreur ;
+      - si le premier argument vaut `echec`, il exécute la commande `false` (qui doit faire échouer le script).
+
+      `deploie.sh ok` se termine avec le code 0, `deploie.sh echec` avec un code non nul, et aucun dossier
+      `/tmp/deploie.*` ne doit rester.
+    hint: "tmp=$(mktemp -d /tmp/deploie.XXXXXX); trap 'rm -rf \"$tmp\"' EXIT; echo \"$tmp\""
+    checks:
+      - desc: Le script utilise set -euo pipefail et trap
+        run: grep -q 'set -euo pipefail' /home/eleve/scripts/deploie.sh && grep -q 'trap' /home/eleve/scripts/deploie.sh
+      - desc: En cas de succès, code 0 et dossier supprimé
+        run: |
+          out=$(/home/eleve/scripts/deploie.sh ok); r=$?; d=$(echo "$out" | head -1); test $r -eq 0 && case "$d" in /tmp/deploie.*) ! test -e "$d" ;; *) false ;; esac
+      - desc: En cas d'échec, code non nul et dossier supprimé quand même
+        run: |
+          out=$(/home/eleve/scripts/deploie.sh echec); r=$?; d=$(echo "$out" | head -1); test $r -ne 0 && case "$d" in /tmp/deploie.*) ! test -e "$d" ;; *) false ;; esac
+  - id: options
+    title: Options en ligne de commande avec getopts
+    description: |
+      Écris `~/scripts/chercher.sh` qui accepte des **options** :
+      - `-d DOSSIER` (obligatoire) et `-e EXTENSION` (obligatoire, sans le point, par exemple `log`) ;
+      - `-r` : recherche **récursive** (sinon, seulement le premier niveau) ;
+      - `-h` : affiche l'aide et quitte avec le code 0 ; une option inconnue ou une option obligatoire manquante
+        affiche l'aide sur la sortie d'erreur et quitte avec le code 1.
+
+      Il affiche les chemins des fichiers trouvés, **triés**.
+    hint: "while getopts 'd:e:rh' opt; do case $opt in d) dossier=$OPTARG;; … esac; done ; puis find \"$dossier\" -maxdepth 1 -name \"*.$ext\""
+    checks:
+      - desc: Recherche au premier niveau
+        run: |
+          rm -rf /tmp/ch && mkdir -p /tmp/ch/sous && touch /tmp/ch/a.log /tmp/ch/b.txt /tmp/ch/sous/c.log && test "$(/home/eleve/scripts/chercher.sh -d /tmp/ch -e log)" = "/tmp/ch/a.log"
+      - desc: Recherche récursive avec -r
+        run: |
+          rm -rf /tmp/ch && mkdir -p /tmp/ch/sous && touch /tmp/ch/a.log /tmp/ch/b.txt /tmp/ch/sous/c.log && test "$(/home/eleve/scripts/chercher.sh -r -d /tmp/ch -e log | tr '\n' ' ')" = "/tmp/ch/a.log /tmp/ch/sous/c.log "
+      - desc: -h affiche l'aide (code 0)
+        run: /home/eleve/scripts/chercher.sh -h | grep -q .
+      - desc: Option inconnue ou -d manquant, code 1
+        run: |
+          test -x /home/eleve/scripts/chercher.sh && { /home/eleve/scripts/chercher.sh -z >/dev/null 2>&1; test $? -eq 1; } && { /home/eleve/scripts/chercher.sh -e log >/dev/null 2>&1; test $? -eq 1; }
+  - id: supervision
+    title: Script de supervision du disque
+    description: |
+      Écris `~/scripts/surveille-disque.sh SEUIL` qui lit le taux d'occupation de la partition `/`
+      (colonne `Use%` de `df -P /`) et :
+      - affiche `ALERTE <taux>%` et quitte avec le code **1** si le taux est supérieur ou égal au seuil ;
+      - affiche `OK <taux>%` et quitte avec le code **0** sinon.
+
+      Un tel script se branche facilement sur cron ou sur un outil de supervision.
+    hint: "taux=$(df -P / | awk 'NR==2 {gsub(\"%\",\"\",$5); print $5}') puis if [ \"$taux\" -ge \"$1\" ]"
+    checks:
+      - desc: Seuil 0 → ALERTE avec le bon taux, code 1
+        run: |
+          t=$(df -P / | awk 'NR==2 {gsub("%","",$5); print $5}'); out=$(/home/eleve/scripts/surveille-disque.sh 0); test $? -eq 1 && test "$out" = "ALERTE ${t}%"
+      - desc: Seuil 101 → OK, code 0
+        run: |
+          t=$(df -P / | awk 'NR==2 {gsub("%","",$5); print $5}'); out=$(/home/eleve/scripts/surveille-disque.sh 101); test $? -eq 0 && test "$out" = "OK ${t}%"
+  - id: shellcheck
+    title: Un code propre validé par shellcheck
+    description: |
+      `shellcheck` repère les pièges classiques du shell (variables non protégées par des guillemets,
+      `cd` sans vérification, syntaxe obsolète…). Corrige tes scripts jusqu'à ce que
+      `shellcheck ~/scripts/*.sh` n'affiche **plus aucun avertissement**.
+      Il faut au moins les 8 scripts des exercices précédents.
+    hint: "Chaque avertissement a un code (SC2086…) documenté sur https://www.shellcheck.net/wiki/"
+    checks:
+      - desc: Au moins 8 scripts dans ~/scripts
+        run: test "$(ls /home/eleve/scripts/*.sh 2>/dev/null | wc -l)" -ge 8
+      - desc: shellcheck ne signale rien
+        run: shellcheck /home/eleve/scripts/*.sh

@@ -1,0 +1,128 @@
+title: Réseau Linux et diagnostic
+level: debutant
+order: 6
+tags: [réseau, linux, dns, tcp, iptables, tcpdump, diagnostic]
+summary: Adresses, DNS, ports, HTTP, routage, pare-feu et capture de trafic sur un petit réseau à diagnostiquer.
+compose: docker-compose.yml
+service: poste
+shell: bash
+workdir: /root
+description: |
+  Tu es sur le **poste** d'un petit réseau d'entreprise (tu es `root`). Autour de toi :
+
+  | Machine | Rôle | Réseau |
+  |---|---|---|
+  | `web` | serveur web de l'intranet | LAN |
+  | `dns` | serveur DNS de la zone `tdm.lab` | LAN |
+  | `routeur` | relie le LAN à la DMZ (10.89.10.254 / 10.89.20.254) | LAN + DMZ |
+  | `db` | base Redis (10.89.20.10) | DMZ, derrière le routeur |
+
+  Outils installés : `ip`, `ping`, `dig`, `curl`, `nc`, `nmap`, `ss`, `traceroute`, `tcpdump`, `iptables`.
+
+  Le parcours suit la démarche de diagnostic, couche par couche : adressage, résolution de noms, ports ouverts,
+  protocole HTTP, routage vers un autre réseau, pare-feu, puis capture de trafic.
+exercises:
+  - id: interfaces
+    title: Adresse IP et passerelle
+    description: |
+      Identifie la configuration réseau du poste :
+      - écris son **adresse IPv4** (interface `eth0`, sans le masque) dans `/root/ip.txt` ;
+      - écris l'adresse de sa **passerelle par défaut** dans `/root/passerelle.txt`.
+    hint: "ip -4 addr show eth0 et ip route (la ligne « default via … »)"
+    checks:
+      - desc: L'adresse IP du poste est correcte
+        run: test -s /root/ip.txt && test "$(tr -d '[:space:]' < /root/ip.txt)" = "$(ip -4 -o addr show eth0 | awk '{print $4}' | cut -d/ -f1)"
+      - desc: La passerelle par défaut est correcte
+        run: test -s /root/passerelle.txt && test "$(tr -d '[:space:]' < /root/passerelle.txt)" = "$(ip route | awk '/^default/ {print $3; exit}')"
+  - id: dns
+    title: Interroger un serveur DNS
+    description: |
+      Le serveur DNS de l'entreprise est `10.89.10.53` (il n'est pas configuré sur le poste : interroge-le
+      directement avec `dig @10.89.10.53 ...`). Trouve :
+      - l'adresse IP de `intranet.tdm.lab` → `/root/intranet.txt` ;
+      - la valeur de l'enregistrement **TXT** de `flag.tdm.lab` → `/root/flag.txt` (sans les guillemets) ;
+      - le nom associé à l'adresse `10.89.10.80` (résolution **inverse**) → `/root/inverse.txt` (sans le point final).
+    hint: "dig @10.89.10.53 intranet.tdm.lab +short ; dig @10.89.10.53 TXT flag.tdm.lab +short ; dig @10.89.10.53 -x 10.89.10.80 +short"
+    checks:
+      - desc: Adresse de intranet.tdm.lab
+        run: test "$(tr -d '[:space:]' < /root/intranet.txt)" = 10.89.10.80
+      - desc: Enregistrement TXT de flag.tdm.lab
+        run: test "$(tr -d '[:space:]"' < /root/flag.txt)" = TDM-DNS-42
+      - desc: Résolution inverse de 10.89.10.80
+        run: test "$(tr -d '[:space:]' < /root/inverse.txt | sed 's/\.$//')" = intranet.tdm.lab
+  - id: ports
+    title: Découvrir les ports ouverts
+    description: |
+      Quels services TCP le serveur `web` expose-t-il ? Scanne ses ports **1 à 10000** (avec `nmap` ou `nc -z`)
+      et écris dans `/root/ports-web.txt` les numéros des ports ouverts, **un par ligne, triés**.
+    hint: "nmap -p 1-10000 web ; ou for p in $(seq 1 10000); do nc -z -w1 web $p && echo $p; done"
+    checks:
+      - desc: La liste des ports ouverts est exacte
+        run: test "$(tr -s '[:space:]' ' ' < /root/ports-web.txt | sed 's/ $//')" = "80 8765"
+  - id: http
+    title: Inspecter des échanges HTTP
+    description: |
+      Le service du port 8765 de `web` renvoie un en-tête HTTP particulier :
+      - écris la valeur de l'en-tête `X-TDM-Secret` dans `/root/entete.txt` ;
+      - écris le **code de statut** HTTP renvoyé par `http://web:8765/admin` dans `/root/code-admin.txt`.
+    hint: "curl -I (ou -v) affiche les en-têtes ; curl -s -o /dev/null -w '%{http_code}' donne le code"
+    checks:
+      - desc: Valeur de l'en-tête X-TDM-Secret
+        run: test "$(tr -d '[:space:]' < /root/entete.txt)" = reseau-2026
+      - desc: Code de statut de /admin
+        run: test "$(tr -d '[:space:]' < /root/code-admin.txt)" = 403
+  - id: routage
+    title: Atteindre un autre réseau
+    description: |
+      La base Redis `db` est dans la DMZ, à l'adresse `10.89.20.10`, port **6380**. Depuis le poste, elle est
+      injoignable : vérifie-le (`nc -zv -w2 10.89.20.10 6380`), puis regarde `ip route`.
+
+      Ajoute une **route** vers le réseau `10.89.20.0/24` qui passe par le routeur (`10.89.10.254`), puis vérifie
+      que Redis répond : `printf 'PING\r\n' | nc -q1 10.89.20.10 6380` doit afficher `+PONG`.
+      Contrôle le chemin avec `traceroute -n 10.89.20.10`.
+    hint: "ip route add 10.89.20.0/24 via 10.89.10.254"
+    checks:
+      - desc: Le trafic vers 10.89.20.10 passe par le routeur
+        run: ip route get 10.89.20.10 | grep -q 'via 10.89.10.254'
+      - desc: Redis répond PONG
+        run: printf 'PING\r\n' | nc -q1 -w3 10.89.20.10 6380 | grep -q PONG
+  - id: ecoute
+    title: Services en écoute sur le poste
+    description: |
+      1. Un service que personne n'a documenté écoute en TCP sur le poste. Trouve son **port** et le **nom du
+         programme** avec `ss`, et écris-les dans `/root/ecoute.txt` au format `port programme` (exemple : `22 sshd`).
+      2. Lance à ton tour un serveur web de test qui écoute sur le port **7000** de toutes les interfaces
+         (`python3 -m http.server 7000`, en arrière-plan avec `nohup … &`).
+    hint: "ss -ltnp affiche les sockets TCP en écoute avec le processus"
+    checks:
+      - desc: Le service inconnu est identifié
+        run: test "$(tr -s '[:space:]' ' ' < /root/ecoute.txt | sed 's/^ //; s/ $//')" = "4321 python3"
+      - desc: Un service écoute sur le port 7000
+        run: ss -ltn | awk '{print $4}' | grep -Eq '(^|:)7000$'
+  - id: pare-feu
+    title: Filtrer le trafic avec iptables
+    description: |
+      Par sécurité, le poste ne doit plus joindre le service du port **8765** de `web` (`10.89.10.80`), mais doit
+      toujours accéder au site sur le port **80**. Ajoute une règle `iptables` dans la chaîne `OUTPUT` qui
+      **rejette** (`REJECT`) ou **bloque** (`DROP`) ce trafic.
+    hint: "iptables -A OUTPUT -p tcp -d 10.89.10.80 --dport 8765 -j REJECT ; iptables -L OUTPUT -n -v pour voir les compteurs"
+    checks:
+      - desc: Une règle OUTPUT vise le port 8765
+        run: iptables -S OUTPUT | grep -- '--dport 8765' | grep -Eq 'DROP|REJECT'
+      - desc: Le port 8765 n'est plus joignable
+        run: "! nc -z -w2 10.89.10.80 8765"
+      - desc: Le port 80 reste joignable
+        run: nc -z -w2 10.89.10.80 80
+  - id: capture
+    title: Capturer du trafic avec tcpdump
+    description: |
+      Capture le trafic HTTP entre le poste et `web` dans le fichier `/root/capture.pcap` :
+      lance `tcpdump` en arrière-plan (filtre `host 10.89.10.80 and port 80`), fais une requête
+      `curl http://web/`, puis arrête la capture. Relis-la avec `tcpdump -nr /root/capture.pcap -A`
+      et repère la requête `GET` et la poignée de main TCP (`[S]`, `[S.]`, `[.]`).
+    hint: "tcpdump -i eth0 -w /root/capture.pcap host 10.89.10.80 and port 80 & ; curl http://web/ ; kill %1"
+    checks:
+      - desc: La capture contient une requête GET vers web
+        run: tcpdump -nr /root/capture.pcap -A 2>/dev/null | grep -q 'GET / HTTP/1.1'
+      - desc: La capture contient l'établissement de connexion (SYN)
+        run: tcpdump -nr /root/capture.pcap 'tcp[tcpflags] & tcp-syn != 0 and host 10.89.10.80' 2>/dev/null | grep -q .

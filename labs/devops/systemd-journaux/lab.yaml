@@ -1,0 +1,167 @@
+title: systemd, cron et journaux
+level: intermediaire
+order: 7
+tags: [linux, systemd, journalctl, cron, logrotate, services]
+summary: Gérer des services, écrire ses unités et timers, lire les journaux, planifier, faire tourner les logs et dépanner.
+build: .
+privileged: true
+command: []
+shell: bash
+workdir: /root
+description: |
+  Un serveur Ubuntu où **systemd** est le processus n°1, comme sur une vraie machine (le conteneur tourne
+  en mode privilégié). Tu es `root`.
+
+  Rappels : `systemctl status|start|stop|enable|disable|restart <unité>`, `systemctl daemon-reload` après
+  avoir modifié un fichier d'unité, `journalctl -u <unité>`, `systemctl list-timers`, `systemctl --failed`.
+
+  Le parcours : état des services, écrire sa propre unité, redémarrage automatique, journaux, timers,
+  tâches cron, rotation des logs, dépannage d'un service en échec et limites de ressources.
+exercises:
+  - id: etat
+    title: État des services
+    description: |
+      1. Le service `cron` est arrêté et désactivé : **démarre-le** et **active-le** au démarrage.
+      2. Un service est en échec depuis le démarrage : trouve son nom (`systemctl --failed`) et écris-le dans
+         `/root/echec.txt` (par exemple `truc.service`). Tu le répareras plus tard.
+    hint: "systemctl enable --now cron"
+    checks:
+      - desc: cron est actif
+        run: test "$(systemctl is-active cron)" = active
+      - desc: cron est activé au démarrage
+        run: test "$(systemctl is-enabled cron)" = enabled
+      - desc: Le service en échec est identifié
+        run: grep -qx 'rapport.service\|rapport' /root/echec.txt
+  - id: unite
+    title: Écrire son unité de service
+    description: |
+      Transforme une API de test en vrai service : crée l'utilisateur système `api`, puis l'unité
+      `/etc/systemd/system/tdm-api.service` qui lance
+      `/usr/bin/python3 -m http.server 8000 --directory /srv/api` sous l'utilisateur `api`.
+      Le service doit être **actif** et **activé** au démarrage.
+
+      `curl localhost:8000/health` doit répondre.
+    hint: "[Unit] Description=… / [Service] User=api ExecStart=… / [Install] WantedBy=multi-user.target ; puis systemctl daemon-reload && systemctl enable --now tdm-api"
+    checks:
+      - desc: tdm-api est actif et activé
+        run: test "$(systemctl is-active tdm-api)" = active && test "$(systemctl is-enabled tdm-api)" = enabled
+      - desc: Il tourne sous l'utilisateur api
+        run: test "$(systemctl show -p User --value tdm-api)" = api && test "$(ps -o user= -p "$(systemctl show -p MainPID --value tdm-api)")" = api
+      - desc: L'API répond sur le port 8000
+        run: curl -fsS http://localhost:8000/health | grep -q ok
+  - id: resilience
+    title: Redémarrage automatique
+    description: |
+      Un service de production doit repartir tout seul s'il plante. Configure `tdm-api` avec `Restart=always`
+      et `RestartSec=2`, recharge systemd et redémarre le service.
+
+      Teste : `kill -9` sur son PID principal (`systemctl show -p MainPID tdm-api`), puis attends quelques
+      secondes : il doit être revenu avec un nouveau PID.
+    checks:
+      - desc: Restart=always et RestartSec=2s
+        run: test "$(systemctl show -p Restart --value tdm-api)" = always && test "$(systemctl show -p RestartUSec --value tdm-api)" = 2s
+      - desc: Le service revient après un kill -9
+        run: |
+          p=$(systemctl show -p MainPID --value tdm-api); test "$p" -gt 0 || exit 1; kill -9 "$p"; sleep 5; test "$(systemctl is-active tdm-api)" = active && test "$(systemctl show -p MainPID --value tdm-api)" != "$p"
+        timeout: 30
+  - id: journal
+    title: Lire et conserver les journaux
+    description: |
+      1. Le service `mystere` a écrit un **code secret** dans son journal au démarrage : retrouve-le avec
+         `journalctl` et écris-le (juste le nombre) dans `/root/code.txt`.
+      2. Par défaut ici, le journal est perdu au redémarrage. Rends-le **persistant** : crée
+         `/etc/systemd/journald.conf.d/persistant.conf` avec `Storage=persistent` (section `[Journal]`) et
+         redémarre `systemd-journald`. Le dossier `/var/log/journal` doit alors exister.
+    hint: "journalctl -u mystere ; journalctl -p err -b liste les erreurs depuis le démarrage"
+    checks:
+      - desc: Le code secret est correct
+        run: test "$(tr -d '[:space:]' < /root/code.txt)" = 7319
+      - desc: Le journal est configuré en persistant
+        run: grep -rqs '^Storage=persistent' /etc/systemd/journald.conf.d/ && test -d /var/log/journal
+  - id: timer
+    title: Planifier avec un timer systemd
+    description: |
+      Remplace une tâche cron par un **timer** systemd :
+      1. écris le script `/usr/local/bin/sauvegarde.sh` qui ajoute la date (`date`) à la fin de `/var/backups/tdm.log` ;
+      2. crée `sauvegarde.service` (`Type=oneshot`) qui lance ce script ;
+      3. crée `sauvegarde.timer` qui le déclenche **chaque minute** (`OnCalendar=*:0/1`, avec `AccuracySec=1s`
+         sinon systemd peut décaler l'exécution jusqu'à une minute), et active-le.
+
+      `systemctl list-timers` affiche la prochaine exécution ; `journalctl -u sauvegarde` montre les passages.
+    hint: "Le timer a une section [Timer] et [Install] WantedBy=timers.target ; systemctl enable --now sauvegarde.timer"
+    checks:
+      - desc: Le timer est actif et activé
+        run: test "$(systemctl is-active sauvegarde.timer)" = active && test "$(systemctl is-enabled sauvegarde.timer)" = enabled
+      - desc: Le service est de type oneshot
+        run: test "$(systemctl show -p Type --value sauvegarde.service)" = oneshot
+      - desc: La sauvegarde s'est exécutée au moins une fois
+        run: |
+          for i in $(seq 1 65); do test -s /var/backups/tdm.log && exit 0; sleep 2; done; exit 1
+        timeout: 150
+  - id: cron
+    title: Tâches cron
+    description: |
+      Crée le fichier `/etc/cron.d/tdm` avec deux tâches exécutées par `root` :
+      - **chaque nuit à 3 h 00**, supprimer les fichiers de `/tmp/cache` de plus de 7 jours
+        (`find /tmp/cache -type f -mtime +7 -delete`) ;
+      - **chaque minute**, ajouter la date à `/var/log/heartbeat.log` (pour vérifier que cron tourne).
+
+      Attention : dans `/etc/cron.d`, chaque ligne indique l'utilisateur après les cinq champs de date.
+    hint: "0 3 * * * root find … et * * * * * root date >> /var/log/heartbeat.log"
+    checks:
+      - desc: La tâche de 3 h est correcte
+        run: grep -Eq '^0 +3 +\* +\* +\* +root +.*find +/tmp/cache' /etc/cron.d/tdm
+      - desc: La tâche de chaque minute est correcte
+        run: grep -Eq '^\* +\* +\* +\* +\* +root +.*/var/log/heartbeat.log' /etc/cron.d/tdm
+      - desc: cron a bien exécuté la tâche
+        run: |
+          for i in $(seq 1 40); do test -s /var/log/heartbeat.log && exit 0; sleep 2; done; exit 1
+        timeout: 100
+  - id: logrotate
+    title: Rotation des journaux
+    description: |
+      `/var/log/tdm/app.log` grossit sans fin. Écris `/etc/logrotate.d/tdm` pour les fichiers
+      `/var/log/tdm/*.log` : rotation **quotidienne**, **7** archives conservées, **compression**, pas d'erreur si
+      le fichier manque (`missingok`). Teste la configuration avec `logrotate -d`, puis force une rotation
+      avec `logrotate -f /etc/logrotate.d/tdm`.
+    hint: "/var/log/tdm/*.log { daily  rotate 7  compress  missingok  notifempty }"
+    checks:
+      - desc: La configuration est valide et complète
+        run: |
+          logrotate -d /etc/logrotate.d/tdm >/dev/null 2>&1 && grep -q daily /etc/logrotate.d/tdm && grep -Eq 'rotate +7' /etc/logrotate.d/tdm && grep -q compress /etc/logrotate.d/tdm
+      - desc: Une rotation compressée a eu lieu
+        run: test -f /var/log/tdm/app.log.1.gz && gzip -t /var/log/tdm/app.log.1.gz
+  - id: depannage
+    title: Réparer le service en échec
+    description: |
+      Répare le service `rapport` que tu as trouvé en échec au premier exercice. Lis attentivement
+      `systemctl status rapport` et `journalctl -u rapport` : il y a **deux** problèmes. Il doit tourner sous
+      l'utilisateur `rapport`, être actif et activé, et plus aucune unité ne doit être en échec.
+    hint: "Une faute de frappe dans un chemin, et un utilisateur qui n'existe pas (useradd --system rapport) ; n'oublie pas daemon-reload"
+    checks:
+      - desc: rapport est actif et activé
+        run: test "$(systemctl is-active rapport)" = active && test "$(systemctl is-enabled rapport)" = enabled
+      - desc: Il tourne sous l'utilisateur rapport
+        run: test "$(ps -o user= -p "$(systemctl show -p MainPID --value rapport)")" = rapport
+      - desc: Il écrit bien son rapport dans le journal
+        run: |
+          for i in $(seq 1 15); do journalctl -u rapport --no-pager | grep -q 'rapport généré' && exit 0; sleep 2; done; exit 1
+        timeout: 45
+      - desc: Plus aucune unité en échec
+        run: test -z "$(systemctl --failed --no-legend --plain)"
+  - id: limites
+    title: Limiter les ressources d'un service
+    description: |
+      Sans modifier le fichier d'unité d'origine, ajoute un **drop-in** pour `tdm-api` (`systemctl edit tdm-api`,
+      qui crée `/etc/systemd/system/tdm-api.service.d/override.conf`) limitant le service à **100 Mo** de mémoire
+      (`MemoryMax=100M`) et **20 %** d'un processeur (`CPUQuota=20%`). Redémarre-le.
+    hint: "[Service] / MemoryMax=100M / CPUQuota=20% ; systemctl cat tdm-api montre l'unité et ses drop-ins"
+    checks:
+      - desc: Un drop-in existe pour tdm-api
+        run: ls /etc/systemd/system/tdm-api.service.d/*.conf >/dev/null 2>&1
+      - desc: Mémoire limitée à 100 Mo
+        run: test "$(systemctl show -p MemoryMax --value tdm-api)" = 104857600
+      - desc: CPU limité à 20 %
+        run: test "$(systemctl show -p CPUQuotaPerSecUSec --value tdm-api)" = 200ms
+      - desc: Le service tourne toujours
+        run: test "$(systemctl is-active tdm-api)" = active
