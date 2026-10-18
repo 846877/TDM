@@ -150,7 +150,8 @@ function createXterm(host) {
     cursorBlink: true,
     fontFamily: '"JetBrains Mono", "Fira Code", Menlo, Consolas, monospace',
     fontSize: 14,
-    theme: { background: "#0b0f14", foreground: "#e6edf3", cursor: "#22c55e" },
+    theme: { background: "#000000", foreground: "#c8ffd8", cursor: "#00ff66", selectionBackground: "#0f4d26",
+             green: "#00ff66", brightGreen: "#5bff9b" },
   });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
@@ -237,12 +238,47 @@ window.addEventListener("hashchange", router);
 
 /* --- Accueil ------------------------------------------------------------ */
 
+/** Pluie de caractères verte en fond d'accueil (arrêtée en quittant la page). */
+function matrixRain() {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const canvas = h("canvas", { id: "matrix" });
+  document.body.append(canvas);
+  const ctx = canvas.getContext("2d");
+  const chars = "アカサタナハマヤラワ0123456789ABCDEF<>/{}$#@%";
+  let columns = [];
+  const size = 16;
+  const resize = () => {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    columns = Array.from({ length: Math.ceil(canvas.width / size) }, () => Math.random() * -50);
+  };
+  resize();
+  window.addEventListener("resize", resize);
+  const timer = setInterval(() => {
+    ctx.fillStyle = "rgba(3, 6, 4, 0.12)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#00ff66";
+    ctx.font = `${size}px monospace`;
+    columns.forEach((y, i) => {
+      ctx.fillText(chars[Math.floor(Math.random() * chars.length)], i * size, y * size);
+      columns[i] = y * size > canvas.height && Math.random() > 0.975 ? 0 : y + 1;
+    });
+  }, 60);
+  onLeave(() => {
+    clearInterval(timer);
+    window.removeEventListener("resize", resize);
+    canvas.remove();
+  });
+}
+
 async function renderHome() {
   document.title = "TDM · Entraînement";
+  matrixRain();
   const data = await api("/api/categories");
   app.replaceChildren(h("div", { class: "page" },
     h("section", { class: "hero" },
-      h("h1", {}, "Entraîne-toi, pour de vrai."),
+      h("h1", {}, h("span", { class: "glitch", "data-text": "Entraîne-toi, pour de vrai." }, "Entraîne-toi, pour de vrai."),
+        h("span", { class: "cursor" })),
       h("p", {}, "Choisis une catégorie, ouvre un exercice, code dans le navigateur et laisse la moulinette valider ton travail.")),
     h("div", { class: "cards" }, data.categories.map((cat) => {
       const done = progress.count(cat.id);
