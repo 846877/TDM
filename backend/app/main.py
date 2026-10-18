@@ -97,7 +97,10 @@ def categories():
              "description": "Des bases jusqu'aux sujets avancés, corrigés par une moulinette."},
             {"id": "reseaux", "title": "Réseaux", "count": len(network_catalog.all()),
              "description": "Configuration Cisco IOS dans un terminal simulé : VLAN, trunks, routage, sécurité."},
-            {"id": "devops", "title": "DevOps", "count": len(devops.load_labs()),
+            {"id": "systemes", "title": "Systèmes & réseaux", "count": len(devops.load_labs(category="systemes")),
+             "description": "Le parcours du technicien : postes, accès distants, Active Directory, DNS/DHCP, "
+                            "VLAN, routage, pare-feu, virtualisation, supervision."},
+            {"id": "devops", "title": "DevOps", "count": len(devops.load_labs(category="devops")),
              "description": "Des labs lancés en un clic, en conteneur Docker ou en VM Vagrant, avec exercices vérifiés."},
         ],
     }
@@ -258,10 +261,10 @@ def network_check(session_id: str, profile: int | None = ProfileHeader):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/devops/labs")
-def devops_labs():
+def devops_labs(category: str = "devops"):
     return [
         {k: v for k, v in devops.public(lab).items() if k != "description"} | {"exercise_count": len(lab["exercises"])}
-        for lab in devops.load_labs()
+        for lab in devops.load_labs(category=category)
     ]
 
 
@@ -299,7 +302,7 @@ def devops_reset(lab_id: str):
 def devops_check(lab_id: str, exercise_id: str, profile: int | None = ProfileHeader):
     lab = _lab(lab_id)
     result = _lab_action(devops.check, lab, exercise_id)
-    return _reward(result, profile, "devops", f"{lab_id}/{exercise_id}", lab["level"])
+    return _reward(result, profile, lab["category"], f"{lab_id}/{exercise_id}", lab["level"])
 
 
 @app.websocket("/ws/devops/{lab_id}")
@@ -327,7 +330,8 @@ def _totals() -> dict[str, int]:
     return {
         "python": len(python_catalog.all()),
         "reseaux": len(network_catalog.all()),
-        "devops": sum(len(lab["exercises"]) for lab in devops.load_labs()),
+        **{category: sum(len(lab["exercises"]) for lab in devops.load_labs(category=category))
+           for category in devops.LAB_CATEGORIES},
     }
 
 
@@ -364,7 +368,7 @@ def _item_title(category: str, item_id: str) -> str:
         found = python_catalog.get(item_id)
     elif category == "reseaux":
         found = network_catalog.get(item_id)
-    else:
+    else:  # labs DevOps ou Systèmes & réseaux
         lab_id, _, exercise_id = item_id.partition("/")
         lab = next((lab for lab in devops.load_labs() if lab["id"] == lab_id), None)
         exercise = next((e for e in lab["exercises"] if e["id"] == exercise_id), None) if lab else None

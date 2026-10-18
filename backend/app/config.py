@@ -21,6 +21,7 @@ def _path_env(name: str, default: Path) -> Path:
 
 CONTENT_DIR = _path_env("TDM_CONTENT_DIR", ROOT_DIR / "content")
 LABS_DIR = _path_env("TDM_LABS_DIR", ROOT_DIR / "labs" / "devops")
+SYSTEMS_LABS_DIR = _path_env("TDM_SYSTEMS_LABS_DIR", ROOT_DIR / "labs" / "systemes")
 FRONTEND_DIR = ROOT_DIR / "frontend"
 
 

@@ -17,6 +17,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./content:/app/content
       - ./labs/devops:/app/labs/devops
+      - ./labs/systemes:/app/labs/systemes
       - tdm-data:/app/.data
     restart: unless-stopped
 

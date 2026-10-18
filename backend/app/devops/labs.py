@@ -27,15 +27,35 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9-]+", "-", text.lower()).strip("-")
 
 
-def load_labs(labs_dir: Path | None = None) -> list[dict[str, Any]]:
-    root = labs_dir or config.LABS_DIR
+LAB_CATEGORIES = ("devops", "systemes")
+
+
+def load_labs(labs_dir: Path | None = None, category: str | None = None) -> list[dict[str, Any]]:
+    """Labs DevOps (``labs/devops``) et labs Systèmes & réseaux (``labs/systemes``).
+
+    ``category`` filtre sur l'une des deux catégories ; ``labs_dir`` charge un seul dossier.
+    """
+    if labs_dir is not None:
+        sources = [(labs_dir, "devops")]
+    else:
+        sources = [(config.LABS_DIR, "devops"), (config.SYSTEMS_LABS_DIR, "systemes")]
     labs = []
-    if not root.is_dir():
-        return labs
+    for root, default_category in sources:
+        if root.is_dir():
+            labs += _load_dir(root, default_category)
+    if category:
+        labs = [lab for lab in labs if lab["category"] == category]
+    order = {level: i for i, level in enumerate(LEVELS)}
+    return sorted(labs, key=lambda lab: (order[lab["level"]], lab.get("order", 999), lab["id"]))
+
+
+def _load_dir(root: Path, default_category: str) -> list[dict[str, Any]]:
+    labs = []
     for path in sorted(root.glob("*/lab.yaml")):
         with path.open(encoding="utf-8") as fh:
             data = yaml.safe_load(fh) or {}
         data["id"] = _slug(data.get("id") or path.parent.name)
+        data["category"] = default_category
         data["dir"] = str(path.parent)
         data.setdefault("title", path.parent.name)
         data.setdefault("level", "debutant")
@@ -56,8 +76,7 @@ def load_labs(labs_dir: Path | None = None) -> list[dict[str, Any]]:
         for index, exercise in enumerate(data["exercises"], start=1):
             exercise.setdefault("id", f"ex{index}")
         labs.append(data)
-    order = {level: i for i, level in enumerate(LEVELS)}
-    return sorted(labs, key=lambda lab: (order[lab["level"]], lab.get("order", 999), lab["id"]))
+    return labs
 
 
 def public(lab: dict[str, Any]) -> dict[str, Any]:
@@ -70,6 +89,7 @@ def public(lab: dict[str, Any]) -> dict[str, Any]:
         "description": lab["description"],
         "ports": lab.get("ports", []),
         "kind": "vagrant" if "vagrant" in lab else "docker",
+        "category": lab["category"],
         "exercises": [
             {k: e.get(k) for k in ("id", "title", "description", "hint") if e.get(k) is not None}
             for e in lab["exercises"]

@@ -33,9 +33,14 @@ def test_definitions_des_labs():
             assert all(c.get("desc") and c.get("run") for c in exercise["checks"]), (lab["id"], exercise["id"])
 
 
+def test_identifiants_uniques():
+    ids = [lab["id"] for lab in labs.load_labs()]
+    assert len(ids) == len(set(ids)), sorted(i for i in ids if ids.count(i) > 1)
+
+
 def test_labs_compose_sans_montage_de_dossier():
     # La plateforme pilote le Docker de l'hôte depuis un conteneur : un montage relatif ne marcherait pas.
-    for compose in (ROOT / "labs" / "devops").glob("*/docker-compose.yml"):
+    for compose in (ROOT / "labs").glob("*/*/docker-compose.yml"):
         for line in compose.read_text(encoding="utf-8").splitlines():
             assert not line.strip().startswith(("- ./", "- ../", "- /")), f"{compose}: {line}"
 

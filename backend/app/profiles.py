@@ -37,6 +37,8 @@ GOD_TITLE = ("GOD", "Créateur de la plateforme. Au-dessus de tous les niveaux."
 CATEGORY_TITLES = {
     "python": ["Pythoniste débutant", "Pythoniste", "Pythoniste confirmé", "Maître Python"],
     "reseaux": ["Câbleur", "Technicien réseau", "Ingénieur réseau", "Maître Cisco"],
+    "systemes": ["Technicien de proximité", "Technicien systèmes et réseaux", "Administrateur systèmes et réseaux",
+                 "Maître de l'infra"],
     "devops": ["Bidouilleur", "Opérateur", "Ingénieur DevOps", "Maître SRE"],
 }
 

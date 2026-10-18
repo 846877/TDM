@@ -12,7 +12,8 @@ const LEVEL_LABEL = Object.fromEntries(LEVELS);
 const CATEGORIES = {
   python: { title: "Python", icon: "🐍", api: "/api/python/exercises" },
   reseaux: { title: "Réseaux", icon: "🌐", api: "/api/network/exercises" },
-  devops: { title: "DevOps", icon: "🚀", api: "/api/devops/labs" },
+  systemes: { title: "Systèmes & réseaux", icon: "🖧", api: "/api/devops/labs?category=systemes", labs: true },
+  devops: { title: "DevOps", icon: "🚀", api: "/api/devops/labs?category=devops", labs: true },
 };
 
 /* --- Utilitaires --------------------------------------------------------- */
@@ -202,8 +203,10 @@ const routes = [
   [/^\/python\/(.+)$/, (id) => renderPythonExercise(id)],
   [/^\/reseaux\/?$/, () => renderList("reseaux")],
   [/^\/reseaux\/(.+)$/, (id) => renderNetworkExercise(id)],
+  [/^\/systemes\/?$/, () => renderList("systemes")],
+  [/^\/systemes\/(.+)$/, (id) => renderLab(id, "systemes")],
   [/^\/devops\/?$/, () => renderList("devops")],
-  [/^\/devops\/(.+)$/, (id) => renderLab(id)],
+  [/^\/devops\/(.+)$/, (id) => renderLab(id, "devops")],
 ];
 
 async function router() {
@@ -243,7 +246,8 @@ async function renderHome() {
       h("p", {}, "Choisis une catégorie, ouvre un exercice, code dans le navigateur et laisse la moulinette valider ton travail.")),
     h("div", { class: "cards" }, data.categories.map((cat) => {
       const done = progress.count(cat.id);
-      const total = cat.id === "devops" ? profile.data.categories.devops.total : cat.count;
+      const isLabs = CATEGORIES[cat.id].labs;
+      const total = isLabs ? (profile.data.categories[cat.id] || {}).total || 0 : cat.count;
       const pct = total ? Math.round((done / total) * 100) : 0;
       return h("a", { class: "card", href: `#/${cat.id}` },
         h("div", { class: "icon" }, CATEGORIES[cat.id].icon),
@@ -251,7 +255,7 @@ async function renderHome() {
         h("p", {}, cat.description),
         h("div", { class: "progress" }, h("span", { style: `width:${pct}%` })),
         h("div", { class: "progress-label" },
-          cat.id === "devops" ? `${cat.count} labs · ${done} exercice(s) validé(s)` : `${done} / ${cat.count} exercices validés`));
+          isLabs ? `${cat.count} labs · ${done} / ${total} exercices validés` : `${done} / ${cat.count} exercices validés`));
     }))));
 }
 
@@ -274,14 +278,14 @@ async function renderList(cat) {
       body.append(h("section", { class: "level-section" },
         h("h2", {}, `${label} · ${group.length}`),
         h("div", { class: "ex-list" }, group.map((it) => {
-          const done = cat === "devops" ? labDoneCount(it) === it.exercise_count && it.exercise_count > 0 : progress.isDone(cat, it.id);
+          const done = meta.labs ? labDoneCount(cat, it) === it.exercise_count && it.exercise_count > 0 : progress.isDone(cat, it.id);
           return h("a", { class: `ex-item ${done ? "done" : ""}`, href: `#/${cat}/${it.id}` },
             h("span", { class: "check" }, done ? "✓" : ""),
             h("div", {},
               h("div", { class: "title" }, it.title),
               it.summary ? h("div", { class: "summary" }, it.summary) : null,
-              cat === "devops" ? h("div", { class: "summary" },
-                `${it.kind === "vagrant" ? "🖥 VM Vagrant" : "🐳 Docker"} · ${labDoneCount(it)} / ${it.exercise_count} exercice(s)`) : null,
+              meta.labs ? h("div", { class: "summary" },
+                `${it.kind === "vagrant" ? "🖥 VM Vagrant" : "🐳 Docker"} · ${labDoneCount(cat, it)} / ${it.exercise_count} exercice(s)`) : null,
               h("div", { class: "tags" }, (it.tags || []).map((t) => h("span", { class: "tag" }, t)))));
         }))));
     }
@@ -290,7 +294,7 @@ async function renderList(cat) {
   search.addEventListener("input", draw);
   draw();
 
-  const doneCount = cat === "devops" ? null : items.filter((it) => progress.isDone(cat, it.id)).length;
+  const doneCount = meta.labs ? null : items.filter((it) => progress.isDone(cat, it.id)).length;
   app.replaceChildren(h("div", { class: "page" },
     h("div", { class: "list-head" },
       h("h1", {}, `${meta.icon} ${meta.title}`),
@@ -298,13 +302,13 @@ async function renderList(cat) {
       search),
     cat === "reseaux" ? h("p", { class: "muted" },
       "Les exercices se font dans un terminal Cisco IOS simulé (switch 2960 / routeur ISR) : mêmes modes, mêmes commandes, abréviations comprises.") : null,
-    cat === "devops" ? h("p", { class: "muted" },
+    meta.labs ? h("p", { class: "muted" },
       "Chaque lab démarre un environnement isolé dans Docker en un clic, avec un terminal intégré et des exercices vérifiés automatiquement.") : null,
     body));
 }
 
-function labDoneCount(lab) {
-  return progress.items("devops").filter((item) => item.startsWith(lab.id + "/")).length;
+function labDoneCount(cat, lab) {
+  return progress.items(cat).filter((item) => item.startsWith(lab.id + "/")).length;
 }
 
 function neighbours(items, id) {
@@ -599,10 +603,10 @@ async function renderNetworkExercise(id) {
 
 /* --- Lab DevOps --------------------------------------------------------- */
 
-async function renderLab(id) {
+async function renderLab(id, cat = "devops") {
   const [lab, items] = await Promise.all([
     api(`/api/devops/labs/${encodeURIComponent(id)}`),
-    api("/api/devops/labs"),
+    api(CATEGORIES[cat].api),
   ]);
   document.title = `TDM · ${lab.title}`;
 
@@ -623,7 +627,7 @@ async function renderLab(id) {
   const exerciseCards = lab.exercises.map((ex) => {
     const result = h("div", { class: "results" });
     result.style.padding = "8px 0 0";
-    const card = h("article", { class: `lab-ex ${progress.isDone("devops", `${id}/${ex.id}`) ? "done" : ""}` });
+    const card = h("article", { class: `lab-ex ${progress.isDone(cat, `${id}/${ex.id}`) ? "done" : ""}` });
     const btn = h("button", { class: "btn small" }, "Vérifier");
     btn.addEventListener("click", async () => {
       btn.disabled = true;
@@ -632,7 +636,7 @@ async function renderLab(id) {
         const res = await api(`/api/devops/labs/${encodeURIComponent(id)}/exercises/${encodeURIComponent(ex.id)}/check`, { method: "POST" });
         renderResults(result, res);
         if (res.success) {
-          progress.markDone("devops", `${id}/${ex.id}`);
+          progress.markDone(cat, `${id}/${ex.id}`);
           card.classList.add("done");
           celebrate(res.reward);
         }
@@ -648,12 +652,12 @@ async function renderLab(id) {
   });
 
   app.replaceChildren(h("div", { class: "workspace" },
-    h("section", { class: "left" }, ...exerciseHeader("devops", lab),
+    h("section", { class: "left" }, ...exerciseHeader(cat, lab),
       lab.kind === "vagrant" ? h("p", {}, h("span", { class: "badge warn" }, "🖥 Machine virtuelle Vagrant")) : null,
       markdown(lab.description),
       h("div", { class: "lab-controls" }, statusDot, statusText, startBtn, stopBtn, resetBtn), errorBox,
       h("h3", {}, `Exercices (${lab.exercises.length})`), ...exerciseCards,
-      exerciseNav("devops", items, id)),
+      exerciseNav(cat, items, id)),
     right));
 
   const openTerminal = () => {
@@ -737,7 +741,7 @@ async function renderLab(id) {
 
 /* --- Profils, XP et classement ----------------------------------------- */
 
-const CATEGORY_KEYS = ["python", "reseaux", "devops"];
+const CATEGORY_KEYS = ["python", "reseaux", "systemes", "devops"];
 
 function avatar(p, size = "") {
   return h("span", { class: `avatar ${size} ${p.title.god ? "god" : ""}` }, p.name.slice(0, 1).toUpperCase());
