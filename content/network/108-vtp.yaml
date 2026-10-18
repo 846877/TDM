@@ -1,0 +1,36 @@
+title: Rejoindre un domaine VTP
+level: intermediaire
+order: 8
+device: switch
+hostname: SW-ACCES3
+tags: [vtp, vlan]
+summary: Recevoir automatiquement les VLAN du serveur VTP.
+description: |
+  Sur le site de Lyon, les VLAN sont créés une seule fois sur le switch de distribution
+  (serveur **VTP**) et propagés aux switchs d'accès.
+
+  Fais entrer le nouveau switch d'accès dans le domaine :
+
+  1. domaine `TDM-LYON` (`vtp domain TDM-LYON`) ;
+  2. version `2` ;
+  3. mot de passe `Vtp2024!` (il doit être identique sur tout le domaine) ;
+  4. mode **client** : le switch apprend les VLAN mais ne peut plus en créer.
+
+  Contrôle avec `show vtp status`. Essaie ensuite `vlan 50` : que répond le switch ?
+checks:
+  - desc: Domaine VTP TDM-LYON
+    expr: d.vtp_domain == "TDM-LYON"
+    hint: "Le nom de domaine est sensible à la casse."
+  - desc: VTP version 2
+    expr: d.vtp_version == 2
+  - desc: Mot de passe VTP configuré
+    expr: d.vtp_password == "Vtp2024!"
+  - desc: Mode client
+    expr: d.vtp_mode == "client"
+solution: |
+  configure terminal
+  vtp domain TDM-LYON
+  vtp version 2
+  vtp password Vtp2024!
+  vtp mode client
+  end

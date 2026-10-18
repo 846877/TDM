@@ -1,0 +1,45 @@
+title: Relais DHCP
+level: intermediaire
+order: 9
+device: router
+hostname: R-SITE
+tags: [dhcp, ip helper-address, inter-vlan]
+summary: Faire parvenir les requêtes DHCP à un serveur centralisé.
+description: |
+  Une requête DHCP est un **broadcast** : elle ne traverse pas les routeurs. Le serveur DHCP
+  de l'entreprise (`10.10.10.5`) est au datacenter, pas dans les VLAN des utilisateurs.
+
+  Le routeur doit **relayer** les requêtes avec `ip helper-address` sur les interfaces côté clients :
+
+  - `G0/0.10` (VLAN 10, utilisateurs) et `G0/0.20` (VLAN 20, Wi-Fi) → relais vers `10.10.10.5` ;
+  - **pas** sur `G0/0.99` : le VLAN de gestion est en adressage statique.
+initial: |
+  interface g0/0
+  no shutdown
+  interface g0/0.10
+  encapsulation dot1Q 10
+  ip address 192.168.10.1 255.255.255.0
+  interface g0/0.20
+  encapsulation dot1Q 20
+  ip address 192.168.20.1 255.255.255.0
+  interface g0/0.99
+  encapsulation dot1Q 99
+  ip address 192.168.99.1 255.255.255.0
+  interface g0/1
+  ip address 10.0.0.2 255.255.255.252
+  no shutdown
+checks:
+  - desc: Relais DHCP sur G0/0.10
+    expr: '"10.10.10.5" in intf("g0/0.10").helper_addresses'
+    hint: "interface g0/0.10 puis ip helper-address 10.10.10.5"
+  - desc: Relais DHCP sur G0/0.20
+    expr: '"10.10.10.5" in intf("g0/0.20").helper_addresses'
+  - desc: Pas de relais sur le VLAN de gestion
+    expr: not intf("g0/0.99").helper_addresses
+solution: |
+  configure terminal
+  interface g0/0.10
+  ip helper-address 10.10.10.5
+  interface g0/0.20
+  ip helper-address 10.10.10.5
+  end

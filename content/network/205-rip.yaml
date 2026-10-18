@@ -1,0 +1,46 @@
+title: Routage dynamique RIPv2
+level: avance
+order: 5
+device: router
+hostname: R-ANNEXE
+tags: [rip, routage dynamique]
+summary: Configurer RIP version 2 sans résumé automatique.
+description: |
+  L'annexe utilise encore **RIP** avec un vieux routeur partenaire. Configure `R-ANNEXE` :
+
+  1. `router rip` puis `version 2` (RIPv1 ne transporte pas les masques : pas de VLSM) ;
+  2. annonce le LAN `192.168.50.0/24` et le lien WAN `10.1.1.0/30`.
+     Attention : `network` de RIP est **par classe** : `network 10.1.1.0` est enregistré
+     comme `10.0.0.0` (vérifie avec `show running-config | section rip`) ;
+  3. `no auto-summary` : sinon les sous-réseaux de `10.0.0.0` seraient résumés en `/8` ;
+  4. `G0/0` (LAN) **passive** : inutile d'envoyer des mises à jour RIP aux PC.
+
+  Contrôle avec `show ip protocols`.
+initial: |
+  interface g0/0
+  ip address 192.168.50.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.1.1.1 255.255.255.252
+  no shutdown
+checks:
+  - desc: RIP version 2
+    expr: d.rip is not None and d.rip.version == 2
+    hint: "router rip puis version 2"
+  - desc: LAN 192.168.50.0 annoncé
+    expr: rip_net("192.168.50.0")
+  - desc: Réseau 10.0.0.0 (lien WAN) annoncé
+    expr: rip_net("10.1.1.0")
+  - desc: Résumé automatique désactivé
+    expr: d.rip is not None and not d.rip.auto_summary
+  - desc: G0/0 passive
+    expr: d.rip is not None and d.rip.is_passive("g0/0") and not d.rip.is_passive("g0/1")
+solution: |
+  configure terminal
+  router rip
+  version 2
+  network 192.168.50.0
+  network 10.1.1.0
+  no auto-summary
+  passive-interface g0/0
+  end

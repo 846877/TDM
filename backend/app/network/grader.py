@@ -50,7 +50,8 @@ def _cleanup() -> None:
 
 
 SAFE_BUILTINS = {"len": len, "any": any, "all": all, "set": set, "sorted": sorted, "str": str,
-                 "int": int, "range": range, "list": list, "True": True, "False": False, "None": None}
+                 "int": int, "range": range, "list": list, "min": min, "max": max, "zip": zip,
+                 "True": True, "False": False, "None": None}
 
 
 def check(exercise: dict[str, Any], device: Device) -> dict[str, Any]:
@@ -62,7 +63,14 @@ def check(exercise: dict[str, Any], device: Device) -> dict[str, Any]:
         "vlan": device.vlan_name,
         "vlan_ports": device.vlan_ports,
         "route": device.has_route,
+        "route6": device.has_route6,
         "ospf_net": device.ospf_has_network,
+        "eigrp_net": device.eigrp_has_network,
+        "rip_net": device.rip_has_network,
+        "nat": device.has_nat,
+        "ipv6": lambda name, address: device.intf(name).has_ipv6(address),
+        "hsrp": lambda name, group: device.intf(name).standby[group],
+        "members": device.channel_members,
         "vlans": parse_vlan_list,
         "prefix": mask_to_prefix,
         "ports": lambda spec: [device.intf(n) for n in expand_range(spec)],

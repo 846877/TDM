@@ -1,0 +1,74 @@
+title: Durcir l'accès à un routeur
+level: expert
+order: 7
+device: router
+hostname: R-DMZ
+tags: [aaa, sécurité, mots de passe, durcissement]
+summary: Appliquer la politique de sécurité de l'entreprise au routeur de la DMZ.
+description: |
+  L'audit de sécurité a relevé de nombreux écarts sur `R-DMZ` (observe `show running-config`).
+  Applique la politique :
+
+  **Mots de passe**
+  - longueur minimale de **10** caractères (`security passwords min-length 10`) — à configurer
+    *avant* les nouveaux mots de passe ;
+  - supprime l'ancien `enable password` en clair et remplace-le par `enable secret D3mz!Secret` ;
+  - chiffre les mots de passe restants (`service password-encryption`).
+
+  **Authentification**
+  - active AAA (`aaa new-model`) et authentifie les connexions sur la base locale :
+    `aaa authentication login default local` ;
+  - compte `secadmin`, privilège 15, `secret S3cur1ty!Adm` ;
+  - après 3 échecs en 60 secondes, bloque les connexions 120 secondes :
+    `login block-for 120 attempts 3 within 60`.
+
+  **Services et sessions**
+  - désactive l'interface web : `no ip http server` et `no ip http secure-server` ;
+  - console et VTY : déconnexion après **5 minutes** d'inactivité ; VTY en **SSH uniquement**.
+initial: |
+  enable password cisco
+  ip domain-name tdm.local
+  crypto key generate rsa general-keys modulus 2048
+  ip ssh version 2
+  line vty 0 4
+  password cisco
+  login
+  transport input all
+checks:
+  - desc: Longueur minimale des mots de passe 10
+    expr: d.min_password_length == 10
+  - desc: enable password supprimé, enable secret configuré
+    expr: d.enable_password is None and d.enable_secret == "D3mz!Secret"
+    hint: "no enable password, puis enable secret D3mz!Secret"
+  - desc: Mots de passe chiffrés
+    expr: d.password_encryption
+  - desc: AAA activé avec authentification locale par défaut
+    expr: d.aaa_new_model and d.aaa_authentication.get("login default") == "local"
+  - desc: Compte secadmin privilège 15 avec un secret
+    expr: d.users.get("secadmin", {}).get("privilege") == 15 and d.users["secadmin"].get("secret") == "S3cur1ty!Adm"
+  - desc: Blocage après 3 échecs en 60 s pendant 120 s
+    expr: d.login_block == (120, 3, 60)
+  - desc: Serveurs HTTP et HTTPS désactivés
+    expr: not d.http_server and not d.https_server
+  - desc: Déconnexion après 5 minutes sur la console et les VTY
+    expr: line("console").exec_timeout in ("5", "5 0") and line("vty").exec_timeout in ("5", "5 0")
+  - desc: VTY en SSH uniquement
+    expr: line("vty").transport_input == "ssh"
+solution: |
+  configure terminal
+  security passwords min-length 10
+  no enable password
+  enable secret D3mz!Secret
+  service password-encryption
+  aaa new-model
+  aaa authentication login default local
+  username secadmin privilege 15 secret S3cur1ty!Adm
+  login block-for 120 attempts 3 within 60
+  no ip http server
+  no ip http secure-server
+  line console 0
+  exec-timeout 5 0
+  line vty 0 4
+  exec-timeout 5 0
+  transport input ssh
+  end

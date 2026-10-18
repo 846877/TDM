@@ -1,0 +1,47 @@
+title: Restreindre l'administration à distance
+level: avance
+order: 15
+device: router
+hostname: R-SIEGE
+tags: [acl, vty, access-class, ssh]
+summary: Seul le réseau d'administration peut ouvrir une session SSH.
+description: |
+  SSH est déjà configuré sur `R-SIEGE`, mais n'importe quel poste peut tenter de s'y connecter.
+  Limite l'accès aux lignes VTY avec une **ACL nommée** appliquée par `access-class`.
+
+  1. crée l'ACL standard nommée `ADMIN-VTY` :
+     - autoriser le réseau d'administration `192.168.99.0/24`,
+     - autoriser le poste du prestataire `10.0.0.50`,
+     - refuser et **journaliser** tout le reste : `deny any log` ;
+  2. applique-la en entrée des lignes `vty 0 4` : `access-class ADMIN-VTY in`.
+
+  ⚠️ Sur une ligne VTY, c'est `access-class` ; `ip access-group` s'applique à une interface.
+initial: |
+  ip domain-name tdm.local
+  username admin privilege 15 secret Adm1nS1ege
+  crypto key generate rsa general-keys modulus 2048
+  ip ssh version 2
+  line vty 0 4
+  login local
+  transport input ssh
+checks:
+  - desc: ACL ADMIN-VTY autorise 192.168.99.0/24
+    expr: '"permit 192.168.99.0 0.0.0.255" in acl("ADMIN-VTY")'
+    hint: "ip access-list standard ADMIN-VTY puis permit 192.168.99.0 0.0.0.255"
+  - desc: ACL ADMIN-VTY autorise l'hôte 10.0.0.50
+    expr: '"permit host 10.0.0.50" in acl("ADMIN-VTY") or "permit 10.0.0.50 0.0.0.0" in acl("ADMIN-VTY")'
+  - desc: Le reste est refusé et journalisé
+    expr: acl("ADMIN-VTY")[-1:] == ["deny any log"]
+  - desc: ACL appliquée en entrée des lignes VTY
+    expr: line("vty").access_class.get("in") == "ADMIN-VTY"
+    hint: "line vty 0 4 puis access-class ADMIN-VTY in"
+solution: |
+  configure terminal
+  ip access-list standard ADMIN-VTY
+  permit 192.168.99.0 0.0.0.255
+  permit host 10.0.0.50
+  deny any log
+  exit
+  line vty 0 4
+  access-class ADMIN-VTY in
+  end

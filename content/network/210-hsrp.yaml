@@ -1,0 +1,42 @@
+title: Passerelle redondante HSRP
+level: avance
+order: 10
+device: router
+hostname: R-GW1
+tags: [hsrp, redondance, fhrp]
+summary: Partager une adresse de passerelle virtuelle entre deux routeurs.
+description: |
+  Les PC du VLAN 10 ont pour passerelle `192.168.10.1`. Si le routeur tombe, plus personne ne
+  sort. Avec **HSRP**, deux routeurs (`R-GW1` en `.2`, `R-GW2` en `.3`) partagent une adresse
+  **virtuelle** `.1` : l'un est actif, l'autre prend le relais.
+
+  Sur `R-GW1`, interface `G0/0` :
+
+  1. `standby version 2` ;
+  2. groupe `10`, adresse virtuelle `192.168.10.1` (`standby 10 ip 192.168.10.1`) ;
+  3. priorité `110` (au-dessus des 100 par défaut de `R-GW2`) pour être le routeur actif ;
+  4. `standby 10 preempt` : quand `R-GW1` redémarre, il reprend le rôle actif.
+
+  Contrôle avec `show standby brief`.
+initial: |
+  interface g0/0
+  ip address 192.168.10.2 255.255.255.0
+  no shutdown
+checks:
+  - desc: HSRP version 2 sur G0/0
+    expr: intf("g0/0").standby_version == 2
+  - desc: Groupe 10 avec l'adresse virtuelle 192.168.10.1
+    expr: hsrp("g0/0", 10).ip == "192.168.10.1"
+    hint: "interface g0/0 puis standby 10 ip 192.168.10.1"
+  - desc: Priorité 110
+    expr: hsrp("g0/0", 10).priority == 110
+  - desc: Préemption activée
+    expr: hsrp("g0/0", 10).preempt
+solution: |
+  configure terminal
+  interface g0/0
+  standby version 2
+  standby 10 ip 192.168.10.1
+  standby 10 priority 110
+  standby 10 preempt
+  end

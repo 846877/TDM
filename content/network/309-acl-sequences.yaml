@@ -1,0 +1,56 @@
+title: Modifier une ACL en production
+level: expert
+order: 9
+device: router
+hostname: R-DC
+tags: [acl, numéros de séquence, sécurité]
+summary: Insérer et supprimer des lignes sans réécrire l'ACL.
+description: |
+  L'ACL étendue `SERVEURS` protège le serveur `10.0.0.10`. Affiche-la avec `show access-lists` :
+  chaque ligne porte un **numéro de séquence** (10, 20, 30...).
+
+  La ligne 20 autorise SSH depuis **n'importe où** : c'est une faille. Sans supprimer l'ACL
+  (ce qui couperait le trafic pendant la reconstruction) :
+
+  1. entre dans `ip access-list extended SERVEURS` ;
+  2. supprime la ligne 20 : `no 20` ;
+  3. insère en **15** l'accès SSH réservé au poste d'administration :
+     `15 permit tcp host 192.168.99.5 host 10.0.0.10 eq 22` ;
+  4. insère en **25** le ping depuis le réseau des utilisateurs :
+     `25 permit icmp 192.168.10.0 0.0.0.255 host 10.0.0.10 echo`.
+
+  La ligne finale `deny ip any any log` doit rester la dernière.
+initial: |
+  interface g0/0
+  ip address 192.168.10.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.0.0.1 255.255.255.0
+  no shutdown
+  ip access-list extended SERVEURS
+  permit tcp 192.168.10.0 0.0.0.255 host 10.0.0.10 eq 443
+  permit tcp any host 10.0.0.10 eq 22
+  deny ip any any log
+  exit
+  interface g0/1
+  ip access-group SERVEURS out
+checks:
+  - desc: La ligne SSH ouverte à tous est supprimée
+    expr: '"permit tcp any host 10.0.0.10 eq 22" not in acl("SERVEURS")'
+    hint: "Dans l'ACL : no 20"
+  - desc: SSH réservé au poste 192.168.99.5 en séquence 15
+    expr: (15, "permit tcp host 192.168.99.5 host 10.0.0.10 eq 22") in list(zip(d.acl_seqs("SERVEURS"), acl("SERVEURS")))
+  - desc: Ping des utilisateurs autorisé en séquence 25
+    expr: (25, "permit icmp 192.168.10.0 0.0.0.255 host 10.0.0.10 echo") in list(zip(d.acl_seqs("SERVEURS"), acl("SERVEURS")))
+  - desc: HTTPS toujours autorisé en séquence 10, deny final en séquence 30
+    expr: list(zip(d.acl_seqs("SERVEURS"), acl("SERVEURS")))[0] == (10, "permit tcp 192.168.10.0 0.0.0.255 host 10.0.0.10 eq 443") and list(zip(d.acl_seqs("SERVEURS"), acl("SERVEURS")))[-1] == (30, "deny ip any any log")
+    hint: "Ne supprime pas l'ACL entière : modifie-la ligne par ligne."
+  - desc: L'ACL est toujours appliquée en sortie de G0/1
+    expr: intf("g0/1").access_groups.get("out") == "SERVEURS"
+solution: |
+  configure terminal
+  ip access-list extended SERVEURS
+  no 20
+  15 permit tcp host 192.168.99.5 host 10.0.0.10 eq 22
+  25 permit icmp 192.168.10.0 0.0.0.255 host 10.0.0.10 echo
+  end

@@ -1,0 +1,52 @@
+title: Routage inter-VLAN sur switch de niveau 3
+level: intermediaire
+order: 11
+device: switch
+hostname: SW-L3
+tags: [inter-vlan, svi, ip routing, niveau 3]
+summary: Remplacer le router-on-a-stick par des SVI.
+description: |
+  Le router-on-a-stick sature : tout le trafic inter-VLAN passe par un seul câble.
+  Un switch **multicouche** peut router lui-même entre ses VLAN grâce aux **SVI**
+  (interfaces `vlan X`).
+
+  1. Active le routage IPv4 : `ip routing` ;
+  2. crée les SVI passerelles des utilisateurs, et active-les :
+
+  | SVI        | Adresse           |
+  |------------|-------------------|
+  | `Vlan10`   | 192.168.10.1/24   |
+  | `Vlan20`   | 192.168.20.1/24   |
+  | `Vlan30`   | 192.168.30.1/24   |
+
+  Les VLAN existent déjà. Contrôle avec `show ip interface brief` et `show ip route`.
+initial: |
+  vlan 10
+  name ADMIN
+  vlan 20
+  name COMPTA
+  vlan 30
+  name PROD
+checks:
+  - desc: Routage IPv4 activé
+    expr: d.ip_routing
+    hint: "Sans ip routing, le switch ne route pas entre les SVI."
+  - desc: Vlan10 en 192.168.10.1/24 et activée
+    expr: intf("vlan10").ip == "192.168.10.1" and prefix(intf("vlan10").mask) == 24 and not intf("vlan10").shutdown
+  - desc: Vlan20 en 192.168.20.1/24 et activée
+    expr: intf("vlan20").ip == "192.168.20.1" and prefix(intf("vlan20").mask) == 24 and not intf("vlan20").shutdown
+  - desc: Vlan30 en 192.168.30.1/24 et activée
+    expr: intf("vlan30").ip == "192.168.30.1" and prefix(intf("vlan30").mask) == 24 and not intf("vlan30").shutdown
+solution: |
+  configure terminal
+  ip routing
+  interface vlan 10
+  ip address 192.168.10.1 255.255.255.0
+  no shutdown
+  interface vlan 20
+  ip address 192.168.20.1 255.255.255.0
+  no shutdown
+  interface vlan 30
+  ip address 192.168.30.1 255.255.255.0
+  no shutdown
+  end

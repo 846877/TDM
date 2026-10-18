@@ -1,0 +1,44 @@
+title: Découverte des voisins CDP et LLDP
+level: intermediaire
+order: 13
+device: router
+hostname: R-EDGE
+tags: [cdp, lldp, sécurité]
+summary: Garder la découverte en interne, la couper côté Internet.
+description: |
+  **CDP** (Cisco) et **LLDP** (standard IEEE) annoncent le modèle, la version d'IOS et les adresses
+  de l'équipement à ses voisins. Très pratique pour cartographier le réseau... et pour un attaquant.
+
+  Sur le routeur de bordure :
+
+  1. le réseau interne mélange plusieurs constructeurs : active **LLDP** globalement (`lldp run`) ;
+  2. sur l'interface Internet `G0/1`, **coupe CDP** (`no cdp enable`) ;
+  3. toujours sur `G0/1`, coupe l'émission et la réception LLDP (`no lldp transmit`, `no lldp receive`).
+
+  CDP doit rester actif globalement et sur le LAN `G0/0`. Contrôle avec `show cdp` et `show lldp`.
+initial: |
+  interface g0/0
+  ip address 192.168.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 203.0.113.2 255.255.255.252
+  no shutdown
+checks:
+  - desc: LLDP activé globalement
+    expr: d.lldp_run
+  - desc: CDP désactivé sur G0/1
+    expr: not intf("g0/1").cdp_enabled
+    hint: "interface g0/1 puis no cdp enable"
+  - desc: LLDP coupé (émission et réception) sur G0/1
+    expr: not intf("g0/1").lldp_transmit and not intf("g0/1").lldp_receive
+  - desc: CDP toujours actif globalement et sur G0/0
+    expr: d.cdp_run and intf("g0/0").cdp_enabled
+    hint: "Ne tape pas no cdp run : cela couperait CDP partout."
+solution: |
+  configure terminal
+  lldp run
+  interface g0/1
+  no cdp enable
+  no lldp transmit
+  no lldp receive
+  end

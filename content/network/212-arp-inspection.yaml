@@ -1,0 +1,47 @@
+title: Inspection ARP dynamique
+level: avance
+order: 12
+device: switch
+hostname: SW-ACCES
+tags: [dai, arp, sécurité, errdisable]
+summary: Empêcher l'usurpation ARP (attaque de l'homme du milieu).
+description: |
+  Avec un outil d'empoisonnement ARP, un poste peut se faire passer pour la passerelle et
+  intercepter le trafic de ses voisins. L'**inspection ARP dynamique** (DAI) vérifie chaque
+  réponse ARP à l'aide de la table construite par le DHCP snooping (déjà configuré ici).
+
+  1. active la DAI sur les VLAN `10` et `20` : `ip arp inspection vlan 10,20` ;
+  2. l'uplink `Gi0/1` est de confiance : `ip arp inspection trust` ;
+  3. un port coupé pour violation DAI passe en *err-disabled* : réactive-le automatiquement
+     après `300` secondes :
+     `errdisable recovery cause arp-inspection` et `errdisable recovery interval 300`.
+initial: |
+  vlan 10
+  vlan 20
+  ip dhcp snooping
+  ip dhcp snooping vlan 10,20
+  interface range fa0/1 - 24
+  switchport mode access
+  switchport access vlan 10
+  interface g0/1
+  switchport mode trunk
+  ip dhcp snooping trust
+checks:
+  - desc: DAI sur les VLAN 10 et 20
+    expr: "{10, 20} <= d.arp_inspection_vlans"
+  - desc: Gi0/1 de confiance pour la DAI
+    expr: intf("g0/1").arp_inspection_trust
+    hint: "interface g0/1 puis ip arp inspection trust"
+  - desc: Les ports utilisateurs ne sont pas de confiance
+    expr: not any(i.arp_inspection_trust for i in ports("fa0/1-24"))
+  - desc: Réactivation automatique après violation DAI (300 s)
+    expr: '"arp-inspection" in d.errdisable_recovery and d.errdisable_interval == 300'
+solution: |
+  configure terminal
+  ip arp inspection vlan 10,20
+  interface g0/1
+  ip arp inspection trust
+  exit
+  errdisable recovery cause arp-inspection
+  errdisable recovery interval 300
+  end

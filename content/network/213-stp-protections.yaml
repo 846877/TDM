@@ -1,0 +1,45 @@
+title: Protéger le spanning tree
+level: avance
+order: 13
+device: switch
+hostname: SW-DIST
+tags: [stp, root guard, bpdu guard, portfast]
+summary: Fixer le pont racine et empêcher qu'on le détrône.
+description: |
+  `SW-DIST` doit rester le **pont racine** des VLAN utilisateurs, quoi qu'on branche ailleurs.
+
+  1. passe en Rapid PVST+ ;
+  2. pont racine **primaire** des VLAN `10` et `20` (`spanning-tree vlan 10,20 root primary`) et
+     **secondaire** du VLAN `30` (le switch voisin est racine du 30) ;
+  3. active PortFast et BPDU Guard **par défaut** sur tous les ports d'accès :
+     `spanning-tree portfast default` et `spanning-tree portfast bpduguard default` ;
+  4. `Fa0/23` et `Fa0/24` vont vers des switchs gérés par un prestataire : active le **Root Guard**
+     (`spanning-tree guard root`) pour qu'ils ne puissent jamais devenir racine.
+
+  Contrôle avec `show spanning-tree summary`.
+initial: |
+  vlan 10
+  vlan 20
+  vlan 30
+checks:
+  - desc: Mode rapid-pvst
+    expr: d.stp_mode == "rapid-pvst"
+  - desc: Racine primaire des VLAN 10 et 20 (priorité 24576 ou moins)
+    expr: d.stp_priority.get(10, 32768) <= 24576 and d.stp_priority.get(20, 32768) <= 24576
+  - desc: Racine secondaire du VLAN 30 (priorité 28672)
+    expr: d.stp_priority.get(30) == 28672
+    hint: "spanning-tree vlan 30 root secondary"
+  - desc: PortFast et BPDU Guard activés par défaut
+    expr: d.stp_portfast_default and d.stp_bpduguard_default
+  - desc: Root Guard sur Fa0/23 et Fa0/24 uniquement
+    expr: all(i.stp_guard == "root" for i in ports("fa0/23-24")) and not any(i.stp_guard for i in ports("fa0/1-22"))
+solution: |
+  configure terminal
+  spanning-tree mode rapid-pvst
+  spanning-tree vlan 10,20 root primary
+  spanning-tree vlan 30 root secondary
+  spanning-tree portfast default
+  spanning-tree portfast bpduguard default
+  interface range fa0/23 - 24
+  spanning-tree guard root
+  end

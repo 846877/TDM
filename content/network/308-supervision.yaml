@@ -1,0 +1,52 @@
+title: Supervision SNMP, syslog et NTP
+level: expert
+order: 8
+device: router
+hostname: R-CORE
+tags: [snmp, syslog, ntp, acl, supervision]
+summary: Raccorder un routeur à la plateforme de supervision, sans laisser de faille.
+description: |
+  La plateforme de supervision (`10.0.0.30`) interroge les équipements en SNMP. Sur `R-CORE`,
+  un prestataire a laissé une communauté `public` en **lecture-écriture** : n'importe qui
+  pourrait modifier la configuration !
+
+  1. supprime la communauté `public` ;
+  2. ACL standard nommée `SNMP-NMS` qui n'autorise que l'hôte `10.0.0.30` ;
+  3. communauté `Tdm-M0nit` en **lecture seule** limitée par cette ACL :
+     `snmp-server community Tdm-M0nit RO SNMP-NMS` ;
+  4. `snmp-server location Lyon-Salle-Serveur` et `snmp-server contact noc@tdm.local` ;
+  5. syslog vers `10.0.0.20` au niveau `informational` ;
+  6. NTP vers `10.0.0.10`, fuseau `CET 1`.
+initial: |
+  interface g0/0
+  ip address 10.0.0.1 255.255.255.0
+  no shutdown
+  snmp-server community public RW
+checks:
+  - desc: Communauté public supprimée
+    expr: '"public" not in d.snmp_communities'
+    hint: "no snmp-server community public"
+  - desc: ACL SNMP-NMS limitée à l'hôte 10.0.0.30
+    expr: acl("SNMP-NMS") in (["permit host 10.0.0.30"], ["permit 10.0.0.30 0.0.0.0"], ["permit 10.0.0.30"])
+  - desc: Communauté Tdm-M0nit en lecture seule, filtrée par SNMP-NMS
+    expr: d.snmp_communities.get("Tdm-M0nit") == ("RO", "SNMP-NMS")
+  - desc: Emplacement et contact renseignés
+    expr: d.snmp_location == "Lyon-Salle-Serveur" and d.snmp_contact == "noc@tdm.local"
+  - desc: Syslog vers 10.0.0.20 au niveau informational
+    expr: '"10.0.0.20" in d.logging_hosts and d.logging_trap == "informational"'
+  - desc: NTP 10.0.0.10 et fuseau CET 1
+    expr: '"10.0.0.10" in d.ntp_servers and d.clock_timezone == ("CET", 1)'
+solution: |
+  configure terminal
+  no snmp-server community public
+  ip access-list standard SNMP-NMS
+  permit host 10.0.0.30
+  exit
+  snmp-server community Tdm-M0nit RO SNMP-NMS
+  snmp-server location Lyon-Salle-Serveur
+  snmp-server contact noc@tdm.local
+  logging host 10.0.0.20
+  logging trap informational
+  ntp server 10.0.0.10
+  clock timezone CET 1
+  end

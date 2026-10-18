@@ -1,0 +1,35 @@
+title: Comptes utilisateurs locaux
+level: debutant
+order: 12
+device: switch
+hostname: SW-COMPTA
+tags: [username, login local, sécurité]
+summary: Un compte nominatif par administrateur plutôt qu'un mot de passe partagé.
+description: |
+  Un mot de passe de ligne partagé ne permet pas de savoir **qui** s'est connecté.
+  On crée plutôt des comptes locaux, avec un mot de passe haché (`secret`, jamais `password`).
+
+  1. `username admin privilege 15 secret Adm1n2024` : accès direct au mode privilégié ;
+  2. `username support secret Supp0rt2024` : compte de niveau 1 (consultation) ;
+  3. sur la **console**, demande un identifiant et un mot de passe : `login local`.
+
+  ```
+  line console 0
+   login local
+  ```
+checks:
+  - desc: Utilisateur admin, privilège 15, avec un secret
+    expr: d.users.get("admin", {}).get("privilege") == 15 and d.users["admin"].get("secret") == "Adm1n2024"
+    hint: "username admin privilege 15 secret Adm1n2024"
+  - desc: Utilisateur support, privilège 1, avec un secret
+    expr: d.users.get("support", {}).get("privilege") == 1 and d.users["support"].get("secret") == "Supp0rt2024"
+    hint: "Utilise le mot-clé secret (haché) et non password."
+  - desc: Console en authentification locale
+    expr: line("console").login == "local"
+solution: |
+  configure terminal
+  username admin privilege 15 secret Adm1n2024
+  username support secret Supp0rt2024
+  line console 0
+  login local
+  end

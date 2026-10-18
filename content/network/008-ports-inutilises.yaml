@@ -1,0 +1,40 @@
+title: Éteindre les ports inutilisés
+level: debutant
+order: 8
+device: switch
+hostname: SW-ATELIER
+tags: [shutdown, interface range, sécurité]
+summary: Désactiver en une fois tous les ports qui ne servent pas.
+description: |
+  Sur un switch, tous les ports sont **actifs par défaut** : n'importe qui peut brancher un PC
+  sur une prise libre. Bonne pratique : éteindre les ports non utilisés.
+
+  À l'atelier, seuls `Fa0/1` à `Fa0/10` et l'uplink `Gi0/1` sont câblés.
+
+  1. Sélectionne `Fa0/11` à `Fa0/24` avec `interface range fa0/11 - 24` ;
+  2. donne-leur la description `NON-UTILISE` ;
+  3. désactive-les avec `shutdown` ;
+  4. fais de même pour `Gi0/2`.
+
+  Les ports utilisés doivent rester actifs. Contrôle avec `show interfaces status`
+  (les ports éteints apparaissent en *disabled*).
+checks:
+  - desc: Fa0/11 à Fa0/24 sont éteints
+    expr: all(i.shutdown for i in ports("fa0/11-24"))
+    hint: "interface range fa0/11 - 24 puis shutdown"
+  - desc: Gi0/2 est éteint
+    expr: intf("g0/2").shutdown
+  - desc: Les ports éteints portent la description NON-UTILISE
+    expr: all(i.description == "NON-UTILISE" for i in ports("fa0/11-24")) and intf("g0/2").description == "NON-UTILISE"
+  - desc: Fa0/1 à Fa0/10 et Gi0/1 restent actifs
+    expr: not any(i.shutdown for i in ports("fa0/1-10")) and not intf("g0/1").shutdown
+    hint: "Attention à la plage : seuls les ports 11 à 24 doivent être éteints."
+solution: |
+  configure terminal
+  interface range fa0/11 - 24
+  description NON-UTILISE
+  shutdown
+  interface g0/2
+  description NON-UTILISE
+  shutdown
+  end

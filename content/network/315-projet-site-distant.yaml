@@ -1,0 +1,93 @@
+title: "Projet : routeur de site distant en double pile"
+level: expert
+order: 15
+device: router
+hostname: R-SITE-B
+tags: [projet, ipv6, eigrp, dhcp, router-on-a-stick]
+summary: Ouvrir un nouveau site en IPv4 et IPv6, raccordé au siège en EIGRP.
+description: |
+  L'entreprise ouvre le site B. Le switch d'accès est relié en trunk au port `G0/0` du routeur,
+  et le lien WAN vers le siège arrive sur `G0/1`.
+
+  **1. Adressage double pile** — active le routage IPv6 et l'interface physique `G0/0`, puis :
+
+  | Interface  | VLAN | IPv4              | IPv6                    |
+  |------------|------|-------------------|-------------------------|
+  | `G0/0.10`  | 10   | 192.168.110.1/24  | 2001:db8:b:10::1/64     |
+  | `G0/0.20`  | 20   | 192.168.120.1/24  | 2001:db8:b:20::1/64     |
+  | `G0/1`     | —    | 10.255.0.2/30     | 2001:db8:b:ff::2/64     |
+
+  **2. DHCP** pour les deux VLAN : adresses `.1` à `.10` exclues, pools `VLAN10` et `VLAN20`
+  (passerelle = adresse du routeur, DNS `10.0.0.53`, domaine `tdm.local`).
+
+  **3. EIGRP** AS `100`, router-id `22.22.22.22`, `no auto-summary`, annonce des trois réseaux IPv4
+  avec leur masque générique ; sous-interfaces utilisateurs **passives**.
+
+  **4. IPv6** — route par défaut `::/0` vers le siège `2001:db8:b:ff::1`.
+
+  **5.** NTP `10.0.0.10`, puis sauvegarde.
+checks:
+  - desc: G0/0 activée et sous-interfaces 802.1Q adressées en IPv4
+    expr: not intf("g0/0").shutdown and intf("g0/0.10").encapsulation_vlan == 10 and intf("g0/0.10").ip == "192.168.110.1" and intf("g0/0.20").encapsulation_vlan == 20 and intf("g0/0.20").ip == "192.168.120.1"
+  - desc: Lien WAN en 10.255.0.2/30 et actif
+    expr: intf("g0/1").ip == "10.255.0.2" and prefix(intf("g0/1").mask) == 30 and not intf("g0/1").shutdown
+  - desc: Routage IPv6 et adresses IPv6 des trois interfaces
+    expr: d.ipv6_routing and ipv6("g0/0.10", "2001:db8:b:10::1/64") and ipv6("g0/0.20", "2001:db8:b:20::1/64") and ipv6("g0/1", "2001:db8:b:ff::2/64")
+  - desc: Adresses .1 à .10 exclues dans les deux réseaux
+    expr: ("192.168.110.1", "192.168.110.10") in d.dhcp_excluded and ("192.168.120.1", "192.168.120.10") in d.dhcp_excluded
+  - desc: Pools VLAN10 et VLAN20 complets
+    expr: all(d.dhcp_pools[n].network == net and prefix(d.dhcp_pools[n].mask) == 24 and d.dhcp_pools[n].default_router == gw and d.dhcp_pools[n].dns_server == "10.0.0.53" and d.dhcp_pools[n].domain_name == "tdm.local" for n, net, gw in [("VLAN10", "192.168.110.0", "192.168.110.1"), ("VLAN20", "192.168.120.0", "192.168.120.1")])
+  - desc: EIGRP 100, router-id 22.22.22.22, sans résumé automatique
+    expr: 100 in d.eigrp and d.eigrp[100].router_id == "22.22.22.22" and not d.eigrp[100].auto_summary
+  - desc: Les trois réseaux annoncés en EIGRP avec leur wildcard
+    expr: eigrp_net(100, "192.168.110.0", "0.0.0.255") and eigrp_net(100, "192.168.120.0", "0.0.0.255") and eigrp_net(100, "10.255.0.0", "0.0.0.3")
+  - desc: Sous-interfaces utilisateurs passives, lien WAN actif
+    expr: d.eigrp[100].is_passive("g0/0.10") and d.eigrp[100].is_passive("g0/0.20") and not d.eigrp[100].is_passive("g0/1")
+  - desc: Route par défaut IPv6 vers 2001:db8:b:ff::1
+    expr: route6("::/0", "2001:db8:b:ff::1")
+  - desc: NTP et sauvegarde
+    expr: '"10.0.0.10" in d.ntp_servers and d.saved'
+solution: |
+  configure terminal
+  ipv6 unicast-routing
+  interface g0/0
+  no shutdown
+  interface g0/0.10
+  encapsulation dot1Q 10
+  ip address 192.168.110.1 255.255.255.0
+  ipv6 address 2001:db8:b:10::1/64
+  interface g0/0.20
+  encapsulation dot1Q 20
+  ip address 192.168.120.1 255.255.255.0
+  ipv6 address 2001:db8:b:20::1/64
+  interface g0/1
+  ip address 10.255.0.2 255.255.255.252
+  ipv6 address 2001:db8:b:ff::2/64
+  no shutdown
+  exit
+  ip dhcp excluded-address 192.168.110.1 192.168.110.10
+  ip dhcp excluded-address 192.168.120.1 192.168.120.10
+  ip dhcp pool VLAN10
+  network 192.168.110.0 255.255.255.0
+  default-router 192.168.110.1
+  dns-server 10.0.0.53
+  domain-name tdm.local
+  ip dhcp pool VLAN20
+  network 192.168.120.0 255.255.255.0
+  default-router 192.168.120.1
+  dns-server 10.0.0.53
+  domain-name tdm.local
+  exit
+  router eigrp 100
+  eigrp router-id 22.22.22.22
+  network 192.168.110.0 0.0.0.255
+  network 192.168.120.0 0.0.0.255
+  network 10.255.0.0 0.0.0.3
+  passive-interface g0/0.10
+  passive-interface g0/0.20
+  no auto-summary
+  exit
+  ipv6 route ::/0 2001:db8:b:ff::1
+  ntp server 10.0.0.10
+  end
+  copy running-config startup-config
