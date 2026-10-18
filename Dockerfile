@@ -10,6 +10,8 @@ WORKDIR /app
 COPY backend/requirements.txt backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
 COPY . .
+# Un clone Windows peut avoir des fins de ligne CRLF, que sh refuse.
+RUN sed -i 's/\r$//' /app/docker-entrypoint.sh
 ENV TDM_SANDBOX=docker \
     PYTHONUNBUFFERED=1
 EXPOSE 8000
