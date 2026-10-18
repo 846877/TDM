@@ -1,0 +1,138 @@
+title: Mini-inventaire
+level: intermediaire
+order: 22
+tags: [classes, dataclass, exceptions]
+summary: Modéliser des données avec @dataclass et une classe qui les gère.
+description: |
+  1. Crée une **dataclass** `Produit` avec les champs `nom` (str), `prix` (float) et
+     `quantite` (int, **0 par défaut**), plus une **propriété** `valeur` qui renvoie
+     `prix * quantite`.
+  2. Crée une classe `Inventaire` qui stocke des produits par nom :
+     - `ajouter(produit)` : ajoute le produit ; si un produit du même nom existe déjà, on
+       **additionne** les quantités (et on garde le prix existant) ;
+     - `retirer(nom, quantite)` : diminue la quantité ; lève `KeyError` si le produit est
+       inconnu et `ValueError` si le stock est insuffisant (le stock ne change pas). Un produit
+       dont la quantité tombe à 0 reste dans l'inventaire ;
+     - `valeur_totale()` : somme des valeurs, arrondie à 2 décimales ;
+     - `en_rupture()` : liste **triée** des noms dont la quantité vaut 0 ;
+     - `len(inventaire)` renvoie le nombre de produits différents (méthode `__len__`).
+
+  ```python
+  from dataclasses import dataclass
+
+  inv = Inventaire()
+  inv.ajouter(Produit("stylo", 1.5, 10))
+  inv.retirer("stylo", 4)
+  inv.valeur_totale()   # 9.0
+  ```
+starter: |
+  from dataclasses import dataclass
+
+
+  class Produit:
+      pass
+
+
+  class Inventaire:
+      pass
+tests: |
+  def test_dataclass():
+      "Produit est une dataclass avec quantite = 0 par défaut"
+      import dataclasses
+      assert dataclasses.is_dataclass(solution.Produit), "Produit doit être décoré par @dataclass"
+      p = solution.Produit("gomme", 0.8)
+      assert p.quantite == 0, "la quantité par défaut doit valoir 0"
+      assert p == solution.Produit("gomme", 0.8, 0), "une dataclass sait comparer ses instances"
+
+  def test_valeur():
+      "Propriété valeur"
+      p = solution.Produit("stylo", 1.5, 4)
+      assert p.valeur == 6.0, f"attendu 6.0, obtenu {p.valeur!r}"
+
+  def test_ajouter_retirer():
+      "Ajouter puis retirer"
+      inv = solution.Inventaire()
+      inv.ajouter(solution.Produit("stylo", 1.5, 10))
+      inv.retirer("stylo", 4)
+      assert inv.valeur_totale() == 9.0, f"valeur totale : {inv.valeur_totale()!r}"
+      assert len(inv) == 1
+
+  def test_fusion():
+      "Ajouter un produit existant additionne les quantités"
+      inv = solution.Inventaire()
+      inv.ajouter(solution.Produit("cahier", 2.0, 3))
+      inv.ajouter(solution.Produit("cahier", 9.99, 2))
+      assert len(inv) == 1, "il ne doit y avoir qu'un seul produit « cahier »"
+      assert inv.valeur_totale() == 10.0, f"attendu 10.0 (5 x 2.0), obtenu {inv.valeur_totale()!r}"
+
+  def test_erreurs():
+      "KeyError et ValueError"
+      inv = solution.Inventaire()
+      inv.ajouter(solution.Produit("colle", 3.0, 2))
+      try:
+          inv.retirer("ciseaux", 1)
+      except KeyError:
+          pass
+      else:
+          raise AssertionError("retirer un produit inconnu doit lever KeyError")
+      try:
+          inv.retirer("colle", 5)
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("retirer plus que le stock doit lever ValueError")
+      assert inv.valeur_totale() == 6.0, "le stock ne doit pas changer après une erreur"
+
+  def test_rupture():
+      "Produits en rupture, triés"
+      inv = solution.Inventaire()
+      inv.ajouter(solution.Produit("zip", 1.0, 1))
+      inv.ajouter(solution.Produit("agrafe", 0.1))
+      inv.ajouter(solution.Produit("encre", 5.0, 2))
+      inv.retirer("zip", 1)
+      assert inv.en_rupture() == ["agrafe", "zip"], f"obtenu {inv.en_rupture()!r}"
+      assert len(inv) == 3
+
+  def test_vide():
+      "Inventaire vide"
+      inv = solution.Inventaire()
+      assert inv.valeur_totale() == 0 and len(inv) == 0 and inv.en_rupture() == []
+solution: |
+  from dataclasses import dataclass
+
+
+  @dataclass
+  class Produit:
+      nom: str
+      prix: float
+      quantite: int = 0
+
+      @property
+      def valeur(self):
+          return self.prix * self.quantite
+
+
+  class Inventaire:
+      def __init__(self):
+          self._produits = {}
+
+      def ajouter(self, produit):
+          if produit.nom in self._produits:
+              self._produits[produit.nom].quantite += produit.quantite
+          else:
+              self._produits[produit.nom] = Produit(produit.nom, produit.prix, produit.quantite)
+
+      def retirer(self, nom, quantite):
+          produit = self._produits[nom]
+          if quantite > produit.quantite:
+              raise ValueError("stock insuffisant")
+          produit.quantite -= quantite
+
+      def valeur_totale(self):
+          return round(sum(p.valeur for p in self._produits.values()), 2)
+
+      def en_rupture(self):
+          return sorted(nom for nom, p in self._produits.items() if p.quantite == 0)
+
+      def __len__(self):
+          return len(self._produits)

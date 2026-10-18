@@ -1,0 +1,78 @@
+title: Jouer avec range
+level: debutant
+order: 25
+tags: [range, listes, boucles]
+summary: Maîtriser début, fin et pas de range().
+description: |
+  `range(debut, fin, pas)` produit les entiers de `debut` (inclus) à `fin` (**exclu**), en
+  avançant de `pas` (qui peut être négatif). `list(range(...))` le transforme en liste.
+
+  1. `multiples(n, limite)` : les multiples de `n` strictement positifs et **inférieurs ou égaux**
+     à `limite`.
+  2. `compte_a_rebours(n)` : la liste de `n` jusqu'à `0` inclus.
+  3. `somme_impairs(n)` : la somme des nombres impairs de 1 à `n` inclus.
+
+  ```python
+  multiples(3, 10)        # [3, 6, 9]
+  compte_a_rebours(3)     # [3, 2, 1, 0]
+  somme_impairs(7)        # 1 + 3 + 5 + 7 = 16
+  ```
+starter: |
+  def multiples(n, limite):
+      pass
+
+
+  def compte_a_rebours(n):
+      pass
+
+
+  def somme_impairs(n):
+      pass
+tests: |
+  def test_multiples():
+      "multiples(3, 10)"
+      r = solution.multiples(3, 10)
+      assert r == [3, 6, 9], f"attendu [3, 6, 9], obtenu {r!r}"
+
+  def test_multiples_limite_incluse():
+      "La limite est incluse"
+      r = solution.multiples(5, 20)
+      assert r == [5, 10, 15, 20], f"attendu [5, 10, 15, 20], obtenu {r!r}"
+
+  def test_multiples_vide():
+      "Limite plus petite que n"
+      assert solution.multiples(7, 3) == []
+
+  def test_rebours():
+      "compte_a_rebours(3)"
+      r = solution.compte_a_rebours(3)
+      assert r == [3, 2, 1, 0], f"attendu [3, 2, 1, 0], obtenu {r!r}"
+
+  def test_rebours_zero():
+      "compte_a_rebours(0)"
+      assert solution.compte_a_rebours(0) == [0]
+
+  def test_impairs():
+      "somme_impairs(7) vaut 16"
+      r = solution.somme_impairs(7)
+      assert r == 16, f"attendu 16, obtenu {r!r}"
+
+  def test_impairs_pair():
+      "somme_impairs(10) vaut 25"
+      r = solution.somme_impairs(10)
+      assert r == 25, f"attendu 25, obtenu {r!r}"
+
+  def test_impairs_zero():
+      "somme_impairs(0) vaut 0"
+      assert solution.somme_impairs(0) == 0
+solution: |
+  def multiples(n, limite):
+      return list(range(n, limite + 1, n))
+
+
+  def compte_a_rebours(n):
+      return list(range(n, -1, -1))
+
+
+  def somme_impairs(n):
+      return sum(range(1, n + 1, 2))

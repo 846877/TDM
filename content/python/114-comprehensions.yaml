@@ -1,0 +1,85 @@
+title: Compréhensions
+level: intermediaire
+order: 14
+tags: [compréhensions, listes, dictionnaires]
+summary: Remplacer des boucles par des compréhensions de listes et de dictionnaires.
+description: |
+  Écris chaque fonction **en une seule expression** grâce aux compréhensions :
+
+  - `carres_pairs(n)` : la liste des carrés des nombres **pairs** de 0 à `n` inclus ;
+  - `longueurs(mots)` : un dictionnaire `{mot: longueur}` ;
+  - `inverser(d)` : un dictionnaire où clés et valeurs sont échangées (on suppose les valeurs
+    uniques) ;
+  - `matrice_identite(n)` : une liste de `n` listes, avec des `1` sur la diagonale et des `0`
+    ailleurs.
+
+  ```python
+  carres_pairs(6)                # [0, 4, 16, 36]
+  longueurs(["chat", "souris"])  # {"chat": 4, "souris": 6}
+  inverser({"a": 1, "b": 2})     # {1: "a", 2: "b"}
+  matrice_identite(2)            # [[1, 0], [0, 1]]
+  ```
+
+  Rappel : `[expr for x in iterable if condition]` et `{cle: valeur for ...}`.
+starter: |
+  def carres_pairs(n):
+      pass
+
+
+  def longueurs(mots):
+      pass
+
+
+  def inverser(d):
+      pass
+
+
+  def matrice_identite(n):
+      pass
+tests: |
+  def test_carres_pairs():
+      "carres_pairs(6)"
+      r = solution.carres_pairs(6)
+      assert r == [0, 4, 16, 36], f"attendu [0, 4, 16, 36], obtenu {r!r}"
+
+  def test_carres_pairs_impair():
+      "carres_pairs(5) s'arrête à 4"
+      r = solution.carres_pairs(5)
+      assert r == [0, 4, 16], f"attendu [0, 4, 16], obtenu {r!r}"
+
+  def test_longueurs():
+      "longueurs de mots"
+      r = solution.longueurs(["chat", "souris", ""])
+      assert r == {"chat": 4, "souris": 6, "": 0}, f"obtenu {r!r}"
+
+  def test_inverser():
+      "inverser un dictionnaire"
+      r = solution.inverser({"a": 1, "b": 2})
+      assert r == {1: "a", 2: "b"}, f"obtenu {r!r}"
+      assert solution.inverser({}) == {}
+
+  def test_identite():
+      "matrice identité 3x3"
+      r = solution.matrice_identite(3)
+      assert r == [[1, 0, 0], [0, 1, 0], [0, 0, 1]], f"obtenu {r!r}"
+
+  def test_identite_lignes_independantes():
+      "Les lignes sont des listes distinctes"
+      m = solution.matrice_identite(2)
+      m[0][1] = 9
+      assert m[1][1] == 1 and m[1][0] == 0, "modifier une ligne ne doit pas changer les autres"
+solution: |
+  def carres_pairs(n):
+      return [x * x for x in range(0, n + 1, 2)]
+
+
+  def longueurs(mots):
+      return {mot: len(mot) for mot in mots}
+
+
+  def inverser(d):
+      return {v: k for k, v in d.items()}
+
+
+  def matrice_identite(n):
+      return [[1 if i == j else 0 for j in range(n)] for i in range(n)]

@@ -1,0 +1,39 @@
+title: Pyramide d'étoiles
+level: debutant
+order: 18
+tags: [boucles, chaînes, print]
+summary: Dessiner avec des boucles et la multiplication de chaînes.
+mode: stdio
+description: |
+  Lis un entier `n` puis dessine une pyramide de `n` étages avec des `*`.
+  L'étage `i` (de 1 à `n`) contient `2*i - 1` étoiles, précédées de `n - i` espaces.
+
+  Pour `n = 4` :
+
+  ```
+     *
+    ***
+   *****
+  *******
+  ```
+
+  Astuce : `"*" * 3` vaut `"***"`. Si `n` vaut 0, rien n'est affiché.
+starter: |
+  n = int(input())
+cases:
+  - name: "n = 4"
+    input: "4\n"
+    output: "   *\n  ***\n *****\n*******\n"
+  - name: "n = 1"
+    input: "1\n"
+    output: "*\n"
+  - name: "n = 6"
+    input: "6\n"
+    output: "     *\n    ***\n   *****\n  *******\n *********\n***********\n"
+  - name: "n = 0"
+    input: "0\n"
+    output: ""
+solution: |
+  n = int(input())
+  for i in range(1, n + 1):
+      print(" " * (n - i) + "*" * (2 * i - 1))

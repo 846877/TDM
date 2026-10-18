@@ -1,0 +1,95 @@
+title: Conversion de bases
+level: intermediaire
+order: 27
+tags: [algorithmes, chaînes, input]
+summary: Passer d'une base à l'autre, de 2 à 36.
+mode: stdio
+description: |
+  Chaque ligne d'entrée contient `nombre base_source base_cible` (bases entre 2 et 36). Pour
+  chaque ligne, affiche le nombre converti dans la base cible, en **majuscules**, sans préfixe.
+  Le nombre peut être négatif.
+
+  Si une base est hors de `[2, 36]` ou si le nombre n'est pas valide dans sa base, affiche
+  `Erreur` pour cette ligne et continue. Les lignes vides sont ignorées.
+
+  Entrée :
+
+  ```
+  255 10 16
+  ff 16 2
+  -101 2 10
+  19 8 10
+  ```
+
+  Sortie :
+
+  ```
+  FF
+  11111111
+  -5
+  Erreur
+  ```
+
+  `int(texte, base)` lit un nombre dans n'importe quelle base. Pour écrire dans la base cible,
+  c'est à toi de jouer : divisions successives et la chaîne
+  `"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"`.
+starter: |
+  import sys
+
+  for ligne in sys.stdin:
+      nombre, source, cible = ligne.split()
+cases:
+  - name: "Exemple de l'énoncé"
+    input: "255 10 16\nff 16 2\n-101 2 10\n19 8 10\n"
+    output: |
+      FF
+      11111111
+      -5
+      Erreur
+  - name: "Zéro et base 36"
+    input: "0 10 2\n35 10 36\nZZ 36 10\n"
+    output: |
+      0
+      Z
+      1295
+  - name: "Bases invalides"
+    input: "10 1 10\n10 10 37\n42 10 3\n"
+    output: |
+      Erreur
+      Erreur
+      1120
+  - name: "Lignes vides et grands nombres"
+    input: "\n18446744073709551615 10 16\n\n"
+    output: "FFFFFFFFFFFFFFFF"
+solution: |
+  import sys
+
+  CHIFFRES = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+  def en_base(n, base):
+      if n == 0:
+          return "0"
+      signe = "-" if n < 0 else ""
+      n = abs(n)
+      chiffres = []
+      while n > 0:
+          n, reste = divmod(n, base)
+          chiffres.append(CHIFFRES[reste])
+      return signe + "".join(reversed(chiffres))
+
+
+  for ligne in sys.stdin:
+      if not ligne.strip():
+          continue
+      nombre, source, cible = ligne.split()
+      source, cible = int(source), int(cible)
+      if not (2 <= source <= 36 and 2 <= cible <= 36):
+          print("Erreur")
+          continue
+      try:
+          valeur = int(nombre, source)
+      except ValueError:
+          print("Erreur")
+          continue
+      print(en_base(valeur, cible))

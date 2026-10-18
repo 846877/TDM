@@ -1,0 +1,65 @@
+title: Somme des chiffres
+level: debutant
+order: 26
+tags: [while, division entière]
+summary: Découper un nombre chiffre par chiffre avec while.
+description: |
+  Sans convertir le nombre en chaîne, en utilisant `% 10` (dernier chiffre) et `// 10`
+  (on enlève le dernier chiffre) dans une boucle `while` :
+
+  1. Écris `somme_chiffres(n)` qui renvoie la somme des chiffres d'un entier positif.
+  2. Écris `racine_numerique(n)` qui additionne les chiffres **encore et encore** jusqu'à
+     n'obtenir qu'un seul chiffre.
+
+  ```python
+  somme_chiffres(1234)     # 10
+  racine_numerique(9875)   # 9 + 8 + 7 + 5 = 29 -> 2 + 9 = 11 -> 1 + 1 = 2
+  ```
+starter: |
+  def somme_chiffres(n):
+      pass
+
+
+  def racine_numerique(n):
+      pass
+tests: |
+  def test_somme():
+      "somme_chiffres(1234) vaut 10"
+      r = solution.somme_chiffres(1234)
+      assert r == 10, f"attendu 10, obtenu {r!r}"
+
+  def test_somme_zero():
+      "somme_chiffres(0) vaut 0"
+      assert solution.somme_chiffres(0) == 0
+
+  def test_somme_zeros_internes():
+      "somme_chiffres(10203) vaut 6"
+      r = solution.somme_chiffres(10203)
+      assert r == 6, f"attendu 6, obtenu {r!r}"
+
+  def test_racine():
+      "racine_numerique(9875) vaut 2"
+      r = solution.racine_numerique(9875)
+      assert r == 2, f"attendu 2, obtenu {r!r}"
+
+  def test_racine_un_chiffre():
+      "Un nombre à un chiffre est sa propre racine"
+      assert solution.racine_numerique(7) == 7
+
+  def test_racine_grand():
+      "Grand nombre"
+      r = solution.racine_numerique(999999999999)
+      assert r == 9, f"attendu 9, obtenu {r!r}"
+solution: |
+  def somme_chiffres(n):
+      total = 0
+      while n > 0:
+          total += n % 10
+          n //= 10
+      return total
+
+
+  def racine_numerique(n):
+      while n >= 10:
+          n = somme_chiffres(n)
+      return n

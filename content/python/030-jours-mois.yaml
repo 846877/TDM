@@ -1,0 +1,83 @@
+title: Jours dans un mois
+level: debutant
+order: 30
+tags: [fonctions, tuples, conditions]
+summary: Combiner plusieurs fonctions et une table de valeurs.
+description: |
+  1. Écris `est_bissextile(annee)` (règle : divisible par 4, sauf par 100, sauf par 400).
+  2. Écris `jours_dans_mois(mois, annee)` qui renvoie le nombre de jours du mois (1 = janvier,
+     12 = décembre). Février a 29 jours les années bissextiles. Si le mois n'est pas entre 1 et
+     12, renvoie `0`.
+  3. Écris `jours_dans_annee(annee)` qui **réutilise** `jours_dans_mois` pour additionner les
+     jours des 12 mois.
+
+  ```python
+  jours_dans_mois(2, 2024)    # 29
+  jours_dans_mois(4, 2023)    # 30
+  jours_dans_annee(2023)      # 365
+  ```
+
+  Astuce : un tuple `(31, 28, 31, 30, ...)` indexé par `mois - 1` évite une longue suite de `if`.
+starter: |
+  def est_bissextile(annee):
+      pass
+
+
+  def jours_dans_mois(mois, annee):
+      pass
+
+
+  def jours_dans_annee(annee):
+      pass
+tests: |
+  def test_mois_31():
+      "Janvier, juillet, août et décembre ont 31 jours"
+      for mois in (1, 7, 8, 12):
+          r = solution.jours_dans_mois(mois, 2023)
+          assert r == 31, f"jours_dans_mois({mois}, 2023) : attendu 31, obtenu {r!r}"
+
+  def test_mois_30():
+      "Avril, juin, septembre et novembre ont 30 jours"
+      for mois in (4, 6, 9, 11):
+          r = solution.jours_dans_mois(mois, 2023)
+          assert r == 30, f"jours_dans_mois({mois}, 2023) : attendu 30, obtenu {r!r}"
+
+  def test_fevrier():
+      "Février : 28 ou 29 jours"
+      cas = {2023: 28, 2024: 29, 1900: 28, 2000: 29}
+      for annee, attendu in cas.items():
+          r = solution.jours_dans_mois(2, annee)
+          assert r == attendu, f"février {annee} : attendu {attendu}, obtenu {r!r}"
+
+  def test_mois_invalide():
+      "Mois invalide -> 0"
+      for mois in (0, 13, -1):
+          r = solution.jours_dans_mois(mois, 2023)
+          assert r == 0, f"jours_dans_mois({mois}, 2023) : attendu 0, obtenu {r!r}"
+
+  def test_annee():
+      "365 ou 366 jours"
+      assert solution.jours_dans_annee(2023) == 365, "2023 a 365 jours"
+      assert solution.jours_dans_annee(2024) == 366, "2024 a 366 jours"
+      assert solution.jours_dans_annee(2100) == 365, "2100 n'est pas bissextile"
+solution: |
+  JOURS = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+
+
+  def est_bissextile(annee):
+      return annee % 4 == 0 and (annee % 100 != 0 or annee % 400 == 0)
+
+
+  def jours_dans_mois(mois, annee):
+      if not 1 <= mois <= 12:
+          return 0
+      if mois == 2 and est_bissextile(annee):
+          return 29
+      return JOURS[mois - 1]
+
+
+  def jours_dans_annee(annee):
+      total = 0
+      for mois in range(1, 13):
+          total += jours_dans_mois(mois, annee)
+      return total

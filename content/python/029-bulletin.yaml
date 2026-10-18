@@ -1,0 +1,61 @@
+title: Bulletin de classe
+level: debutant
+order: 29
+tags: [input, listes, boucles, f-string]
+summary: Lire plusieurs lignes et produire un petit rapport.
+mode: stdio
+description: |
+  La première ligne contient le nombre d'élèves `n`. Les `n` lignes suivantes contiennent un
+  prénom et une note entière séparés par un espace.
+
+  Affiche ensuite trois lignes :
+
+  ```
+  Moyenne : 12.33
+  Meilleur : Bob (17)
+  Admis : 2/3
+  ```
+
+  - la moyenne est affichée avec **2 décimales** (`{moyenne:.2f}`) ;
+  - le meilleur est le premier élève ayant la note la plus haute ;
+  - un élève est admis si sa note est ≥ 10.
+
+  (exemple pour `Alice 12`, `Bob 17`, `Chloé 8`).
+starter: |
+  n = int(input())
+cases:
+  - name: "Trois élèves"
+    input: "3\nAlice 12\nBob 17\nChloé 8\n"
+    output: |
+      Moyenne : 12.33
+      Meilleur : Bob (17)
+      Admis : 2/3
+  - name: "Égalité : le premier gagne"
+    input: "4\nDan 15\nEve 15\nFlo 10\nGus 9\n"
+    output: |
+      Moyenne : 12.25
+      Meilleur : Dan (15)
+      Admis : 3/4
+  - name: "Un seul élève"
+    input: "1\nZoé 20\n"
+    output: |
+      Moyenne : 20.00
+      Meilleur : Zoé (20)
+      Admis : 1/1
+solution: |
+  n = int(input())
+  total = 0
+  admis = 0
+  meilleur_nom = None
+  meilleure_note = -1
+  for _ in range(n):
+      nom, note = input().split()
+      note = int(note)
+      total += note
+      if note >= 10:
+          admis += 1
+      if note > meilleure_note:
+          meilleur_nom, meilleure_note = nom, note
+  print(f"Moyenne : {total / n:.2f}")
+  print(f"Meilleur : {meilleur_nom} ({meilleure_note})")
+  print(f"Admis : {admis}/{n}")

@@ -1,0 +1,101 @@
+title: Validateur de mots de passe
+level: intermediaire
+order: 28
+tags: [chaînes, conditions, input]
+summary: Vérifier plusieurs règles et expliquer ce qui ne va pas.
+mode: stdio
+description: |
+  Chaque ligne d'entrée est un mot de passe à vérifier (les lignes vides sont ignorées). Les
+  règles, **dans cet ordre** :
+
+  1. au moins 12 caractères → sinon `trop court`
+  2. au moins une minuscule → sinon `pas de minuscule`
+  3. au moins une majuscule → sinon `pas de majuscule`
+  4. au moins un chiffre → sinon `pas de chiffre`
+  5. au moins un caractère spécial (ni lettre, ni chiffre, ni espace) → sinon `pas de caractère spécial`
+  6. pas d'espace → sinon `contient un espace`
+
+  Pour chaque mot de passe, affiche `OK` s'il respecte tout, sinon `REFUSÉ : ` suivi des
+  problèmes séparés par `, `. À la fin, affiche `Valides : X/N`.
+
+  Entrée :
+
+  ```
+  Tr0ub4dor&3xyz
+  motdepasse
+  ```
+
+  Sortie :
+
+  ```
+  OK
+  REFUSÉ : trop court, pas de majuscule, pas de chiffre, pas de caractère spécial
+  Valides : 1/2
+  ```
+
+  Astuce : `any(c.isdigit() for c in mdp)`.
+starter: |
+  import sys
+
+  for ligne in sys.stdin:
+      mdp = ligne.rstrip("\n")
+cases:
+  - name: "Exemple de l'énoncé"
+    input: "Tr0ub4dor&3xyz\nmotdepasse\n"
+    output: |
+      OK
+      REFUSÉ : trop court, pas de majuscule, pas de chiffre, pas de caractère spécial
+      Valides : 1/2
+  - name: "Une seule règle manquante"
+    input: "ABCDEFGHIJ1!\nabcdefghij1!\nAbcdefghijk!\nAbcdefghij12\n"
+    output: |
+      REFUSÉ : pas de minuscule
+      REFUSÉ : pas de majuscule
+      REFUSÉ : pas de chiffre
+      REFUSÉ : pas de caractère spécial
+      Valides : 0/4
+  - name: "Espaces et lignes vides"
+    input: "Mon mot 2 Passe!\n\nC0rrect-Horse-Battery\n"
+    output: |
+      REFUSÉ : contient un espace
+      OK
+      Valides : 1/2
+  - name: "Tout faux"
+    input: "    \n"
+    output: |
+      REFUSÉ : trop court, pas de minuscule, pas de majuscule, pas de chiffre, pas de caractère spécial, contient un espace
+      Valides : 0/1
+solution: |
+  import sys
+
+
+  def problemes(mdp):
+      erreurs = []
+      if len(mdp) < 12:
+          erreurs.append("trop court")
+      if not any(c.islower() for c in mdp):
+          erreurs.append("pas de minuscule")
+      if not any(c.isupper() for c in mdp):
+          erreurs.append("pas de majuscule")
+      if not any(c.isdigit() for c in mdp):
+          erreurs.append("pas de chiffre")
+      if not any(not c.isalnum() and not c.isspace() for c in mdp):
+          erreurs.append("pas de caractère spécial")
+      if any(c.isspace() for c in mdp):
+          erreurs.append("contient un espace")
+      return erreurs
+
+
+  total = valides = 0
+  for ligne in sys.stdin:
+      mdp = ligne.rstrip("\n")
+      if not mdp:
+          continue
+      total += 1
+      erreurs = problemes(mdp)
+      if erreurs:
+          print("REFUSÉ : " + ", ".join(erreurs))
+      else:
+          valides += 1
+          print("OK")
+  print(f"Valides : {valides}/{total}")

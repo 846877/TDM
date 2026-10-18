@@ -1,0 +1,101 @@
+title: Fenêtre glissante avec deque
+level: intermediaire
+order: 19
+tags: [collections, deque, algorithmes]
+summary: Utiliser une file à double extrémité.
+description: |
+  `collections.deque` est une liste optimisée pour ajouter et retirer aux **deux bouts**.
+  `deque(maxlen=k)` oublie automatiquement les éléments les plus anciens.
+
+  1. `moyennes_glissantes(valeurs, k)` : renvoie la liste des moyennes de chaque fenêtre de `k`
+     valeurs consécutives, arrondies à 2 décimales. Si `k` est plus grand que la liste, renvoie
+     `[]`. Si `k <= 0`, lève `ValueError`.
+  2. `tourner(liste, n)` : renvoie une **nouvelle liste** décalée de `n` positions vers la droite
+     (`n` négatif = vers la gauche). Astuce : `deque.rotate(n)`.
+  3. `derniers(iterable, n)` : renvoie la liste des `n` derniers éléments d'un itérable
+     quelconque (même un générateur).
+
+  ```python
+  moyennes_glissantes([1, 2, 3, 4, 5], 3)   # [2.0, 3.0, 4.0]
+  tourner([1, 2, 3, 4], 1)                  # [4, 1, 2, 3]
+  derniers(range(10), 3)                    # [7, 8, 9]
+  ```
+starter: |
+  from collections import deque
+
+
+  def moyennes_glissantes(valeurs, k):
+      pass
+
+
+  def tourner(liste, n):
+      pass
+
+
+  def derniers(iterable, n):
+      pass
+tests: |
+  def test_moyennes():
+      "Fenêtres de 3"
+      r = solution.moyennes_glissantes([1, 2, 3, 4, 5], 3)
+      assert r == [2.0, 3.0, 4.0], f"obtenu {r!r}"
+
+  def test_moyennes_arrondi():
+      "Arrondi à 2 décimales"
+      r = solution.moyennes_glissantes([1, 2, 2, 5], 3)
+      assert r == [1.67, 3.0], f"obtenu {r!r}"
+
+  def test_moyennes_trop_grand():
+      "k plus grand que la liste"
+      assert solution.moyennes_glissantes([1, 2], 3) == []
+
+  def test_moyennes_k_invalide():
+      "k <= 0 -> ValueError"
+      try:
+          solution.moyennes_glissantes([1, 2], 0)
+      except ValueError:
+          return
+      raise AssertionError("k = 0 aurait dû lever ValueError")
+
+  def test_tourner():
+      "Rotation à droite et à gauche"
+      assert solution.tourner([1, 2, 3, 4], 1) == [4, 1, 2, 3]
+      assert solution.tourner([1, 2, 3, 4], -1) == [2, 3, 4, 1]
+      assert solution.tourner([1, 2, 3], 4) == [3, 1, 2], "une rotation plus grande que la liste boucle"
+
+  def test_tourner_copie():
+      "tourner renvoie une nouvelle liste"
+      l = [1, 2, 3]
+      r = solution.tourner(l, 1)
+      assert l == [1, 2, 3], "la liste d'origine ne doit pas être modifiée"
+      assert isinstance(r, list), f"attendu une list, obtenu {type(r).__name__}"
+
+  def test_derniers():
+      "Derniers éléments d'un générateur"
+      r = solution.derniers((x * x for x in range(6)), 2)
+      assert r == [16, 25], f"obtenu {r!r}"
+      assert solution.derniers([1], 5) == [1]
+solution: |
+  from collections import deque
+
+
+  def moyennes_glissantes(valeurs, k):
+      if k <= 0:
+          raise ValueError("k doit être positif")
+      fenetre = deque(maxlen=k)
+      resultat = []
+      for v in valeurs:
+          fenetre.append(v)
+          if len(fenetre) == k:
+              resultat.append(round(sum(fenetre) / k, 2))
+      return resultat
+
+
+  def tourner(liste, n):
+      d = deque(liste)
+      d.rotate(n)
+      return list(d)
+
+
+  def derniers(iterable, n):
+      return list(deque(iterable, maxlen=n))

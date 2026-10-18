@@ -1,0 +1,74 @@
+title: Classement d'une course
+level: intermediaire
+order: 16
+tags: [tri, lambda, input]
+summary: Trier avec sorted, key et un tuple de critères.
+mode: stdio
+description: |
+  Chaque ligne d'entrée décrit un coureur au format `nom;temps` où le temps est écrit `mm:ss`.
+  La lecture s'arrête à la fin de l'entrée.
+
+  Affiche le classement : rang, nom et temps, du plus rapide au plus lent. En cas d'égalité de
+  temps, les coureurs sont classés par **ordre alphabétique** et partagent le même rang (le
+  rang suivant saute, comme aux JO) :
+
+  ```
+  1. Léa 12:05
+  2. Ben 12:30
+  2. Max 12:30
+  4. Zoé 13:00
+  ```
+
+  Astuces :
+  - lire toutes les lignes : `import sys` puis `sys.stdin.read().splitlines()` ;
+  - `sorted(coureurs, key=lambda c: (c[1], c[0]))` trie selon plusieurs critères ;
+  - convertis le temps en secondes pour comparer correctement.
+starter: |
+  import sys
+
+  lignes = sys.stdin.read().splitlines()
+cases:
+  - name: "Avec égalité"
+    input: "Zoé;13:00\nMax;12:30\nLéa;12:05\nBen;12:30\n"
+    output: |
+      1. Léa 12:05
+      2. Ben 12:30
+      2. Max 12:30
+      4. Zoé 13:00
+  - name: "Minutes à plus d'un chiffre"
+    input: "Ali;9:59\nBob;10:01\nCyd;59:00\n"
+    output: |
+      1. Ali 9:59
+      2. Bob 10:01
+      3. Cyd 59:00
+  - name: "Lignes vides ignorées"
+    input: "Paul;20:00\n\nAnne;20:00\n\n"
+    output: |
+      1. Anne 20:00
+      1. Paul 20:00
+  - name: "Un seul coureur"
+    input: "Solo;01:00\n"
+    output: "1. Solo 01:00"
+solution: |
+  import sys
+
+
+  def en_secondes(temps):
+      minutes, secondes = temps.split(":")
+      return int(minutes) * 60 + int(secondes)
+
+
+  coureurs = []
+  for ligne in sys.stdin.read().splitlines():
+      if ligne.strip():
+          nom, temps = ligne.strip().split(";")
+          coureurs.append((nom, temps))
+
+  classement = sorted(coureurs, key=lambda c: (en_secondes(c[1]), c[0]))
+  rang = 0
+  precedent = None
+  for position, (nom, temps) in enumerate(classement, start=1):
+      if en_secondes(temps) != precedent:
+          rang = position
+          precedent = en_secondes(temps)
+      print(f"{rang}. {nom} {temps}")
