@@ -44,23 +44,45 @@ function clientId() {
   return id;
 }
 
-const progress = {
-  all() { return storage.get("progress", {}); },
-  isDone(cat, id) { return Boolean((this.all()[cat] || {})[id]); },
-  markDone(cat, id) {
-    const p = this.all();
-    p[cat] = p[cat] || {};
-    p[cat][id] = true;
-    storage.set("progress", p);
+/* Profil actif : sa progression et son XP sont enregistrées par le serveur. */
+const profile = {
+  id: storage.get("profile", null),
+  data: null,
+  async load() {
+    this.data = null;
+    if (this.id) {
+      try {
+        this.data = await api(`/api/profiles/${this.id}`);
+      } catch {
+        this.select(null);
+      }
+    }
+    renderProfileChip();
   },
-  count(cat) { return Object.keys(this.all()[cat] || {}).length; },
+  select(id) {
+    this.id = id;
+    storage.set("profile", id);
+  },
+  isGod() { return Boolean(this.data && this.data.title.god); },
+};
+
+const progress = {
+  items(cat) { return (profile.data && profile.data.completed_items[cat]) || []; },
+  isDone(cat, id) { return this.items(cat).includes(id); },
+  markDone(cat, id) {
+    if (!profile.data) return;
+    const list = (profile.data.completed_items[cat] = this.items(cat));
+    if (!list.includes(id)) list.push(id);
+  },
+  count(cat) { return this.items(cat).length; },
 };
 
 async function api(path, options = {}) {
-  const init = { ...options };
+  const init = { ...options, headers: { ...(options.headers || {}) } };
+  if (profile.id) init.headers["X-TDM-Profile"] = String(profile.id);
   if (init.body && typeof init.body !== "string") {
     init.body = JSON.stringify(init.body);
-    init.headers = { "Content-Type": "application/json" };
+    init.headers["Content-Type"] = "application/json";
   }
   const res = await fetch(path, init);
   const data = await res.json().catch(() => ({}));
@@ -173,6 +195,9 @@ function onLeave(fn) { cleanups.push(fn); }
 
 const routes = [
   [/^\/?$/, renderHome],
+  [/^\/profils\/?$/, renderProfilePicker],
+  [/^\/profil\/?$/, renderProfile],
+  [/^\/classement\/?$/, renderLeaderboard],
   [/^\/python\/?$/, () => renderList("python")],
   [/^\/python\/(.+)$/, (id) => renderPythonExercise(id)],
   [/^\/reseaux\/?$/, () => renderList("reseaux")],
@@ -185,6 +210,10 @@ async function router() {
   cleanups.forEach((fn) => { try { fn(); } catch { /* ignore */ } });
   cleanups = [];
   const path = decodeURIComponent(location.hash.replace(/^#/, "")) || "/";
+  if (!profile.data && path !== "/profils") {
+    location.hash = "#/profils";
+    return;
+  }
   const section = path.split("/")[1] || "";
   document.querySelectorAll("[data-nav]").forEach((a) => a.classList.toggle("active", a.dataset.nav === section));
   for (const [pattern, handler] of routes) {
@@ -214,14 +243,15 @@ async function renderHome() {
       h("p", {}, "Choisis une catégorie, ouvre un exercice, code dans le navigateur et laisse la moulinette valider ton travail.")),
     h("div", { class: "cards" }, data.categories.map((cat) => {
       const done = progress.count(cat.id);
-      const pct = cat.count ? Math.round((done / cat.count) * 100) : 0;
+      const total = cat.id === "devops" ? profile.data.categories.devops.total : cat.count;
+      const pct = total ? Math.round((done / total) * 100) : 0;
       return h("a", { class: "card", href: `#/${cat.id}` },
         h("div", { class: "icon" }, CATEGORIES[cat.id].icon),
         h("h2", {}, cat.title),
         h("p", {}, cat.description),
         h("div", { class: "progress" }, h("span", { style: `width:${pct}%` })),
         h("div", { class: "progress-label" },
-          cat.id === "devops" ? `${cat.count} lab(s) disponibles` : `${done} / ${cat.count} exercices validés`));
+          cat.id === "devops" ? `${cat.count} labs · ${done} exercice(s) validé(s)` : `${done} / ${cat.count} exercices validés`));
     }))));
 }
 
@@ -274,7 +304,7 @@ async function renderList(cat) {
 }
 
 function labDoneCount(lab) {
-  return Object.keys(storage.get(`lab.${lab.id}`, {})).length;
+  return progress.items("devops").filter((item) => item.startsWith(lab.id + "/")).length;
 }
 
 function neighbours(items, id) {
@@ -420,6 +450,7 @@ async function renderPythonExercise(id) {
       if (res.success) {
         progress.markDone("python", id);
         doneBadge.style.display = "";
+        celebrate(res.reward);
       }
     } catch (err) {
       resultsPane.replaceChildren(h("div", { class: "error-box" }, err.message));
@@ -553,6 +584,7 @@ async function renderNetworkExercise(id) {
       if (res.success) {
         progress.markDone("reseaux", id);
         doneBadge.style.display = "";
+        celebrate(res.reward);
       }
     } catch (err) {
       verdict.replaceChildren(h("div", { class: "error-box" }, err.message));
@@ -573,8 +605,6 @@ async function renderLab(id) {
     api("/api/devops/labs"),
   ]);
   document.title = `TDM · ${lab.title}`;
-  const doneKey = `lab.${id}`;
-  const done = storage.get(doneKey, {});
 
   const statusDot = h("span", { class: "status-dot" });
   const statusText = h("span", { class: "muted" });
@@ -593,7 +623,7 @@ async function renderLab(id) {
   const exerciseCards = lab.exercises.map((ex) => {
     const result = h("div", { class: "results" });
     result.style.padding = "8px 0 0";
-    const card = h("article", { class: `lab-ex ${done[ex.id] ? "done" : ""}` });
+    const card = h("article", { class: `lab-ex ${progress.isDone("devops", `${id}/${ex.id}`) ? "done" : ""}` });
     const btn = h("button", { class: "btn small" }, "Vérifier");
     btn.addEventListener("click", async () => {
       btn.disabled = true;
@@ -602,9 +632,9 @@ async function renderLab(id) {
         const res = await api(`/api/devops/labs/${encodeURIComponent(id)}/exercises/${encodeURIComponent(ex.id)}/check`, { method: "POST" });
         renderResults(result, res);
         if (res.success) {
-          done[ex.id] = true;
-          storage.set(doneKey, done);
+          progress.markDone("devops", `${id}/${ex.id}`);
           card.classList.add("done");
+          celebrate(res.reward);
         }
       } catch (err) {
         result.replaceChildren(h("div", { class: "error-box" }, err.message));
@@ -705,6 +735,195 @@ async function renderLab(id) {
   }
 }
 
+/* --- Profils, XP et classement ----------------------------------------- */
+
+const CATEGORY_KEYS = ["python", "reseaux", "devops"];
+
+function avatar(p, size = "") {
+  return h("span", { class: `avatar ${size} ${p.title.god ? "god" : ""}` }, p.name.slice(0, 1).toUpperCase());
+}
+
+function titleBadge(title) {
+  return h("span", { class: `title-badge ${title.god ? "god" : ""}`, title: title.description }, title.name);
+}
+
+function xpBar(p) {
+  const span = Math.max(1, p.next_level_xp - p.level_xp);
+  const pct = Math.min(100, Math.round(((p.xp - p.level_xp) / span) * 100));
+  return h("div", { class: "xp" },
+    h("div", { class: `progress xp-bar ${p.title.god ? "god" : ""}` }, h("span", { style: `width:${pct}%` })),
+    h("div", { class: "progress-label" }, `${p.xp} XP · encore ${p.next_level_xp - p.xp} XP pour le niveau ${p.level + 1}`));
+}
+
+function renderProfileChip() {
+  const chip = document.getElementById("profile-chip");
+  if (!chip) return;
+  const p = profile.data;
+  if (!p) {
+    chip.replaceChildren(h("span", { class: "muted" }, "Choisir un profil"));
+    chip.setAttribute("href", "#/profils");
+    return;
+  }
+  chip.setAttribute("href", "#/profil");
+  const span = Math.max(1, p.next_level_xp - p.level_xp);
+  const pct = Math.min(100, Math.round(((p.xp - p.level_xp) / span) * 100));
+  chip.replaceChildren(avatar(p, "small"),
+    h("span", { class: "chip-text" },
+      h("span", { class: "chip-name" }, p.name, " ", titleBadge(p.title)),
+      h("span", { class: "chip-level" }, `Niv. ${p.level} · ${p.xp} XP`,
+        h("span", { class: `chip-bar ${p.title.god ? "god" : ""}` }, h("span", { style: `width:${pct}%` })))));
+}
+
+function toast(content, kind = "") {
+  let host = document.getElementById("toasts");
+  if (!host) {
+    host = h("div", { id: "toasts" });
+    document.body.append(host);
+  }
+  const el = h("div", { class: `toast ${kind}` }, content);
+  host.append(el);
+  setTimeout(() => el.classList.add("leave"), 3200);
+  setTimeout(() => el.remove(), 3800);
+}
+
+/** Met à jour le profil après une validation réussie et fête l'XP gagnée. */
+function celebrate(reward) {
+  if (!reward || !profile.data) return;
+  Object.assign(profile.data, reward.profile);
+  renderProfileChip();
+  if (reward.xp_gained > 0) toast(`+${reward.xp_gained} XP`, "xp");
+  else toast("Déjà validé : pas d'XP en plus");
+  if (reward.level_up) {
+    const p = reward.profile;
+    const overlay = h("div", { class: "levelup", onclick: () => overlay.remove() },
+      h("div", { class: "levelup-card" },
+        h("div", { class: "levelup-kicker" }, "Niveau supérieur !"),
+        h("div", { class: "levelup-level" }, String(p.level)),
+        reward.new_title ? h("div", {}, "Nouveau titre : ", titleBadge(p.title)) : titleBadge(p.title),
+        h("button", { class: "btn primary" }, "Continuer")));
+    document.body.append(overlay);
+  }
+}
+
+async function renderProfilePicker() {
+  document.title = "TDM · Profils";
+  const list = await api("/api/profiles");
+  const input = h("input", { class: "search", placeholder: "Ton pseudo", maxlength: 24, autofocus: true });
+  const error = h("div");
+  const choose = async (id) => {
+    profile.select(id);
+    await profile.load();
+    location.hash = "#/";
+  };
+  const create = async (event) => {
+    event.preventDefault();
+    error.replaceChildren();
+    try {
+      const created = await api("/api/profiles", { method: "POST", body: { name: input.value } });
+      await choose(created.id);
+    } catch (err) {
+      error.replaceChildren(h("div", { class: "error-box" }, err.message));
+    }
+  };
+  app.replaceChildren(h("div", { class: "page narrow" },
+    h("section", { class: "hero" },
+      h("h1", {}, "Qui s'entraîne ?"),
+      h("p", {}, "Chaque exercice réussi rapporte de l'XP : monte de niveau, débloque des titres et grimpe au classement.")),
+    list.length ? h("div", { class: "profile-grid" }, list.map((p) =>
+      h("button", { class: `profile-card ${p.title.god ? "god" : ""}`, onclick: () => choose(p.id) },
+        avatar(p, "large"),
+        h("strong", {}, p.name),
+        titleBadge(p.title),
+        h("span", { class: "muted" }, `Niveau ${p.level} · ${p.xp} XP`)))) : null,
+    h("form", { class: "create-profile", onsubmit: create },
+      h("h2", {}, list.length ? "Nouveau profil" : "Crée ton profil"),
+      h("div", { class: "row" }, input, h("button", { class: "btn primary", type: "submit" }, "Créer")),
+      error)));
+}
+
+async function renderProfile() {
+  await profile.load();
+  const p = profile.data;
+  document.title = `TDM · ${p.name}`;
+  const categories = CATEGORY_KEYS.map((key) => {
+    const c = p.categories[key];
+    const pct = c.total ? Math.round((c.done / c.total) * 100) : 0;
+    return h("div", { class: "stat-card" },
+      h("div", { class: "stat-head" }, h("span", { class: "icon" }, CATEGORIES[key].icon), h("strong", {}, CATEGORIES[key].title),
+        c.title ? h("span", { class: "badge ok" }, c.title) : null),
+      h("div", { class: "stat-value" }, `${c.done} / ${c.total}`),
+      h("div", { class: "progress" }, h("span", { style: `width:${pct}%` })),
+      h("div", { class: "progress-label" }, `${pct} % · ${c.xp} XP`),
+      h("div", { class: "level-split" }, LEVELS.map(([level, label]) =>
+        h("span", { class: `badge ${level}` }, `${label} ${c.levels[level] || 0}`))));
+  });
+  const ladder = p.titles.map((t) => {
+    const unlocked = p.level >= t.level;
+    return h("li", { class: unlocked ? "unlocked" : "" },
+      h("span", { class: "ladder-mark" }, unlocked ? "✓" : "🔒"),
+      h("strong", {}, t.name), h("span", { class: "muted" }, ` · niveau ${t.level} (${t.xp} XP)`),
+      h("div", { class: "muted small" }, t.description));
+  });
+  if (p.title.god) {
+    ladder.push(h("li", { class: "unlocked god" }, h("span", { class: "ladder-mark" }, "⚡"),
+      h("strong", {}, "GOD"), h("div", { class: "muted small" }, p.title.description)));
+  }
+  const recent = p.recent.length ? h("ul", { class: "recent" }, p.recent.map((r) =>
+    h("li", {}, h("span", { class: "icon" }, CATEGORIES[r.category].icon), " ", r.title || r.item_id,
+      " ", levelBadge(r.level), h("span", { class: "muted" }, ` +${r.xp} XP · ${new Date(r.completed_at * 1000).toLocaleString("fr-FR")}`))))
+    : h("p", { class: "muted" }, "Aucun exercice validé pour l'instant. Lance-toi !");
+  const removeBtn = h("button", { class: "btn small danger" }, "Supprimer ce profil");
+  removeBtn.addEventListener("click", async () => {
+    if (removeBtn.dataset.confirm !== "1") {
+      removeBtn.dataset.confirm = "1";
+      removeBtn.textContent = "Confirmer la suppression (définitif)";
+      return;
+    }
+    await api(`/api/profiles/${p.id}`, { method: "DELETE" });
+    profile.select(null);
+    await profile.load();
+    location.hash = "#/profils";
+  });
+
+  app.replaceChildren(h("div", { class: "page" },
+    h("section", { class: `profile-hero ${p.title.god ? "god" : ""}` },
+      avatar(p, "xl"),
+      h("div", { class: "profile-main" },
+        h("h1", {}, p.name, " ", titleBadge(p.title)),
+        h("div", { class: "profile-sub" },
+          h("span", { class: "big-level" }, `Niveau ${p.level}`),
+          h("a", { href: "#/classement" }, `#${p.rank} au classement sur ${p.total_profiles}`),
+          h("span", { class: "muted" }, `${p.completed} exercice(s) validé(s)`)),
+        xpBar(p)),
+      h("div", { class: "profile-actions" },
+        h("a", { class: "btn small", href: "#/profils" }, "Changer de profil"), removeBtn)),
+    h("h2", {}, "Progression"),
+    h("div", { class: "stat-grid" }, categories),
+    h("div", { class: "two-cols" },
+      h("section", {}, h("h2", {}, "Titres"), h("ul", { class: "ladder" }, ladder),
+        h("p", { class: "muted small" }, "XP par exercice : Débutant 10 · Intermédiaire 25 · Avancé 50 · Expert 100.")),
+      h("section", {}, h("h2", {}, "Activité récente"), recent))));
+}
+
+async function renderLeaderboard() {
+  document.title = "TDM · Classement";
+  const list = await api("/api/profiles");
+  const medal = (rank) => ({ 1: "🥇", 2: "🥈", 3: "🥉" })[rank] || `#${rank}`;
+  app.replaceChildren(h("div", { class: "page" },
+    h("h1", {}, "🏆 Classement"),
+    h("p", { class: "muted" }, "Classé par XP. Chaque exercice compte une seule fois."),
+    h("table", { class: "leaderboard" },
+      h("thead", {}, h("tr", {}, ["Rang", "Joueur", "Titre", "Niveau", "XP", "Exercices"].map((t) => h("th", {}, t)))),
+      h("tbody", {}, list.map((p) =>
+        h("tr", { class: `${p.id === profile.id ? "me" : ""} ${p.title.god ? "god" : ""}` },
+          h("td", { class: "rank" }, medal(p.rank)),
+          h("td", {}, h("span", { class: "who" }, avatar(p, "small"), p.name)),
+          h("td", {}, titleBadge(p.title)),
+          h("td", {}, String(p.level)),
+          h("td", {}, h("strong", {}, String(p.xp))),
+          h("td", {}, String(p.completed))))))));
+}
+
 /* --- Démarrage ---------------------------------------------------------- */
 
 api("/api/health").then((health) => {
@@ -716,4 +935,4 @@ api("/api/health").then((health) => {
     : "Le code est exécuté directement sur cette machine (usage personnel uniquement).";
 }).catch(() => {});
 
-router();
+profile.load().then(router);

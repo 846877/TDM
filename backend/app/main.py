@@ -10,12 +10,12 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import FastAPI, Header, HTTPException, WebSocket
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, sandbox, terminal
+from . import config, profiles, sandbox, terminal
 from .catalog import LEVEL_LABELS, LEVELS, Catalog, summary
 from .devops import labs as devops
 from .network import grader as net_grader
@@ -36,6 +36,22 @@ class CodeIn(BaseModel):
 
 class CommandIn(BaseModel):
     line: str = Field(max_length=2000)
+
+
+class ProfileIn(BaseModel):
+    name: str = Field(max_length=64)
+
+
+ProfileHeader = Header(default=None, alias="X-TDM-Profile")
+
+
+def _reward(result: dict, profile_id: int | None, category: str, item_id: str, level: str) -> dict:
+    """Ajoute l'XP gagnée au résultat d'une validation réussie (si un profil est actif)."""
+    if profile_id and result.get("success"):
+        reward = profiles.record_success(profile_id, category, item_id, level)
+        if reward:
+            result = result | {"reward": reward}
+    return result
 
 
 def _python_exercise(exercise_id: str) -> dict:
@@ -119,8 +135,9 @@ def python_run(exercise_id: str, body: CodeIn):
 
 
 @app.post("/api/python/exercises/{exercise_id}/submit")
-def python_submit(exercise_id: str, body: CodeIn):
-    return py_grader.grade(_python_exercise(exercise_id), body.code)
+def python_submit(exercise_id: str, body: CodeIn, profile: int | None = ProfileHeader):
+    exercise = _python_exercise(exercise_id)
+    return _reward(py_grader.grade(exercise, body.code), profile, "python", exercise_id, exercise["level"])
 
 
 @app.websocket("/ws/python/{exercise_id}")
@@ -230,9 +247,10 @@ def network_command(session_id: str, body: CommandIn):
 
 
 @app.post("/api/network/sessions/{session_id}/check")
-def network_check(session_id: str):
+def network_check(session_id: str, profile: int | None = ProfileHeader):
     exercise_id, session = _net_session(session_id)
-    return net_grader.check(_network_exercise(exercise_id), session.device)
+    exercise = _network_exercise(exercise_id)
+    return _reward(net_grader.check(exercise, session.device), profile, "reseaux", exercise_id, exercise["level"])
 
 
 # ---------------------------------------------------------------------------
@@ -278,8 +296,10 @@ def devops_reset(lab_id: str):
 
 
 @app.post("/api/devops/labs/{lab_id}/exercises/{exercise_id}/check")
-def devops_check(lab_id: str, exercise_id: str):
-    return _lab_action(devops.check, _lab(lab_id), exercise_id)
+def devops_check(lab_id: str, exercise_id: str, profile: int | None = ProfileHeader):
+    lab = _lab(lab_id)
+    result = _lab_action(devops.check, lab, exercise_id)
+    return _reward(result, profile, "devops", f"{lab_id}/{exercise_id}", lab["level"])
 
 
 @app.websocket("/ws/devops/{lab_id}")
@@ -297,6 +317,65 @@ async def devops_terminal(websocket: WebSocket, lab_id: str):
         await websocket.close()
         return
     await terminal.bridge(websocket, argv)
+
+
+# ---------------------------------------------------------------------------
+# Profils et classement
+# ---------------------------------------------------------------------------
+
+def _totals() -> dict[str, int]:
+    return {
+        "python": len(python_catalog.all()),
+        "reseaux": len(network_catalog.all()),
+        "devops": sum(len(lab["exercises"]) for lab in devops.load_labs()),
+    }
+
+
+@app.get("/api/profiles")
+def profiles_list():
+    return profiles.list_profiles()
+
+
+@app.post("/api/profiles")
+def profiles_create(body: ProfileIn):
+    try:
+        return profiles.create_profile(body.name)
+    except profiles.ProfileError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/profiles/{profile_id}")
+def profiles_get(profile_id: int):
+    profile = profiles.get_profile(profile_id)
+    if profile is None:
+        raise HTTPException(404, "Profil introuvable")
+    totals = _totals()
+    for category, total in totals.items():
+        stats = profile["categories"].setdefault(category, {"done": 0, "xp": 0, "levels": {}})
+        stats["total"] = total
+        stats["title"] = profiles.category_title(category, stats["done"], total)
+    for item in profile["recent"]:
+        item["title"] = _item_title(item["category"], item["item_id"])
+    return profile | {"titles": profiles.titles_ladder()}
+
+
+def _item_title(category: str, item_id: str) -> str:
+    if category == "python":
+        found = python_catalog.get(item_id)
+    elif category == "reseaux":
+        found = network_catalog.get(item_id)
+    else:
+        lab_id, _, exercise_id = item_id.partition("/")
+        lab = next((lab for lab in devops.load_labs() if lab["id"] == lab_id), None)
+        exercise = next((e for e in lab["exercises"] if e["id"] == exercise_id), None) if lab else None
+        return f"{lab['title']} · {exercise['title']}" if exercise else item_id
+    return found["title"] if found else item_id
+
+
+@app.delete("/api/profiles/{profile_id}")
+def profiles_delete(profile_id: int):
+    profiles.delete_profile(profile_id)
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------

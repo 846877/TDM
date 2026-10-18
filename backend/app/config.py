@@ -31,6 +31,7 @@ def user_data_dir() -> Path:
     return Path(base) / "TDM"
 
 
+DATA_DIR = _path_env("TDM_DATA_DIR", user_data_dir() if FROZEN else ROOT_DIR / ".data")
 WORKSPACES_DIR = _path_env("TDM_WORKSPACES_DIR", user_data_dir() / "workspaces" if FROZEN else ROOT_DIR / ".workspaces")
 
 # "auto" (docker si disponible, sinon local), "docker" ou "local".
