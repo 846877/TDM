@@ -1,0 +1,33 @@
+title: Sécuriser les accès
+level: debutant
+order: 2
+device: switch
+tags: [mots de passe, sécurité]
+summary: Mot de passe privilégié, console et chiffrement.
+description: |
+  Un switch sans mot de passe, c'est une porte ouverte. Configure :
+
+  1. le mot de passe du mode privilégié **chiffré** : `class` (`enable secret`) ;
+  2. la **ligne console** : mot de passe `cisco` et demande d'authentification (`login`) ;
+  3. le **chiffrement** de tous les mots de passe en clair (`service password-encryption`).
+
+  Vérifie le résultat avec `show running-config`.
+checks:
+  - desc: enable secret configuré à « class »
+    expr: d.enable_secret == "class"
+  - desc: Mot de passe console « cisco »
+    expr: line("console").password == "cisco"
+  - desc: Authentification demandée sur la console
+    expr: line("console").login == "login"
+    hint: "Dans line console 0, tape login"
+  - desc: Mots de passe chiffrés
+    expr: d.password_encryption
+solution: |
+  configure terminal
+  enable secret class
+  line console 0
+  password cisco
+  login
+  exit
+  service password-encryption
+  end

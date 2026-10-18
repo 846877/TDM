@@ -6,7 +6,7 @@ import secrets
 import time
 from typing import Any
 
-from .ios import Device, Session, apply_commands, mask_to_prefix, parse_vlan_list
+from .ios import Device, Session, apply_commands, expand_range, mask_to_prefix, parse_vlan_list
 
 SESSION_TTL = 6 * 3600
 MAX_SESSIONS = 500
@@ -49,6 +49,10 @@ def _cleanup() -> None:
         del _sessions[oldest]
 
 
+SAFE_BUILTINS = {"len": len, "any": any, "all": all, "set": set, "sorted": sorted, "str": str,
+                 "int": int, "range": range, "list": list, "True": True, "False": False, "None": None}
+
+
 def check(exercise: dict[str, Any], device: Device) -> dict[str, Any]:
     """Évalue chaque vérification (expression Python écrite par l'auteur de l'exercice)."""
     namespace = {
@@ -61,12 +65,14 @@ def check(exercise: dict[str, Any], device: Device) -> dict[str, Any]:
         "ospf_net": device.ospf_has_network,
         "vlans": parse_vlan_list,
         "prefix": mask_to_prefix,
+        "ports": lambda spec: [device.intf(n) for n in expand_range(spec)],
+        "acl": lambda name: [e for e in device.acls.get(str(name), []) if e != "__ext__"],
+        "line": lambda kind: device.lines[kind],
     }
     results = []
     for item in exercise.get("checks", []):
         try:
-            ok = bool(eval(item["expr"], {"__builtins__": {"len": len, "any": any, "all": all, "set": set,
-                                                           "sorted": sorted, "str": str, "int": int}}, namespace))
+            ok = bool(eval(item["expr"], {"__builtins__": SAFE_BUILTINS, **namespace}))
         except Exception:  # noqa: BLE001 - une interface absente, etc. = vérification échouée
             ok = False
         results.append({"name": item["desc"], "passed": ok, "message": "" if ok else item.get("hint", "")})

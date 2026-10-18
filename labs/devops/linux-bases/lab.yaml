@@ -1,0 +1,59 @@
+title: Les bases de Linux
+level: debutant
+order: 1
+tags: [linux, shell, permissions]
+summary: Fichiers, droits, utilisateurs et filtres en ligne de commande.
+user: eleve
+workdir: /home/eleve
+description: |
+  Un conteneur Ubuntu rien que pour toi (utilisateur `eleve`, `sudo` sans mot de passe).
+  Réalise les exercices dans le terminal puis clique sur **Vérifier**.
+
+  Commandes utiles : `ls -l`, `mkdir -p`, `chmod`, `chown`, `grep`, `wc -l`, `useradd`.
+exercises:
+  - id: arborescence
+    title: Créer une arborescence
+    description: |
+      Dans ton dossier personnel, crée l'arborescence `projets/tdm/src` et `projets/tdm/docs`,
+      puis un fichier vide `projets/tdm/README.md`.
+    checks:
+      - desc: Dossiers src et docs
+        run: test -d /home/eleve/projets/tdm/src && test -d /home/eleve/projets/tdm/docs
+      - desc: Fichier README.md
+        run: test -f /home/eleve/projets/tdm/README.md
+  - id: permissions
+    title: Droits d'accès
+    description: |
+      Crée un script `~/projets/tdm/deploy.sh` qui affiche `deploiement ok`, puis rends-le
+      exécutable **uniquement par toi** (droits `700`). Il doit fonctionner avec `./deploy.sh`.
+    hint: "chmod 700 deploy.sh — et n'oublie pas la première ligne #!/bin/bash"
+    checks:
+      - desc: Droits 700
+        run: test "$(stat -c %a /home/eleve/projets/tdm/deploy.sh)" = 700
+      - desc: Le script affiche « deploiement ok »
+        run: cd /home/eleve/projets/tdm && ./deploy.sh | grep -q "deploiement ok"
+  - id: filtres
+    title: Analyser un fichier de log
+    description: |
+      Le fichier `~/donnees/app.log` contient des logs applicatifs. Écris dans `~/erreurs.txt`
+      **le nombre** de lignes de niveau `ERROR` (juste le nombre), et dans `~/erreurs-service-2.log`
+      toutes les lignes `ERROR` du service `service-2`.
+    hint: "grep -c, et les redirections > ; pense à combiner deux grep avec |"
+    checks:
+      - desc: Nombre d'erreurs correct
+        run: test "$(tr -d '[:space:]' < /home/eleve/erreurs.txt)" = "$(grep -c ' ERROR ' /home/eleve/donnees/app.log)"
+      - desc: Lignes du service-2 extraites
+        run: grep ' ERROR ' /home/eleve/donnees/app.log | grep 'service-2 ' | cmp -s - /home/eleve/erreurs-service-2.log
+  - id: utilisateurs
+    title: Utilisateurs et groupes
+    description: |
+      Crée le groupe `devops`, puis l'utilisateur `deployer` (avec un dossier personnel) membre de ce groupe.
+      Crée ensuite `/opt/app` appartenant à `deployer:devops` avec les droits `770`.
+    hint: "sudo groupadd, sudo useradd -m -G, sudo chown, sudo chmod"
+    checks:
+      - desc: Groupe devops
+        run: getent group devops
+      - desc: Utilisateur deployer dans devops
+        run: id -nG deployer | grep -qw devops && test -d /home/deployer
+      - desc: /opt/app appartient à deployer:devops en 770
+        run: test "$(stat -c '%U:%G %a' /opt/app)" = "deployer:devops 770"

@@ -1,0 +1,38 @@
+title: Accès SSH sécurisé
+level: intermediaire
+order: 5
+device: switch
+tags: [ssh, sécurité, vty]
+summary: Remplacer Telnet par SSH.
+description: |
+  Telnet fait circuler les mots de passe en clair. Configure l'administration en **SSH v2** :
+
+  1. nom d'hôte `SW-CORE` et nom de domaine `tdm.local` ;
+  2. utilisateur local `admin`, privilège 15, secret `Sup3rS3cret` ;
+  3. clés RSA de **2048 bits** : `crypto key generate rsa general-keys modulus 2048` ;
+  4. `ip ssh version 2` ;
+  5. lignes VTY 0 à 15 : authentification **locale** et **SSH uniquement**.
+checks:
+  - desc: Nom d'hôte SW-CORE et domaine tdm.local
+    expr: d.hostname == "SW-CORE" and d.domain_name == "tdm.local"
+  - desc: Utilisateur admin privilège 15 avec un secret
+    expr: d.users.get("admin", {}).get("privilege") == 15 and d.users["admin"].get("secret") == "Sup3rS3cret"
+  - desc: Clés RSA d'au moins 2048 bits
+    expr: (d.rsa_modulus or 0) >= 2048
+  - desc: SSH version 2
+    expr: d.ssh_version == 2
+  - desc: VTY en login local
+    expr: line("vty").login == "local"
+  - desc: VTY en SSH uniquement
+    expr: line("vty").transport_input == "ssh"
+solution: |
+  configure terminal
+  hostname SW-CORE
+  ip domain-name tdm.local
+  username admin privilege 15 secret Sup3rS3cret
+  crypto key generate rsa general-keys modulus 2048
+  ip ssh version 2
+  line vty 0 15
+  login local
+  transport input ssh
+  end

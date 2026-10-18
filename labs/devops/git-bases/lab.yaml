@@ -1,0 +1,49 @@
+title: Git au quotidien
+level: debutant
+order: 2
+tags: [git, versioning]
+summary: Dépôt, commits, branches et fusion.
+image: alpine/git:latest
+entrypoint: ""
+shell: sh
+workdir: /root
+setup: |
+  git config --global user.name "Eleve TDM" && git config --global user.email eleve@tdm.local && git config --global init.defaultBranch main
+description: |
+  Un conteneur Alpine avec `git` déjà configuré (`user.name` et `user.email`).
+  Travaille dans `/root/app`.
+exercises:
+  - id: init
+    title: Premier dépôt
+    description: |
+      Crée le dossier `/root/app`, initialise un dépôt git, ajoute un fichier `README.md`
+      et fais un premier commit avec le message `Premier commit`.
+    checks:
+      - desc: Dépôt git initialisé
+        run: test -d /root/app/.git
+      - desc: Commit « Premier commit » contenant README.md
+        run: cd /root/app && git log --format=%s | grep -qx "Premier commit" && git ls-files | grep -qx README.md
+  - id: branche
+    title: Travailler sur une branche
+    description: |
+      Crée une branche `feature/login`, ajoute-y un fichier `login.py` dans un commit, puis reviens
+      sur `main` et **fusionne** la branche.
+    checks:
+      - desc: La branche feature/login existe
+        run: cd /root/app && git rev-parse --verify feature/login
+      - desc: login.py est présent sur main
+        run: cd /root/app && git ls-tree --name-only main | grep -qx login.py
+      - desc: La branche est fusionnée dans main
+        run: cd /root/app && git merge-base --is-ancestor feature/login main
+  - id: ignore
+    title: Ignorer des fichiers
+    description: |
+      Ajoute un `.gitignore` (commité) qui ignore les fichiers `*.log` et le dossier `__pycache__/`.
+      Crée un fichier `debug.log` : il ne doit pas apparaître dans `git status`.
+    checks:
+      - desc: .gitignore commité
+        run: cd /root/app && git ls-files | grep -qx .gitignore
+      - desc: Les .log sont ignorés
+        run: cd /root/app && git check-ignore -q debug.log
+      - desc: __pycache__ est ignoré
+        run: cd /root/app && mkdir -p __pycache__ && touch __pycache__/x.pyc && git check-ignore -q __pycache__/x.pyc

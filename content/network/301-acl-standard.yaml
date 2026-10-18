@@ -1,0 +1,42 @@
+title: ACL standard
+level: expert
+order: 1
+device: router
+hostname: R1
+tags: [acl, sécurité, wildcard]
+summary: Filtrer le trafic par adresse source.
+description: |
+  Le serveur sensible est derrière `G0/1`. Seul le réseau d'administration `192.168.10.0/24`
+  et le poste `192.168.20.50` doivent pouvoir l'atteindre.
+
+  1. Crée l'ACL standard numérotée **10** :
+     - autoriser `192.168.10.0 0.0.0.255`,
+     - autoriser l'hôte `192.168.20.50` (`host`),
+     - refuser tout le reste (explicitement : `deny any`).
+  2. Applique-la en **sortie** de `G0/1`.
+
+  Rappel : une ACL standard se place au plus près de la **destination**.
+initial: |
+  interface g0/0
+  ip address 192.168.10.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 172.16.0.1 255.255.255.0
+  no shutdown
+checks:
+  - desc: ACL 10 autorise 192.168.10.0/24
+    expr: '"permit 192.168.10.0 0.0.0.255" in acl(10)'
+  - desc: ACL 10 autorise l'hôte 192.168.20.50
+    expr: '"permit host 192.168.20.50" in acl(10) or "permit 192.168.20.50 0.0.0.0" in acl(10)'
+  - desc: ACL 10 se termine par deny any
+    expr: acl(10)[-1:] == ["deny any"]
+  - desc: ACL 10 appliquée en sortie de G0/1
+    expr: intf("g0/1").access_groups.get("out") == "10"
+solution: |
+  configure terminal
+  access-list 10 permit 192.168.10.0 0.0.0.255
+  access-list 10 permit host 192.168.20.50
+  access-list 10 deny any
+  interface g0/1
+  ip access-group 10 out
+  end

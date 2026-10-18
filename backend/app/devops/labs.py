@@ -132,6 +132,8 @@ def start(lab: dict[str, Any]) -> str:
         cmd += ["-p", str(port)]
     if lab.get("privileged"):
         cmd.append("--privileged")
+    if lab.get("entrypoint") is not None:
+        cmd.append(f"--entrypoint={lab['entrypoint']}")
     cmd.append(image)
     command = lab.get("command", ["sleep", "infinity"])
     cmd += command if isinstance(command, list) else ["sh", "-c", command]

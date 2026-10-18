@@ -1,0 +1,38 @@
+title: Affecter les ports aux VLAN
+level: debutant
+order: 5
+device: switch
+tags: [vlan, access, interface range]
+summary: Configurer des ports d'accès en lot.
+description: |
+  Les VLAN 10 (ADMIN) et 20 (COMPTA) existent déjà. Configure les ports en **mode access** :
+
+  - `Fa0/1` à `Fa0/8` → VLAN 10
+  - `Fa0/9` à `Fa0/16` → VLAN 20
+
+  Gagne du temps avec `interface range fa0/1 - 8`.
+  ```
+  switchport mode access
+  switchport access vlan 10
+  ```
+initial: |
+  vlan 10
+  name ADMIN
+  vlan 20
+  name COMPTA
+checks:
+  - desc: Fa0/1-8 en mode access dans le VLAN 10
+    expr: all(i.mode == "access" and i.access_vlan == 10 for i in ports("fa0/1-8"))
+  - desc: Fa0/9-16 en mode access dans le VLAN 20
+    expr: all(i.mode == "access" and i.access_vlan == 20 for i in ports("fa0/9-16"))
+  - desc: Les autres ports n'ont pas été modifiés
+    expr: all(i.access_vlan == 1 for i in ports("fa0/17-24"))
+solution: |
+  configure terminal
+  interface range fa0/1 - 8
+  switchport mode access
+  switchport access vlan 10
+  interface range fa0/9 - 16
+  switchport mode access
+  switchport access vlan 20
+  end

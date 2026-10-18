@@ -1,0 +1,38 @@
+title: Adressage d'un routeur
+level: intermediaire
+order: 2
+device: router
+tags: [routeur, ipv4, interfaces]
+summary: Configurer et activer les interfaces d'un routeur.
+description: |
+  Contrairement aux switchs, les interfaces d'un routeur sont **éteintes par défaut**.
+
+  | Interface | Adresse         | Masque          | Description |
+  |-----------|-----------------|-----------------|-------------|
+  | `G0/0`    | 192.168.1.1     | 255.255.255.0   | LAN         |
+  | `G0/1`    | 10.0.0.1        | 255.255.255.252 | WAN         |
+
+  Renomme aussi le routeur `R1`, puis vérifie avec `show ip interface brief`.
+checks:
+  - desc: Le routeur s'appelle R1
+    expr: d.hostname == "R1"
+  - desc: G0/0 en 192.168.1.1/24
+    expr: intf("g0/0").ip == "192.168.1.1" and prefix(intf("g0/0").mask) == 24
+  - desc: G0/1 en 10.0.0.1/30
+    expr: intf("g0/1").ip == "10.0.0.1" and prefix(intf("g0/1").mask) == 30
+  - desc: Les deux interfaces sont activées
+    expr: not intf("g0/0").shutdown and not intf("g0/1").shutdown
+  - desc: Descriptions LAN et WAN
+    expr: intf("g0/0").description.upper().startswith("LAN") and intf("g0/1").description.upper().startswith("WAN")
+solution: |
+  configure terminal
+  hostname R1
+  interface g0/0
+  description LAN
+  ip address 192.168.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  description WAN
+  ip address 10.0.0.1 255.255.255.252
+  no shutdown
+  end

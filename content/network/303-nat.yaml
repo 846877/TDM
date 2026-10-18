@@ -1,0 +1,41 @@
+title: NAT/PAT vers Internet
+level: expert
+order: 3
+device: router
+hostname: R-EDGE
+tags: [nat, pat, acl]
+summary: Partager une IP publique avec tout le LAN.
+description: |
+  Le LAN `192.168.1.0/24` (derrière `G0/0`) doit sortir sur Internet via `G0/1` (IP publique) en **PAT**.
+
+  1. Déclare `G0/0` en `ip nat inside` et `G0/1` en `ip nat outside` ;
+  2. Crée l'ACL standard `1` qui autorise `192.168.1.0 0.0.0.255` ;
+  3. Active la traduction : `ip nat inside source list 1 interface g0/1 overload` ;
+  4. Ajoute la route par défaut vers le FAI `203.0.113.1`.
+initial: |
+  interface g0/0
+  ip address 192.168.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 203.0.113.2 255.255.255.252
+  no shutdown
+checks:
+  - desc: G0/0 en nat inside, G0/1 en nat outside
+    expr: intf("g0/0").nat == "inside" and intf("g0/1").nat == "outside"
+  - desc: ACL 1 autorise le LAN
+    expr: '"permit 192.168.1.0 0.0.0.255" in acl(1)'
+  - desc: PAT (overload) sur G0/1 avec la liste 1
+    expr: any(r.split()[:6] == ["ip", "nat", "inside", "source", "list", "1"] and r.endswith("overload") and r.split()[-2].lower() in ("g0/1", "gi0/1", "gigabitethernet0/1") for r in d.nat_rules)
+  - desc: Route par défaut vers 203.0.113.1
+    expr: route("0.0.0.0", "0.0.0.0", "203.0.113.1")
+solution: |
+  configure terminal
+  interface g0/0
+  ip nat inside
+  interface g0/1
+  ip nat outside
+  exit
+  access-list 1 permit 192.168.1.0 0.0.0.255
+  ip nat inside source list 1 interface g0/1 overload
+  ip route 0.0.0.0 0.0.0.0 203.0.113.1
+  end

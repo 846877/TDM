@@ -1,0 +1,45 @@
+title: Sécurité des ports
+level: avance
+order: 3
+device: switch
+tags: [port-security, sécurité, vlan]
+summary: Limiter les adresses MAC et neutraliser les ports inutilisés.
+description: |
+  1. Sur `Fa0/1` à `Fa0/4` (déjà en access VLAN 10), active la **port-security** :
+     maximum **2** adresses MAC, apprentissage **sticky**, violation en mode **restrict**.
+  2. Crée le VLAN `999` nommé `PARKING`.
+  3. Les ports `Fa0/20` à `Fa0/24` sont inutilisés : mets-les en access dans le VLAN 999
+     et **désactive-les** (`shutdown`).
+initial: |
+  vlan 10
+  name ADMIN
+  interface range fa0/1 - 4
+  switchport mode access
+  switchport access vlan 10
+checks:
+  - desc: Port-security active sur Fa0/1-4
+    expr: all(i.port_security for i in ports("fa0/1-4"))
+  - desc: Maximum 2 adresses MAC
+    expr: all(i.port_security_max == 2 for i in ports("fa0/1-4"))
+  - desc: Apprentissage sticky
+    expr: all(i.port_security_sticky for i in ports("fa0/1-4"))
+  - desc: Violation en mode restrict
+    expr: all(i.port_security_violation == "restrict" for i in ports("fa0/1-4"))
+  - desc: VLAN 999 PARKING
+    expr: vlan(999) == "PARKING"
+  - desc: Fa0/20-24 dans le VLAN 999 et désactivés
+    expr: all(i.access_vlan == 999 and i.shutdown and i.mode == "access" for i in ports("fa0/20-24"))
+solution: |
+  configure terminal
+  interface range fa0/1 - 4
+  switchport port-security
+  switchport port-security maximum 2
+  switchport port-security mac-address sticky
+  switchport port-security violation restrict
+  vlan 999
+  name PARKING
+  interface range fa0/20 - 24
+  switchport mode access
+  switchport access vlan 999
+  shutdown
+  end

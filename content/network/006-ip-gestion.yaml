@@ -1,0 +1,32 @@
+title: Adresse IP de gestion
+level: debutant
+order: 6
+device: switch
+tags: [svi, management]
+summary: Rendre le switch administrable à distance.
+description: |
+  Un switch de niveau 2 s'administre via une interface virtuelle (**SVI**).
+
+  1. Crée le VLAN `99` nommé `MGMT` ;
+  2. Configure l'interface `vlan 99` avec l'adresse `192.168.99.2/24` et active-la (`no shutdown`) ;
+  3. Configure la passerelle par défaut `192.168.99.1` (`ip default-gateway`).
+checks:
+  - desc: VLAN 99 nommé MGMT
+    expr: vlan(99) == "MGMT"
+  - desc: Interface Vlan99 en 192.168.99.2 255.255.255.0
+    expr: intf("vlan99").ip == "192.168.99.2" and intf("vlan99").mask == "255.255.255.0"
+  - desc: Interface Vlan99 activée
+    expr: not intf("vlan99").shutdown
+  - desc: Passerelle par défaut 192.168.99.1
+    expr: d.default_gateway == "192.168.99.1"
+solution: |
+  configure terminal
+  vlan 99
+  name MGMT
+  exit
+  interface vlan 99
+  ip address 192.168.99.2 255.255.255.0
+  no shutdown
+  exit
+  ip default-gateway 192.168.99.1
+  end

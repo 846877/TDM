@@ -1,0 +1,40 @@
+title: Routage dynamique OSPF
+level: avance
+order: 2
+device: router
+hostname: R1
+tags: [ospf, routage dynamique, wildcard]
+summary: Annoncer ses réseaux en OSPF zone 0.
+description: |
+  Active **OSPF** (processus `1`) sur `R1` :
+
+  - router-id `1.1.1.1` ;
+  - annonce le LAN `192.168.1.0/24` et le lien WAN `10.0.0.0/30` dans la **zone 0** ;
+  - rends l'interface LAN `G0/0` **passive** (pas d'annonces OSPF vers les PC).
+
+  Rappel : OSPF utilise des **masques génériques** (wildcard) : `/24` → `0.0.0.255`, `/30` → `0.0.0.3`.
+initial: |
+  interface g0/0
+  ip address 192.168.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.0.0.1 255.255.255.252
+  no shutdown
+checks:
+  - desc: Processus OSPF 1 avec router-id 1.1.1.1
+    expr: 1 in d.ospf and d.ospf[1].router_id == "1.1.1.1"
+  - desc: Réseau 192.168.1.0/24 annoncé en zone 0
+    expr: ospf_net("192.168.1.0", "0.0.0.255", 0)
+    hint: "network 192.168.1.0 0.0.0.255 area 0"
+  - desc: Réseau 10.0.0.0/30 annoncé en zone 0
+    expr: ospf_net("10.0.0.0", "0.0.0.3", 0)
+  - desc: G0/0 passive
+    expr: 1 in d.ospf and "GigabitEthernet0/0" in d.ospf[1].passive
+solution: |
+  configure terminal
+  router ospf 1
+  router-id 1.1.1.1
+  network 192.168.1.0 0.0.0.255 area 0
+  network 10.0.0.0 0.0.0.3 area 0
+  passive-interface g0/0
+  end

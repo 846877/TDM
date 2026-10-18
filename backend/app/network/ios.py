@@ -1527,6 +1527,14 @@ def expand_range(text: str) -> list[str]:
     return names
 
 
+ERROR_MARKERS = ("% Invalid", "% Incomplete", "% Ambiguous", "% Unrecognized", "% Please", "Command rejected",
+                 "% Bridge Priority", "% Hostname", "% Configuring")
+
+
+def is_error(output: str) -> bool:
+    return output.startswith(ERROR_MARKERS)
+
+
 def apply_commands(device: Device, commands: str | list[str]) -> Session:
     """Applique une suite de commandes (depuis le mode privilégié) et renvoie la session."""
     session = Session(device)
@@ -1534,6 +1542,6 @@ def apply_commands(device: Device, commands: str | list[str]) -> Session:
     lines = commands.splitlines() if isinstance(commands, str) else commands
     for line in lines:
         output = session.execute(line)
-        if output.startswith("%") and "Creating vlan" not in output and "SSH" not in output:
+        if is_error(output):
             raise ValueError(f"commande refusée : {line!r} -> {output}")
     return session

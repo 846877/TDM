@@ -1,0 +1,26 @@
+title: Les modes IOS et le nom d'hôte
+level: debutant
+order: 1
+device: switch
+tags: [modes, hostname]
+summary: Naviguer entre les modes et renommer le switch.
+description: |
+  Un équipement Cisco a plusieurs **modes** :
+
+  | Invite              | Mode                     | Pour y aller             |
+  |---------------------|--------------------------|--------------------------|
+  | `Switch>`           | utilisateur              | (au démarrage)           |
+  | `Switch#`           | privilégié               | `enable`                 |
+  | `Switch(config)#`   | configuration globale    | `configure terminal`     |
+
+  **Objectif :** renomme le switch en `SW1`, puis reviens au mode privilégié avec `end`.
+
+  Astuce : IOS accepte les abréviations (`en`, `conf t`) et `?` affiche l'aide.
+checks:
+  - desc: Le switch s'appelle SW1
+    expr: d.hostname == "SW1"
+    hint: "En mode configuration : hostname SW1"
+solution: |
+  configure terminal
+  hostname SW1
+  end

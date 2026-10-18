@@ -1,0 +1,46 @@
+title: Router-on-a-stick
+level: intermediaire
+order: 4
+device: router
+hostname: R1
+tags: [inter-vlan, sous-interfaces, 802.1q]
+summary: Router entre VLAN avec des sous-interfaces.
+description: |
+  Le port `G0/0` du routeur est relié au trunk d'un switch. Configure le routage inter-VLAN :
+
+  | Sous-interface | VLAN | Adresse          |
+  |----------------|------|------------------|
+  | `G0/0.10`      | 10   | 192.168.10.1/24  |
+  | `G0/0.20`      | 20   | 192.168.20.1/24  |
+  | `G0/0.99`      | 99   | 192.168.99.1/24  |
+
+  ```
+  interface g0/0.10
+   encapsulation dot1Q 10
+   ip address 192.168.10.1 255.255.255.0
+  ```
+
+  N'oublie pas d'activer l'interface **physique** `G0/0`.
+checks:
+  - desc: G0/0 activée
+    expr: not intf("g0/0").shutdown
+  - desc: G0/0.10 en VLAN 10 avec 192.168.10.1/24
+    expr: intf("g0/0.10").encapsulation_vlan == 10 and intf("g0/0.10").ip == "192.168.10.1" and prefix(intf("g0/0.10").mask) == 24
+  - desc: G0/0.20 en VLAN 20 avec 192.168.20.1/24
+    expr: intf("g0/0.20").encapsulation_vlan == 20 and intf("g0/0.20").ip == "192.168.20.1" and prefix(intf("g0/0.20").mask) == 24
+  - desc: G0/0.99 en VLAN 99 avec 192.168.99.1/24
+    expr: intf("g0/0.99").encapsulation_vlan == 99 and intf("g0/0.99").ip == "192.168.99.1" and prefix(intf("g0/0.99").mask) == 24
+solution: |
+  configure terminal
+  interface g0/0
+  no shutdown
+  interface g0/0.10
+  encapsulation dot1Q 10
+  ip address 192.168.10.1 255.255.255.0
+  interface g0/0.20
+  encapsulation dot1Q 20
+  ip address 192.168.20.1 255.255.255.0
+  interface g0/0.99
+  encapsulation dot1Q 99
+  ip address 192.168.99.1 255.255.255.0
+  end

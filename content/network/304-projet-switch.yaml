@@ -1,0 +1,88 @@
+title: "Projet : déployer un switch d'accès"
+level: expert
+order: 4
+device: switch
+tags: [projet, vlan, trunk, ssh, sécurité]
+summary: Tout mettre bout à bout comme en entreprise.
+description: |
+  Tu reçois un switch neuf à installer à l'étage 2. Cahier des charges :
+
+  **Identité et sécurité**
+  - hostname `SW-ET2`, domaine `tdm.local`, `enable secret` à `Et2@dmin`
+  - utilisateur `netadmin` privilège 15 (secret au choix), SSH v2 uniquement sur les VTY (clés ≥ 2048 bits)
+  - chiffrement des mots de passe, `no ip domain-lookup`
+
+  **VLAN**
+  - `10 ADMIN`, `20 COMPTA`, `99 MGMT`, `999 PARKING`
+  - `Fa0/1-12` → VLAN 10, `Fa0/13-20` → VLAN 20 (access + PortFast)
+  - `Fa0/21-24` → VLAN 999, éteints
+
+  **Uplink et gestion**
+  - `Gi0/1` trunk, natif 99, VLAN autorisés 10,20,99
+  - `interface vlan 99` en `192.168.99.12/24`, passerelle `192.168.99.1`
+
+  **Pour finir** : sauvegarde la configuration.
+checks:
+  - desc: Identité (hostname, domaine, enable secret)
+    expr: d.hostname == "SW-ET2" and d.domain_name == "tdm.local" and d.enable_secret == "Et2@dmin"
+  - desc: SSH v2 avec utilisateur netadmin privilège 15
+    expr: d.users.get("netadmin", {}).get("privilege") == 15 and d.ssh_version == 2 and (d.rsa_modulus or 0) >= 2048 and line("vty").login == "local" and line("vty").transport_input == "ssh"
+  - desc: Mots de passe chiffrés et pas de résolution DNS
+    expr: d.password_encryption and not d.domain_lookup
+  - desc: VLAN créés et nommés
+    expr: vlan(10) == "ADMIN" and vlan(20) == "COMPTA" and vlan(99) == "MGMT" and vlan(999) == "PARKING"
+  - desc: Ports utilisateurs affectés avec PortFast
+    expr: all(i.mode == "access" and i.access_vlan == 10 and i.portfast for i in ports("fa0/1-12")) and all(i.mode == "access" and i.access_vlan == 20 and i.portfast for i in ports("fa0/13-20"))
+  - desc: Ports inutilisés parqués et éteints
+    expr: all(i.access_vlan == 999 and i.shutdown for i in ports("fa0/21-24"))
+  - desc: Uplink trunk Gi0/1
+    expr: intf("g0/1").mode == "trunk" and intf("g0/1").native_vlan == 99 and intf("g0/1").allowed_vlans() == {10, 20, 99}
+  - desc: Gestion sur le VLAN 99
+    expr: intf("vlan99").ip == "192.168.99.12" and not intf("vlan99").shutdown and d.default_gateway == "192.168.99.1"
+  - desc: Configuration sauvegardée
+    expr: d.saved
+solution: |
+  configure terminal
+  hostname SW-ET2
+  no ip domain-lookup
+  ip domain-name tdm.local
+  enable secret Et2@dmin
+  service password-encryption
+  username netadmin privilege 15 secret N3t@dmin
+  crypto key generate rsa general-keys modulus 2048
+  ip ssh version 2
+  line vty 0 15
+  login local
+  transport input ssh
+  exit
+  vlan 10
+  name ADMIN
+  vlan 20
+  name COMPTA
+  vlan 99
+  name MGMT
+  vlan 999
+  name PARKING
+  interface range fa0/1 - 12
+  switchport mode access
+  switchport access vlan 10
+  spanning-tree portfast
+  interface range fa0/13 - 20
+  switchport mode access
+  switchport access vlan 20
+  spanning-tree portfast
+  interface range fa0/21 - 24
+  switchport mode access
+  switchport access vlan 999
+  shutdown
+  interface g0/1
+  switchport mode trunk
+  switchport trunk native vlan 99
+  switchport trunk allowed vlan 10,20,99
+  interface vlan 99
+  ip address 192.168.99.12 255.255.255.0
+  no shutdown
+  exit
+  ip default-gateway 192.168.99.1
+  end
+  write memory

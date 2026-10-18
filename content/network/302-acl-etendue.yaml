@@ -1,0 +1,44 @@
+title: ACL étendue nommée
+level: expert
+order: 2
+device: router
+hostname: R1
+tags: [acl, sécurité, tcp]
+summary: Filtrer par protocole et par port.
+description: |
+  Le VLAN invités (`192.168.30.0/24`, derrière `G0/0`) ne doit avoir accès **qu'au web**.
+
+  Crée l'ACL étendue nommée `INVITES-WEB` :
+
+  - autoriser `tcp` depuis `192.168.30.0 0.0.0.255` vers `any` port `80` (`eq 80`),
+  - idem pour le port `443`,
+  - autoriser `udp` depuis ce réseau vers `any` port `53` (DNS),
+  - refuser tout le reste : `deny ip any any`.
+
+  Applique-la en **entrée** de `G0/0` (au plus près de la **source** pour une ACL étendue).
+initial: |
+  interface g0/0
+  ip address 192.168.30.1 255.255.255.0
+  no shutdown
+checks:
+  - desc: HTTP autorisé
+    expr: '"permit tcp 192.168.30.0 0.0.0.255 any eq 80" in acl("INVITES-WEB") or "permit tcp 192.168.30.0 0.0.0.255 any eq www" in acl("INVITES-WEB")'
+  - desc: HTTPS autorisé
+    expr: '"permit tcp 192.168.30.0 0.0.0.255 any eq 443" in acl("INVITES-WEB")'
+  - desc: DNS autorisé
+    expr: '"permit udp 192.168.30.0 0.0.0.255 any eq 53" in acl("INVITES-WEB") or "permit udp 192.168.30.0 0.0.0.255 any eq domain" in acl("INVITES-WEB")'
+  - desc: Le reste est refusé
+    expr: acl("INVITES-WEB")[-1:] == ["deny ip any any"]
+  - desc: ACL appliquée en entrée de G0/0
+    expr: intf("g0/0").access_groups.get("in") == "INVITES-WEB"
+solution: |
+  configure terminal
+  ip access-list extended INVITES-WEB
+  permit tcp 192.168.30.0 0.0.0.255 any eq 80
+  permit tcp 192.168.30.0 0.0.0.255 any eq 443
+  permit udp 192.168.30.0 0.0.0.255 any eq 53
+  deny ip any any
+  exit
+  interface g0/0
+  ip access-group INVITES-WEB in
+  end

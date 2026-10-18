@@ -1,0 +1,26 @@
+title: Bannière et sauvegarde
+level: debutant
+order: 3
+device: switch
+tags: [banner, sauvegarde]
+summary: Afficher un avertissement légal et sauvegarder.
+description: |
+  1. Configure une bannière MOTD contenant le mot **Interdit**, par exemple :
+     `banner motd #Acces Interdit aux personnes non autorisees#`
+  2. **Sauvegarde** la configuration pour qu'elle survive à un redémarrage :
+     `copy running-config startup-config` (ou `write memory`).
+
+  La configuration courante (*running-config*) est en RAM ; la *startup-config* est en NVRAM.
+initial: |
+  hostname SW-ACCUEIL
+checks:
+  - desc: La bannière contient « Interdit »
+    expr: d.banner_motd is not None and "interdit" in d.banner_motd.lower()
+  - desc: La configuration est sauvegardée
+    expr: d.saved
+    hint: "La sauvegarde doit être faite APRÈS les dernières modifications."
+solution: |
+  configure terminal
+  banner motd #Acces Interdit aux personnes non autorisees#
+  end
+  copy running-config startup-config

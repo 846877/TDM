@@ -1,0 +1,38 @@
+title: Routage statique
+level: intermediaire
+order: 3
+device: router
+hostname: R1
+tags: [routage, static]
+summary: Ajouter des routes statiques et une route par défaut.
+description: |
+  `R1` est relié à `R2` (10.0.0.2) par le lien WAN et à Internet via le FAI (203.0.113.1).
+
+  1. Ajoute une route vers le réseau `192.168.2.0/24` via `10.0.0.2` ;
+  2. Ajoute une route vers `172.16.0.0/16` via `10.0.0.2` ;
+  3. Ajoute une **route par défaut** vers `203.0.113.1`.
+
+  `ip route <réseau> <masque> <prochain saut>` — puis `show ip route`.
+initial: |
+  interface g0/0
+  ip address 192.168.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.0.0.1 255.255.255.252
+  no shutdown
+  interface g0/2
+  ip address 203.0.113.2 255.255.255.252
+  no shutdown
+checks:
+  - desc: Route vers 192.168.2.0/24 via 10.0.0.2
+    expr: route("192.168.2.0", "255.255.255.0", "10.0.0.2")
+  - desc: Route vers 172.16.0.0/16 via 10.0.0.2
+    expr: route("172.16.0.0", "255.255.0.0", "10.0.0.2")
+  - desc: Route par défaut vers 203.0.113.1
+    expr: route("0.0.0.0", "0.0.0.0", "203.0.113.1")
+solution: |
+  configure terminal
+  ip route 192.168.2.0 255.255.255.0 10.0.0.2
+  ip route 172.16.0.0 255.255.0.0 10.0.0.2
+  ip route 0.0.0.0 0.0.0.0 203.0.113.1
+  end

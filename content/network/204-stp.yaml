@@ -1,0 +1,34 @@
+title: Spanning Tree
+level: avance
+order: 4
+device: switch
+hostname: SW-DIST
+tags: [stp, rapid-pvst, portfast]
+summary: Maîtriser l'élection du pont racine.
+description: |
+  1. Passe le switch en **Rapid PVST+** ;
+  2. Fais-en le **pont racine primaire** du VLAN 10 (`spanning-tree vlan 10 root primary`)
+     ou donne-lui une priorité de `4096` ou moins ;
+  3. Sur les ports d'accès `Fa0/1` à `Fa0/10`, active **PortFast** et **BPDU Guard**.
+initial: |
+  vlan 10
+  interface range fa0/1 - 10
+  switchport mode access
+  switchport access vlan 10
+checks:
+  - desc: Mode rapid-pvst
+    expr: d.stp_mode == "rapid-pvst"
+  - desc: Priorité STP du VLAN 10 ≤ 24576
+    expr: d.stp_priority.get(10, 32768) <= 24576
+  - desc: PortFast sur Fa0/1-10
+    expr: all(i.portfast for i in ports("fa0/1-10"))
+  - desc: BPDU Guard sur Fa0/1-10
+    expr: all(i.bpduguard for i in ports("fa0/1-10"))
+solution: |
+  configure terminal
+  spanning-tree mode rapid-pvst
+  spanning-tree vlan 10 root primary
+  interface range fa0/1 - 10
+  spanning-tree portfast
+  spanning-tree bpduguard enable
+  end

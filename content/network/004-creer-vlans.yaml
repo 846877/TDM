@@ -1,0 +1,37 @@
+title: Créer des VLAN
+level: debutant
+order: 4
+device: switch
+tags: [vlan]
+summary: Segmenter le réseau en VLAN nommés.
+description: |
+  L'entreprise veut séparer ses services. Crée les VLAN suivants :
+
+  | ID | Nom      |
+  |----|----------|
+  | 10 | ADMIN    |
+  | 20 | COMPTA   |
+  | 30 | INVITES  |
+
+  ```
+  vlan 10
+   name ADMIN
+  ```
+
+  Contrôle avec `show vlan brief`.
+checks:
+  - desc: VLAN 10 nommé ADMIN
+    expr: vlan(10) == "ADMIN"
+  - desc: VLAN 20 nommé COMPTA
+    expr: vlan(20) == "COMPTA"
+  - desc: VLAN 30 nommé INVITES
+    expr: vlan(30) == "INVITES"
+solution: |
+  configure terminal
+  vlan 10
+  name ADMIN
+  vlan 20
+  name COMPTA
+  vlan 30
+  name INVITES
+  end
