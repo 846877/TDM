@@ -3,6 +3,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    echo "Sous Windows, lance plutôt start.bat (la plateforme y tourne dans Docker Desktop)." >&2
+    exit 1 ;;
+esac
+
 PORT="${PORT:-8000}"
 HOST="${HOST:-127.0.0.1}"
 
