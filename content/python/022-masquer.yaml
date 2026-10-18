@@ -1,0 +1,63 @@
+title: Masquer et formater
+level: debutant
+order: 22
+tags: [chaînes, slicing]
+summary: Extraire des morceaux de chaîne avec le slicing.
+description: |
+  Le **slicing** permet d'extraire une partie d'une chaîne : `texte[debut:fin:pas]`.
+
+  1. Écris `masquer_carte(numero)` qui remplace tous les chiffres d'un numéro de carte par des
+     `*`, **sauf les 4 derniers**.
+  2. Écris `formater_telephone(numero)` qui découpe un numéro de 10 chiffres en paires séparées
+     par des espaces.
+
+  ```python
+  masquer_carte("1234567812345678")    # "************5678"
+  masquer_carte("1234")                # "1234"
+  formater_telephone("0612345678")     # "06 12 34 56 78"
+  ```
+
+  Astuces : `numero[-4:]` donne les 4 derniers caractères, `range(0, 10, 2)` avance de 2 en 2.
+starter: |
+  def masquer_carte(numero):
+      pass
+
+
+  def formater_telephone(numero):
+      pass
+tests: |
+  def test_carte():
+      "Carte à 16 chiffres"
+      r = solution.masquer_carte("1234567812345678")
+      assert r == "************5678", f"obtenu {r!r}"
+
+  def test_carte_courte():
+      "Numéro de 4 chiffres ou moins : rien à masquer"
+      assert solution.masquer_carte("1234") == "1234"
+      assert solution.masquer_carte("12") == "12"
+
+  def test_carte_longueur():
+      "La longueur est conservée"
+      r = solution.masquer_carte("9876543210")
+      assert r == "******3210", f"obtenu {r!r}"
+
+  def test_telephone():
+      "0612345678 -> 06 12 34 56 78"
+      r = solution.formater_telephone("0612345678")
+      assert r == "06 12 34 56 78", f"obtenu {r!r}"
+
+  def test_telephone_sans_espace_final():
+      "Pas d'espace en trop au début ni à la fin"
+      r = solution.formater_telephone("0102030405")
+      assert r == "01 02 03 04 05", f"obtenu {r!r}"
+solution: |
+  def masquer_carte(numero):
+      cache = max(len(numero) - 4, 0)
+      return "*" * cache + numero[cache:]
+
+
+  def formater_telephone(numero):
+      paires = []
+      for i in range(0, len(numero), 2):
+          paires.append(numero[i:i + 2])
+      return " ".join(paires)

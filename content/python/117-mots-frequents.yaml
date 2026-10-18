@@ -1,0 +1,72 @@
+title: Mots les plus fréquents
+level: intermediaire
+order: 17
+tags: [collections, Counter, tri, input]
+summary: Compter avec collections.Counter et départager les égalités.
+mode: stdio
+description: |
+  La première ligne contient un entier `k`, le reste de l'entrée est un texte (sur une ou
+  plusieurs lignes). Affiche les `k` mots les plus fréquents, un par ligne, au format
+  `mot : nombre`.
+
+  Règles :
+  - les mots sont comparés **en minuscules** ;
+  - un mot est une suite de lettres (les apostrophes et la ponctuation séparent les mots :
+    `l'eau` donne `l` et `eau`) ;
+  - en cas d'égalité, l'ordre **alphabétique** départage ;
+  - s'il y a moins de `k` mots différents, affiche-les tous.
+
+  Entrée :
+
+  ```
+  2
+  Le chat voit le chien. Le chien dort.
+  ```
+
+  Sortie :
+
+  ```
+  le : 3
+  chien : 2
+  ```
+
+  Astuces : `collections.Counter`, `re.findall(r"[^\W\d_]+", texte)` pour extraire les mots,
+  et `sorted(compteur.items(), key=lambda p: (-p[1], p[0]))`.
+starter: |
+  import sys
+
+  k = int(input())
+  texte = sys.stdin.read()
+cases:
+  - name: "Exemple de l'énoncé"
+    input: "2\nLe chat voit le chien. Le chien dort.\n"
+    output: |
+      le : 3
+      chien : 2
+  - name: "Égalités départagées par l'alphabet"
+    input: "3\nbanane pomme Cerise pomme cerise banane kiwi\n"
+    output: |
+      banane : 2
+      cerise : 2
+      pomme : 2
+  - name: "Plusieurs lignes et apostrophes"
+    input: "2\nL'eau, l'air\net l'eau encore !\n"
+    output: |
+      l : 3
+      eau : 2
+  - name: "k plus grand que le nombre de mots"
+    input: "10\nun deux un\n"
+    output: |
+      un : 2
+      deux : 1
+solution: |
+  import re
+  import sys
+  from collections import Counter
+
+  k = int(input())
+  texte = sys.stdin.read().lower()
+  compteur = Counter(re.findall(r"[^\W\d_]+", texte))
+  classement = sorted(compteur.items(), key=lambda p: (-p[1], p[0]))
+  for mot, nombre in classement[:k]:
+      print(f"{mot} : {nombre}")

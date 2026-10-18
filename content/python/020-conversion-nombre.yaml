@@ -1,0 +1,56 @@
+title: Du texte au nombre
+level: debutant
+order: 20
+tags: [types, conversions, chaînes]
+summary: Convertir une saisie en int ou en float.
+description: |
+  Les saisies arrivent toujours sous forme de **texte** (`str`). Écris `en_nombre(texte)` qui
+  convertit une chaîne en nombre :
+
+  - les espaces autour sont ignorés ;
+  - la virgule française est acceptée comme séparateur décimal ;
+  - s'il y a une partie décimale, renvoie un `float`, sinon un `int`.
+
+  ```python
+  en_nombre("12")      # 12      (int)
+  en_nombre(" 3,5 ")   # 3.5     (float)
+  en_nombre("-4")      # -4      (int)
+  en_nombre("2.0")     # 2.0     (float)
+  ```
+
+  Astuces : `strip()`, `replace()`, `int()`, `float()` et `type(x)` pour vérifier.
+starter: |
+  def en_nombre(texte):
+      pass
+tests: |
+  def verifier(texte, attendu):
+      r = solution.en_nombre(texte)
+      assert r == attendu and type(r) is type(attendu), (
+          f"en_nombre({texte!r}) : attendu {attendu!r} ({type(attendu).__name__}), "
+          f"obtenu {r!r} ({type(r).__name__})")
+
+  def test_entier():
+      "\"12\" donne 12 (int)"
+      verifier("12", 12)
+
+  def test_virgule():
+      "\" 3,5 \" donne 3.5 (float)"
+      verifier(" 3,5 ", 3.5)
+
+  def test_point():
+      "\"0.25\" donne 0.25 (float)"
+      verifier("0.25", 0.25)
+
+  def test_negatif():
+      "\"-4\" donne -4 (int)"
+      verifier("-4", -4)
+
+  def test_float_rond():
+      "\"2.0\" reste un float"
+      verifier("2.0", 2.0)
+solution: |
+  def en_nombre(texte):
+      texte = texte.strip().replace(",", ".")
+      if "." in texte:
+          return float(texte)
+      return int(texte)

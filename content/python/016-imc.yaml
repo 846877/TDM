@@ -1,0 +1,66 @@
+title: Indice de masse corporelle
+level: debutant
+order: 16
+tags: [calculs, conditions, fonctions]
+summary: Calculer un IMC puis l'interpréter.
+description: |
+  L'IMC se calcule avec la formule `poids / taille²` (poids en kg, taille en mètres).
+
+  1. Écris `imc(poids, taille)` qui renvoie l'IMC **arrondi à 1 décimale**.
+  2. Écris `categorie(valeur)` qui renvoie la catégorie correspondant à un IMC :
+
+  | IMC | Catégorie |
+  |-----|-----------|
+  | moins de 18.5 | `"maigreur"` |
+  | de 18.5 à moins de 25 | `"normal"` |
+  | de 25 à moins de 30 | `"surpoids"` |
+  | 30 ou plus | `"obésité"` |
+
+  ```python
+  imc(70, 1.75)     # 22.9
+  categorie(22.9)   # "normal"
+  ```
+starter: |
+  def imc(poids, taille):
+      pass
+
+
+  def categorie(valeur):
+      pass
+tests: |
+  def test_imc():
+      "imc(70, 1.75) vaut 22.9"
+      r = solution.imc(70, 1.75)
+      assert r == 22.9, f"attendu 22.9, obtenu {r!r}"
+
+  def test_imc_arrondi():
+      "Arrondi à une décimale"
+      r = solution.imc(90, 1.80)
+      assert r == 27.8, f"attendu 27.8, obtenu {r!r}"
+
+  def test_categories():
+      "Les quatre catégories"
+      attendus = {16: "maigreur", 22: "normal", 27: "surpoids", 35: "obésité"}
+      for valeur, cat in attendus.items():
+          r = solution.categorie(valeur)
+          assert r == cat, f"categorie({valeur}) : attendu {cat!r}, obtenu {r!r}"
+
+  def test_bornes():
+      "Les bornes 18.5, 25 et 30"
+      assert solution.categorie(18.5) == "normal", "18.5 est déjà « normal »"
+      assert solution.categorie(25) == "surpoids", "25 est déjà « surpoids »"
+      assert solution.categorie(30) == "obésité", "30 est déjà « obésité »"
+      assert solution.categorie(24.9) == "normal", "24.9 est encore « normal »"
+solution: |
+  def imc(poids, taille):
+      return round(poids / taille ** 2, 1)
+
+
+  def categorie(valeur):
+      if valeur < 18.5:
+          return "maigreur"
+      if valeur < 25:
+          return "normal"
+      if valeur < 30:
+          return "surpoids"
+      return "obésité"

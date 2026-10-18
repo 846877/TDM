@@ -1,0 +1,76 @@
+title: Regrouper avec defaultdict
+level: intermediaire
+order: 18
+tags: [collections, defaultdict, dictionnaires]
+summary: Construire des groupes sans tester l'existence des clés.
+description: |
+  `collections.defaultdict(list)` crée automatiquement une liste vide pour toute clé absente.
+
+  1. `regrouper_par_initiale(mots)` : renvoie un dictionnaire `{lettre: [mots]}` où la lettre est
+     l'initiale **en minuscule**, et où chaque liste est **triée** (sans tenir compte de la casse).
+  2. `ventes_par_vendeur(ventes)` : `ventes` est une liste de tuples `(vendeur, montant)` ;
+     renvoie `{vendeur: total}`.
+
+  Les deux fonctions doivent renvoyer un `dict` classique (pas un `defaultdict`) : utilise
+  `dict(...)` pour convertir à la fin.
+
+  ```python
+  regrouper_par_initiale(["Pomme", "poire", "abricot"])
+  # {"p": ["poire", "Pomme"], "a": ["abricot"]}
+  ventes_par_vendeur([("Ana", 10), ("Bo", 5), ("Ana", 7)])
+  # {"Ana": 17, "Bo": 5}
+  ```
+starter: |
+  from collections import defaultdict
+
+
+  def regrouper_par_initiale(mots):
+      pass
+
+
+  def ventes_par_vendeur(ventes):
+      pass
+tests: |
+  def test_initiales():
+      "Exemple de l'énoncé"
+      r = solution.regrouper_par_initiale(["Pomme", "poire", "abricot"])
+      assert r == {"p": ["poire", "Pomme"], "a": ["abricot"]}, f"obtenu {r!r}"
+
+  def test_initiales_dict():
+      "Le résultat est un dict classique"
+      r = solution.regrouper_par_initiale(["x"])
+      assert type(r) is dict, f"attendu dict, obtenu {type(r).__name__}"
+      r = solution.ventes_par_vendeur([("a", 1)])
+      assert type(r) is dict, f"attendu dict, obtenu {type(r).__name__}"
+
+  def test_initiales_vide():
+      "Liste vide et mot vide ignoré"
+      assert solution.regrouper_par_initiale([]) == {}
+      r = solution.regrouper_par_initiale(["", "Bus"])
+      assert r == {"b": ["Bus"]}, f"les mots vides doivent être ignorés, obtenu {r!r}"
+
+  def test_ventes():
+      "Totaux par vendeur"
+      r = solution.ventes_par_vendeur([("Ana", 10), ("Bo", 5), ("Ana", 7)])
+      assert r == {"Ana": 17, "Bo": 5}, f"obtenu {r!r}"
+
+  def test_ventes_vide():
+      "Aucune vente"
+      assert solution.ventes_par_vendeur([]) == {}
+solution: |
+  from collections import defaultdict
+
+
+  def regrouper_par_initiale(mots):
+      groupes = defaultdict(list)
+      for mot in mots:
+          if mot:
+              groupes[mot[0].lower()].append(mot)
+      return {lettre: sorted(liste, key=str.lower) for lettre, liste in groupes.items()}
+
+
+  def ventes_par_vendeur(ventes):
+      totaux = defaultdict(int)
+      for vendeur, montant in ventes:
+          totaux[vendeur] += montant
+      return dict(totaux)

@@ -1,0 +1,66 @@
+title: Convertisseur de longueurs
+level: debutant
+order: 28
+tags: [dictionnaires, input, conversions, f-string]
+summary: Lire une saisie, la découper et convertir des unités.
+mode: stdio
+description: |
+  Chaque ligne d'entrée contient une valeur, une unité de départ et une unité d'arrivée,
+  séparées par des espaces. Les unités possibles sont `mm`, `cm`, `m` et `km`.
+  La **première ligne** donne le nombre de conversions à faire.
+
+  Pour chaque conversion, affiche `<valeur> <unité> = <résultat> <unité>`. Les nombres sont
+  affichés avec le format `:g`, qui supprime les zéros inutiles (`1500.0` devient `1500`,
+  `0.25` reste `0.25`). Si une unité est inconnue, affiche `Unité inconnue`.
+
+  Entrée :
+
+  ```
+  3
+  1.5 km m
+  250 mm cm
+  3 m pouce
+  ```
+
+  Sortie :
+
+  ```
+  1.5 km = 1500 m
+  250 mm = 25 cm
+  Unité inconnue
+  ```
+
+  Astuce : un dictionnaire `{"mm": 0.001, "cm": 0.01, "m": 1, "km": 1000}` donne la valeur de
+  chaque unité en mètres. `ligne.split()` découpe la saisie.
+starter: |
+  n = int(input())
+cases:
+  - name: "Exemple de l'énoncé"
+    input: "3\n1.5 km m\n250 mm cm\n3 m pouce\n"
+    output: |
+      1.5 km = 1500 m
+      250 mm = 25 cm
+      Unité inconnue
+  - name: "Vers une plus grande unité"
+    input: "2\n42195 m km\n5 cm m\n"
+    output: |
+      42195 m = 42.195 km
+      5 cm = 0.05 m
+  - name: "Même unité"
+    input: "1\n7 m m\n"
+    output: "7 m = 7 m"
+  - name: "Unité de départ inconnue"
+    input: "1\n2 mile km\n"
+    output: "Unité inconnue"
+solution: |
+  EN_METRES = {"mm": 0.001, "cm": 0.01, "m": 1, "km": 1000}
+
+  n = int(input())
+  for _ in range(n):
+      valeur, source, cible = input().split()
+      if source not in EN_METRES or cible not in EN_METRES:
+          print("Unité inconnue")
+          continue
+      nombre = float(valeur)
+      resultat = round(nombre * EN_METRES[source] / EN_METRES[cible], 6)
+      print(f"{nombre:g} {source} = {resultat:g} {cible}")

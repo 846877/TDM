@@ -1,0 +1,58 @@
+title: Échanger deux valeurs
+level: debutant
+order: 14
+tags: [variables, tuples]
+summary: Découvrir l'affectation multiple et les tuples.
+description: |
+  En Python, une fonction peut renvoyer **plusieurs valeurs** à la fois : elles sont regroupées
+  dans un **tuple**.
+
+  1. Écris `echanger(a, b)` qui renvoie le tuple `(b, a)`.
+  2. Écris `min_max(a, b)` qui renvoie le tuple `(plus_petit, plus_grand)`.
+
+  ```python
+  echanger(1, "x")   # ("x", 1)
+  min_max(8, 3)      # (3, 8)
+  ```
+
+  Astuce : `a, b = b, a` échange deux variables en une seule ligne.
+starter: |
+  def echanger(a, b):
+      pass
+
+
+  def min_max(a, b):
+      pass
+tests: |
+  def test_echanger():
+      "echanger(1, 2) vaut (2, 1)"
+      r = solution.echanger(1, 2)
+      assert r == (2, 1), f"attendu (2, 1), obtenu {r!r}"
+
+  def test_echanger_types():
+      "Fonctionne avec des types différents"
+      r = solution.echanger(1, "x")
+      assert r == ("x", 1), f"attendu ('x', 1), obtenu {r!r}"
+
+  def test_tuple():
+      "Le résultat est bien un tuple"
+      r = solution.echanger(3, 4)
+      assert isinstance(r, tuple), f"il faut renvoyer un tuple, pas un {type(r).__name__}"
+
+  def test_min_max():
+      "min_max(8, 3) vaut (3, 8)"
+      assert solution.min_max(8, 3) == (3, 8)
+      assert solution.min_max(3, 8) == (3, 8), "l'ordre des arguments ne doit pas compter"
+
+  def test_min_max_egaux():
+      "Deux valeurs égales"
+      assert solution.min_max(5, 5) == (5, 5)
+solution: |
+  def echanger(a, b):
+      return b, a
+
+
+  def min_max(a, b):
+      if a <= b:
+          return a, b
+      return b, a

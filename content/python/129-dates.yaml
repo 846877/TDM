@@ -1,0 +1,119 @@
+title: Dates sans datetime
+level: intermediaire
+order: 29
+tags: [chaînes, exceptions, algorithmes]
+summary: Parser, valider et comparer des dates à la main.
+description: |
+  Sans utiliser le module `datetime` :
+
+  1. `lire_date(texte)` : lit une date au format `JJ/MM/AAAA` et renvoie le tuple
+     `(annee, mois, jour)` d'entiers. Lève `ValueError` si le format est incorrect
+     (séparateurs, parties non numériques) ou si la date n'existe pas (31/04, 29/02 d'une année
+     non bissextile…). Les espaces autour sont tolérés.
+  2. `jour_de_l_annee(texte)` : numéro du jour dans l'année (1 pour le 1er janvier).
+  3. `ecart_jours(debut, fin)` : nombre de jours entre deux dates (négatif si `fin` est avant
+     `debut`).
+
+  ```python
+  lire_date("18/10/2026")                     # (2026, 10, 18)
+  jour_de_l_annee("01/03/2024")               # 61
+  ecart_jours("25/12/2025", "01/01/2026")     # 7
+  ```
+
+  Indice pour l'écart : compte le nombre de jours depuis une date de référence (par exemple
+  le 01/01/0001) pour chaque date, puis fais la différence.
+starter: |
+  def lire_date(texte):
+      pass
+
+
+  def jour_de_l_annee(texte):
+      pass
+
+
+  def ecart_jours(debut, fin):
+      pass
+tests: |
+  import datetime
+
+  def doit_echouer(texte):
+      try:
+          r = solution.lire_date(texte)
+      except ValueError:
+          return
+      raise AssertionError(f"lire_date({texte!r}) aurait dû lever ValueError (obtenu {r!r})")
+
+  def test_lire():
+      "Lecture d'une date valide"
+      r = solution.lire_date("18/10/2026")
+      assert r == (2026, 10, 18), f"obtenu {r!r}"
+      assert solution.lire_date(" 01/02/0999 ") == (999, 2, 1)
+
+  def test_format_invalide():
+      "Formats incorrects"
+      for texte in ("18-10-2026", "18/10", "aa/10/2026", "", "18/10/2026/1", "1 8/10/2026"):
+          doit_echouer(texte)
+
+  def test_date_inexistante():
+      "Dates qui n'existent pas"
+      for texte in ("31/04/2026", "29/02/2025", "29/02/1900", "00/01/2026", "15/13/2026", "32/01/2026"):
+          doit_echouer(texte)
+      assert solution.lire_date("29/02/2000") == (2000, 2, 29), "le 29/02/2000 existe"
+
+  def test_jour_annee():
+      "Numéro du jour dans l'année"
+      assert solution.jour_de_l_annee("01/01/2026") == 1
+      assert solution.jour_de_l_annee("01/03/2024") == 61, "2024 est bissextile"
+      assert solution.jour_de_l_annee("01/03/2023") == 60
+      assert solution.jour_de_l_annee("31/12/2024") == 366
+
+  def test_ecart():
+      "Écart entre deux dates"
+      assert solution.ecart_jours("25/12/2025", "01/01/2026") == 7
+      assert solution.ecart_jours("01/01/2026", "25/12/2025") == -7
+      assert solution.ecart_jours("14/07/1789", "14/07/1789") == 0
+
+  def test_ecart_long():
+      "Écart sur plusieurs siècles (vérifié avec datetime)"
+      paires = [("01/01/1900", "18/10/2026"), ("28/02/2000", "01/03/2100"), ("15/06/0012", "31/12/9999")]
+      for a, b in paires:
+          ja, ma, aa = map(int, a.split("/"))
+          jb, mb, ab = map(int, b.split("/"))
+          attendu = (datetime.date(ab, mb, jb) - datetime.date(aa, ma, ja)).days
+          r = solution.ecart_jours(a, b)
+          assert r == attendu, f"ecart_jours({a!r}, {b!r}) : attendu {attendu}, obtenu {r!r}"
+solution: |
+  JOURS = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+
+
+  def bissextile(annee):
+      return annee % 4 == 0 and (annee % 100 != 0 or annee % 400 == 0)
+
+
+  def jours_mois(mois, annee):
+      return 29 if mois == 2 and bissextile(annee) else JOURS[mois - 1]
+
+
+  def lire_date(texte):
+      parties = texte.strip().split("/")
+      if len(parties) != 3 or not all(p.isdigit() for p in parties):
+          raise ValueError(f"format invalide : {texte!r}")
+      jour, mois, annee = (int(p) for p in parties)
+      if annee < 1 or not 1 <= mois <= 12 or not 1 <= jour <= jours_mois(mois, annee):
+          raise ValueError(f"date inexistante : {texte!r}")
+      return annee, mois, jour
+
+
+  def jour_de_l_annee(texte):
+      annee, mois, jour = lire_date(texte)
+      return sum(jours_mois(m, annee) for m in range(1, mois)) + jour
+
+
+  def _jours_depuis_origine(texte):
+      annee, _, _ = lire_date(texte)
+      a = annee - 1
+      return a * 365 + a // 4 - a // 100 + a // 400 + jour_de_l_annee(texte)
+
+
+  def ecart_jours(debut, fin):
+      return _jours_depuis_origine(fin) - _jours_depuis_origine(debut)

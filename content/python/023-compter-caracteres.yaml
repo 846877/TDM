@@ -1,0 +1,66 @@
+title: Analyser une phrase
+level: debutant
+order: 23
+tags: [chaînes, méthodes, boucles, input]
+summary: Classer les caractères avec isalpha, isdigit et isspace.
+mode: stdio
+description: |
+  Lis une ligne de texte puis affiche combien elle contient de lettres, de chiffres, d'espaces
+  et d'autres caractères, exactement sous cette forme (exemple pour `Rendez-vous 2026 à midi`) :
+
+  ```
+  Lettres : 15
+  Chiffres : 4
+  Espaces : 3
+  Autres : 1
+  ```
+
+  Les lettres accentuées comptent comme des lettres. Utilise les méthodes de chaînes
+  `isalpha()`, `isdigit()` et `isspace()`.
+starter: |
+  phrase = input()
+cases:
+  - name: "Phrase avec chiffres"
+    input: "Rendez-vous 2026 à midi\n"
+    output: |
+      Lettres : 15
+      Chiffres : 4
+      Espaces : 3
+      Autres : 1
+  - name: "Lettres seulement"
+    input: "Bonjour\n"
+    output: |
+      Lettres : 7
+      Chiffres : 0
+      Espaces : 0
+      Autres : 0
+  - name: "Ponctuation"
+    input: "1, 2, 3... partez !\n"
+    output: |
+      Lettres : 6
+      Chiffres : 3
+      Espaces : 4
+      Autres : 6
+  - name: "Ligne vide"
+    input: "\n"
+    output: |
+      Lettres : 0
+      Chiffres : 0
+      Espaces : 0
+      Autres : 0
+solution: |
+  phrase = input()
+  lettres = chiffres = espaces = autres = 0
+  for c in phrase:
+      if c.isalpha():
+          lettres += 1
+      elif c.isdigit():
+          chiffres += 1
+      elif c.isspace():
+          espaces += 1
+      else:
+          autres += 1
+  print(f"Lettres : {lettres}")
+  print(f"Chiffres : {chiffres}")
+  print(f"Espaces : {espaces}")
+  print(f"Autres : {autres}")

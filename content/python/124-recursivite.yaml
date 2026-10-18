@@ -1,0 +1,96 @@
+title: Penser récursif
+level: intermediaire
+order: 24
+tags: [récursivité, algorithmes]
+summary: Résoudre des problèmes en les découpant en sous-problèmes.
+description: |
+  Écris ces fonctions **récursivement** (sans boucle `for`/`while` pour les deux premières) :
+
+  1. `puissance(x, n)` : calcule `x ** n` pour `n ≥ 0` sans utiliser `**` ni `pow`, en
+     exploitant `x^n = (x^(n/2))²` quand `n` est pair (exponentiation rapide).
+  2. `somme_imbriquee(donnees)` : additionne tous les nombres d'une structure faite de listes
+     **et** de dictionnaires imbriqués (pour un dictionnaire, on additionne ses valeurs).
+  3. `permutations(texte)` : renvoie la liste **triée et sans doublons** de toutes les
+     permutations d'une chaîne (sans `itertools`).
+
+  ```python
+  puissance(2, 10)                             # 1024
+  somme_imbriquee([1, {"a": 2, "b": [3, 4]}])  # 10
+  permutations("aba")                          # ["aab", "aba", "baa"]
+  ```
+starter: |
+  def puissance(x, n):
+      pass
+
+
+  def somme_imbriquee(donnees):
+      pass
+
+
+  def permutations(texte):
+      pass
+tests: |
+  def test_puissance():
+      "Petites puissances"
+      assert solution.puissance(2, 10) == 1024
+      assert solution.puissance(3, 0) == 1, "x^0 vaut 1"
+      assert solution.puissance(5, 1) == 5
+      assert solution.puissance(-2, 3) == -8
+
+  def test_puissance_rapide():
+      "Grand exposant (il faut l'exponentiation rapide)"
+      r = solution.puissance(3, 5000)
+      assert r == 3 ** 5000, "résultat incorrect pour 3^5000"
+
+  def test_somme():
+      "Listes et dictionnaires imbriqués"
+      r = solution.somme_imbriquee([1, {"a": 2, "b": [3, 4]}])
+      assert r == 10, f"attendu 10, obtenu {r!r}"
+
+  def test_somme_profonde():
+      "Imbrication profonde et structures vides"
+      r = solution.somme_imbriquee({"x": [[[1.5]], {}, []], "y": {"z": {"w": 2}}})
+      assert r == 3.5, f"attendu 3.5, obtenu {r!r}"
+      assert solution.somme_imbriquee([]) == 0
+      assert solution.somme_imbriquee(7) == 7, "un nombre seul est sa propre somme"
+
+  def test_permutations():
+      "Permutations de abc"
+      r = solution.permutations("abc")
+      assert r == ["abc", "acb", "bac", "bca", "cab", "cba"], f"obtenu {r!r}"
+
+  def test_permutations_doublons():
+      "Sans doublons"
+      r = solution.permutations("aba")
+      assert r == ["aab", "aba", "baa"], f"obtenu {r!r}"
+
+  def test_permutations_bords():
+      "Chaîne d'un caractère et chaîne vide"
+      assert solution.permutations("z") == ["z"]
+      assert solution.permutations("") == [""]
+solution: |
+  def puissance(x, n):
+      if n == 0:
+          return 1
+      moitie = puissance(x, n // 2)
+      if n % 2 == 0:
+          return moitie * moitie
+      return moitie * moitie * x
+
+
+  def somme_imbriquee(donnees):
+      if isinstance(donnees, dict):
+          return sum(somme_imbriquee(v) for v in donnees.values())
+      if isinstance(donnees, list):
+          return sum(somme_imbriquee(v) for v in donnees)
+      return donnees
+
+
+  def permutations(texte):
+      if len(texte) <= 1:
+          return [texte]
+      resultat = set()
+      for i, c in enumerate(texte):
+          for reste in permutations(texte[:i] + texte[i + 1:]):
+              resultat.add(c + reste)
+      return sorted(resultat)

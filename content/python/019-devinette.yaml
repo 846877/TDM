@@ -1,0 +1,75 @@
+title: Jeu de devinette
+level: debutant
+order: 19
+tags: [while, input, conditions]
+summary: Une boucle while qui s'arrête quand on a trouvé.
+mode: stdio
+description: |
+  On simule un jeu de « plus ou moins ». La **première ligne** contient le nombre secret, les
+  lignes suivantes sont les propositions du joueur.
+
+  Pour chaque proposition, affiche :
+  - `Trop petit` si elle est inférieure au secret ;
+  - `Trop grand` si elle est supérieure ;
+  - `Gagné en N essais !` si c'est le bon nombre, puis le programme s'arrête (même s'il reste
+    des lignes). Avec un seul essai, affiche `Gagné en 1 essai !` (sans « s »).
+
+  Exemple d'entrée :
+
+  ```
+  42
+  50
+  25
+  42
+  ```
+
+  Sortie attendue :
+
+  ```
+  Trop grand
+  Trop petit
+  Gagné en 3 essais !
+  ```
+
+  Astuce : une boucle `while` et un compteur d'essais.
+starter: |
+  secret = int(input())
+cases:
+  - name: "Trois essais"
+    input: "42\n50\n25\n42\n"
+    output: |
+      Trop grand
+      Trop petit
+      Gagné en 3 essais !
+  - name: "Du premier coup"
+    input: "7\n7\n"
+    output: "Gagné en 1 essai !"
+  - name: "Lignes en trop ignorées"
+    input: "10\n1\n10\n99\n5\n"
+    output: |
+      Trop petit
+      Gagné en 2 essais !
+  - name: "Recherche par dichotomie"
+    input: "63\n50\n75\n62\n68\n65\n63\n"
+    output: |
+      Trop petit
+      Trop grand
+      Trop petit
+      Trop grand
+      Trop grand
+      Gagné en 6 essais !
+solution: |
+  secret = int(input())
+  essais = 0
+  trouve = False
+  while not trouve:
+      proposition = int(input())
+      essais += 1
+      if proposition < secret:
+          print("Trop petit")
+      elif proposition > secret:
+          print("Trop grand")
+      else:
+          trouve = True
+  pluriel = "s" if essais > 1 else ""
+  print(f"Gagné en {essais} essai{pluriel} !")

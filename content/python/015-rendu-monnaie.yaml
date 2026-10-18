@@ -1,0 +1,57 @@
+title: Rendu de monnaie
+level: debutant
+order: 15
+tags: [input, division entière, boucles]
+summary: Décomposer une somme en billets et pièces.
+mode: stdio
+description: |
+  Un distributeur doit rendre une somme **entière** en euros avec le moins de billets et de
+  pièces possible. Les valeurs disponibles sont : `50, 20, 10, 5, 2, 1`.
+
+  Lis la somme avec `input()` puis affiche, **dans l'ordre décroissant**, une ligne par valeur
+  utilisée (les valeurs non utilisées ne sont pas affichées). Pour `127` :
+
+  ```
+  2 x 50
+  1 x 20
+  1 x 5
+  1 x 2
+  ```
+
+  Si la somme vaut `0`, affiche `Rien à rendre`.
+
+  Astuce : la division entière `//` et le modulo `%`.
+starter: |
+  somme = int(input())
+cases:
+  - name: "127 €"
+    input: "127\n"
+    output: |
+      2 x 50
+      1 x 20
+      1 x 5
+      1 x 2
+  - name: "88 €"
+    input: "88\n"
+    output: |
+      1 x 50
+      1 x 20
+      1 x 10
+      1 x 5
+      1 x 2
+      1 x 1
+  - name: "4 €"
+    input: "4\n"
+    output: "2 x 2"
+  - name: "Rien à rendre"
+    input: "0\n"
+    output: "Rien à rendre"
+solution: |
+  somme = int(input())
+  if somme == 0:
+      print("Rien à rendre")
+  for valeur in (50, 20, 10, 5, 2, 1):
+      nombre = somme // valeur
+      if nombre > 0:
+          print(f"{nombre} x {valeur}")
+      somme = somme % valeur

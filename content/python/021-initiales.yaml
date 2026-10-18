@@ -1,0 +1,52 @@
+title: Initiales
+level: debutant
+order: 21
+tags: [chaînes, méthodes, listes]
+summary: Découper une chaîne avec split et la reconstruire.
+description: |
+  Écris `initiales(nom_complet)` qui renvoie les initiales d'un nom, en majuscules, chacune
+  suivie d'un point. Les prénoms composés avec un tiret comptent pour plusieurs initiales, et
+  les espaces en trop sont ignorés.
+
+  ```python
+  initiales("ada lovelace")        # "A.L."
+  initiales("Jean-Luc  Picard")    # "J.L.P."
+  initiales("  grace hopper ")     # "G.H."
+  ```
+
+  Astuces : `split()` sans argument découpe sur les espaces (même multiples),
+  `replace("-", " ")` transforme les tirets et `upper()` met en majuscule.
+starter: |
+  def initiales(nom_complet):
+      pass
+tests: |
+  def test_simple():
+      "ada lovelace -> A.L."
+      r = solution.initiales("ada lovelace")
+      assert r == "A.L.", f"attendu 'A.L.', obtenu {r!r}"
+
+  def test_tiret():
+      "Prénom composé avec un tiret"
+      r = solution.initiales("Jean-Luc Picard")
+      assert r == "J.L.P.", f"attendu 'J.L.P.', obtenu {r!r}"
+
+  def test_espaces():
+      "Espaces multiples et en bordure"
+      r = solution.initiales("  grace   hopper ")
+      assert r == "G.H.", f"attendu 'G.H.', obtenu {r!r}"
+
+  def test_un_mot():
+      "Un seul mot"
+      r = solution.initiales("linus")
+      assert r == "L.", f"attendu 'L.', obtenu {r!r}"
+
+  def test_vide():
+      "Chaîne vide -> chaîne vide"
+      r = solution.initiales("")
+      assert r == "", f"attendu '', obtenu {r!r}"
+solution: |
+  def initiales(nom_complet):
+      resultat = ""
+      for mot in nom_complet.replace("-", " ").split():
+          resultat += mot[0].upper() + "."
+      return resultat
