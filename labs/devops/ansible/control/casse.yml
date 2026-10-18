@@ -1,0 +1,18 @@
+# Playbook à réparer : il doit créer le dossier /opt/tdm (propriétaire deploy)
+# et y déposer un fichier version contenant 1.2.3.
+- name: Déployer la version de l'application
+  hosts: clients
+  vars:
+    version: "1.2.3"
+  tasks:
+    - name: Créer le dossier de l'application
+      file:
+        path: /opt/tdm
+        state: directory
+         owner: deploy
+        mode: "0755"
+
+    - name: Écrire le numéro de version
+      copie:
+        dest: /opt/tdm/version
+        content: "{{ version }}\n"

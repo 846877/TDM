@@ -1,8 +1,8 @@
 title: Docker, les fondamentaux
 level: debutant
 order: 3
-tags: [docker, conteneurs, images, volumes, réseaux]
-summary: Lancer, construire, persister et relier des conteneurs.
+tags: [docker, conteneurs, images, volumes, réseaux, compose, registre]
+summary: Lancer, construire, persister, relier, limiter, dépanner et publier des conteneurs.
 image: docker:28-dind
 privileged: true
 command: []
@@ -10,11 +10,19 @@ shell: sh
 workdir: /root
 setup: |
   for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+  mkdir -p /root/buggy/site /root/goapp
+  echo '<h1>Site TDM</h1>' > /root/buggy/site/index.html
+  printf 'FROM nginx:1.27-alpine\nCOPY site/ /usr/share/nginx/html/\nEXPOSE 80\nCMD ["nginx", "-g", "daemon off"]\n' > /root/buggy/Dockerfile
+  printf 'package main\n\nimport "fmt"\n\nfunc main() {\n\tfmt.Println("Hello TDM")\n}\n' > /root/goapp/main.go
 description: |
   Un hôte Docker rien qu'à toi (Docker dans Docker) : tu peux tout casser, un clic sur
   **Réinitialiser** remet tout à zéro. C'est l'équivalent conteneur du lab Vagrant `docker` de ta formation.
 
-  Commandes utiles : `docker run`, `docker ps`, `docker build`, `docker volume`, `docker network`, `docker logs`.
+  Commandes utiles : `docker run`, `docker ps`, `docker build`, `docker volume`, `docker network`, `docker logs`,
+  `docker inspect`, `docker exec`, `docker compose`.
+
+  Le parcours va du premier `docker run` jusqu'aux réflexes de production : limites de ressources,
+  dépannage d'un conteneur qui s'arrête, image multi-étapes minimale, registre privé et docker compose.
 exercises:
   - id: premier-conteneur
     title: Premier conteneur
@@ -68,3 +76,102 @@ exercises:
       - desc: cache répond par son nom
         run: docker run --rm --network backend redis redis-cli -h cache ping | grep -q PONG
         timeout: 120
+  - id: inspection
+    title: Inspecter et entrer dans un conteneur
+    description: |
+      Sur le conteneur `web` du premier exercice :
+      1. Écris son **adresse IP** (réseau bridge par défaut) dans `/root/ip-web.txt` (juste l'adresse).
+      2. Sans reconstruire d'image, crée **dans** le conteneur la page `/usr/share/nginx/html/tdm.html`
+         qui contient `TDM` : `curl localhost:8080/tdm.html` doit l'afficher.
+    hint: "docker inspect -f '{{.NetworkSettings.IPAddress}}' web ; docker exec web sh -c 'echo TDM > /usr/share/nginx/html/tdm.html'"
+    checks:
+      - desc: L'IP notée est celle de web
+        run: test -s /root/ip-web.txt && test "$(tr -d '[:space:]' < /root/ip-web.txt)" = "$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' web)"
+      - desc: La page tdm.html est servie
+        run: wget -qO- http://localhost:8080/tdm.html | grep -q TDM
+  - id: ressources
+    title: Redémarrage, limites et healthcheck
+    description: |
+      Lance un conteneur `api` (image `nginx:1.27-alpine`) prêt pour la production :
+      - politique de redémarrage `unless-stopped` ;
+      - au plus **128 Mo** de mémoire et **0,5** CPU ;
+      - un **healthcheck** qui interroge `http://localhost/` toutes les 5 secondes
+        (`wget -qO- http://localhost/ || exit 1`).
+
+      Attends quelques secondes : `docker ps` doit afficher `(healthy)`.
+    hint: "docker run -d --name api --restart unless-stopped --memory 128m --cpus 0.5 --health-cmd 'wget -qO- http://localhost/ || exit 1' --health-interval 5s nginx:1.27-alpine"
+    checks:
+      - desc: Politique de redémarrage unless-stopped
+        run: test "$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' api)" = unless-stopped
+      - desc: Mémoire limitée à 128 Mo
+        run: test "$(docker inspect -f '{{.HostConfig.Memory}}' api)" = 134217728
+      - desc: CPU limité à 0,5
+        run: test "$(docker inspect -f '{{.HostConfig.NanoCpus}}' api)" = 500000000
+      - desc: Le conteneur est healthy
+        run: test "$(docker inspect -f '{{.State.Health.Status}}' api)" = healthy
+  - id: depannage
+    title: Dépanner un conteneur qui s'arrête
+    description: |
+      Un collègue a préparé l'image d'un site dans `/root/buggy`, mais le conteneur s'arrête aussitôt lancé.
+      1. Construis l'image `buggy:1.0`, lance-la et constate le problème (`docker ps -a`, `docker logs`).
+      2. Corrige le `Dockerfile`, reconstruis l'image en **`buggy:2.0`** et lance le conteneur **`buggy`**
+         qui publie son port 80 sur le port **8081** et reste démarré.
+    hint: "docker logs <conteneur> montre l'erreur de nginx : regarde bien la directive passée avec -g (il manque un caractère)"
+    checks:
+      - desc: Le conteneur buggy tourne depuis buggy:2.0
+        run: test "$(docker inspect -f '{{.State.Running}} {{.Config.Image}}' buggy)" = "true buggy:2.0"
+      - desc: Il ne redémarre pas en boucle
+        run: test "$(docker inspect -f '{{.RestartCount}}' buggy)" = 0 && sleep 3 && test "$(docker inspect -f '{{.State.Running}}' buggy)" = true
+      - desc: Le site répond sur 8081
+        run: wget -qO- http://localhost:8081/ | grep -q "Site TDM"
+  - id: multi-stage
+    title: Image minimale multi-étapes
+    description: |
+      Dans `/root/goapp` se trouve un programme Go (`main.go`). Écris un `Dockerfile` **multi-étapes** :
+      - une étape `build` basée sur `golang:1.22-alpine` qui compile le binaire (`CGO_ENABLED=0 go build -o hello main.go`) ;
+      - une étape finale basée sur `alpine:3.20` (ou `scratch`) qui ne contient **que** le binaire et
+        s'exécute avec un utilisateur **non root**.
+
+      Construis l'image `hello-go:1.0` : elle doit faire **moins de 20 Mo** et afficher `Hello TDM`.
+    hint: "FROM golang:1.22-alpine AS build … FROM alpine:3.20 / COPY --from=build /src/hello /hello / USER 65534 / ENTRYPOINT [\"/hello\"]"
+    checks:
+      - desc: L'image affiche Hello TDM
+        run: docker run --rm hello-go:1.0 | grep -qx "Hello TDM"
+      - desc: Moins de 20 Mo
+        run: test "$(docker image inspect -f '{{.Size}}' hello-go:1.0)" -lt 20000000
+      - desc: Exécutée en non root
+        run: u=$(docker image inspect -f '{{.Config.User}}' hello-go:1.0); test -n "$u" && test "$u" != root && test "$u" != 0
+      - desc: Le Dockerfile a plusieurs étapes
+        run: test "$(grep -ciE '^FROM ' /root/goapp/Dockerfile)" -ge 2
+  - id: registre
+    title: Registre privé
+    description: |
+      Lance un registre Docker privé : conteneur `registry` (image `registry:2.8.3`) publié sur le port **5000**.
+      Tague ton image `monapp:1.0` en `localhost:5000/monapp:1.0` et **pousse**-la dans ce registre.
+      Pour vérifier, supprime l'image locale puis récupère-la avec `docker pull`.
+    hint: "docker run -d --name registry -p 5000:5000 registry:2.8.3 ; docker tag monapp:1.0 localhost:5000/monapp:1.0 ; docker push localhost:5000/monapp:1.0"
+    checks:
+      - desc: Le registre tourne
+        run: test "$(docker inspect -f '{{.State.Running}}' registry)" = true
+      - desc: monapp:1.0 est dans le registre
+        run: wget -qO- http://localhost:5000/v2/monapp/tags/list | grep -q '"1.0"'
+  - id: compose
+    title: Décrire une application avec docker compose
+    description: |
+      Écris `/root/stack/compose.yaml` décrivant deux services :
+      - `web` : image `nginx:1.27-alpine`, port 80 publié sur **8082** ;
+      - `cache` : image `redis:7.2-alpine`, avec un volume nommé `cache-data` monté sur `/data`.
+
+      Démarre la stack depuis `/root/stack` avec `docker compose up -d`, puis observe `docker compose ps`
+      et `docker compose logs`. Remarque que les deux services se joignent par leur nom.
+    hint: "services: / web: image, ports: [\"8082:80\"] / cache: image, volumes: [cache-data:/data] / volumes: cache-data:"
+    checks:
+      - desc: Les services web et cache tournent
+        run: test "$(docker compose -f /root/stack/compose.yaml ps --status running --services | sort | tr '\n' ' ')" = "cache web "
+      - desc: web répond sur 8082
+        run: wget -qO- http://localhost:8082/ | grep -qi nginx
+      - desc: Le volume cache-data est monté sur /data
+        run: |
+          docker inspect -f '{{range .Mounts}}{{.Name}}:{{.Destination}} {{end}}' "$(docker compose -f /root/stack/compose.yaml ps -q cache)" | grep -q 'cache-data:/data'
+      - desc: web joint cache par son nom
+        run: docker compose -f /root/stack/compose.yaml exec -T web ping -c1 -W2 cache >/dev/null

@@ -1,8 +1,8 @@
 title: Cluster Docker Swarm
 level: avance
 order: 1
-tags: [docker, swarm, orchestration]
-summary: Former un cluster, déployer et mettre à jour des services répliqués.
+tags: [docker, swarm, orchestration, secrets]
+summary: Cluster, services répliqués et globaux, stacks, secrets, rollback, placement et maintenance.
 compose: docker-compose.yml
 service: manager
 shell: sh
@@ -12,6 +12,9 @@ description: |
   `docker-swarm` et `docker-ee` de ta formation). Ton terminal est sur **manager**.
 
   Les workers sont pilotables à distance : `docker -H tcp://worker1:2375 <commande>`.
+
+  Le parcours : former le cluster, services répliqués, mise à l'échelle, stacks, services globaux,
+  secrets et réseau overlay, retour arrière automatique, placement par étiquettes et maintenance d'un nœud.
 exercises:
   - id: init
     title: Initialiser le cluster
@@ -65,3 +68,85 @@ exercises:
         run: docker service inspect demo_viz -f '{{json .Spec.TaskTemplate.Placement.Constraints}}' | grep -q 'node.role *== *worker'
       - desc: viz a 2 réplicas
         run: test "$(docker service inspect demo_viz -f '{{.Spec.Mode.Replicated.Replicas}}')" = 2
+  - id: global
+    title: Service global
+    description: |
+      Certains services doivent tourner **sur chaque nœud** (agent de supervision, collecteur de logs).
+      Déploie le service `agent` en mode **global** (image `alpine:3.20`, commande `sleep infinity`) :
+      Swarm place exactement une tâche par nœud, y compris sur ceux qui rejoindraient plus tard le cluster.
+    hint: "docker service create --name agent --mode global alpine:3.20 sleep infinity"
+    checks:
+      - desc: agent est un service global
+        run: docker service inspect agent -f '{{json .Spec.Mode}}' | grep -q '"Global"'
+      - desc: Une tâche tourne sur chaque nœud actif
+        run: |
+          a=$(docker node ls --format '{{.Availability}}' | grep -c Active); test "$a" -ge 2 && test "$(docker service ps agent -f desired-state=running --format '{{.Node}} {{.CurrentState}}' | grep Running | cut -d' ' -f1 | sort -u | wc -l)" -ge "$a"
+        timeout: 90
+  - id: secrets
+    title: Secrets et réseau overlay
+    description: |
+      1. Crée le secret Swarm `db_password` (par exemple `printf 'S3cret' | docker secret create db_password -`).
+      2. Crée un réseau **overlay** `backend` (`--attachable`).
+      3. Déploie le service `app` (image `alpine:3.20`) relié à `backend`, qui reçoit le secret, avec la commande :
+         `sh -c 'test -s /run/secrets/db_password && echo secret ok; sleep infinity'`.
+
+      Le secret n'apparaît ni dans `docker service inspect` ni dans les variables d'environnement : il est monté
+      en mémoire dans `/run/secrets/` du seul conteneur autorisé.
+    hint: "docker service create --name app --secret db_password --network backend alpine:3.20 sh -c '…'"
+    checks:
+      - desc: Le secret db_password existe
+        run: docker secret inspect db_password >/dev/null
+      - desc: backend est un réseau overlay
+        run: test "$(docker network inspect backend -f '{{.Driver}}')" = overlay
+      - desc: app reçoit le secret et est sur backend
+        run: |
+          docker service inspect app -f '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}' | grep -qw db_password && test "$(docker service inspect app -f '{{range .Spec.TaskTemplate.Networks}}{{.Target}}{{end}}')" = "$(docker network inspect backend -f '{{.Id}}')"
+      - desc: Le conteneur lit bien le secret
+        run: docker service logs --raw app 2>/dev/null | grep -q 'secret ok'
+        timeout: 90
+  - id: rollback
+    title: Mise à jour ratée et retour arrière automatique
+    description: |
+      Une mise à jour de `web` vers une image qui n'existe pas doit **revenir automatiquement** à la version
+      précédente. Configure le service pour qu'un échec de mise à jour déclenche un retour arrière
+      (`--update-failure-action rollback`, surveillance de 10 s avec `--update-monitor 10s`), puis lance la mise à
+      jour vers `nginx:version-inexistante-tdm` et observe `docker service ps web`.
+    hint: "docker service update --update-failure-action rollback --update-monitor 10s --image nginx:version-inexistante-tdm web"
+    checks:
+      - desc: Une tâche a tenté l'image inexistante
+        run: docker service ps web --format '{{.Image}}' | grep -q 'version-inexistante-tdm'
+      - desc: Le retour arrière s'est terminé
+        run: test "$(docker service inspect web -f '{{.UpdateStatus.State}}')" = rollback_completed
+        timeout: 90
+      - desc: web est revenu sur nginx:1.27-alpine
+        run: docker service inspect web -f '{{.Spec.TaskTemplate.ContainerSpec.Image}}' | grep -q '^nginx:1.27-alpine'
+  - id: placement
+    title: Placement par étiquettes de nœuds
+    description: |
+      Simule deux zones de disponibilité : pose l'étiquette `zone=a` sur **worker1** et `zone=b` sur **worker2**
+      (`docker node update --label-add`). Déploie ensuite le service `zoned` (image `nginx:1.27-alpine`,
+      2 réplicas) contraint à la zone `a`.
+    hint: "docker service create --name zoned --replicas 2 --constraint node.labels.zone==a nginx:1.27-alpine"
+    checks:
+      - desc: Les étiquettes zone=a et zone=b sont posées
+        run: |
+          test "$(docker node inspect worker1 -f '{{index .Spec.Labels "zone"}}')" = a && test "$(docker node inspect worker2 -f '{{index .Spec.Labels "zone"}}')" = b
+      - desc: Les 2 tâches de zoned tournent sur worker1 uniquement
+        run: |
+          test "$(docker service ps zoned -f desired-state=running --format '{{.Node}} {{.CurrentState}}' | grep -c '^worker1 Running')" = 2 && test -z "$(docker service ps zoned -f desired-state=running --format '{{.Node}}' | grep -v '^worker1$')"
+        timeout: 90
+  - id: drain
+    title: Maintenance d'un nœud
+    description: |
+      **worker2** doit partir en maintenance. Passe-le en disponibilité `drain` : Swarm déplace ses tâches vers les
+      autres nœuds (observe `docker service ps` avant et après). Le nœud reste membre du cluster.
+    hint: "docker node update --availability drain worker2"
+    checks:
+      - desc: worker2 est en drain
+        run: test "$(docker node inspect worker2 -f '{{.Spec.Availability}}')" = drain
+      - desc: Plus aucune tâche ne tourne sur worker2
+        run: docker node inspect worker2 >/dev/null && test -z "$(docker node ps worker2 -f desired-state=running -q)"
+        timeout: 90
+      - desc: Les services répliqués ont gardé leurs réplicas
+        run: test "$(docker service ps web -f desired-state=running --format '{{.CurrentState}}' | grep -c Running)" = 5
+        timeout: 90

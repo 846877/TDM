@@ -35,3 +35,42 @@ exercises:
         run: test "$(sudo oc -n demo get pods --no-headers | grep hello | grep -c Running)" -ge 2
       - desc: L'application répond par la route
         run: curl -fsS --max-time 10 "http://$(sudo oc -n demo get route hello -o jsonpath='{.spec.host}')" | grep -qi hello
+  - id: configuration
+    title: Configuration par ConfigMap
+    description: |
+      Crée dans `demo` la ConfigMap `hello-config` contenant `RESPONSE=Bonjour depuis OpenShift`, puis injecte-la
+      dans la DeploymentConfig `hello` comme variables d'environnement (l'image `hello-openshift` affiche la
+      variable `RESPONSE`). Un nouveau déploiement est déclenché automatiquement.
+    hint: "oc create configmap hello-config --from-literal=RESPONSE='Bonjour depuis OpenShift' ; oc set env dc/hello --from=configmap/hello-config"
+    checks:
+      - desc: La ConfigMap hello-config existe
+        run: sudo oc -n demo get configmap hello-config -o jsonpath='{.data.RESPONSE}' | grep -q 'Bonjour'
+      - desc: hello utilise la ConfigMap
+        run: sudo oc -n demo get dc hello -o yaml | grep -q 'hello-config'
+      - desc: La route affiche le nouveau message
+        run: curl -fsS --max-time 10 "http://$(sudo oc -n demo get route hello -o jsonpath='{.spec.host}')" | grep -q 'Bonjour depuis OpenShift'
+  - id: sondes
+    title: Sondes de santé
+    description: |
+      Ajoute à `dc/hello` une sonde de disponibilité (*readiness*) et une sonde de vie (*liveness*) HTTP sur le
+      port **8080**, chemin `/`.
+    hint: "oc set probe dc/hello --readiness --get-url=http://:8080/ puis la même chose avec --liveness"
+    checks:
+      - desc: readinessProbe définie
+        run: sudo oc -n demo get dc hello -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.port}' | grep -q 8080
+      - desc: livenessProbe définie
+        run: sudo oc -n demo get dc hello -o jsonpath='{.spec.template.spec.containers[0].livenessProbe.httpGet.port}' | grep -q 8080
+  - id: ressources
+    title: Requêtes et limites de ressources
+    description: |
+      Fixe pour `dc/hello` une requête de **50m** CPU et **32Mi** de mémoire, et une limite de **64Mi** de mémoire.
+      Vérifie que les 2 pods redémarrent correctement.
+    hint: "oc set resources dc/hello --requests=cpu=50m,memory=32Mi --limits=memory=64Mi"
+    checks:
+      - desc: Requêtes définies
+        run: |
+          sudo oc -n demo get dc hello -o jsonpath='{.spec.template.spec.containers[0].resources.requests.cpu}' | grep -qx 50m && sudo oc -n demo get dc hello -o jsonpath='{.spec.template.spec.containers[0].resources.requests.memory}' | grep -qx 32Mi
+      - desc: Limite mémoire de 64Mi
+        run: sudo oc -n demo get dc hello -o jsonpath='{.spec.template.spec.containers[0].resources.limits.memory}' | grep -qx 64Mi
+      - desc: 2 pods hello prêts
+        run: test "$(sudo oc -n demo get dc hello -o jsonpath='{.status.readyReplicas}')" = 2

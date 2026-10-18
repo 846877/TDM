@@ -78,3 +78,70 @@ exercises:
         run: test -z "$(sudo kubectl get nodes -l role=worker -o jsonpath='{.items[0].spec.unschedulable}')"
       - desc: L'annotation maintenance=faite est posée
         run: test "$(sudo kubectl get nodes -l role=worker -o jsonpath='{.items[0].metadata.annotations.maintenance}')" = faite
+  - id: sondes
+    title: Sondes de santé
+    description: |
+      Rends le déploiement `nginx` du namespace `web` **auto-réparant** :
+      - une `readinessProbe` HTTP sur `/` port 80 (le pod ne reçoit du trafic qu'une fois prêt) ;
+      - une `livenessProbe` HTTP sur `/` port 80, avec `initialDelaySeconds: 5` (le conteneur est redémarré s'il ne répond plus).
+
+      Après le déploiement progressif, les 3 réplicas doivent être de nouveau disponibles.
+    hint: "kubectl -n web edit deploy nginx, ou kubectl patch ; vérifie avec kubectl -n web describe pod"
+    checks:
+      - desc: readinessProbe HTTP définie
+        run: sudo kubectl -n web get deploy nginx -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.port}' | grep -q 80
+      - desc: livenessProbe HTTP définie
+        run: sudo kubectl -n web get deploy nginx -o jsonpath='{.spec.template.spec.containers[0].livenessProbe.httpGet.port}' | grep -q 80
+      - desc: 3 réplicas disponibles
+        run: test "$(sudo kubectl -n web get deploy nginx -o jsonpath='{.status.availableReplicas}')" = 3
+  - id: rbac
+    title: Droits d'accès avec RBAC
+    description: |
+      Une application de supervision doit pouvoir **lire** les pods du namespace `web`, et rien d'autre.
+      Crée dans `web` :
+      - le ServiceAccount `lecteur` ;
+      - le Role `lecture-pods` (verbes `get`, `list`, `watch` sur les `pods`) ;
+      - le RoleBinding `lecteur-pods` qui lie les deux.
+
+      Vérifie avec `kubectl auth can-i ... --as=system:serviceaccount:web:lecteur`.
+    hint: "kubectl -n web create role lecture-pods --verb=get,list,watch --resource=pods ; kubectl -n web create rolebinding lecteur-pods --role=lecture-pods --serviceaccount=web:lecteur"
+    checks:
+      - desc: lecteur peut lister les pods de web
+        run: test "$(sudo kubectl auth can-i list pods -n web --as=system:serviceaccount:web:lecteur)" = yes
+      - desc: lecteur ne peut pas supprimer de pods
+        run: test "$(sudo kubectl auth can-i delete pods -n web --as=system:serviceaccount:web:lecteur)" = no
+      - desc: lecteur ne peut pas lire les secrets
+        run: test "$(sudo kubectl auth can-i get secrets -n web --as=system:serviceaccount:web:lecteur)" = no
+      - desc: lecteur n'a aucun droit dans default
+        run: test "$(sudo kubectl auth can-i list pods -n default --as=system:serviceaccount:web:lecteur)" = no
+  - id: stockage
+    title: Stockage persistant (PV et PVC)
+    description: |
+      1. Crée un PersistentVolume `pv-donnees` de 1Gi, `storageClassName: manual`, mode `ReadWriteOnce`,
+         de type `hostPath` sur `/data/tdm` (avec `type: DirectoryOrCreate`).
+      2. Dans `web`, crée la PersistentVolumeClaim `donnees` (500Mi, classe `manual`) : elle doit se lier au PV.
+      3. Lance le pod `stockage` (image `busybox:1.36`, commande `sleep 3600`) qui monte la claim sur `/data`, puis
+         écris `persistant` dans `/data/test.txt` depuis le pod.
+    hint: "kubectl -n web exec stockage -- sh -c 'echo persistant > /data/test.txt'"
+    checks:
+      - desc: La claim donnees est liée à pv-donnees
+        run: test "$(sudo kubectl -n web get pvc donnees -o jsonpath='{.status.phase}/{.spec.volumeName}')" = Bound/pv-donnees
+      - desc: Le pod stockage monte la claim sur /data
+        run: sudo kubectl -n web get pod stockage -o jsonpath='{.spec.volumes[*].persistentVolumeClaim.claimName}' | grep -qw donnees
+      - desc: Le fichier est écrit sur le volume
+        run: test "$(sudo kubectl -n web exec stockage -- cat /data/test.txt)" = persistant
+  - id: etcd
+    title: Sauvegarder etcd
+    description: |
+      Geste classique de la certification CKA : **sauvegarder la base etcd** du cluster.
+      Fais un instantané avec `etcdctl snapshot save` (depuis le pod etcd ou avec `etcdctl` installé sur le
+      master, en utilisant les certificats de `/etc/kubernetes/pki/etcd/`), puis place-le dans
+      `/home/vagrant/etcd-snapshot.db`, lisible par l'utilisateur `vagrant`.
+    hint: |
+      sudo kubectl -n kube-system exec etcd-master -- etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key snapshot save /var/lib/etcd/snapshot.db
+      (le dossier /var/lib/etcd du pod est celui du master), puis sudo cp et sudo chown
+    checks:
+      - desc: L'instantané existe et pèse plus de 1 Mo
+        run: test -r /home/vagrant/etcd-snapshot.db && test "$(stat -c %s /home/vagrant/etcd-snapshot.db)" -gt 1000000
+      - desc: C'est bien une base etcd (bbolt)
+        run: od -A n -t x4 -j 16 -N 4 /home/vagrant/etcd-snapshot.db | grep -q 'ed0cdaed'

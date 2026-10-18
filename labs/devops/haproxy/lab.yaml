@@ -1,8 +1,8 @@
 title: HAProxy et Squid
 level: intermediaire
 order: 4
-tags: [haproxy, load balancing, proxy, squid]
-summary: Répartition de charge, routage par URL, statistiques et proxy sortant.
+tags: [haproxy, load balancing, proxy, squid, tls]
+summary: Répartition de charge, routage, statistiques, proxy sortant, persistance, TLS, limitation de débit et API runtime.
 compose: docker-compose.yml
 service: haproxy
 shell: bash
@@ -73,3 +73,80 @@ exercises:
         run: curl -fsS -x http://squid:3128 http://site1/ | grep -q "Site 1"
       - desc: Le code noté est correct
         run: test "$(tr -d '[:space:]' < /root/squid.txt)" = "$(curl -s -o /dev/null -w '%{http_code}' -x http://squid:3128 http://site1/)"
+  - id: persistance
+    title: Persistance de session par cookie
+    description: |
+      Certaines applications gardent la session en mémoire : un utilisateur doit toujours retomber sur le
+      **même** serveur. Active la persistance par cookie sur le backend `couleurs` :
+      HAProxy insère un cookie `SERVERID` qui désigne le serveur (`cookie SERVERID insert indirect nocache`,
+      et `cookie red` / `cookie blue` sur chaque ligne `server`).
+
+      Teste avec `curl -c /tmp/c -b /tmp/c http://localhost/` plusieurs fois : la couleur ne change plus.
+    hint: "Dans le backend : cookie SERVERID insert indirect nocache ; server red red:8080 check cookie red"
+    checks:
+      - desc: HAProxy pose le cookie SERVERID
+        run: |
+          curl -s -o /dev/null -D - http://localhost/ | grep -qi '^set-cookie: SERVERID='
+      - desc: Avec le cookie, on reste sur le même serveur
+        run: |
+          c=$(curl -s -o /dev/null -D - http://localhost/ | sed -n 's/^[Ss]et-[Cc]ookie: *\(SERVERID=[^;]*\).*/\1/p' | tr -d '\r'); test -n "$c" && for i in 1 2 3 4 5 6; do curl -s -b "$c" http://localhost/; done | grep -o 'red\|blue' | sort -u | wc -l | grep -qx 1
+  - id: tls
+    title: Terminaison TLS
+    description: |
+      HAProxy doit aussi servir le site en **HTTPS** sur le port 443 (`openssl` est installé) :
+      1. Génère un certificat auto-signé pour le CN `tdm.local` et regroupe certificat **et** clé dans
+         `/usr/local/etc/haproxy/certs/tdm.pem` (c'est le format attendu par HAProxy).
+      2. Ajoute à ton frontend `bind *:443 ssl crt /usr/local/etc/haproxy/certs/tdm.pem` et recharge.
+
+      `curl -k https://localhost/` doit renvoyer une couleur.
+    hint: "openssl req -x509 -newkey rsa:2048 -nodes -keyout /tmp/k.pem -out /tmp/c.pem -days 365 -subj '/CN=tdm.local' ; cat /tmp/c.pem /tmp/k.pem > certs/tdm.pem"
+    checks:
+      - desc: Le site répond en HTTPS
+        run: curl -sk https://localhost/ | grep -q 'red\|blue'
+      - desc: Le certificat présenté est celui de tdm.local
+        run: echo | openssl s_client -connect localhost:443 2>/dev/null | openssl x509 -noout -subject | grep -q 'CN *= *tdm.local'
+      - desc: Le HTTP reste disponible
+        run: curl -fsS http://localhost/ | grep -q 'red\|blue'
+  - id: limitation
+    title: Limiter le débit d'une API
+    description: |
+      Protège le chemin `/api` contre les abus : au-delà de **10 requêtes en 10 secondes** par adresse IP,
+      HAProxy doit répondre `429 Too Many Requests`. Le reste du site ne doit **pas** être limité.
+
+      Utilise une *stick-table* : `stick-table type ip size 100k expire 30s store http_req_rate(10s)` dans le
+      frontend, `http-request track-sc0 src if { path_beg /api }` puis
+      `http-request deny deny_status 429 if { path_beg /api } { sc_http_req_rate(0) gt 10 }`.
+    hint: "for i in $(seq 1 15); do curl -s -o /dev/null -w '%{http_code}\\n' http://localhost/api; done"
+    checks:
+      - desc: Une rafale sur /api finit en 429 (après une première réponse normale)
+        run: |
+          sleep 11; r=$(for i in $(seq 1 25); do curl -s -o /dev/null -w '%{http_code}\n' http://localhost/api; done); echo "$r" | head -1 | grep -qv 429 && echo "$r" | grep -q 429
+        timeout: 90
+      - desc: Le reste du site n'est pas limité
+        run: for i in $(seq 1 15); do curl -fsS -o /dev/null http://localhost/ || exit 1; done
+  - id: runtime
+    title: Maintenance à chaud avec l'API runtime
+    description: |
+      Ajoute dans la section `global` un socket d'administration :
+      `stats socket /run/haproxy/admin.sock mode 600 level admin`, puis redémarre HAProxy.
+
+      Les commandes ci-dessous supposent que tes serveurs s'appellent `red` et `blue` dans le backend
+      `couleurs` (`server red red:8080 check`) : renomme-les si besoin.
+
+      Sans recharger la configuration, avec `socat` :
+      1. mets `blue` en maintenance (`echo "disable server couleurs/blue" | socat stdio /run/haproxy/admin.sock`)
+         et constate que seul `red` répond ;
+      2. remets `blue` en service (`enable server`) ;
+      3. limite le serveur `red` à **100 connexions simultanées** (`set maxconn server couleurs/red 100`).
+
+      Observe l'état avec `echo "show servers state couleurs" | socat stdio /run/haproxy/admin.sock`.
+    hint: "Si le socket n'apparaît pas, HAProxy n'a pas été redémarré : un rechargement avec -sf relit bien la section global"
+    checks:
+      - desc: Le socket d'administration existe
+        run: test -S /run/haproxy/admin.sock && echo "show info" | socat stdio /run/haproxy/admin.sock | grep -q '^Name. HAProxy'
+      - desc: red est limité à 100 connexions
+        run: |
+          echo "show stat" | socat stdio /run/haproxy/admin.sock | awk -F, '$1=="couleurs" && $2=="red" {print $7}' | grep -qx 100
+      - desc: blue est de nouveau en service
+        run: |
+          echo "show servers state couleurs" | socat stdio /run/haproxy/admin.sock | awk '$4=="blue" && $6==2 && $7==0' | grep -q blue

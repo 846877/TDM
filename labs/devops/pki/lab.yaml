@@ -1,8 +1,8 @@
 title: PKI et certificats TLS
 level: intermediaire
 order: 5
-tags: [pki, tls, openssl, nginx]
-summary: Créer une autorité de certification et publier un site en HTTPS.
+tags: [pki, tls, openssl, nginx, mtls, crl]
+summary: CA racine et intermédiaire, HTTPS, durcissement, mTLS et révocation de certificats.
 compose: docker-compose.yml
 service: webserver
 shell: sh
@@ -68,3 +68,84 @@ exercises:
         run: curl -fsSI --cacert /pki/ca/ca.crt https://localhost/ | grep -qi "strict-transport-security"
       - desc: server.key en 600
         run: test "$(stat -c %a /pki/webserver/server.key)" = 600
+  - id: inspection
+    title: Inspecter un certificat distant
+    description: |
+      Comme lors d'un diagnostic en production, interroge le serveur HTTPS **par le réseau** (pas en lisant
+      le fichier) avec `openssl s_client -connect localhost:443` et extrais du certificat présenté :
+      - son **empreinte SHA-256** dans `/pki/empreinte.txt`, au format `AB:CD:...` (sans le préfixe
+        `sha256 Fingerprint=`) ;
+      - son **numéro de série** dans `/pki/serie.txt` (juste la valeur hexadécimale, sans `serial=`).
+    hint: "echo | openssl s_client -connect localhost:443 2>/dev/null | openssl x509 -noout -fingerprint -sha256 (puis cut -d= -f2)"
+    checks:
+      - desc: L'empreinte SHA-256 est exacte
+        run: |
+          test -s /pki/empreinte.txt && test "$(tr -d '[:space:]' < /pki/empreinte.txt | tr a-f A-F)" = "$(echo | openssl s_client -connect localhost:443 2>/dev/null | openssl x509 -noout -fingerprint -sha256 | cut -d= -f2 | tr a-f A-F)"
+      - desc: Le numéro de série est exact
+        run: |
+          test -s /pki/serie.txt && test "$(tr -d '[:space:]' < /pki/serie.txt | tr a-f A-F)" = "$(echo | openssl s_client -connect localhost:443 2>/dev/null | openssl x509 -noout -serial | cut -d= -f2 | tr a-f A-F)"
+  - id: intermediaire
+    title: Autorité intermédiaire et chaîne de certification
+    description: |
+      En production, la CA racine reste hors ligne et une **CA intermédiaire** signe les certificats.
+      1. Crée `/pki/ca/intermediate.key` et `/pki/ca/intermediate.crt` (CN `TDM Intermediate CA`), **signé par
+         la racine**, avec `basicConstraints=critical,CA:TRUE,pathlen:0` et `keyUsage=critical,keyCertSign,cRLSign`.
+      2. Avec l'intermédiaire, signe un certificat `/pki/webserver/app.crt` (clé `app.key`) pour le CN
+         `app.tdm.local` (SAN `DNS:app.tdm.local`).
+      3. Configure nginx pour servir `app.tdm.local` en HTTPS avec la **chaîne complète**
+         (`app.crt` suivi de `intermediate.crt` dans `/pki/webserver/app-fullchain.crt`).
+
+      `curl --cacert /pki/ca/ca.crt --resolve app.tdm.local:443:127.0.0.1 https://app.tdm.local/` doit fonctionner :
+      le client ne connaît que la racine, c'est le serveur qui fournit l'intermédiaire.
+    hint: "Les extensions se passent à openssl x509 -req avec -extfile (un fichier contenant basicConstraints=… et keyUsage=…) ; server { listen 443 ssl; server_name app.tdm.local; ssl_certificate /pki/webserver/app-fullchain.crt; … }"
+    checks:
+      - desc: L'intermédiaire est signé par la racine
+        run: |
+          openssl verify -CAfile /pki/ca/ca.crt /pki/ca/intermediate.crt | grep -q ': OK' && openssl x509 -in /pki/ca/intermediate.crt -noout -subject | grep -q 'TDM Intermediate CA'
+      - desc: C'est une CA limitée (pathlen:0)
+        run: openssl x509 -in /pki/ca/intermediate.crt -noout -text | grep -q 'CA:TRUE, pathlen:0'
+      - desc: app.crt est signé par l'intermédiaire
+        run: |
+          openssl verify -CAfile /pki/ca/ca.crt -untrusted /pki/ca/intermediate.crt /pki/webserver/app.crt | grep -q ': OK' && ! openssl verify -CAfile /pki/ca/ca.crt /pki/webserver/app.crt >/dev/null 2>&1
+      - desc: Le serveur présente la chaîne complète
+        run: curl -fsS --cacert /pki/ca/ca.crt --resolve app.tdm.local:443:127.0.0.1 https://app.tdm.local/ >/dev/null
+  - id: mtls
+    title: Authentification par certificat client (mTLS)
+    description: |
+      Réserve un espace aux clients qui présentent un **certificat signé par ta CA** :
+      1. Crée un certificat client `/pki/client/client.crt` (clé `client.key`) pour le CN `eleve`, signé par la
+         racine, avec `extendedKeyUsage=clientAuth`.
+      2. Ajoute un serveur nginx sur le port **9443** (certificat `server.crt`) qui exige un certificat client
+         (`ssl_client_certificate /pki/ca/ca.crt;` et `ssl_verify_client on;`).
+
+      `curl --cacert /pki/ca/ca.crt https://localhost:9443/` doit être refusé, et accepté avec
+      `--cert /pki/client/client.crt --key /pki/client/client.key`.
+    checks:
+      - desc: client.crt est un certificat client signé par la CA
+        run: |
+          openssl verify -CAfile /pki/ca/ca.crt /pki/client/client.crt | grep -q ': OK' && openssl x509 -in /pki/client/client.crt -noout -text | grep -q 'TLS Web Client Authentication'
+      - desc: Sans certificat client, l'accès est refusé
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' --cacert /pki/ca/ca.crt https://localhost:9443/); test "$code" = 400
+      - desc: Avec le certificat client, l'accès est accepté
+        run: curl -fsS --cacert /pki/ca/ca.crt --cert /pki/client/client.crt --key /pki/client/client.key https://localhost:9443/ >/dev/null
+  - id: revocation
+    title: Révoquer un certificat (CRL)
+    description: |
+      Un certificat a fuité : il faut le **révoquer**. Monte une petite CA gérée par `openssl ca` dans `/pki/ca`
+      (fichier de configuration avec `database = index.txt`, `serial`, `certificate = ca.crt`,
+      `private_key = ca.key`, `default_md = sha256`, `default_crl_days = 30`).
+      1. Crée et signe un certificat `/pki/ca/revoque.crt` pour le CN `fuite`.
+      2. Révoque-le (`openssl ca -revoke`), puis publie la liste de révocation `/pki/ca/crl.pem` (`openssl ca -gencrl`).
+
+      Vérifie : `openssl verify -crl_check` doit refuser `revoque.crt` mais toujours accepter `server.crt`.
+    hint: "touch index.txt ; echo 1000 > serial ; openssl ca -config ca.cnf -revoke revoque.crt ; openssl ca -config ca.cnf -gencrl -out crl.pem"
+    checks:
+      - desc: crl.pem est une CRL émise par TDM Root CA
+        run: openssl crl -in /pki/ca/crl.pem -noout -issuer | grep -q 'TDM Root CA'
+      - desc: revoque.crt est refusé (révoqué)
+        run: |
+          cat /pki/ca/ca.crt /pki/ca/crl.pem > /tmp/ca-crl.pem && openssl verify -crl_check -CAfile /tmp/ca-crl.pem /pki/ca/revoque.crt 2>&1 | grep -q 'certificate revoked'
+      - desc: server.crt reste valide avec la CRL
+        run: |
+          cat /pki/ca/ca.crt /pki/ca/crl.pem > /tmp/ca-crl.pem && openssl verify -crl_check -CAfile /tmp/ca-crl.pem /pki/webserver/server.crt | grep -q ': OK'
