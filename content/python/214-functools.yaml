@@ -1,0 +1,153 @@
+title: "functools : singledispatch, partial, reduce"
+level: avance
+order: 14
+tags: [functools, programmation fonctionnelle, dispatch]
+summary: Une fonction générique qui s'adapte au type de son argument.
+description: |
+  1. Avec `functools.singledispatch`, écris une fonction générique `formater(valeur)` qui renvoie
+     une chaîne lisible :
+
+     | Type | Résultat |
+     |------|----------|
+     | `None` | `"rien"` |
+     | `bool` | `"oui"` / `"non"` |
+     | `int` | `"42"` |
+     | `float` | 2 décimales : `"3.14"` |
+     | `str` | entre guillemets : `'"abc"'` |
+     | `list` / `tuple` | `'[1, 2.50, "a"]'` (éléments formatés **récursivement**, séparés par `", "`) |
+     | `dict` | `'{"a": 1, "b": oui}'` (clés et valeurs formatées) |
+     | autre | lève `TypeError` |
+
+     Attention : `True` est aussi un `int` ! La moulinette ajoute aussi son propre type avec
+     `formater.register`, il faut donc bien utiliser `singledispatch`.
+
+  2. `composer(*fonctions)` renvoie la composée : `composer(f, g, h)(x) == f(g(h(x)))`.
+     Sans argument, c'est l'identité. Utilise `functools.reduce`.
+
+  3. `prix_ttc(prix, taux)` renvoie `prix * (1 + taux)` arrondi à 2 décimales, et
+     `prix_ttc_france` est une `functools.partial` de `prix_ttc` avec `taux=0.2`.
+starter: |
+  import functools
+
+
+  def formater(valeur):
+      pass
+
+
+  def composer(*fonctions):
+      pass
+
+
+  def prix_ttc(prix, taux):
+      pass
+
+
+  prix_ttc_france = None
+tests: |
+  import functools
+
+  def test_simples():
+      "Types simples"
+      f = solution.formater
+      assert f(42) == "42"
+      assert f(3.14159) == "3.14"
+      assert f("abc") == '"abc"'
+      assert f(None) == "rien"
+
+  def test_bool():
+      "Les booléens ne sont pas formatés comme des entiers"
+      assert solution.formater(True) == "oui" and solution.formater(False) == "non"
+
+  def test_conteneurs():
+      "Listes, tuples et dictionnaires récursifs"
+      assert solution.formater([1, 2.5, "a"]) == '[1, 2.50, "a"]'
+      assert solution.formater((True, [None])) == "[oui, [rien]]"
+      assert solution.formater({"a": 1, "b": True}) == '{"a": 1, "b": oui}'
+      assert solution.formater([]) == "[]"
+
+  def test_inconnu():
+      "Type non géré : TypeError"
+      try:
+          solution.formater(object())
+      except TypeError:
+          pass
+      else:
+          raise AssertionError("TypeError attendue")
+
+  def test_register():
+      "On peut enregistrer un nouveau type (singledispatch)"
+      assert hasattr(solution.formater, "register"), "formater doit être décorée par functools.singledispatch"
+      class Euro:
+          def __init__(self, montant):
+              self.montant = montant
+      @solution.formater.register(Euro)
+      def _(valeur):
+          return f"{valeur.montant} €"
+      assert solution.formater([Euro(5)]) == "[5 €]", "les conteneurs doivent rappeler formater"
+
+  def test_composer():
+      "Composition de fonctions"
+      c = solution.composer(str, lambda x: x * 2, abs)
+      assert c(-4) == "8"
+      assert solution.composer()(7) == 7
+      assert solution.composer(len)("abc") == 3
+
+  def test_partial():
+      "prix_ttc_france est une partial"
+      assert solution.prix_ttc(100, 0.055) == 105.5
+      assert isinstance(solution.prix_ttc_france, functools.partial), "utilise functools.partial"
+      assert solution.prix_ttc_france(10) == 12.0
+solution: |
+  import functools
+
+
+  @functools.singledispatch
+  def formater(valeur):
+      raise TypeError(f"type non géré : {type(valeur).__name__}")
+
+
+  @formater.register(type(None))
+  def _(valeur):
+      return "rien"
+
+
+  @formater.register(bool)
+  def _(valeur):
+      return "oui" if valeur else "non"
+
+
+  @formater.register(int)
+  def _(valeur):
+      return str(valeur)
+
+
+  @formater.register(float)
+  def _(valeur):
+      return f"{valeur:.2f}"
+
+
+  @formater.register(str)
+  def _(valeur):
+      return f'"{valeur}"'
+
+
+  @formater.register(list)
+  @formater.register(tuple)
+  def _(valeur):
+      return "[" + ", ".join(formater(v) for v in valeur) + "]"
+
+
+  @formater.register(dict)
+  def _(valeur):
+      return "{" + ", ".join(f"{formater(k)}: {formater(v)}" for k, v in valeur.items()) + "}"
+
+
+  def composer(*fonctions):
+      return functools.reduce(lambda f, g: lambda x: f(g(x)), fonctions, lambda x: x)
+
+
+  def prix_ttc(prix, taux):
+      return round(prix * (1 + taux), 2)
+
+
+  prix_ttc_france = functools.partial(prix_ttc, taux=0.2)

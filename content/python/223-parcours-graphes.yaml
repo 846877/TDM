@@ -1,0 +1,159 @@
+title: Parcours de graphes BFS et DFS
+level: avance
+order: 23
+tags: [graphes, algorithmes, deque, piles]
+summary: Largeur, profondeur, plus court chemin et composantes connexes.
+description: |
+  Un graphe est représenté par un dictionnaire de listes d'adjacence :
+  `{"A": ["B", "C"], "B": ["D"], "C": [], "D": []}`. Tous les sommets sont des clés du dictionnaire,
+  et les voisins sont toujours examinés **dans l'ordre de la liste**.
+
+  1. `bfs(graphe, depart)` : liste des sommets dans l'ordre d'un **parcours en largeur**
+     (utilise `collections.deque`).
+  2. `dfs(graphe, depart)` : liste des sommets dans l'ordre d'un **parcours en profondeur** préfixe —
+     le même ordre que la version récursive classique. **Sans récursion** : la moulinette utilise une
+     chaîne de 20 000 sommets, bien au-delà de la limite de récursion de Python. Utilise une pile
+     explicite (attention à l'ordre dans lequel tu empiles les voisins).
+  3. `plus_court_chemin(graphe, a, b)` : liste des sommets d'un plus court chemin (en nombre d'arcs)
+     de `a` à `b`, ou `None` s'il n'y en a pas. Si plusieurs chemins sont aussi courts, renvoie celui
+     que trouve le BFS (premier découvert). `plus_court_chemin(g, a, a) == [a]`.
+  4. `composantes(graphe)` : nombre de composantes connexes d'un graphe **non orienté**
+     (chaque arête apparaît dans les deux sens).
+
+  ```python
+  g = {"A": ["B", "C"], "B": ["D"], "C": ["D"], "D": []}
+  bfs(g, "A")                       # ["A", "B", "C", "D"]
+  dfs(g, "A")                       # ["A", "B", "D", "C"]
+  plus_court_chemin(g, "A", "D")    # ["A", "B", "D"]
+  ```
+starter: |
+  from collections import deque
+
+
+  def bfs(graphe, depart):
+      pass
+
+
+  def dfs(graphe, depart):
+      pass
+
+
+  def plus_court_chemin(graphe, a, b):
+      pass
+
+
+  def composantes(graphe):
+      pass
+tests: |
+  G = {"A": ["B", "C"], "B": ["D"], "C": ["D"], "D": []}
+  ARBRE = {1: [2, 3], 2: [4, 5], 3: [6], 4: [], 5: [], 6: []}
+  CYCLE = {"a": ["b"], "b": ["c"], "c": ["a", "d"], "d": []}
+
+  def test_bfs():
+      "Parcours en largeur"
+      assert solution.bfs(G, "A") == ["A", "B", "C", "D"]
+      assert solution.bfs(ARBRE, 1) == [1, 2, 3, 4, 5, 6]
+      assert solution.bfs(CYCLE, "b") == ["b", "c", "a", "d"]
+
+  def test_dfs():
+      "Parcours en profondeur préfixe"
+      assert solution.dfs(G, "A") == ["A", "B", "D", "C"]
+      assert solution.dfs(ARBRE, 1) == [1, 2, 4, 5, 3, 6], f"obtenu {solution.dfs(ARBRE, 1)}"
+      assert solution.dfs(CYCLE, "a") == ["a", "b", "c", "d"]
+
+  def test_dfs_ordre_recursif():
+      "DFS identique à la version récursive"
+      g = {0: [1, 2, 3], 1: [3, 2], 2: [0], 3: [2], 4: [0]}
+      vus = []
+      def rec(s):
+          vus.append(s)
+          for v in g[s]:
+              if v not in vus:
+                  rec(v)
+      rec(0)
+      assert solution.dfs(g, 0) == vus, f"obtenu {solution.dfs(g, 0)}, attendu {vus}"
+
+  def test_longue_chaine():
+      "Chaîne de 20 000 sommets (pas de récursion)"
+      n = 20_000
+      g = {i: [i + 1] for i in range(n)}
+      g[n] = []
+      assert solution.dfs(g, 0) == list(range(n + 1))
+      assert len(solution.bfs(g, 0)) == n + 1
+
+  def test_chemin():
+      "Plus court chemin"
+      assert solution.plus_court_chemin(G, "A", "D") == ["A", "B", "D"]
+      assert solution.plus_court_chemin(CYCLE, "b", "a") == ["b", "c", "a"]
+      assert solution.plus_court_chemin(G, "C", "C") == ["C"]
+
+  def test_pas_de_chemin():
+      "Aucun chemin"
+      assert solution.plus_court_chemin(G, "D", "A") is None
+
+  def test_composantes():
+      "Composantes connexes"
+      g = {1: [2], 2: [1], 3: [], 4: [5], 5: [4, 6], 6: [5]}
+      assert solution.composantes(g) == 3
+      assert solution.composantes({}) == 0
+      assert solution.composantes({"x": []}) == 1
+solution: |
+  from collections import deque
+
+
+  def bfs(graphe, depart):
+      vus = {depart}
+      ordre = []
+      file = deque([depart])
+      while file:
+          sommet = file.popleft()
+          ordre.append(sommet)
+          for voisin in graphe[sommet]:
+              if voisin not in vus:
+                  vus.add(voisin)
+                  file.append(voisin)
+      return ordre
+
+
+  def dfs(graphe, depart):
+      vus = set()
+      ordre = []
+      pile = [depart]
+      while pile:
+          sommet = pile.pop()
+          if sommet in vus:
+              continue
+          vus.add(sommet)
+          ordre.append(sommet)
+          for voisin in reversed(graphe[sommet]):
+              if voisin not in vus:
+                  pile.append(voisin)
+      return ordre
+
+
+  def plus_court_chemin(graphe, a, b):
+      parents = {a: None}
+      file = deque([a])
+      while file:
+          sommet = file.popleft()
+          if sommet == b:
+              chemin = []
+              while sommet is not None:
+                  chemin.append(sommet)
+                  sommet = parents[sommet]
+              return chemin[::-1]
+          for voisin in graphe[sommet]:
+              if voisin not in parents:
+                  parents[voisin] = sommet
+                  file.append(voisin)
+      return None
+
+
+  def composantes(graphe):
+      vus = set()
+      nombre = 0
+      for sommet in graphe:
+          if sommet not in vus:
+              nombre += 1
+              vus.update(bfs(graphe, sommet))
+      return nombre

@@ -1,0 +1,154 @@
+title: Protocoles et duck typing
+level: avance
+order: 18
+tags: [typing, Protocol, POO, méthodes spéciales]
+summary: typing.Protocol pour typer « ce qui sait faire », pas « ce qui hérite de ».
+description: |
+  En Python, peu importe la classe d'un objet : ce qui compte, c'est ce qu'il **sait faire**.
+  `typing.Protocol` permet de l'exprimer.
+
+  1. Déclare un protocole `Dessinable`, vérifiable avec `isinstance` (`@runtime_checkable`),
+     qui exige une méthode `dessiner(self) -> str`.
+  2. Écris `rendu(objet)` :
+     - si l'objet est `Dessinable`, renvoie `objet.dessiner()` ;
+     - sinon, si c'est un conteneur de taille connue (`collections.abc.Sized`),
+       renvoie `"<N éléments>"` ;
+     - sinon lève `TypeError`.
+  3. Crée une classe `Canevas` (sans hériter de `Dessinable` !) qui :
+     - possède `ajouter(objet)` qui accepte uniquement des `Dessinable` (`TypeError` sinon)
+       et renvoie `self` pour permettre le chaînage ;
+     - supporte `len()`, l'itération (dans l'ordre d'ajout) et `in` ;
+     - est elle-même dessinable : `dessiner()` renvoie les dessins de ses éléments séparés par
+       des retours à la ligne.
+
+  ```python
+  class Carre:
+      def dessiner(self):
+          return "[]"
+
+  isinstance(Carre(), Dessinable)       # True, sans héritage
+  Canevas().ajouter(Carre()).ajouter(Carre()).dessiner()   # "[]\n[]"
+  rendu([1, 2, 3])                      # "<3 éléments>"
+  ```
+starter: |
+  from collections.abc import Sized
+  from typing import Protocol, runtime_checkable
+
+
+  class Dessinable(Protocol):
+      pass
+
+
+  def rendu(objet):
+      pass
+
+
+  class Canevas:
+      pass
+tests: |
+  class Carre:
+      def dessiner(self):
+          return "[]"
+
+  class Rond:
+      def dessiner(self):
+          return "()"
+
+  class Muet:
+      pass
+
+  def test_protocole():
+      "Dessinable est un Protocol vérifiable à l'exécution"
+      assert getattr(solution.Dessinable, "_is_protocol", False), "Dessinable doit hériter de typing.Protocol"
+      assert isinstance(Carre(), solution.Dessinable), "Carre a une méthode dessiner : il est Dessinable"
+      assert not isinstance(Muet(), solution.Dessinable)
+
+  def test_rendu():
+      "rendu selon les capacités de l'objet"
+      assert solution.rendu(Rond()) == "()"
+      assert solution.rendu([1, 2, 3]) == "<3 éléments>"
+      assert solution.rendu("ab") == "<2 éléments>"
+      try:
+          solution.rendu(42)
+      except TypeError:
+          pass
+      else:
+          raise AssertionError("rendu(42) doit lever TypeError")
+
+  def test_canevas_dessinable():
+      "Canevas est Dessinable sans en hériter"
+      c = solution.Canevas()
+      assert isinstance(c, solution.Dessinable)
+      assert solution.Dessinable not in type(c).__mro__, "Canevas ne doit pas hériter de Dessinable"
+
+  def test_chainage():
+      "ajouter renvoie le canevas"
+      c = solution.Canevas()
+      assert c.ajouter(Carre()).ajouter(Rond()) is c
+      assert c.dessiner() == "[]\n()"
+
+  def test_conteneur():
+      "len, itération et in"
+      a, b = Carre(), Rond()
+      c = solution.Canevas().ajouter(a).ajouter(b)
+      assert len(c) == 2 and list(c) == [a, b]
+      assert a in c and Carre() not in c
+
+  def test_imbrique():
+      "Un canevas peut contenir un canevas"
+      interieur = solution.Canevas().ajouter(Rond())
+      c = solution.Canevas().ajouter(Carre()).ajouter(interieur)
+      assert solution.rendu(c) == "[]\n()"
+
+  def test_refus():
+      "ajouter refuse les objets non dessinables"
+      try:
+          solution.Canevas().ajouter(Muet())
+      except TypeError:
+          pass
+      else:
+          raise AssertionError("TypeError attendue")
+
+  def test_vide():
+      "Canevas vide"
+      assert solution.Canevas().dessiner() == "" and len(solution.Canevas()) == 0
+solution: |
+  from collections.abc import Sized
+  from typing import Protocol, runtime_checkable
+
+
+  @runtime_checkable
+  class Dessinable(Protocol):
+      def dessiner(self) -> str:
+          ...
+
+
+  def rendu(objet):
+      if isinstance(objet, Dessinable):
+          return objet.dessiner()
+      if isinstance(objet, Sized):
+          return f"<{len(objet)} éléments>"
+      raise TypeError(f"impossible de rendre un objet {type(objet).__name__}")
+
+
+  class Canevas:
+      def __init__(self):
+          self._elements = []
+
+      def ajouter(self, objet):
+          if not isinstance(objet, Dessinable):
+              raise TypeError("seuls les objets dessinables sont acceptés")
+          self._elements.append(objet)
+          return self
+
+      def __len__(self):
+          return len(self._elements)
+
+      def __iter__(self):
+          return iter(self._elements)
+
+      def __contains__(self, objet):
+          return any(e is objet for e in self._elements)
+
+      def dessiner(self) -> str:
+          return "\n".join(e.dessiner() for e in self._elements)

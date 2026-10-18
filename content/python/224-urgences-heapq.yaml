@@ -1,0 +1,123 @@
+title: File de priorité aux urgences
+level: avance
+order: 24
+tags: [heapq, files de priorité, stdin]
+summary: Un tas binaire avec ordre d'arrivée et suppression paresseuse.
+mode: stdio
+description: |
+  Simule l'accueil des urgences. Ton programme lit des commandes sur l'entrée standard, une par ligne,
+  jusqu'à la fin du flux :
+
+  | Commande | Effet |
+  |----------|-------|
+  | `ARRIVEE <nom> <gravite>` | un patient arrive (gravité entière, plus elle est grande plus c'est urgent) |
+  | `SUIVANT` | affiche le nom du patient le plus grave et le retire de la file, ou `personne` si la file est vide |
+  | `DEPART <nom>` | le patient quitte la file sans être soigné (ignoré s'il n'y est pas) |
+  | `ATTENTE` | affiche le nombre de patients en attente |
+
+  - à gravité égale, le **premier arrivé** passe en premier ;
+  - les noms des patients en attente sont tous différents ;
+  - à la fin, affiche `restants: ` suivi des patients encore en attente **dans l'ordre où ils
+    seraient appelés**, séparés par `, ` — ou `restants: aucun`.
+
+  Utilise `heapq` (c'est un tas **min** : pense à la clé `(-gravite, numero_arrivee)`).
+  Pour `DEPART`, retirer un élément au milieu d'un tas coûte cher : marque plutôt le patient comme parti
+  et ignore-le quand il sort du tas (*suppression paresseuse*).
+starter: |
+  import heapq
+  import sys
+
+  for ligne in sys.stdin.read().splitlines():
+      pass
+cases:
+  - name: Priorités et ordre d'arrivée
+    input: |
+      ARRIVEE alice 3
+      ARRIVEE bob 5
+      ARRIVEE chloe 3
+      ATTENTE
+      SUIVANT
+      SUIVANT
+      ARRIVEE david 9
+      SUIVANT
+      SUIVANT
+      SUIVANT
+    output: |
+      3
+      bob
+      alice
+      david
+      chloe
+      personne
+      restants: aucun
+  - name: Départs et patients restants
+    input: |
+      ARRIVEE a 1
+      ARRIVEE b 7
+      ARRIVEE c 7
+      ARRIVEE d 4
+      DEPART b
+      DEPART inconnu
+      ATTENTE
+      SUIVANT
+      ARRIVEE e 4
+    output: |
+      3
+      c
+      restants: d, e, a
+  - name: Un patient qui part puis revient
+    input: |
+      ARRIVEE zoe 2
+      ARRIVEE yann 2
+      DEPART zoe
+      ARRIVEE zoe 2
+      ATTENTE
+      SUIVANT
+    output: |
+      2
+      yann
+      restants: zoe
+  - name: Aucune commande
+    input: ""
+    output: |
+      restants: aucun
+solution: |
+  import heapq
+  import sys
+  from itertools import count
+
+  tas = []              # (-gravite, numero, nom)
+  en_attente = {}       # nom -> numero de son entrée valide dans le tas
+  numeros = count()
+
+
+  def nettoyer():
+      while tas and en_attente.get(tas[0][2]) != tas[0][1]:
+          heapq.heappop(tas)
+
+
+  for ligne in sys.stdin.read().splitlines():
+      morceaux = ligne.split()
+      if not morceaux:
+          continue
+      commande = morceaux[0]
+      if commande == "ARRIVEE":
+          nom, gravite = morceaux[1], int(morceaux[2])
+          numero = next(numeros)
+          en_attente[nom] = numero
+          heapq.heappush(tas, (-gravite, numero, nom))
+      elif commande == "SUIVANT":
+          nettoyer()
+          if tas:
+              _, _, nom = heapq.heappop(tas)
+              del en_attente[nom]
+              print(nom)
+          else:
+              print("personne")
+      elif commande == "DEPART":
+          en_attente.pop(morceaux[1], None)
+      elif commande == "ATTENTE":
+          print(len(en_attente))
+
+  restants = [nom for _, numero, nom in sorted(tas) if en_attente.get(nom) == numero]
+  print("restants: " + (", ".join(restants) if restants else "aucun"))

@@ -1,0 +1,138 @@
+title: Convertir CSV ⇄ JSON en mémoire
+level: avance
+order: 21
+tags: [csv, json, io, données]
+summary: Les modules csv et json avec io.StringIO, sans fichier sur disque.
+description: |
+  Les modules `csv` et `json` travaillent sur des fichiers… mais `io.StringIO` permet de les utiliser
+  sur des chaînes en mémoire.
+
+  1. `csv_vers_json(texte, types=None)` reçoit un texte CSV (première ligne = en-têtes, séparateur `,`,
+     guillemets gérés par le module `csv`) et renvoie une **chaîne JSON** : la liste des lignes sous
+     forme d'objets.
+     - `types` est un dictionnaire facultatif `{colonne: fonction}` appliqué aux valeurs
+       (ex. `{"age": int}`) ;
+     - une cellule vide devient `null` (sans appeler la fonction de conversion).
+
+  2. `json_vers_csv(texte, colonnes=None)` fait l'inverse : à partir d'une chaîne JSON contenant une
+     liste d'objets, renvoie le texte CSV avec une ligne d'en-têtes.
+     - colonnes : celles fournies, sinon l'union des clés **dans l'ordre de première apparition** ;
+     - une clé absente ou `null` donne une cellule vide ;
+     - les lignes se terminent par `\n` (`lineterminator="\n"`) ;
+     - les valeurs contenant une virgule ou des guillemets sont protégées par le module `csv`.
+
+  ```python
+  csv_vers_json('nom,age\nAlice,30\n"Dupont, Bob",\n', {"age": int})
+  # '[{"nom": "Alice", "age": 30}, {"nom": "Dupont, Bob", "age": null}]'
+
+  json_vers_csv('[{"a": 1, "b": "x"}, {"b": "y", "c": true}]')
+  # 'a,b,c\n1,x,\n,y,True\n'
+  ```
+
+  Interdit : écrire sur le disque. Utilise `io.StringIO`, `csv.DictReader` / `csv.DictWriter`.
+starter: |
+  import csv
+  import io
+  import json
+
+
+  def csv_vers_json(texte, types=None):
+      pass
+
+
+  def json_vers_csv(texte, colonnes=None):
+      pass
+tests: |
+  import csv, io, json
+
+  def test_csv_simple():
+      "CSV vers JSON sans conversion"
+      r = solution.csv_vers_json("a,b\n1,2\n3,4\n")
+      assert isinstance(r, str), "il faut renvoyer une chaîne JSON"
+      assert json.loads(r) == [{"a": "1", "b": "2"}, {"a": "3", "b": "4"}]
+
+  def test_csv_types():
+      "Conversion des types et cellules vides"
+      r = json.loads(solution.csv_vers_json('nom,age\nAlice,30\n"Dupont, Bob",\n', {"age": int}))
+      assert r == [{"nom": "Alice", "age": 30}, {"nom": "Dupont, Bob", "age": None}], f"obtenu {r}"
+
+  def test_csv_guillemets():
+      "Guillemets doublés et retours à la ligne dans une cellule"
+      texte = 'id,note\n1,"Il a dit ""ok"""\n2,"ligne1\nligne2"\n'
+      r = json.loads(solution.csv_vers_json(texte, {"id": int}))
+      assert r == [{"id": 1, "note": 'Il a dit "ok"'}, {"id": 2, "note": "ligne1\nligne2"}]
+
+  def test_csv_vide():
+      "CSV avec seulement les en-têtes"
+      assert json.loads(solution.csv_vers_json("a,b\n")) == []
+
+  def test_json_simple():
+      "JSON vers CSV, union des colonnes"
+      r = solution.json_vers_csv('[{"a": 1, "b": "x"}, {"b": "y", "c": true}]')
+      assert r == "a,b,c\n1,x,\n,y,True\n", f"obtenu {r!r}"
+
+  def test_json_colonnes():
+      "Colonnes imposées"
+      r = solution.json_vers_csv('[{"a": 1, "b": 2, "c": 3}]', colonnes=["c", "a"])
+      assert r == "c,a\n3,1\n", f"obtenu {r!r}"
+
+  def test_json_null():
+      "null donne une cellule vide"
+      assert solution.json_vers_csv('[{"a": null, "b": 0}]') == "a,b\n,0\n"
+
+  def test_json_protection():
+      "Virgules et guillemets protégés"
+      r = solution.json_vers_csv(json.dumps([{"nom": "Dupont, Bob", "citation": 'dit "oui"'}]))
+      lignes = list(csv.reader(io.StringIO(r)))
+      assert lignes == [["nom", "citation"], ["Dupont, Bob", 'dit "oui"']], f"obtenu {r!r}"
+
+  def test_aller_retour():
+      "Aller-retour JSON → CSV → JSON"
+      donnees = [{"ville": "Lyon, FR", "hab": 522000}, {"ville": "Nice", "hab": 342000}]
+      texte = solution.json_vers_csv(json.dumps(donnees))
+      assert json.loads(solution.csv_vers_json(texte, {"hab": int})) == donnees
+
+  def test_pas_de_fichier():
+      "Aucun fichier écrit sur le disque"
+      import builtins
+      original = builtins.open
+      def interdit(*a, **k):
+          raise AssertionError("open() interdit : utilise io.StringIO")
+      builtins.open = interdit
+      try:
+          solution.csv_vers_json("a\n1\n")
+          solution.json_vers_csv('[{"a": 1}]')
+      finally:
+          builtins.open = original
+solution: |
+  import csv
+  import io
+  import json
+
+
+  def csv_vers_json(texte, types=None):
+      types = types or {}
+      lignes = []
+      for ligne in csv.DictReader(io.StringIO(texte)):
+          objet = {}
+          for cle, valeur in ligne.items():
+              if valeur == "":
+                  objet[cle] = None
+              elif cle in types:
+                  objet[cle] = types[cle](valeur)
+              else:
+                  objet[cle] = valeur
+          lignes.append(objet)
+      return json.dumps(lignes, ensure_ascii=False)
+
+
+  def json_vers_csv(texte, colonnes=None):
+      objets = json.loads(texte)
+      if colonnes is None:
+          colonnes = list(dict.fromkeys(cle for objet in objets for cle in objet))
+      sortie = io.StringIO()
+      ecrivain = csv.DictWriter(sortie, fieldnames=colonnes, lineterminator="\n", extrasaction="ignore")
+      ecrivain.writeheader()
+      for objet in objets:
+          ecrivain.writerow({c: "" if objet.get(c) is None else objet[c] for c in colonnes})
+      return sortie.getvalue()

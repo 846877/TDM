@@ -1,0 +1,168 @@
+title: Arbre de Fenwick
+level: expert
+order: 22
+tags: [structures de données, complexité, bits]
+summary: Sommes de préfixes et mises à jour en O(log n), puis comptage d'inversions.
+description: |
+  Un **arbre de Fenwick** (*Binary Indexed Tree*) stocke un tableau de nombres et permet en
+  `O(log n)` à la fois de modifier un élément et de calculer la somme d'un préfixe — là où une liste
+  simple ou un tableau de sommes cumulées est lent pour l'une des deux opérations.
+
+  Crée la classe `ArbreFenwick(valeurs)` (indices **0-based** pour l'utilisateur ; en interne, la version
+  classique est 1-based et utilise `i & -i`, le bit de poids faible) :
+
+  | Méthode | Rôle |
+  |---------|------|
+  | `ArbreFenwick(valeurs)` | construit à partir d'une liste de nombres (ou `ArbreFenwick([0] * n)`) |
+  | `len(arbre)` | nombre d'éléments |
+  | `ajouter(i, delta)` | ajoute `delta` à l'élément `i` |
+  | `somme_prefixe(i)` | somme des éléments d'indices `0` à `i - 1` (`somme_prefixe(0) == 0`) |
+  | `somme(debut, fin)` | somme des éléments d'indices `debut` à `fin - 1` |
+  | `arbre[i]` / `arbre[i] = v` | lit / remplace la valeur de l'élément `i` |
+
+  Un indice hors limites lève `IndexError` (pour `somme_prefixe`, `i` va de `0` à `len`).
+
+  Écris ensuite `compter_inversions(liste)` : le nombre de couples `(i, j)` avec `i < j` et
+  `liste[i] > liste[j]`. Parcours la liste en comptant, avec un Fenwick indexé par le **rang** des valeurs
+  (compression des valeurs : elles peuvent être grandes, négatives ou répétées), combien d'éléments
+  déjà vus sont plus grands que l'élément courant.
+
+  La moulinette effectue 100 000 opérations sur un arbre de 50 000 éléments.
+starter: |
+  class ArbreFenwick:
+      def __init__(self, valeurs):
+          pass
+
+
+  def compter_inversions(liste):
+      pass
+tests: |
+  import random
+
+  def test_construction():
+      "Construction et sommes"
+      f = solution.ArbreFenwick([5, 2, 9, -3, 4])
+      assert len(f) == 5
+      assert [f.somme_prefixe(i) for i in range(6)] == [0, 5, 7, 16, 13, 17]
+      assert f.somme(1, 4) == 8 and f.somme(2, 2) == 0
+
+  def test_modifications():
+      "ajouter et affectation"
+      f = solution.ArbreFenwick([0] * 6)
+      f.ajouter(2, 5); f.ajouter(4, 1); f.ajouter(2, -2)
+      assert [f[i] for i in range(6)] == [0, 0, 3, 0, 1, 0]
+      f[4] = 10
+      assert f[4] == 10 and f.somme(0, 6) == 13
+
+  def test_indices():
+      "Indices hors limites"
+      f = solution.ArbreFenwick([1, 2, 3])
+      for appel in (lambda: f.ajouter(3, 1), lambda: f[-1], lambda: f.somme_prefixe(4), lambda: f.ajouter(-1, 1)):
+          try:
+              appel()
+          except IndexError:
+              continue
+          raise AssertionError("IndexError attendue")
+      assert f.somme_prefixe(3) == 6
+
+  def test_aleatoire():
+      "Comparaison avec une liste"
+      rng = random.Random(22)
+      valeurs = [rng.randint(-50, 50) for _ in range(300)]
+      f = solution.ArbreFenwick(valeurs)
+      for _ in range(1000):
+          i = rng.randrange(300)
+          if rng.random() < 0.5:
+              d = rng.randint(-20, 20); valeurs[i] += d; f.ajouter(i, d)
+          else:
+              v = rng.randint(-20, 20); valeurs[i] = v; f[i] = v
+          a = rng.randint(0, 300); b = rng.randint(a, 300)
+          assert f.somme(a, b) == sum(valeurs[a:b])
+
+  def test_performance():
+      "100 000 opérations sur 50 000 éléments"
+      rng = random.Random(1)
+      n = 50_000
+      f = solution.ArbreFenwick([1] * n)
+      total = n
+      for _ in range(50_000):
+          i = rng.randrange(n)
+          f.ajouter(i, 2); total += 2
+          f.somme_prefixe(rng.randint(0, n))
+      assert f.somme_prefixe(n) == total
+
+  def test_inversions():
+      "Comptage d'inversions"
+      assert solution.compter_inversions([2, 4, 1, 3, 5]) == 3
+      assert solution.compter_inversions([5, 4, 3, 2, 1]) == 10
+      assert solution.compter_inversions([1, 1, 1]) == 0
+      assert solution.compter_inversions([]) == 0
+      assert solution.compter_inversions([10**12, -7, 10**12, -7]) == 3
+
+  def test_inversions_grand():
+      "Inversions sur 20 000 éléments"
+      rng = random.Random(9)
+      l = [rng.randint(0, 1000) for _ in range(20_000)]
+      petit = l[:300]
+      naif = sum(1 for i in range(len(petit)) for j in range(i + 1, len(petit)) if petit[i] > petit[j])
+      assert solution.compter_inversions(petit) == naif
+      inverse = sorted(l, reverse=True)
+      egaux = {}
+      for x in l:
+          egaux[x] = egaux.get(x, 0) + 1
+      attendu = len(l) * (len(l) - 1) // 2 - sum(c * (c - 1) // 2 for c in egaux.values())
+      assert solution.compter_inversions(inverse) == attendu
+solution: |
+  class ArbreFenwick:
+      def __init__(self, valeurs):
+          self._n = len(valeurs)
+          self._valeurs = list(valeurs)
+          self._arbre = [0] + list(valeurs)
+          for i in range(1, self._n + 1):          # construction en O(n)
+              parent = i + (i & -i)
+              if parent <= self._n:
+                  self._arbre[parent] += self._arbre[i]
+
+      def __len__(self):
+          return self._n
+
+      def _verifier(self, i, maximum):
+          if not 0 <= i < maximum:
+              raise IndexError(f"indice {i} hors limites")
+
+      def ajouter(self, i, delta):
+          self._verifier(i, self._n)
+          self._valeurs[i] += delta
+          i += 1
+          while i <= self._n:
+              self._arbre[i] += delta
+              i += i & -i
+
+      def somme_prefixe(self, i):
+          self._verifier(i, self._n + 1)
+          total = 0
+          while i > 0:
+              total += self._arbre[i]
+              i -= i & -i
+          return total
+
+      def somme(self, debut, fin):
+          return self.somme_prefixe(fin) - self.somme_prefixe(debut)
+
+      def __getitem__(self, i):
+          self._verifier(i, self._n)
+          return self._valeurs[i]
+
+      def __setitem__(self, i, valeur):
+          self.ajouter(i, valeur - self[i])
+
+
+  def compter_inversions(liste):
+      rangs = {v: r for r, v in enumerate(sorted(set(liste)))}
+      arbre = ArbreFenwick([0] * len(rangs))
+      inversions = 0
+      for vus, valeur in enumerate(liste):
+          r = rangs[valeur]
+          inversions += vus - arbre.somme_prefixe(r + 1)    # déjà vus et strictement plus grands
+          arbre.ajouter(r, 1)
+      return inversions

@@ -1,0 +1,138 @@
+title: Plus longue sous-séquence commune
+level: avance
+order: 26
+tags: [programmation dynamique, algorithmes, chaînes]
+summary: LCS et distance d'édition, deux classiques de la programmation dynamique.
+description: |
+  Une **sous-séquence** s'obtient en supprimant des éléments sans changer l'ordre des autres :
+  `"ACE"` est une sous-séquence de `"ABCDE"`.
+
+  1. `lcs_longueur(a, b)` : longueur de la plus longue sous-séquence commune à `a` et `b`.
+  2. `lcs(a, b)` : **une** plus longue sous-séquence commune (s'il y en a plusieurs, n'importe laquelle).
+     Si `a` et `b` sont des chaînes, renvoie une chaîne ; sinon renvoie une liste.
+  3. `distance_edition(a, b)` : distance de Levenshtein, le nombre minimal d'insertions,
+     suppressions ou remplacements d'un caractère pour transformer `a` en `b`.
+
+  ```python
+  lcs_longueur("ABCBDAB", "BDCABA")   # 4
+  lcs("ABCBDAB", "BDCABA")            # "BCBA" (ou "BDAB", ou "BCAB")
+  lcs([1, 2, 3, 4], [2, 4, 5])        # [2, 4]
+  distance_edition("chien", "niche")  # 4
+  ```
+
+  Construis un tableau `dp` de taille `(len(a) + 1) × (len(b) + 1)` où `dp[i][j]` est la réponse pour
+  les préfixes `a[:i]` et `b[:j]`, puis, pour `lcs`, remonte le tableau depuis la case finale.
+  La moulinette utilise des séquences de 600 éléments : la récursion naïve est exclue.
+starter: |
+  def lcs_longueur(a, b):
+      pass
+
+
+  def lcs(a, b):
+      pass
+
+
+  def distance_edition(a, b):
+      pass
+tests: |
+  import random
+
+  def est_sous_sequence(petite, grande):
+      it = iter(grande)
+      return all(any(x == y for y in it) for x in petite)
+
+  def verifier_lcs(a, b, longueur):
+      r = solution.lcs(a, b)
+      attendu = str if isinstance(a, str) and isinstance(b, str) else list
+      assert isinstance(r, attendu), f"lcs doit renvoyer un {attendu.__name__}, pas {type(r).__name__}"
+      assert len(r) == longueur, f"lcs({a!r}, {b!r}) = {r!r} : longueur {len(r)}, attendu {longueur}"
+      assert est_sous_sequence(r, a) and est_sous_sequence(r, b), f"{r!r} n'est pas une sous-séquence commune"
+
+  def test_longueur():
+      "Longueur de la LCS"
+      assert solution.lcs_longueur("ABCBDAB", "BDCABA") == 4
+      assert solution.lcs_longueur("AGGTAB", "GXTXAYB") == 4
+      assert solution.lcs_longueur("abc", "def") == 0
+      assert solution.lcs_longueur("", "abc") == 0
+
+  def test_lcs_chaines():
+      "Une LCS valide pour des chaînes"
+      verifier_lcs("ABCBDAB", "BDCABA", 4)
+      verifier_lcs("AGGTAB", "GXTXAYB", 4)
+      verifier_lcs("abc", "abc", 3)
+      verifier_lcs("abc", "xyz", 0)
+
+  def test_lcs_listes():
+      "Une LCS pour des listes"
+      verifier_lcs([1, 2, 3, 4], [2, 4, 5], 2)
+      verifier_lcs([], [1], 0)
+
+  def test_distance():
+      "Distance d'édition"
+      assert solution.distance_edition("chien", "niche") == 4
+      assert solution.distance_edition("kitten", "sitting") == 3
+      assert solution.distance_edition("", "abc") == 3
+      assert solution.distance_edition("identique", "identique") == 0
+
+  def test_grandes_sequences():
+      "Séquences de 600 caractères"
+      rng = random.Random(5)
+      a = "".join(rng.choice("ACGT") for _ in range(600))
+      b = "".join(rng.choice("ACGT") for _ in range(600))
+      n = solution.lcs_longueur(a, b)
+      assert 350 < n < 600, f"longueur improbable : {n}"
+      verifier_lcs(a, b, n)
+      assert solution.distance_edition(a, a[:300] + "T" + a[300:]) == 1
+
+  def test_coherence():
+      "Cohérence sur des cas aléatoires"
+      rng = random.Random(11)
+      for _ in range(30):
+          a = "".join(rng.choice("ab") for _ in range(rng.randint(0, 10)))
+          b = "".join(rng.choice("ab") for _ in range(rng.randint(0, 10)))
+          n = solution.lcs_longueur(a, b)
+          verifier_lcs(a, b, n)
+          assert solution.distance_edition(a, b) >= max(len(a), len(b)) - n
+solution: |
+  def _table_lcs(a, b):
+      dp = [[0] * (len(b) + 1) for _ in range(len(a) + 1)]
+      for i in range(1, len(a) + 1):
+          for j in range(1, len(b) + 1):
+              if a[i - 1] == b[j - 1]:
+                  dp[i][j] = dp[i - 1][j - 1] + 1
+              else:
+                  dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+      return dp
+
+
+  def lcs_longueur(a, b):
+      return _table_lcs(a, b)[len(a)][len(b)]
+
+
+  def lcs(a, b):
+      dp = _table_lcs(a, b)
+      i, j = len(a), len(b)
+      resultat = []
+      while i and j:
+          if a[i - 1] == b[j - 1]:
+              resultat.append(a[i - 1])
+              i, j = i - 1, j - 1
+          elif dp[i - 1][j] >= dp[i][j - 1]:
+              i -= 1
+          else:
+              j -= 1
+      resultat.reverse()
+      if isinstance(a, str) and isinstance(b, str):
+          return "".join(resultat)
+      return resultat
+
+
+  def distance_edition(a, b):
+      precedente = list(range(len(b) + 1))
+      for i in range(1, len(a) + 1):
+          courante = [i] + [0] * len(b)
+          for j in range(1, len(b) + 1):
+              cout = 0 if a[i - 1] == b[j - 1] else 1
+              courante[j] = min(precedente[j] + 1, courante[j - 1] + 1, precedente[j - 1] + cout)
+          precedente = courante
+      return precedente[len(b)]

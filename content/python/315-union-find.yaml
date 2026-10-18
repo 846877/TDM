@@ -1,0 +1,157 @@
+title: Union-Find (ensembles disjoints)
+level: expert
+order: 15
+tags: [structures de données, graphes, complexité]
+summary: Compression de chemin et union par taille pour des opérations quasi constantes.
+description: |
+  La structure **Union-Find** maintient une partition d'éléments en groupes disjoints, avec deux
+  opérations : *trouver* le représentant du groupe d'un élément, et *unir* deux groupes.
+  Implémente la classe `UnionFind(elements=())` :
+
+  | Méthode | Rôle |
+  |---------|------|
+  | `ajouter(x)` | ajoute `x` dans son propre groupe (sans effet s'il existe déjà) |
+  | `trouver(x)` | représentant du groupe de `x` ; `KeyError` si `x` est inconnu |
+  | `unir(a, b)` | fusionne les groupes ; renvoie `True` s'ils étaient distincts, `False` sinon |
+  | `connectes(a, b)` | `True` si `a` et `b` sont dans le même groupe |
+  | `taille(x)` | nombre d'éléments du groupe de `x` |
+  | `len(uf)` | nombre de **groupes** |
+  | `groupes()` | liste des groupes, chacun trié, la liste triée elle aussi |
+
+  Les éléments peuvent être de n'importe quel type hachable et comparable.
+
+  Pour la performance, combine les deux optimisations classiques :
+
+  - **union par taille** : on accroche le plus petit arbre sous le plus grand ;
+  - **compression de chemin** : après un `trouver`, tous les nœuds parcourus pointent directement
+    vers la racine.
+
+  La moulinette enchaîne 200 000 opérations, dont une longue chaîne d'unions : une version
+  **récursive** de `trouver` sans union par taille dépasserait la limite de récursion.
+starter: |
+  class UnionFind:
+      def __init__(self, elements=()):
+          pass
+tests: |
+  import random
+
+  def test_base():
+      "Unions et connexions"
+      uf = solution.UnionFind("abcde")
+      assert len(uf) == 5
+      assert uf.unir("a", "b") is True
+      assert uf.unir("b", "a") is False, "déjà dans le même groupe"
+      uf.unir("c", "d")
+      assert uf.connectes("a", "b") and not uf.connectes("a", "c")
+      uf.unir("b", "d")
+      assert uf.connectes("a", "c") and len(uf) == 2
+
+  def test_taille():
+      "Taille des groupes"
+      uf = solution.UnionFind(range(6))
+      uf.unir(0, 1); uf.unir(1, 2); uf.unir(4, 5)
+      assert [uf.taille(i) for i in range(6)] == [3, 3, 3, 1, 2, 2]
+
+  def test_trouver():
+      "Représentant commun"
+      uf = solution.UnionFind([1, 2, 3])
+      uf.unir(1, 2)
+      assert uf.trouver(1) == uf.trouver(2) != uf.trouver(3)
+      assert uf.trouver(3) == 3
+
+  def test_inconnu():
+      "Élément inconnu : KeyError"
+      uf = solution.UnionFind()
+      try:
+          uf.trouver("x")
+      except KeyError:
+          pass
+      else:
+          raise AssertionError("KeyError attendue")
+
+  def test_ajouter():
+      "ajouter est idempotent"
+      uf = solution.UnionFind()
+      uf.ajouter("x"); uf.ajouter("y"); uf.unir("x", "y"); uf.ajouter("x")
+      assert len(uf) == 1 and uf.taille("y") == 2
+
+  def test_groupes():
+      "groupes() triés"
+      uf = solution.UnionFind([5, 3, 1, 4, 2])
+      uf.unir(5, 1); uf.unir(4, 3)
+      assert uf.groupes() == [[1, 5], [2], [3, 4]]
+
+  def test_performance_chaine():
+      "Longue chaîne de 100 000 unions"
+      n = 100_000
+      uf = solution.UnionFind(range(n))
+      for i in range(n - 1):
+          uf.unir(i, i + 1)
+      assert len(uf) == 1 and uf.taille(0) == n
+      racine = uf.trouver(0)
+      assert all(uf.trouver(i) == racine for i in range(0, n, 997))
+
+  def test_aleatoire():
+      "Comparaison avec une version naïve"
+      rng = random.Random(8)
+      uf = solution.UnionFind(range(200))
+      groupe = list(range(200))
+      for _ in range(300):
+          a, b = rng.randrange(200), rng.randrange(200)
+          attendu = groupe[a] != groupe[b]
+          assert uf.unir(a, b) == attendu
+          ancien, nouveau = groupe[b], groupe[a]
+          groupe = [nouveau if g == ancien else g for g in groupe]
+          c, d = rng.randrange(200), rng.randrange(200)
+          assert uf.connectes(c, d) == (groupe[c] == groupe[d])
+      assert len(uf) == len(set(groupe))
+solution: |
+  class UnionFind:
+      def __init__(self, elements=()):
+          self._parent = {}
+          self._taille = {}
+          self._nb_groupes = 0
+          for e in elements:
+              self.ajouter(e)
+
+      def ajouter(self, x):
+          if x not in self._parent:
+              self._parent[x] = x
+              self._taille[x] = 1
+              self._nb_groupes += 1
+
+      def trouver(self, x):
+          if x not in self._parent:
+              raise KeyError(x)
+          racine = x
+          while self._parent[racine] != racine:
+              racine = self._parent[racine]
+          while self._parent[x] != racine:          # compression de chemin
+              self._parent[x], x = racine, self._parent[x]
+          return racine
+
+      def unir(self, a, b):
+          ra, rb = self.trouver(a), self.trouver(b)
+          if ra == rb:
+              return False
+          if self._taille[ra] < self._taille[rb]:     # union par taille
+              ra, rb = rb, ra
+          self._parent[rb] = ra
+          self._taille[ra] += self._taille.pop(rb)
+          self._nb_groupes -= 1
+          return True
+
+      def connectes(self, a, b):
+          return self.trouver(a) == self.trouver(b)
+
+      def taille(self, x):
+          return self._taille[self.trouver(x)]
+
+      def __len__(self):
+          return self._nb_groupes
+
+      def groupes(self):
+          par_racine = {}
+          for x in self._parent:
+              par_racine.setdefault(self.trouver(x), []).append(x)
+          return sorted(sorted(g) for g in par_racine.values())

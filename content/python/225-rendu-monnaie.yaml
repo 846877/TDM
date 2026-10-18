@@ -1,0 +1,85 @@
+title: Rendu de monnaie (programmation dynamique)
+level: avance
+order: 25
+tags: [programmation dynamique, algorithmes, stdin]
+summary: Nombre minimal de pièces et nombre de façons de rendre une somme.
+mode: stdio
+description: |
+  Ton programme lit deux lignes sur l'entrée standard :
+
+  1. un montant entier `M >= 0` ;
+  2. les valeurs des pièces disponibles, séparées par des espaces (en quantité illimitée ; une même
+     valeur peut apparaître plusieurs fois dans la liste, elle ne compte qu'une fois).
+
+  Il affiche :
+
+  ```
+  minimum: <nombre minimal de pièces pour obtenir M>
+  facons: <nombre de façons différentes d'obtenir M>
+  ```
+
+  - si `M` ne peut pas être obtenu : `minimum: impossible` (et `facons: 0`) ;
+  - l'ordre des pièces ne compte pas : `1+2` et `2+1` sont **la même** façon ;
+  - pour `M = 0` : 0 pièce et 1 façon (ne rien rendre).
+
+  L'algorithme glouton (prendre la plus grosse pièce possible) ne marche pas toujours :
+  avec les pièces `1 3 4` et `M = 6`, il donne `4+1+1` alors que `3+3` suffit. Utilise la
+  **programmation dynamique** : un tableau indexé par les sommes de 0 à `M`.
+  Le nombre de façons peut devenir très grand (les entiers Python n'ont pas de limite).
+starter: |
+  montant = int(input())
+  pieces = [int(p) for p in input().split()]
+cases:
+  - name: Euros classiques
+    input: "11\n1 2 5\n"
+    output: |
+      minimum: 3
+      facons: 11
+  - name: Le glouton se trompe
+    input: "6\n1 3 4\n"
+    output: |
+      minimum: 2
+      facons: 4
+  - name: Montant impossible
+    input: "7\n2 4\n"
+    output: |
+      minimum: impossible
+      facons: 0
+  - name: Montant nul
+    input: "0\n3 7\n"
+    output: |
+      minimum: 0
+      facons: 1
+  - name: Pièces en double et dans le désordre
+    input: "24\n7 5 7\n"
+    output: |
+      minimum: 4
+      facons: 1
+  - name: Un dollar en cents
+    input: "100\n1 5 10 25 50\n"
+    output: |
+      minimum: 2
+      facons: 292
+  - name: Grand montant
+    input: "10000\n1 2 5 10 20 50 100 200\n"
+    output: |
+      minimum: 50
+      facons: 1133873304647601
+solution: |
+  montant = int(input())
+  pieces = sorted({int(p) for p in input().split()})
+
+  INFINI = float("inf")
+  minimum = [0] + [INFINI] * montant     # minimum[s] : nombre minimal de pièces pour la somme s
+  facons = [1] + [0] * montant           # facons[s] : nombre de combinaisons pour la somme s
+  for piece in pieces:                   # pièce par pièce : l'ordre des pièces ne compte pas
+      for somme in range(piece, montant + 1):
+          facons[somme] += facons[somme - piece]
+          if minimum[somme - piece] + 1 < minimum[somme]:
+              minimum[somme] = minimum[somme - piece] + 1
+
+  if minimum[montant] == INFINI:
+      print("minimum: impossible")
+  else:
+      print(f"minimum: {minimum[montant]}")
+  print(f"facons: {facons[montant]}")
