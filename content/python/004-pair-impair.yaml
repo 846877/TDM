@@ -1,0 +1,31 @@
+title: Pair ou impair
+level: debutant
+order: 4
+tags: [conditions, modulo]
+summary: Utiliser if/else et l'opérateur modulo.
+description: |
+  Écris `pair_ou_impair(n)` qui renvoie la chaîne `"pair"` si `n` est pair, sinon `"impair"`.
+
+  Indice : l'opérateur `%` donne le reste d'une division (`7 % 2 == 1`).
+starter: |
+  def pair_ou_impair(n):
+      pass
+tests: |
+  def test_pair():
+      "4 est pair"
+      assert solution.pair_ou_impair(4) == "pair"
+
+  def test_impair():
+      "7 est impair"
+      assert solution.pair_ou_impair(7) == "impair"
+
+  def test_zero():
+      "0 est pair"
+      assert solution.pair_ou_impair(0) == "pair"
+
+  def test_negatif():
+      "-3 est impair"
+      assert solution.pair_ou_impair(-3) == "impair"
+solution: |
+  def pair_ou_impair(n):
+      return "pair" if n % 2 == 0 else "impair"

@@ -1,0 +1,49 @@
+title: FizzBuzz
+level: debutant
+order: 12
+tags: [boucles, conditions, listes]
+summary: Le grand classique des entretiens.
+description: |
+  Écris `fizzbuzz(n)` qui renvoie une **liste** de chaînes pour les nombres de 1 à `n` :
+
+  - `"Fizz"` si le nombre est divisible par 3,
+  - `"Buzz"` s'il est divisible par 5,
+  - `"FizzBuzz"` s'il est divisible par 3 et par 5,
+  - sinon le nombre lui-même en texte.
+
+  ```python
+  fizzbuzz(5)  # ["1", "2", "Fizz", "4", "Buzz"]
+  ```
+starter: |
+  def fizzbuzz(n):
+      resultat = []
+      return resultat
+tests: |
+  def test_cinq():
+      "fizzbuzz(5)"
+      assert solution.fizzbuzz(5) == ["1", "2", "Fizz", "4", "Buzz"]
+
+  def test_quinze():
+      "Le 15e élément vaut FizzBuzz"
+      assert solution.fizzbuzz(15)[-1] == "FizzBuzz"
+
+  def test_longueur():
+      "La liste a n éléments"
+      assert len(solution.fizzbuzz(100)) == 100
+
+  def test_zero():
+      "fizzbuzz(0) renvoie une liste vide"
+      assert solution.fizzbuzz(0) == []
+solution: |
+  def fizzbuzz(n):
+      resultat = []
+      for i in range(1, n + 1):
+          if i % 15 == 0:
+              resultat.append("FizzBuzz")
+          elif i % 3 == 0:
+              resultat.append("Fizz")
+          elif i % 5 == 0:
+              resultat.append("Buzz")
+          else:
+              resultat.append(str(i))
+      return resultat

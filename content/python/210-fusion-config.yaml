@@ -1,0 +1,57 @@
+title: Fusion de configurations
+level: avance
+order: 10
+tags: [dictionnaires, récursivité, json]
+summary: Fusionner des dictionnaires imbriqués.
+description: |
+  Écris `fusionner(base, surcharge)` qui renvoie un **nouveau** dictionnaire :
+
+  - les clés de `surcharge` remplacent celles de `base`,
+  - si les deux valeurs sont des dictionnaires, on les fusionne **récursivement**,
+  - `base` et `surcharge` ne doivent pas être modifiés.
+
+  ```python
+  fusionner({"db": {"host": "localhost", "port": 5432}, "debug": False},
+            {"db": {"host": "prod.local"}, "debug": True})
+  # {"db": {"host": "prod.local", "port": 5432}, "debug": True}
+  ```
+starter: |
+  def fusionner(base, surcharge):
+      pass
+tests: |
+  import copy
+
+  def test_exemple():
+      "Exemple de l'énoncé"
+      base = {"db": {"host": "localhost", "port": 5432}, "debug": False}
+      sur = {"db": {"host": "prod.local"}, "debug": True}
+      assert solution.fusionner(base, sur) == {"db": {"host": "prod.local", "port": 5432}, "debug": True}
+
+  def test_profond():
+      "Fusion sur 3 niveaux"
+      assert solution.fusionner({"a": {"b": {"c": 1, "d": 2}}}, {"a": {"b": {"d": 3}}}) == {"a": {"b": {"c": 1, "d": 3}}}
+
+  def test_immuable():
+      "Les entrées ne sont pas modifiées"
+      base = {"a": {"x": 1}}
+      sur = {"a": {"y": 2}}
+      copie_base, copie_sur = copy.deepcopy(base), copy.deepcopy(sur)
+      resultat = solution.fusionner(base, sur)
+      resultat["a"]["z"] = 3
+      assert base == copie_base and sur == copie_sur
+
+  def test_remplacement_type():
+      "Un dict peut être remplacé par une valeur simple"
+      assert solution.fusionner({"a": {"x": 1}}, {"a": None}) == {"a": None}
+solution: |
+  import copy
+
+
+  def fusionner(base, surcharge):
+      resultat = copy.deepcopy(base)
+      for cle, valeur in surcharge.items():
+          if isinstance(valeur, dict) and isinstance(resultat.get(cle), dict):
+              resultat[cle] = fusionner(resultat[cle], valeur)
+          else:
+              resultat[cle] = copy.deepcopy(valeur)
+      return resultat

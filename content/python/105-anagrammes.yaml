@@ -1,0 +1,35 @@
+title: Anagrammes
+level: intermediaire
+order: 5
+tags: [chaînes, tri]
+summary: Comparer deux mots lettre par lettre.
+description: |
+  Écris `sont_anagrammes(a, b)` qui renvoie `True` si les deux mots utilisent exactement les mêmes lettres
+  (casse et espaces ignorés).
+
+  ```python
+  sont_anagrammes("Chien", "niche")      # True
+  sont_anagrammes("Marie", "aimer")      # True
+  sont_anagrammes("Python", "typhoon")   # False
+  ```
+starter: |
+  def sont_anagrammes(a, b):
+      pass
+tests: |
+  def test_vrai():
+      "chien / niche"
+      assert solution.sont_anagrammes("Chien", "niche") is True
+
+  def test_espaces():
+      "Espaces ignorés"
+      assert solution.sont_anagrammes("Marie", "aimer") is True
+      assert solution.sont_anagrammes("Jim Morrison", "Mr Mojo Risin") is True
+
+  def test_faux():
+      "Python / typhoon"
+      assert solution.sont_anagrammes("Python", "typhoon") is False
+solution: |
+  def sont_anagrammes(a, b):
+      def cle(mot):
+          return sorted(mot.lower().replace(" ", ""))
+      return cle(a) == cle(b)

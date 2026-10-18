@@ -1,0 +1,22 @@
+title: Bonjour le monde
+level: debutant
+order: 1
+tags: [print]
+summary: Afficher ton premier message.
+mode: stdio
+description: |
+  Bienvenue ! Ton premier programme doit **afficher** exactement :
+
+  ```
+  Bonjour, le monde !
+  ```
+
+  Utilise la fonction `print()`.
+starter: |
+  # Écris ton code ici
+cases:
+  - name: Affichage du message
+    input: ""
+    output: "Bonjour, le monde !"
+solution: |
+  print("Bonjour, le monde !")

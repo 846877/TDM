@@ -1,0 +1,31 @@
+title: Inverser une chaîne
+level: debutant
+order: 10
+tags: [chaînes, slicing]
+summary: Découvrir le slicing.
+description: |
+  Écris `inverser(texte)` qui renvoie le texte à l'envers.
+
+  ```python
+  inverser("python")  # "nohtyp"
+  ```
+
+  Bonus : il existe une solution en une ligne avec le *slicing* `[::]`.
+starter: |
+  def inverser(texte):
+      pass
+tests: |
+  def test_mot():
+      "python devient nohtyp"
+      assert solution.inverser("python") == "nohtyp"
+
+  def test_vide():
+      "Chaîne vide"
+      assert solution.inverser("") == ""
+
+  def test_phrase():
+      "Avec des espaces"
+      assert solution.inverser("le chat") == "tahc el"
+solution: |
+  def inverser(texte):
+      return texte[::-1]

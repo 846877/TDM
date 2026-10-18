@@ -1,0 +1,39 @@
+title: Nombres premiers
+level: intermediaire
+order: 3
+tags: [boucles, algorithmes]
+summary: Lister les nombres premiers jusqu'à n.
+description: |
+  Écris `premiers(n)` qui renvoie la liste croissante des nombres premiers **inférieurs ou égaux** à `n`.
+
+  ```python
+  premiers(20)  # [2, 3, 5, 7, 11, 13, 17, 19]
+  ```
+
+  Bonus : regarde le *crible d'Ératosthène*, la moulinette teste aussi `premiers(100000)` en temps limité.
+starter: |
+  def premiers(n):
+      pass
+tests: |
+  def test_vingt():
+      "premiers(20)"
+      assert solution.premiers(20) == [2, 3, 5, 7, 11, 13, 17, 19]
+
+  def test_petits():
+      "premiers(1) et premiers(2)"
+      assert solution.premiers(1) == []
+      assert solution.premiers(2) == [2]
+
+  def test_rapide():
+      "Il y a 9592 nombres premiers sous 100 000"
+      assert len(solution.premiers(100000)) == 9592
+solution: |
+  def premiers(n):
+      if n < 2:
+          return []
+      crible = [True] * (n + 1)
+      crible[0] = crible[1] = False
+      for i in range(2, int(n ** 0.5) + 1):
+          if crible[i]:
+              crible[i * i::i] = [False] * len(crible[i * i::i])
+      return [i for i, ok in enumerate(crible) if ok]

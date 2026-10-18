@@ -1,0 +1,38 @@
+title: Aplatir une liste
+level: intermediaire
+order: 6
+tags: [récursivité, listes]
+summary: Première fonction récursive.
+description: |
+  Écris `aplatir(liste)` qui transforme une liste imbriquée (sur n'importe quelle profondeur)
+  en une liste simple.
+
+  ```python
+  aplatir([1, [2, [3, 4]], 5])  # [1, 2, 3, 4, 5]
+  ```
+
+  Indice : `isinstance(x, list)` et la **récursivité**.
+starter: |
+  def aplatir(liste):
+      pass
+tests: |
+  def test_simple():
+      "Exemple de l'énoncé"
+      assert solution.aplatir([1, [2, [3, 4]], 5]) == [1, 2, 3, 4, 5]
+
+  def test_profond():
+      "Imbrication profonde"
+      assert solution.aplatir([[[[["a"]]]], "b"]) == ["a", "b"]
+
+  def test_vide():
+      "Listes vides"
+      assert solution.aplatir([[], [[]]]) == []
+solution: |
+  def aplatir(liste):
+      resultat = []
+      for element in liste:
+          if isinstance(element, list):
+              resultat.extend(aplatir(element))
+          else:
+              resultat.append(element)
+      return resultat

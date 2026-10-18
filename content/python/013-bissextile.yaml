@@ -1,0 +1,32 @@
+title: Année bissextile
+level: debutant
+order: 13
+tags: [conditions, booléens]
+summary: Combiner des conditions avec and / or.
+description: |
+  Écris `est_bissextile(annee)` qui renvoie `True` si l'année est bissextile, `False` sinon.
+
+  Une année est bissextile si elle est divisible par 4, **sauf** si elle est divisible par 100,
+  **sauf** si elle est divisible par 400.
+starter: |
+  def est_bissextile(annee):
+      pass
+tests: |
+  def test_2024():
+      "2024 est bissextile"
+      assert solution.est_bissextile(2024) is True
+
+  def test_2023():
+      "2023 ne l'est pas"
+      assert solution.est_bissextile(2023) is False
+
+  def test_1900():
+      "1900 ne l'est pas (divisible par 100)"
+      assert solution.est_bissextile(1900) is False
+
+  def test_2000():
+      "2000 l'est (divisible par 400)"
+      assert solution.est_bissextile(2000) is True
+solution: |
+  def est_bissextile(annee):
+      return annee % 4 == 0 and (annee % 100 != 0 or annee % 400 == 0)

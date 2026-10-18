@@ -1,0 +1,50 @@
+title: Parenthèses équilibrées
+level: intermediaire
+order: 10
+tags: [piles, algorithmes]
+summary: Utiliser une pile.
+description: |
+  Écris `est_equilibre(expression)` qui vérifie que les parenthèses `()`, crochets `[]` et accolades `{}`
+  sont correctement ouverts et fermés.
+
+  ```python
+  est_equilibre("{[()()]}")  # True
+  est_equilibre("([)]")      # False
+  ```
+
+  Indice : une liste utilisée comme **pile** (`append` / `pop`).
+starter: |
+  def est_equilibre(expression):
+      pass
+tests: |
+  def test_ok():
+      "Expressions correctes"
+      assert solution.est_equilibre("{[()()]}") is True
+      assert solution.est_equilibre("f(x) = [a + (b * c)]") is True
+
+  def test_croise():
+      "Fermeture croisée"
+      assert solution.est_equilibre("([)]") is False
+
+  def test_non_ferme():
+      "Ouverture sans fermeture"
+      assert solution.est_equilibre("((") is False
+
+  def test_fermeture_seule():
+      "Fermeture sans ouverture"
+      assert solution.est_equilibre(")(") is False
+
+  def test_vide():
+      "Chaîne vide"
+      assert solution.est_equilibre("") is True
+solution: |
+  def est_equilibre(expression):
+      paires = {")": "(", "]": "[", "}": "{"}
+      pile = []
+      for c in expression:
+          if c in "([{":
+              pile.append(c)
+          elif c in paires:
+              if not pile or pile.pop() != paires[c]:
+                  return False
+      return not pile

@@ -1,0 +1,78 @@
+title: Plus court chemin (Dijkstra)
+level: expert
+order: 2
+tags: [graphes, algorithmes, heapq]
+summary: Router des paquets comme OSPF.
+description: |
+  Un réseau est décrit par un graphe pondéré : `{"A": {"B": 4, "C": 1}, "C": {"B": 2}, ...}`
+  (les liens sont **orientés**, le poids est le coût).
+
+  Écris `plus_court_chemin(graphe, depart, arrivee)` qui renvoie un tuple `(cout, chemin)`
+  où `chemin` est la liste des nœuds traversés. S'il n'existe pas de chemin, renvoie `(None, [])`.
+
+  C'est l'algorithme utilisé par **OSPF** ! Indice : `heapq`.
+starter: |
+  import heapq
+
+
+  def plus_court_chemin(graphe, depart, arrivee):
+      pass
+tests: |
+  G = {
+      "A": {"B": 4, "C": 1},
+      "B": {"D": 1},
+      "C": {"B": 2, "D": 5},
+      "D": {"E": 3},
+      "E": {},
+  }
+
+  def test_simple():
+      "A vers D passe par C puis B"
+      assert solution.plus_court_chemin(G, "A", "D") == (4, ["A", "C", "B", "D"])
+
+  def test_meme_noeud():
+      "Départ = arrivée"
+      assert solution.plus_court_chemin(G, "A", "A") == (0, ["A"])
+
+  def test_inaccessible():
+      "Aucun chemin"
+      assert solution.plus_court_chemin(G, "E", "A") == (None, [])
+
+  def test_grand_graphe():
+      "Grand graphe en grille"
+      n = 60
+      g = {}
+      for i in range(n):
+          for j in range(n):
+              voisins = {}
+              if i + 1 < n: voisins[(i + 1, j)] = 1
+              if j + 1 < n: voisins[(i, j + 1)] = 1
+              g[(i, j)] = voisins
+      cout, chemin = solution.plus_court_chemin(g, (0, 0), (n - 1, n - 1))
+      assert cout == 2 * (n - 1) and len(chemin) == 2 * n - 1
+solution: |
+  import heapq
+
+
+  def plus_court_chemin(graphe, depart, arrivee):
+      file = [(0, 0, depart)]
+      distances = {depart: 0}
+      precedent = {}
+      compteur = 0
+      while file:
+          cout, _, noeud = heapq.heappop(file)
+          if noeud == arrivee:
+              chemin = [noeud]
+              while chemin[-1] != depart:
+                  chemin.append(precedent[chemin[-1]])
+              return cout, chemin[::-1]
+          if cout > distances.get(noeud, float("inf")):
+              continue
+          for voisin, poids in graphe.get(noeud, {}).items():
+              nouveau = cout + poids
+              if nouveau < distances.get(voisin, float("inf")):
+                  distances[voisin] = nouveau
+                  precedent[voisin] = noeud
+                  compteur += 1
+                  heapq.heappush(file, (nouveau, compteur, voisin))
+      return None, []

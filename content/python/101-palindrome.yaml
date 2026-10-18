@@ -1,0 +1,38 @@
+title: Palindrome
+level: intermediaire
+order: 1
+tags: [chaînes]
+summary: Nettoyer une chaîne avant de la comparer.
+description: |
+  Écris `est_palindrome(texte)` qui renvoie `True` si le texte se lit pareil dans les deux sens,
+  en **ignorant la casse, les espaces et la ponctuation** (on ne garde que lettres et chiffres).
+
+  ```python
+  est_palindrome("Esope reste ici et se repose")  # True
+  est_palindrome("Python")                        # False
+  ```
+
+  Indice : `str.isalnum()` et `str.lower()`.
+starter: |
+  def est_palindrome(texte):
+      pass
+tests: |
+  def test_simple():
+      "kayak est un palindrome"
+      assert solution.est_palindrome("kayak") is True
+
+  def test_phrase():
+      "Phrase avec espaces et majuscules"
+      assert solution.est_palindrome("Esope reste ici et se repose") is True
+
+  def test_ponctuation():
+      "La ponctuation est ignorée"
+      assert solution.est_palindrome("Engage le jeu, que je le gagne !") is True
+
+  def test_faux():
+      "Python n'en est pas un"
+      assert solution.est_palindrome("Python") is False
+solution: |
+  def est_palindrome(texte):
+      propre = [c.lower() for c in texte if c.isalnum()]
+      return propre == propre[::-1]

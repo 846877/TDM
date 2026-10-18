@@ -1,0 +1,36 @@
+title: Somme avec une boucle
+level: debutant
+order: 7
+tags: [boucles]
+summary: Additionner les entiers de 1 à n avec for.
+description: |
+  Écris `somme_jusqua(n)` qui renvoie `1 + 2 + ... + n` en utilisant une boucle `for`.
+
+  Si `n` vaut 0 ou est négatif, renvoie `0`.
+starter: |
+  def somme_jusqua(n):
+      total = 0
+      # ta boucle ici
+      return total
+tests: |
+  def test_cinq():
+      "somme_jusqua(5) vaut 15"
+      assert solution.somme_jusqua(5) == 15
+
+  def test_un():
+      "somme_jusqua(1) vaut 1"
+      assert solution.somme_jusqua(1) == 1
+
+  def test_zero():
+      "somme_jusqua(0) vaut 0"
+      assert solution.somme_jusqua(0) == 0
+
+  def test_grand():
+      "somme_jusqua(1000) vaut 500500"
+      assert solution.somme_jusqua(1000) == 500500
+solution: |
+  def somme_jusqua(n):
+      total = 0
+      for i in range(1, n + 1):
+          total += i
+      return total

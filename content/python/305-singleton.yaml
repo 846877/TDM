@@ -1,0 +1,85 @@
+title: Métaclasse et registre
+level: expert
+order: 5
+tags: [métaclasses, POO avancée]
+summary: Contrôler la création des classes.
+description: |
+  Écris une **métaclasse** `RegistrePlugins` :
+
+  1. Chaque classe créée avec cette métaclasse est enregistrée dans le dictionnaire
+     `RegistrePlugins.plugins` sous la clé de son attribut `nom` (s'il existe ; sinon elle n'est pas enregistrée).
+  2. Deux classes avec le même `nom` → `TypeError` à la création.
+  3. Chaque classe enregistrée doit définir une méthode `executer`, sinon `TypeError`.
+
+  Ajoute une classe de base `Plugin(metaclass=RegistrePlugins)` (sans `nom`, donc non enregistrée).
+
+  ```python
+  class Bonjour(Plugin):
+      nom = "bonjour"
+      def executer(self):
+          return "Bonjour !"
+
+  RegistrePlugins.plugins["bonjour"]().executer()  # "Bonjour !"
+  ```
+starter: |
+  class RegistrePlugins(type):
+      plugins = {}
+
+
+  class Plugin(metaclass=RegistrePlugins):
+      pass
+tests: |
+  def test_enregistrement():
+      "Les plugins sont enregistrés"
+      class Bonjour(solution.Plugin):
+          nom = "bonjour-test"
+          def executer(self):
+              return "Bonjour !"
+      assert solution.RegistrePlugins.plugins["bonjour-test"] is Bonjour
+      assert "Plugin" not in solution.RegistrePlugins.plugins
+
+  def test_doublon():
+      "Un nom en double est refusé"
+      class A(solution.Plugin):
+          nom = "doublon"
+          def executer(self): pass
+      try:
+          class B(solution.Plugin):
+              nom = "doublon"
+              def executer(self): pass
+      except TypeError:
+          pass
+      else:
+          raise AssertionError("TypeError attendu pour un nom en double")
+
+  def test_executer_obligatoire():
+      "executer est obligatoire"
+      try:
+          class C(solution.Plugin):
+              nom = "sans-executer"
+      except TypeError:
+          pass
+      else:
+          raise AssertionError("TypeError attendu sans méthode executer")
+
+  def test_metaclasse():
+      "Plugin utilise bien la métaclasse"
+      assert type(solution.Plugin) is solution.RegistrePlugins
+solution: |
+  class RegistrePlugins(type):
+      plugins = {}
+
+      def __new__(mcs, nom_classe, bases, attributs):
+          cls = super().__new__(mcs, nom_classe, bases, attributs)
+          nom = attributs.get("nom")
+          if nom is not None:
+              if nom in mcs.plugins:
+                  raise TypeError(f"plugin déjà enregistré : {nom}")
+              if not callable(getattr(cls, "executer", None)):
+                  raise TypeError(f"{nom_classe} doit définir executer()")
+              mcs.plugins[nom] = cls
+          return cls
+
+
+  class Plugin(metaclass=RegistrePlugins):
+      pass

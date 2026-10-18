@@ -1,0 +1,42 @@
+title: Conversion de températures
+level: debutant
+order: 6
+tags: [calculs, fonctions]
+summary: Appliquer une formule et arrondir.
+description: |
+  Écris deux fonctions :
+
+  - `celsius_vers_fahrenheit(c)` : `F = C × 9/5 + 32`
+  - `fahrenheit_vers_celsius(f)` : l'inverse
+
+  Les deux renvoient le résultat **arrondi à 1 décimale** (`round(x, 1)`).
+starter: |
+  def celsius_vers_fahrenheit(c):
+      pass
+
+
+  def fahrenheit_vers_celsius(f):
+      pass
+tests: |
+  def test_c_vers_f():
+      "100 °C = 212 °F"
+      assert solution.celsius_vers_fahrenheit(100) == 212
+
+  def test_c_vers_f_negatif():
+      "-40 °C = -40 °F"
+      assert solution.celsius_vers_fahrenheit(-40) == -40
+
+  def test_f_vers_c():
+      "98.6 °F = 37 °C"
+      assert solution.fahrenheit_vers_celsius(98.6) == 37.0
+
+  def test_arrondi():
+      "Arrondi à une décimale"
+      assert solution.fahrenheit_vers_celsius(50.5) == 10.3
+solution: |
+  def celsius_vers_fahrenheit(c):
+      return round(c * 9 / 5 + 32, 1)
+
+
+  def fahrenheit_vers_celsius(f):
+      return round((f - 32) * 5 / 9, 1)

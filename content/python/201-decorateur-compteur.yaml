@@ -1,0 +1,66 @@
+title: Décorateur compteur d'appels
+level: avance
+order: 1
+tags: [décorateurs, fonctions]
+summary: Écrire ton premier décorateur.
+description: |
+  Écris un décorateur `compter_appels` qui ajoute à la fonction décorée un attribut `appels`
+  indiquant combien de fois elle a été appelée.
+
+  ```python
+  @compter_appels
+  def saluer(nom):
+      return f"Salut {nom}"
+
+  saluer("a"); saluer("b")
+  saluer.appels       # 2
+  saluer.__name__     # "saluer"  (pense à functools.wraps)
+  ```
+starter: |
+  import functools
+
+
+  def compter_appels(fonction):
+      pass
+tests: |
+  def test_compte():
+      "Le nombre d'appels est compté"
+      @solution.compter_appels
+      def f(x):
+          return x * 2
+      assert f(2) == 4
+      f(3)
+      assert f.appels == 2
+
+  def test_initial():
+      "Zéro appel au départ"
+      @solution.compter_appels
+      def g():
+          pass
+      assert g.appels == 0
+
+  def test_arguments():
+      "Les arguments nommés sont transmis"
+      @solution.compter_appels
+      def h(a, b=1):
+          return a + b
+      assert h(1, b=5) == 6
+
+  def test_wraps():
+      "Le nom de la fonction est conservé"
+      @solution.compter_appels
+      def ma_fonction():
+          "doc"
+      assert ma_fonction.__name__ == "ma_fonction"
+      assert ma_fonction.__doc__ == "doc"
+solution: |
+  import functools
+
+
+  def compter_appels(fonction):
+      @functools.wraps(fonction)
+      def enveloppe(*args, **kwargs):
+          enveloppe.appels += 1
+          return fonction(*args, **kwargs)
+      enveloppe.appels = 0
+      return enveloppe

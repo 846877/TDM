@@ -1,0 +1,69 @@
+title: Les N reines
+level: expert
+order: 7
+tags: [backtracking, récursivité]
+summary: Le backtracking appliqué à un casse-tête classique.
+description: |
+  Placer `n` reines sur un échiquier `n × n` sans qu'aucune ne puisse en prendre une autre
+  (même ligne, colonne ou diagonale).
+
+  Écris :
+
+  - `nombre_solutions(n)` : le nombre de placements possibles (`8` → `92`) ;
+  - `une_solution(n)` : une solution sous forme de liste où l'indice est la ligne et la valeur la
+    colonne de la reine, ou `None` s'il n'y en a pas.
+
+  La moulinette teste `n = 10` (724 solutions) en temps limité.
+starter: |
+  def nombre_solutions(n):
+      pass
+
+
+  def une_solution(n):
+      pass
+tests: |
+  def valide(sol):
+      n = len(sol)
+      return len(set(sol)) == n and len({r + c for r, c in enumerate(sol)}) == n and len({r - c for r, c in enumerate(sol)}) == n
+
+  def test_huit():
+      "92 solutions pour 8 reines"
+      assert solution.nombre_solutions(8) == 92
+
+  def test_petits():
+      "Cas n = 1, 2, 3"
+      assert [solution.nombre_solutions(i) for i in (1, 2, 3)] == [1, 0, 0]
+
+  def test_dix():
+      "724 solutions pour 10 reines"
+      assert solution.nombre_solutions(10) == 724
+
+  def test_une_solution():
+      "Une solution valide"
+      sol = solution.une_solution(8)
+      assert sol is not None and len(sol) == 8 and valide(sol)
+      assert solution.une_solution(3) is None
+solution: |
+  def _placer(n, ligne, colonnes, diag1, diag2, actuelle, premiere_seulement):
+      if ligne == n:
+          return 1, list(actuelle)
+      total, trouvee = 0, None
+      for c in range(n):
+          if c in colonnes or ligne + c in diag1 or ligne - c in diag2:
+              continue
+          colonnes.add(c); diag1.add(ligne + c); diag2.add(ligne - c); actuelle.append(c)
+          nb, sol = _placer(n, ligne + 1, colonnes, diag1, diag2, actuelle, premiere_seulement)
+          colonnes.discard(c); diag1.discard(ligne + c); diag2.discard(ligne - c); actuelle.pop()
+          total += nb
+          trouvee = trouvee or sol
+          if premiere_seulement and trouvee:
+              return total, trouvee
+      return total, trouvee
+
+
+  def nombre_solutions(n):
+      return _placer(n, 0, set(), set(), set(), [], False)[0]
+
+
+  def une_solution(n):
+      return _placer(n, 0, set(), set(), set(), [], True)[1]

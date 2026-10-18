@@ -1,0 +1,25 @@
+title: Saluer quelqu'un
+level: debutant
+order: 2
+tags: [input, print, f-string]
+summary: Lire un prénom au clavier et le saluer.
+mode: stdio
+description: |
+  Lis un prénom avec `input()` puis affiche `Salut <prénom> !`.
+
+  Exemple : si on tape `Alice`, le programme affiche :
+
+  ```
+  Salut Alice !
+  ```
+
+  Astuce : `input()` peut s'appeler sans argument, la moulinette n'affiche pas de question.
+starter: |
+  prenom = input()
+cases:
+  - {name: "Alice", input: "Alice\n", output: "Salut Alice !"}
+  - {name: "Mohamed", input: "Mohamed\n", output: "Salut Mohamed !"}
+  - {name: "Prénom composé", input: "Jean-Luc\n", output: "Salut Jean-Luc !"}
+solution: |
+  prenom = input()
+  print(f"Salut {prenom} !")

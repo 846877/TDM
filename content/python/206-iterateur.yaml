@@ -1,0 +1,56 @@
+title: Itérateur personnalisé
+level: avance
+order: 6
+tags: [itérateurs, classes]
+summary: Implémenter le protocole d'itération.
+description: |
+  Recrée une version simplifiée de `range` pour les décimaux : la classe `Intervalle(debut, fin, pas)`
+  est itérable et produit `debut, debut + pas, ...` tant que la valeur est **strictement inférieure** à `fin`.
+  Les valeurs sont arrondies à 10 décimales pour éviter les surprises du flottant.
+
+  ```python
+  list(Intervalle(0, 1, 0.25))  # [0, 0.25, 0.5, 0.75]
+  ```
+
+  L'objet doit pouvoir être parcouru **plusieurs fois** et supporter `len()`.
+starter: |
+  class Intervalle:
+      def __init__(self, debut, fin, pas=1):
+          pass
+tests: |
+  def test_liste():
+      "Valeurs produites"
+      assert list(solution.Intervalle(0, 1, 0.25)) == [0, 0.25, 0.5, 0.75]
+
+  def test_flottants():
+      "Pas de 0.1"
+      assert list(solution.Intervalle(0, 0.5, 0.1)) == [0, 0.1, 0.2, 0.3, 0.4]
+
+  def test_reutilisable():
+      "Parcourable deux fois"
+      it = solution.Intervalle(0, 3)
+      assert list(it) == list(it) == [0, 1, 2]
+
+  def test_len():
+      "len() fonctionne"
+      assert len(solution.Intervalle(0, 1, 0.25)) == 4
+
+  def test_vide():
+      "Intervalle vide"
+      assert list(solution.Intervalle(5, 1)) == []
+solution: |
+  class Intervalle:
+      def __init__(self, debut, fin, pas=1):
+          self.debut, self.fin, self.pas = debut, fin, pas
+
+      def __iter__(self):
+          i = 0
+          while True:
+              valeur = round(self.debut + i * self.pas, 10)
+              if valeur >= self.fin:
+                  return
+              yield valeur
+              i += 1
+
+      def __len__(self):
+          return sum(1 for _ in self)

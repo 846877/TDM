@@ -1,0 +1,48 @@
+title: Expressions régulières
+level: avance
+order: 9
+tags: [regex, re]
+summary: Extraire des informations d'un texte.
+description: |
+  Avec le module `re`, écris :
+
+  - `extraire_emails(texte)` : la liste des adresses e-mail du texte, dans l'ordre, en minuscules ;
+    une adresse est `partie@domaine.ext` (lettres, chiffres, `.`, `_`, `-`, `+` avant le `@`,
+    domaine avec au moins un point et une extension de 2 lettres ou plus).
+  - `extraire_ipv4(texte)` : la liste des adresses IPv4 **valides** (chaque octet entre 0 et 255).
+starter: |
+  import re
+
+
+  def extraire_emails(texte):
+      pass
+
+
+  def extraire_ipv4(texte):
+      pass
+tests: |
+  def test_emails():
+      "Plusieurs adresses"
+      texte = "Contact : Alice.Martin@Exemple.fr, bob+test@mail.co.uk ou admin@local (invalide)."
+      assert solution.extraire_emails(texte) == ["alice.martin@exemple.fr", "bob+test@mail.co.uk"]
+
+  def test_sans_email():
+      "Aucune adresse"
+      assert solution.extraire_emails("rien ici @ toto") == []
+
+  def test_ipv4():
+      "Seules les IPv4 valides sont gardées"
+      texte = "serveurs 192.168.1.10 et 10.0.0.256, passerelle 8.8.8.8, version 1.2.3"
+      assert solution.extraire_ipv4(texte) == ["192.168.1.10", "8.8.8.8"]
+solution: |
+  import re
+
+
+  def extraire_emails(texte):
+      motif = r"[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}"
+      return [m.lower() for m in re.findall(motif, texte)]
+
+
+  def extraire_ipv4(texte):
+      candidats = re.findall(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])", texte)
+      return [ip for ip in candidats if all(int(o) <= 255 for o in ip.split("."))]

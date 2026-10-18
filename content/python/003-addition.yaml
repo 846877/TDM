@@ -1,0 +1,30 @@
+title: Ma première fonction
+level: debutant
+order: 3
+tags: [fonctions]
+summary: Écrire une fonction qui additionne deux nombres.
+description: |
+  Écris une fonction `addition(a, b)` qui **renvoie** (avec `return`) la somme de `a` et `b`.
+
+  ```python
+  addition(2, 3)   # 5
+  addition(-1, 1)  # 0
+  ```
+starter: |
+  def addition(a, b):
+      pass
+tests: |
+  def test_positifs():
+      "addition(2, 3) vaut 5"
+      assert solution.addition(2, 3) == 5, f"addition(2, 3) a renvoyé {solution.addition(2, 3)!r}"
+
+  def test_negatifs():
+      "Fonctionne avec des négatifs"
+      assert solution.addition(-4, 1) == -3
+
+  def test_decimaux():
+      "Fonctionne avec des décimaux"
+      assert abs(solution.addition(0.5, 0.25) - 0.75) < 1e-9
+solution: |
+  def addition(a, b):
+      return a + b

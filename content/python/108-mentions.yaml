@@ -1,0 +1,41 @@
+title: Mentions au bac
+level: intermediaire
+order: 8
+tags: [dictionnaires, conditions]
+summary: Transformer un dictionnaire.
+description: |
+  Écris `mentions(notes)` qui reçoit un dictionnaire `{nom: note}` et renvoie `{nom: mention}` :
+
+  | Note        | Mention       |
+  |-------------|---------------|
+  | < 10        | `"Ajourné"`   |
+  | 10 à < 12   | `"Passable"`  |
+  | 12 à < 14   | `"Assez bien"`|
+  | 14 à < 16   | `"Bien"`      |
+  | ≥ 16        | `"Très bien"` |
+starter: |
+  def mentions(notes):
+      pass
+tests: |
+  def test_toutes():
+      "Toutes les mentions"
+      notes = {"a": 8, "b": 10, "c": 12.5, "d": 15.99, "e": 16}
+      attendu = {"a": "Ajourné", "b": "Passable", "c": "Assez bien", "d": "Bien", "e": "Très bien"}
+      assert solution.mentions(notes) == attendu
+
+  def test_vide():
+      "Dictionnaire vide"
+      assert solution.mentions({}) == {}
+solution: |
+  def mentions(notes):
+      def mention(note):
+          if note < 10:
+              return "Ajourné"
+          if note < 12:
+              return "Passable"
+          if note < 14:
+              return "Assez bien"
+          if note < 16:
+              return "Bien"
+          return "Très bien"
+      return {nom: mention(note) for nom, note in notes.items()}

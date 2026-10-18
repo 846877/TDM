@@ -1,0 +1,93 @@
+title: Autocomplétion avec un Trie
+level: expert
+order: 8
+tags: [structures de données, arbres]
+summary: Implémenter un arbre de préfixes.
+description: |
+  Crée une classe `Trie` (arbre de préfixes) :
+
+  - `ajouter(mot)` ;
+  - `contient(mot)` → `True` seulement si le mot exact a été ajouté ;
+  - `completer(prefixe, limite=5)` → les mots commençant par le préfixe, **triés par ordre
+    alphabétique**, au plus `limite` ;
+  - `len(trie)` → nombre de mots distincts.
+
+  C'est la structure derrière l'autocomplétion de ton terminal (`git che<TAB>`) !
+starter: |
+  class Trie:
+      def __init__(self):
+          pass
+tests: |
+  def construire():
+      t = solution.Trie()
+      for mot in ["git", "github", "gitlab", "go", "golang", "grep", "git"]:
+          t.ajouter(mot)
+      return t
+
+  def test_contient():
+      "Recherche exacte"
+      t = construire()
+      assert t.contient("git") and t.contient("golang")
+      assert not t.contient("gi") and not t.contient("python")
+
+  def test_completer():
+      "Autocomplétion triée"
+      t = construire()
+      assert t.completer("git") == ["git", "github", "gitlab"]
+      assert t.completer("g", limite=3) == ["git", "github", "gitlab"]
+      assert t.completer("x") == []
+
+  def test_len():
+      "Nombre de mots distincts"
+      assert len(construire()) == 6
+
+  def test_volume():
+      "50 000 mots"
+      t = solution.Trie()
+      for i in range(50000):
+          t.ajouter(f"mot{i}")
+      assert t.completer("mot4999") == ["mot4999", "mot49990", "mot49991", "mot49992", "mot49993"]
+solution: |
+  class Trie:
+      def __init__(self):
+          self.racine = {}
+          self.taille = 0
+
+      def ajouter(self, mot):
+          noeud = self.racine
+          for c in mot:
+              noeud = noeud.setdefault(c, {})
+          if "$" not in noeud:
+              noeud["$"] = True
+              self.taille += 1
+
+      def _noeud(self, prefixe):
+          noeud = self.racine
+          for c in prefixe:
+              if c not in noeud:
+                  return None
+              noeud = noeud[c]
+          return noeud
+
+      def contient(self, mot):
+          noeud = self._noeud(mot)
+          return noeud is not None and "$" in noeud
+
+      def completer(self, prefixe, limite=5):
+          resultats = []
+
+          def parcourir(noeud, chemin):
+              if len(resultats) >= limite:
+                  return
+              if "$" in noeud:
+                  resultats.append(chemin)
+              for c in sorted(k for k in noeud if k != "$"):
+                  parcourir(noeud[c], chemin + c)
+
+          noeud = self._noeud(prefixe)
+          if noeud is not None:
+              parcourir(noeud, prefixe)
+          return resultats
+
+      def __len__(self):
+          return self.taille

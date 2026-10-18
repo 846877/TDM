@@ -1,0 +1,56 @@
+title: Tri fusion
+level: avance
+order: 7
+tags: [algorithmes, récursivité, tri]
+summary: Diviser pour régner.
+description: |
+  Implémente le **tri fusion** : `tri_fusion(liste)` renvoie une **nouvelle** liste triée.
+
+  1. Une liste de 0 ou 1 élément est déjà triée.
+  2. Sinon, coupe-la en deux, trie chaque moitié récursivement,
+  3. puis **fusionne** les deux moitiés triées.
+
+  Interdit d'utiliser `sorted()` ou `.sort()`.
+starter: |
+  def tri_fusion(liste):
+      pass
+tests: |
+  import inspect, random
+
+  def test_simple():
+      "Petite liste"
+      assert solution.tri_fusion([5, 2, 9, 1, 5, 6]) == [1, 2, 5, 5, 6, 9]
+
+  def test_bords():
+      "Listes vides et à un élément"
+      assert solution.tri_fusion([]) == []
+      assert solution.tri_fusion([1]) == [1]
+
+  def test_aleatoire():
+      "10 000 nombres aléatoires"
+      data = [random.randint(-1000, 1000) for _ in range(10000)]
+      assert solution.tri_fusion(data) == sorted(data)
+
+  def test_interdit():
+      "sorted() et .sort() ne sont pas utilisés"
+      source = inspect.getsource(solution)
+      assert "sorted(" not in source and ".sort(" not in source
+solution: |
+  def tri_fusion(liste):
+      if len(liste) <= 1:
+          return list(liste)
+      milieu = len(liste) // 2
+      gauche = tri_fusion(liste[:milieu])
+      droite = tri_fusion(liste[milieu:])
+      resultat = []
+      i = j = 0
+      while i < len(gauche) and j < len(droite):
+          if gauche[i] <= droite[j]:
+              resultat.append(gauche[i])
+              i += 1
+          else:
+              resultat.append(droite[j])
+              j += 1
+      resultat.extend(gauche[i:])
+      resultat.extend(droite[j:])
+      return resultat

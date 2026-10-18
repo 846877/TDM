@@ -1,0 +1,36 @@
+title: Suite de Fibonacci
+level: intermediaire
+order: 4
+tags: [boucles, listes]
+summary: Générer les n premiers termes.
+description: |
+  Écris `fibonacci(n)` qui renvoie la liste des `n` premiers termes de la suite de Fibonacci,
+  qui commence par `0, 1` et où chaque terme est la somme des deux précédents.
+
+  ```python
+  fibonacci(7)  # [0, 1, 1, 2, 3, 5, 8]
+  ```
+starter: |
+  def fibonacci(n):
+      pass
+tests: |
+  def test_sept():
+      "fibonacci(7)"
+      assert solution.fibonacci(7) == [0, 1, 1, 2, 3, 5, 8]
+
+  def test_bords():
+      "fibonacci(0) et fibonacci(1)"
+      assert solution.fibonacci(0) == []
+      assert solution.fibonacci(1) == [0]
+
+  def test_grand():
+      "Le 100e terme"
+      assert solution.fibonacci(100)[-1] == 218922995834555169026
+solution: |
+  def fibonacci(n):
+      suite = []
+      a, b = 0, 1
+      for _ in range(n):
+          suite.append(a)
+          a, b = b, a + b
+      return suite

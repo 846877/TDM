@@ -1,0 +1,39 @@
+title: Compter les mots
+level: intermediaire
+order: 2
+tags: [dictionnaires, chaînes]
+summary: Construire un dictionnaire de fréquences.
+description: |
+  Écris `compter_mots(texte)` qui renvoie un dictionnaire `{mot: nombre d'occurrences}`.
+
+  - les mots sont séparés par des espaces,
+  - on compare en **minuscules**,
+  - on retire la ponctuation `.,;:!?` collée aux mots.
+
+  ```python
+  compter_mots("Le chat et le chien.")  # {"le": 2, "chat": 1, "et": 1, "chien": 1}
+  ```
+starter: |
+  def compter_mots(texte):
+      compteur = {}
+      return compteur
+tests: |
+  def test_simple():
+      "Exemple de l'énoncé"
+      assert solution.compter_mots("Le chat et le chien.") == {"le": 2, "chat": 1, "et": 1, "chien": 1}
+
+  def test_vide():
+      "Texte vide"
+      assert solution.compter_mots("") == {}
+
+  def test_ponctuation():
+      "Ponctuation retirée"
+      assert solution.compter_mots("Oui ! oui, OUI ?") == {"oui": 3}
+solution: |
+  def compter_mots(texte):
+      compteur = {}
+      for mot in texte.lower().split():
+          mot = mot.strip(".,;:!?")
+          if mot:
+              compteur[mot] = compteur.get(mot, 0) + 1
+      return compteur

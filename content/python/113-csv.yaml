@@ -1,0 +1,39 @@
+title: Lire un CSV à la main
+level: intermediaire
+order: 13
+tags: [chaînes, dictionnaires, fichiers]
+summary: Transformer du texte tabulaire en données.
+description: |
+  Écris `lire_csv(texte, separateur=",")` qui transforme un texte CSV en **liste de dictionnaires**.
+  La première ligne contient les noms de colonnes. Les espaces autour des valeurs sont retirés et
+  les lignes vides ignorées.
+
+  ```python
+  lire_csv("nom,age\nAlice, 30\nBob,25\n")
+  # [{"nom": "Alice", "age": "30"}, {"nom": "Bob", "age": "25"}]
+  ```
+
+  (Pas besoin de gérer les guillemets. Dans la vraie vie, on utilise le module `csv` !)
+starter: |
+  def lire_csv(texte, separateur=","):
+      pass
+tests: |
+  def test_simple():
+      "Exemple de l'énoncé"
+      assert solution.lire_csv("nom,age\nAlice, 30\nBob,25\n") == [
+          {"nom": "Alice", "age": "30"}, {"nom": "Bob", "age": "25"}]
+
+  def test_separateur():
+      "Autre séparateur"
+      assert solution.lire_csv("a;b\n1;2", separateur=";") == [{"a": "1", "b": "2"}]
+
+  def test_lignes_vides():
+      "Lignes vides ignorées"
+      assert solution.lire_csv("x\n\n1\n\n") == [{"x": "1"}]
+solution: |
+  def lire_csv(texte, separateur=","):
+      lignes = [l for l in texte.splitlines() if l.strip()]
+      if not lignes:
+          return []
+      entetes = [h.strip() for h in lignes[0].split(separateur)]
+      return [dict(zip(entetes, (v.strip() for v in l.split(separateur)))) for l in lignes[1:]]

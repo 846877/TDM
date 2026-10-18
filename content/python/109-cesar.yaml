@@ -1,0 +1,45 @@
+title: Chiffre de César
+level: intermediaire
+order: 9
+tags: [chaînes, ord/chr]
+summary: Chiffrer un message en décalant les lettres.
+description: |
+  Écris `cesar(texte, decalage)` qui décale chaque lettre de `decalage` positions dans l'alphabet
+  (en revenant au début après `z`). Majuscules et minuscules sont conservées, les autres caractères
+  restent inchangés. Le décalage peut être négatif (déchiffrement).
+
+  ```python
+  cesar("Bonjour !", 3)   # "Erqmrxu !"
+  cesar("Erqmrxu !", -3)  # "Bonjour !"
+  ```
+
+  Indice : `ord("a")`, `chr(...)` et le modulo `% 26`.
+starter: |
+  def cesar(texte, decalage):
+      pass
+tests: |
+  def test_chiffrer():
+      "Chiffrement simple"
+      assert solution.cesar("Bonjour !", 3) == "Erqmrxu !"
+
+  def test_dechiffrer():
+      "Déchiffrement"
+      assert solution.cesar("Erqmrxu !", -3) == "Bonjour !"
+
+  def test_bouclage():
+      "On repart au début après z"
+      assert solution.cesar("xyz XYZ", 3) == "abc ABC"
+
+  def test_grand_decalage():
+      "Décalage supérieur à 26"
+      assert solution.cesar("abc", 29) == "def"
+solution: |
+  def cesar(texte, decalage):
+      resultat = []
+      for c in texte:
+          if c.isascii() and c.isalpha():
+              base = ord("A") if c.isupper() else ord("a")
+              resultat.append(chr((ord(c) - base + decalage) % 26 + base))
+          else:
+              resultat.append(c)
+      return "".join(resultat)

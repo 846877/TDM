@@ -1,0 +1,34 @@
+title: Compter les voyelles
+level: debutant
+order: 9
+tags: [chaînes, boucles]
+summary: Parcourir une chaîne de caractères.
+description: |
+  Écris `compter_voyelles(texte)` qui renvoie le nombre de voyelles (`a e i o u y`) du texte,
+  **majuscules comprises**. Les lettres accentuées ne comptent pas.
+
+  ```python
+  compter_voyelles("Bonjour")  # 3
+  ```
+starter: |
+  def compter_voyelles(texte):
+      pass
+tests: |
+  def test_simple():
+      "Bonjour contient 3 voyelles"
+      assert solution.compter_voyelles("Bonjour") == 3
+
+  def test_majuscules():
+      "Les majuscules comptent"
+      assert solution.compter_voyelles("AEIOUY") == 6
+
+  def test_vide():
+      "Chaîne vide"
+      assert solution.compter_voyelles("") == 0
+
+  def test_phrase():
+      "Une phrase entière"
+      assert solution.compter_voyelles("Python est super !") == 5
+solution: |
+  def compter_voyelles(texte):
+      return sum(1 for c in texte.lower() if c in "aeiouy")

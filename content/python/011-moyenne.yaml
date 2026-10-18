@@ -1,0 +1,33 @@
+title: Moyenne d'une liste
+level: debutant
+order: 11
+tags: [listes]
+summary: Manipuler des listes de nombres.
+description: |
+  Écris `moyenne(notes)` qui renvoie la moyenne d'une liste de nombres, **arrondie à 2 décimales**.
+
+  Si la liste est vide, renvoie `0`.
+starter: |
+  def moyenne(notes):
+      pass
+tests: |
+  def test_simple():
+      "Moyenne de [10, 12, 14]"
+      assert solution.moyenne([10, 12, 14]) == 12
+
+  def test_arrondi():
+      "Arrondi à 2 décimales"
+      assert solution.moyenne([10, 11, 11]) == 10.67
+
+  def test_vide():
+      "Liste vide -> 0"
+      assert solution.moyenne([]) == 0
+
+  def test_un():
+      "Un seul élément"
+      assert solution.moyenne([7.5]) == 7.5
+solution: |
+  def moyenne(notes):
+      if not notes:
+          return 0
+      return round(sum(notes) / len(notes), 2)

@@ -1,0 +1,72 @@
+title: Compte bancaire
+level: intermediaire
+order: 12
+tags: [classes, exceptions]
+summary: Ta première classe avec des exceptions.
+description: |
+  Crée une classe `CompteBancaire` :
+
+  - `CompteBancaire(titulaire, solde=0)`
+  - attribut `titulaire` et propriété/attribut `solde`
+  - `deposer(montant)` : ajoute le montant ; lève `ValueError` si le montant est ≤ 0
+  - `retirer(montant)` : retire le montant ; lève `ValueError` si le montant est ≤ 0
+    **ou** si le solde est insuffisant
+  - `historique` : liste des opérations sous forme de tuples `("depot", montant)` / `("retrait", montant)`
+starter: |
+  class CompteBancaire:
+      def __init__(self, titulaire, solde=0):
+          pass
+tests: |
+  def test_creation():
+      "Création du compte"
+      c = solution.CompteBancaire("Alice", 100)
+      assert c.titulaire == "Alice" and c.solde == 100
+
+  def test_depot_retrait():
+      "Dépôt puis retrait"
+      c = solution.CompteBancaire("Bob")
+      c.deposer(50)
+      c.retirer(20)
+      assert c.solde == 30
+      assert c.historique == [("depot", 50), ("retrait", 20)]
+
+  def test_solde_insuffisant():
+      "Retrait refusé si solde insuffisant"
+      c = solution.CompteBancaire("Chloé", 10)
+      try:
+          c.retirer(50)
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("retirer(50) aurait dû lever ValueError")
+      assert c.solde == 10
+
+  def test_montant_negatif():
+      "Montant négatif refusé"
+      c = solution.CompteBancaire("Dan")
+      for action in (c.deposer, c.retirer):
+          try:
+              action(-5)
+          except ValueError:
+              continue
+          raise AssertionError("un montant négatif aurait dû lever ValueError")
+solution: |
+  class CompteBancaire:
+      def __init__(self, titulaire, solde=0):
+          self.titulaire = titulaire
+          self.solde = solde
+          self.historique = []
+
+      def deposer(self, montant):
+          if montant <= 0:
+              raise ValueError("montant invalide")
+          self.solde += montant
+          self.historique.append(("depot", montant))
+
+      def retirer(self, montant):
+          if montant <= 0:
+              raise ValueError("montant invalide")
+          if montant > self.solde:
+              raise ValueError("solde insuffisant")
+          self.solde -= montant
+          self.historique.append(("retrait", montant))

@@ -1,0 +1,66 @@
+title: Gestionnaire de contexte
+level: avance
+order: 3
+tags: [with, context manager, exceptions]
+summary: Implémenter __enter__ et __exit__.
+description: |
+  Recrée `contextlib.suppress` à la main : une classe `Ignorer(*exceptions)` utilisable avec `with`
+  qui **avale** les exceptions des types donnés et laisse passer les autres.
+
+  Elle mémorise aussi l'exception ignorée dans l'attribut `erreur` (ou `None`).
+
+  ```python
+  with Ignorer(KeyError) as ctx:
+      {}["x"]
+  print(ctx.erreur)   # KeyError('x')
+  ```
+starter: |
+  class Ignorer:
+      def __init__(self, *exceptions):
+          pass
+tests: |
+  def test_ignore():
+      "L'exception demandée est ignorée"
+      with solution.Ignorer(KeyError) as ctx:
+          {}["x"]
+      assert isinstance(ctx.erreur, KeyError)
+
+  def test_plusieurs():
+      "Plusieurs types d'exceptions"
+      with solution.Ignorer(KeyError, ZeroDivisionError):
+          1 / 0
+
+  def test_laisse_passer():
+      "Les autres exceptions remontent"
+      try:
+          with solution.Ignorer(KeyError):
+              raise ValueError("boom")
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("ValueError aurait dû remonter")
+
+  def test_sans_erreur():
+      "Sans erreur, erreur vaut None"
+      with solution.Ignorer(KeyError) as ctx:
+          pass
+      assert ctx.erreur is None
+
+  def test_sous_classes():
+      "Les sous-classes sont aussi ignorées"
+      with solution.Ignorer(LookupError):
+          [][1]
+solution: |
+  class Ignorer:
+      def __init__(self, *exceptions):
+          self.exceptions = exceptions
+          self.erreur = None
+
+      def __enter__(self):
+          return self
+
+      def __exit__(self, type_exc, valeur, trace):
+          if type_exc is not None and issubclass(type_exc, self.exceptions):
+              self.erreur = valeur
+              return True
+          return False

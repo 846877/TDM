@@ -1,0 +1,50 @@
+title: Table de multiplication
+level: debutant
+order: 8
+tags: [boucles, input, print]
+summary: Afficher une table de multiplication ligne par ligne.
+mode: stdio
+description: |
+  Lis un entier `n` au clavier puis affiche sa table de 1 à 10, au format :
+
+  ```
+  3 x 1 = 3
+  3 x 2 = 6
+  ...
+  3 x 10 = 30
+  ```
+
+  Pense à convertir la saisie : `int(input())`.
+starter: |
+  n = int(input())
+cases:
+  - name: Table de 3
+    input: "3\n"
+    output: |
+      3 x 1 = 3
+      3 x 2 = 6
+      3 x 3 = 9
+      3 x 4 = 12
+      3 x 5 = 15
+      3 x 6 = 18
+      3 x 7 = 21
+      3 x 8 = 24
+      3 x 9 = 27
+      3 x 10 = 30
+  - name: Table de 7
+    input: "7\n"
+    output: |
+      7 x 1 = 7
+      7 x 2 = 14
+      7 x 3 = 21
+      7 x 4 = 28
+      7 x 5 = 35
+      7 x 6 = 42
+      7 x 7 = 49
+      7 x 8 = 56
+      7 x 9 = 63
+      7 x 10 = 70
+solution: |
+  n = int(input())
+  for i in range(1, 11):
+      print(f"{n} x {i} = {n * i}")

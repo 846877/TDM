@@ -1,0 +1,83 @@
+title: Classe Vecteur
+level: avance
+order: 5
+tags: [classes, méthodes spéciales]
+summary: Surcharger les opérateurs avec les dunder methods.
+description: |
+  Crée une classe `Vecteur(x, y)` qui supporte :
+
+  | Expression          | Résultat                         |
+  |---------------------|----------------------------------|
+  | `v1 + v2`           | nouveau `Vecteur` somme          |
+  | `v1 - v2`           | nouveau `Vecteur` différence     |
+  | `v * 3` et `3 * v`  | produit par un scalaire          |
+  | `v1 == v2`          | égalité des coordonnées          |
+  | `abs(v)`            | norme (longueur)                 |
+  | `repr(v)`           | `"Vecteur(1, 2)"`                |
+  | `x, y = v`          | décomposition (`__iter__`)       |
+starter: |
+  class Vecteur:
+      def __init__(self, x, y):
+          self.x = x
+          self.y = y
+tests: |
+  V = lambda x, y: solution.Vecteur(x, y)
+
+  def test_addition():
+      "Addition et soustraction"
+      assert V(1, 2) + V(3, 4) == V(4, 6)
+      assert V(5, 5) - V(1, 2) == V(4, 3)
+
+  def test_scalaire():
+      "Produit par un scalaire des deux côtés"
+      assert V(1, 2) * 3 == V(3, 6)
+      assert 3 * V(1, 2) == V(3, 6)
+
+  def test_norme():
+      "Norme"
+      assert abs(V(3, 4)) == 5
+
+  def test_repr():
+      "Représentation"
+      assert repr(V(1, 2)) == "Vecteur(1, 2)"
+
+  def test_iter():
+      "Décomposition"
+      x, y = V(7, 8)
+      assert (x, y) == (7, 8)
+
+  def test_egalite():
+      "Inégalité"
+      assert V(1, 2) != V(2, 1)
+solution: |
+  import math
+
+
+  class Vecteur:
+      def __init__(self, x, y):
+          self.x = x
+          self.y = y
+
+      def __add__(self, autre):
+          return Vecteur(self.x + autre.x, self.y + autre.y)
+
+      def __sub__(self, autre):
+          return Vecteur(self.x - autre.x, self.y - autre.y)
+
+      def __mul__(self, k):
+          return Vecteur(self.x * k, self.y * k)
+
+      __rmul__ = __mul__
+
+      def __eq__(self, autre):
+          return isinstance(autre, Vecteur) and (self.x, self.y) == (autre.x, autre.y)
+
+      def __abs__(self):
+          return math.hypot(self.x, self.y)
+
+      def __repr__(self):
+          return f"Vecteur({self.x}, {self.y})"
+
+      def __iter__(self):
+          yield self.x
+          yield self.y

@@ -1,0 +1,88 @@
+title: Analyse de logs serveur
+level: expert
+order: 6
+tags: [regex, collections, données]
+summary: "Un cas concret d'ops : statistiques sur des logs nginx."
+description: |
+  Écris `analyser(lignes)` qui reçoit une liste de lignes de log au format *combined* de nginx :
+
+  ```
+  192.168.1.10 - - [18/Oct/2026:10:00:01 +0200] "GET /index.html HTTP/1.1" 200 1043 "-" "curl/8.0"
+  ```
+
+  et renvoie un dictionnaire :
+
+  - `"total"` : nombre de lignes valides (les lignes mal formées sont ignorées),
+  - `"top_ips"` : liste des 3 IP les plus fréquentes `[(ip, nombre), ...]`, triée par nombre
+    décroissant puis IP croissante,
+  - `"codes"` : dictionnaire `{code_http (int): nombre}`,
+  - `"octets"` : somme des tailles de réponse (un `-` compte pour 0),
+  - `"erreurs_5xx"` : liste triée et sans doublon des chemins ayant renvoyé un code 5xx.
+starter: |
+  import re
+  from collections import Counter
+
+
+  def analyser(lignes):
+      pass
+tests: |
+  LOGS = [
+      '10.0.0.1 - - [18/Oct/2026:10:00:01 +0200] "GET / HTTP/1.1" 200 512 "-" "curl"',
+      '10.0.0.2 - - [18/Oct/2026:10:00:02 +0200] "GET /api HTTP/1.1" 500 0 "-" "curl"',
+      '10.0.0.1 - - [18/Oct/2026:10:00:03 +0200] "POST /login HTTP/1.1" 302 - "-" "firefox"',
+      'ligne cassée',
+      '10.0.0.3 - - [18/Oct/2026:10:00:04 +0200] "GET /api HTTP/1.1" 503 100 "-" "curl"',
+      '10.0.0.2 - - [18/Oct/2026:10:00:05 +0200] "GET /health HTTP/1.1" 502 10 "-" "kube"',
+      '10.0.0.1 - - [18/Oct/2026:10:00:06 +0200] "GET / HTTP/1.1" 200 512 "-" "curl"',
+  ]
+
+  def test_total():
+      "Les lignes invalides sont ignorées"
+      assert solution.analyser(LOGS)["total"] == 6
+
+  def test_top():
+      "Top 3 des IP"
+      assert solution.analyser(LOGS)["top_ips"] == [("10.0.0.1", 3), ("10.0.0.2", 2), ("10.0.0.3", 1)]
+
+  def test_codes():
+      "Répartition des codes"
+      assert solution.analyser(LOGS)["codes"] == {200: 2, 500: 1, 302: 1, 503: 1, 502: 1}
+
+  def test_octets():
+      "Total des octets"
+      assert solution.analyser(LOGS)["octets"] == 1134
+
+  def test_erreurs():
+      "Chemins en erreur 5xx"
+      assert solution.analyser(LOGS)["erreurs_5xx"] == ["/api", "/health"]
+
+  def test_vide():
+      "Aucune ligne"
+      r = solution.analyser([])
+      assert r["total"] == 0 and r["top_ips"] == []
+solution: |
+  import re
+  from collections import Counter
+
+  MOTIF = re.compile(r'^(\S+) \S+ \S+ \[[^\]]+\] "(\S+) (\S+) [^"]*" (\d{3}) (\d+|-)')
+
+
+  def analyser(lignes):
+      ips, codes = Counter(), Counter()
+      octets = 0
+      erreurs = set()
+      total = 0
+      for ligne in lignes:
+          m = MOTIF.match(ligne)
+          if not m:
+              continue
+          ip, _, chemin, code, taille = m.groups()
+          total += 1
+          ips[ip] += 1
+          codes[int(code)] += 1
+          octets += 0 if taille == "-" else int(taille)
+          if code.startswith("5"):
+              erreurs.add(chemin)
+      top = sorted(ips.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+      return {"total": total, "top_ips": top, "codes": dict(codes), "octets": octets,
+              "erreurs_5xx": sorted(erreurs)}

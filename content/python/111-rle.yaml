@@ -1,0 +1,62 @@
+title: Compression RLE
+level: intermediaire
+order: 11
+tags: [chaînes, algorithmes]
+summary: Compresser et décompresser une chaîne.
+description: |
+  Le *Run-Length Encoding* remplace une suite de caractères identiques par le nombre suivi du caractère.
+
+  Écris :
+
+  - `compresser("aaabccdddd")` → `"3a1b2c4d"`
+  - `decompresser("3a1b2c4d")` → `"aaabccdddd"`
+
+  Les nombres peuvent avoir plusieurs chiffres (`"12a"`). Les textes ne contiennent pas de chiffres.
+starter: |
+  def compresser(texte):
+      pass
+
+
+  def decompresser(code):
+      pass
+tests: |
+  def test_compresser():
+      "Compression"
+      assert solution.compresser("aaabccdddd") == "3a1b2c4d"
+
+  def test_decompresser():
+      "Décompression"
+      assert solution.decompresser("3a1b2c4d") == "aaabccdddd"
+
+  def test_plusieurs_chiffres():
+      "Compteurs à plusieurs chiffres"
+      assert solution.compresser("z" * 12) == "12z"
+      assert solution.decompresser("12z1x") == "z" * 12 + "x"
+
+  def test_vide():
+      "Chaîne vide"
+      assert solution.compresser("") == ""
+      assert solution.decompresser("") == ""
+solution: |
+  def compresser(texte):
+      resultat = []
+      i = 0
+      while i < len(texte):
+          j = i
+          while j < len(texte) and texte[j] == texte[i]:
+              j += 1
+          resultat.append(f"{j - i}{texte[i]}")
+          i = j
+      return "".join(resultat)
+
+
+  def decompresser(code):
+      resultat = []
+      nombre = ""
+      for c in code:
+          if c.isdigit():
+              nombre += c
+          else:
+              resultat.append(c * int(nombre))
+              nombre = ""
+      return "".join(resultat)

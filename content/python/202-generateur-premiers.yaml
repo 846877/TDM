@@ -1,0 +1,51 @@
+title: Générateur infini
+level: avance
+order: 2
+tags: [générateurs, yield]
+summary: Produire des valeurs à la demande avec yield.
+description: |
+  Écris un **générateur** `generer_premiers()` qui produit les nombres premiers à l'infini : 2, 3, 5, 7, 11...
+
+  Puis écris `n_premiers(n)` qui renvoie la liste des `n` premiers nombres premiers en utilisant
+  ton générateur (indice : `itertools.islice`).
+starter: |
+  import itertools
+
+
+  def generer_premiers():
+      pass
+
+
+  def n_premiers(n):
+      pass
+tests: |
+  import types
+
+  def test_generateur():
+      "generer_premiers est un générateur"
+      assert isinstance(solution.generer_premiers(), types.GeneratorType)
+
+  def test_debut():
+      "Les premières valeurs"
+      gen = solution.generer_premiers()
+      assert [next(gen) for _ in range(6)] == [2, 3, 5, 7, 11, 13]
+
+  def test_n_premiers():
+      "Le 1000e nombre premier est 7919"
+      assert solution.n_premiers(1000)[-1] == 7919
+solution: |
+  import itertools
+
+
+  def generer_premiers():
+      trouves = []
+      n = 2
+      while True:
+          if all(n % p for p in trouves if p * p <= n):
+              trouves.append(n)
+              yield n
+          n += 1
+
+
+  def n_premiers(n):
+      return list(itertools.islice(generer_premiers(), n))

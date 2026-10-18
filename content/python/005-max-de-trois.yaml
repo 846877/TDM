@@ -1,0 +1,42 @@
+title: Le plus grand des trois
+level: debutant
+order: 5
+tags: [conditions]
+summary: Comparer des nombres sans utiliser max().
+description: |
+  Écris `max_de_trois(a, b, c)` qui renvoie le plus grand des trois nombres.
+
+  **Interdit** d'utiliser la fonction `max()` : entraîne-toi avec `if`, `elif` et `else`.
+starter: |
+  def max_de_trois(a, b, c):
+      pass
+tests: |
+  import inspect
+
+  def test_premier():
+      "Le premier est le plus grand"
+      assert solution.max_de_trois(9, 2, 3) == 9
+
+  def test_milieu():
+      "Le deuxième est le plus grand"
+      assert solution.max_de_trois(1, 8, 3) == 8
+
+  def test_dernier():
+      "Le dernier est le plus grand"
+      assert solution.max_de_trois(1, 2, 7) == 7
+
+  def test_egaux():
+      "Valeurs égales"
+      assert solution.max_de_trois(5, 5, 5) == 5
+
+  def test_sans_max():
+      "max() n'est pas utilisé"
+      assert "max(" not in inspect.getsource(solution.max_de_trois).replace("def max_de_trois(", ""), "N'utilise pas max() !"
+solution: |
+  def max_de_trois(a, b, c):
+      if a >= b and a >= c:
+          return a
+      elif b >= c:
+          return b
+      else:
+          return c

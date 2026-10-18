@@ -1,0 +1,74 @@
+title: Cache LRU
+level: expert
+order: 1
+tags: [structures de données, classes, complexité]
+summary: Un cache à capacité limitée en O(1).
+description: |
+  Implémente une classe `CacheLRU(capacite)` (*Least Recently Used*) :
+
+  - `get(cle)` renvoie la valeur ou `None` ; une lecture rend la clé « récemment utilisée » ;
+  - `put(cle, valeur)` ajoute ou met à jour ; si la capacité est dépassée, on supprime la clé
+    **la moins récemment utilisée** ;
+  - `len(cache)` donne le nombre d'éléments.
+
+  Les deux opérations doivent être en **O(1)** (la moulinette fait 200 000 opérations).
+  Indice : `collections.OrderedDict` ou dict + liste doublement chaînée.
+starter: |
+  class CacheLRU:
+      def __init__(self, capacite):
+          pass
+tests: |
+  def test_base():
+      "Ajout et lecture"
+      c = solution.CacheLRU(2)
+      c.put("a", 1)
+      c.put("b", 2)
+      assert c.get("a") == 1
+      assert c.get("z") is None
+
+  def test_eviction():
+      "La clé la moins récemment utilisée est supprimée"
+      c = solution.CacheLRU(2)
+      c.put("a", 1); c.put("b", 2)
+      c.get("a")
+      c.put("c", 3)
+      assert c.get("b") is None
+      assert c.get("a") == 1 and c.get("c") == 3
+      assert len(c) == 2
+
+  def test_mise_a_jour():
+      "Mettre à jour rafraîchit la clé"
+      c = solution.CacheLRU(2)
+      c.put("a", 1); c.put("b", 2); c.put("a", 10); c.put("c", 3)
+      assert c.get("a") == 10 and c.get("b") is None
+
+  def test_performance():
+      "200 000 opérations rapidement"
+      c = solution.CacheLRU(1000)
+      for i in range(100000):
+          c.put(i, i)
+          c.get(i // 2)
+      assert len(c) == 1000
+solution: |
+  from collections import OrderedDict
+
+
+  class CacheLRU:
+      def __init__(self, capacite):
+          self.capacite = capacite
+          self.donnees = OrderedDict()
+
+      def get(self, cle):
+          if cle not in self.donnees:
+              return None
+          self.donnees.move_to_end(cle)
+          return self.donnees[cle]
+
+      def put(self, cle, valeur):
+          self.donnees[cle] = valeur
+          self.donnees.move_to_end(cle)
+          if len(self.donnees) > self.capacite:
+              self.donnees.popitem(last=False)
+
+      def __len__(self):
+          return len(self.donnees)
