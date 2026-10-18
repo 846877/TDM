@@ -19,11 +19,13 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed --name TDM `
     --add-data "content;content" `
     --add-data "labs;labs" `
     --add-data "sandbox;sandbox" `
+    --add-data "backend/app/python/runner.py;app/python" `
     --add-data "$embed;python" `
     --collect-submodules app `
     --collect-submodules uvicorn `
     --collect-all webview `
     --collect-all winpty `
+    --exclude-module winpty.tests --exclude-module pytest `
     --hidden-import vagrant_agent `
     desktop\tdm_desktop.py
 Write-Host "OK : dist\TDM.exe"

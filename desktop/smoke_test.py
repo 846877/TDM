@@ -51,6 +51,8 @@ def main():
     process = subprocess.Popen([exe, "--no-window", "--port", str(PORT)], env=env)
     try:
         for _ in range(120):
+            if process.poll() is not None:
+                raise SystemExit(f"TDM.exe s'est arrêté (code {process.returncode})")
             try:
                 health = get("/api/health")
                 break
