@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import secrets
@@ -14,7 +15,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, terminal
+from . import config, sandbox, terminal
 from .catalog import LEVEL_LABELS, LEVELS, Catalog, summary
 from .devops import labs as devops
 from .network import grader as net_grader
@@ -128,41 +129,56 @@ async def python_terminal(websocket: WebSocket, exercise_id: str, client: str = 
     if python_catalog.get(exercise_id) is None:
         await websocket.close(code=4404)
         return
+    if config.use_docker_sandbox():
+        await _docker_python_terminal(websocket)
+    else:
+        await _local_python_terminal(websocket, exercise_id, client)
+
+
+def _safe_filename(name: str) -> str | None:
+    safe = Path(name).name
+    return safe if safe and not safe.startswith(".") else None
+
+
+async def _docker_python_terminal(websocket: WebSocket) -> None:
+    name = "tdm-term-" + secrets.token_hex(6)
+    try:
+        await asyncio.to_thread(sandbox.start_terminal_container, name)
+    except (subprocess.SubprocessError, OSError):
+        await websocket.send_text("\x1b[31mImpossible de démarrer le bac à sable Docker.\x1b[0m\r\n")
+        await websocket.close()
+        return
+
+    def write_file(filename: str, content: str) -> None:
+        safe = _safe_filename(filename)
+        if safe:
+            sandbox.write_to_container(name, safe, content)
+
+    def on_close() -> None:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+
+    await terminal.bridge(websocket, ["docker", "exec", "-it", name, "bash"], on_file=write_file, on_close=on_close)
+
+
+async def _local_python_terminal(websocket: WebSocket, exercise_id: str, client: str) -> None:
     client = re.sub(r"[^A-Za-z0-9_-]", "", client)[:64] or "anon"
     workspace = config.WORKSPACES_DIR / client / exercise_id
     workspace.mkdir(parents=True, exist_ok=True)
-    os.chmod(workspace, 0o777)
 
-    def write_file(name: str, content: str) -> None:
-        safe = Path(name).name
-        if safe and not safe.startswith("."):
+    def write_file(filename: str, content: str) -> None:
+        safe = _safe_filename(filename)
+        if safe:
             (workspace / safe).write_text(content, encoding="utf-8")
 
-    on_close = None
-    if config.use_docker_sandbox():
-        name = "tdm-term-" + secrets.token_hex(6)
-        args = config_docker_terminal(workspace, name)
-        env = None
-
-        def on_close() -> None:
-            subprocess.run(["docker", "rm", "-f", name], capture_output=True)
-    else:
-        args = ["bash", "--noprofile", "--norc", "-i"] if shutil.which("bash") else ["sh", "-i"]
-        env = {
-            "PATH": os.environ.get("PATH", ""),
-            "HOME": str(workspace),
-            "TERM": "xterm-256color",
-            "LANG": "C.UTF-8",
-            "PS1": r"\[\e[32m\]tdm\[\e[0m\]:\[\e[34m\]\W\[\e[0m\]$ ",
-        }
-    await terminal.bridge(websocket, args, cwd=workspace, env=env, on_file=write_file, on_close=on_close)
-
-
-def config_docker_terminal(workspace: Path, name: str) -> list[str]:
-    from .sandbox import docker_run_args
-
-    args = docker_run_args(workspace, interactive=True)
-    return args[:2] + ["--name", name, "-e", "TERM=xterm-256color", "-e", "PS1=tdm:\\W$ "] + args[2:] + ["bash"]
+    args = ["bash", "--noprofile", "--norc", "-i"] if shutil.which("bash") else ["sh", "-i"]
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(workspace),
+        "TERM": "xterm-256color",
+        "LANG": "C.UTF-8",
+        "PS1": r"\[\e[32m\]tdm\[\e[0m\]:\[\e[34m\]\W\[\e[0m\]$ ",
+    }
+    await terminal.bridge(websocket, args, cwd=workspace, env=env, on_file=write_file)
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,15 @@
+# Lancement de la plateforme dans Docker (recommandé sous Windows et macOS) :
+#   docker compose up --build
+# puis http://localhost:8000
+services:
+  tdm:
+    build: .
+    image: tdm-platform
+    container_name: tdm
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./content:/app/content
+      - ./labs/devops:/app/labs/devops
+    restart: unless-stopped

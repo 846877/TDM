@@ -2,8 +2,11 @@
 
 import json
 
+import pytest
+
 from fastapi.testclient import TestClient
 
+from app import config
 from app.main import app
 
 client = TestClient(app)
@@ -67,6 +70,7 @@ def test_labs_listes():
 
 def test_terminal_python_local(tmp_path, monkeypatch):
     monkeypatch.setattr("app.config.WORKSPACES_DIR", tmp_path)
+    monkeypatch.setattr("app.config.SANDBOX_MODE", "local")
     with client.websocket_connect("/ws/python/003-addition?client=test") as ws:
         ws.send_text(json.dumps({"type": "file", "name": "solution.py", "content": "print(6 * 7)\n"}))
         ws.send_text(json.dumps({"type": "input", "data": "python3 solution.py; exit\n"}))
@@ -74,3 +78,14 @@ def test_terminal_python_local(tmp_path, monkeypatch):
         while "42" not in output:
             output += ws.receive_text()
     assert (tmp_path / "test" / "003-addition" / "solution.py").exists()
+
+
+@pytest.mark.skipif(not config.docker_available(), reason="Docker indisponible")
+def test_terminal_python_docker(monkeypatch):
+    monkeypatch.setattr("app.config.SANDBOX_MODE", "docker")
+    with client.websocket_connect("/ws/python/003-addition") as ws:
+        ws.send_text(json.dumps({"type": "file", "name": "solution.py", "content": "print(6 * 7)\n"}))
+        ws.send_text(json.dumps({"type": "input", "data": "python solution.py; exit\n"}))
+        output = ""
+        while "42" not in output:
+            output += ws.receive_text()

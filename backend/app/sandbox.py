@@ -8,9 +8,13 @@ Deux modes :
 
 from __future__ import annotations
 
+import io
 import os
+import secrets
+import shlex
 import subprocess
 import sys
+import tarfile
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,57 +47,84 @@ def _limit_resources() -> None:  # pragma: no cover - exécuté dans le processu
     os.setsid()
 
 
-def docker_run_args(workdir: Path, interactive: bool = False) -> list[str]:
-    args = [
-        "docker", "run", "--rm",
+def _docker_limits() -> list[str]:
+    return [
         "--network", "none",
         "--memory", f"{config.MEMORY_LIMIT_MB}m",
         "--cpus", "1",
         "--pids-limit", "128",
         "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges",
-        "-v", f"{workdir}:/work",
+        "--read-only",
+        "--tmpfs", "/tmp:exec,mode=1777,size=64m",
+        "--tmpfs", "/work:exec,mode=1777,size=64m",
         "-w", "/work",
     ]
-    if interactive:
-        args += ["-it"]
-    else:
-        args += ["-i", "--read-only", "--tmpfs", "/tmp"]
-    return args + [config.SANDBOX_IMAGE]
+
+
+def _tar(files: dict[str, str]) -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        for name, content in files.items():
+            data = content.encode("utf-8")
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mode = 0o644
+            archive.addfile(info, io.BytesIO(data))
+    return buffer.getvalue()
 
 
 def run_python(files: dict[str, str], argv: list[str], stdin: str = "", timeout: float | None = None) -> RunResult:
-    """Écrit ``files`` dans un dossier temporaire et lance ``python <argv>`` dans le bac à sable.
+    """Lance ``python <argv>`` dans le bac à sable avec ``files`` dans son dossier de travail.
 
     Les chemins dans ``argv`` peuvent utiliser ``{workdir}`` pour désigner ce dossier.
     """
     timeout = timeout or config.RUN_TIMEOUT
+    if config.use_docker_sandbox():
+        return _run_docker(files, argv, stdin, timeout)
     with tempfile.TemporaryDirectory(prefix="tdm-run-") as tmp:
         workdir = Path(tmp)
-        os.chmod(workdir, 0o777)
         for name, content in files.items():
             (workdir / name).write_text(content, encoding="utf-8")
-
-        if config.use_docker_sandbox():
-            inner = [a.replace("{workdir}", "/work") for a in argv]
-            cmd = docker_run_args(workdir) + ["python", *inner]
-            kwargs: dict = {}
-        else:
-            inner = [a.replace("{workdir}", str(workdir)) for a in argv]
-            cmd = [sys.executable, *inner]
-            kwargs = {
-                "cwd": workdir,
-                "preexec_fn": _limit_resources,
-                "env": {"PATH": os.environ.get("PATH", ""), "PYTHONIOENCODING": "utf-8", "HOME": str(workdir)},
-            }
+        cmd = [sys.executable, *(a.replace("{workdir}", str(workdir)) for a in argv)]
         try:
             proc = subprocess.run(
-                cmd, input=stdin, capture_output=True, text=True, timeout=timeout + (5 if config.use_docker_sandbox() else 0),
-                **kwargs,
+                cmd, input=stdin, capture_output=True, text=True, timeout=timeout, cwd=workdir,
+                preexec_fn=_limit_resources,
+                env={"PATH": os.environ.get("PATH", ""), "PYTHONIOENCODING": "utf-8", "HOME": str(workdir)},
             )
         except subprocess.TimeoutExpired as exc:
             return RunResult(-1, _decode(exc.stdout), _decode(exc.stderr), timed_out=True)
         return RunResult(proc.returncode, proc.stdout, proc.stderr)
+
+
+def _run_docker(files: dict[str, str], argv: list[str], stdin: str, timeout: float) -> RunResult:
+    # Les fichiers passent par l'entrée standard (archive tar) plutôt que par un volume :
+    # ça fonctionne aussi quand la plateforme tourne elle-même dans un conteneur (Windows, macOS).
+    name = "tdm-run-" + secrets.token_hex(6)
+    inner = " ".join(shlex.quote(a.replace("{workdir}", "/work")) for a in argv)
+    script = f"tar -x -C /work && exec timeout -s KILL {int(timeout) + 1} python {inner} < /work/.stdin"
+    cmd = ["docker", "run", "--rm", "-i", "--name", name, *_docker_limits(), config.SANDBOX_IMAGE, "sh", "-c", script]
+    payload = _tar({**files, ".stdin": stdin})
+    try:
+        proc = subprocess.run(cmd, input=payload, capture_output=True, timeout=timeout + 15)
+    except subprocess.TimeoutExpired as exc:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+        return RunResult(-1, _decode(exc.stdout), _decode(exc.stderr), timed_out=True)
+    stdout, stderr = _decode(proc.stdout), _decode(proc.stderr)
+    return RunResult(proc.returncode, stdout, stderr, timed_out=proc.returncode == 137)
+
+
+def start_terminal_container(name: str) -> None:
+    """Démarre un conteneur de bac à sable persistant pour le terminal d'un exercice."""
+    cmd = ["docker", "run", "-d", "--rm", "--name", name, *_docker_limits(),
+           "-e", "TERM=xterm-256color", "-e", "PS1=tdm:\\W$ ", config.SANDBOX_IMAGE, "sleep", "infinity"]
+    subprocess.run(cmd, capture_output=True, check=True, timeout=60)
+
+
+def write_to_container(name: str, filename: str, content: str) -> None:
+    subprocess.run(["docker", "exec", "-i", name, "sh", "-c", f"cat > /work/{shlex.quote(filename)}"],
+                   input=content.encode("utf-8"), capture_output=True, timeout=10)
 
 
 def _decode(data) -> str:
