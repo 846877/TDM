@@ -65,7 +65,7 @@ def test_detail_reseau_masque_la_correction():
 def test_labs_listes():
     labs = client.get("/api/devops/labs").json()
     assert {"linux-bases", "nginx-web", "git-bases"} <= {lab["id"] for lab in labs}
-    assert all("check" not in json.dumps(lab) for lab in labs)
+    assert all('"checks"' not in json.dumps(lab) and '"run"' not in json.dumps(lab) for lab in labs)
 
 
 def test_terminal_python_local(tmp_path, monkeypatch):

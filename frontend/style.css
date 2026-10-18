@@ -221,7 +221,10 @@ main { flex: 1; min-height: 0; overflow: auto; }
 .lab-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0 18px; }
 .status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
 .status-dot.running { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
-.status-dot.unavailable { background: var(--red); }
+.status-dot.unavailable, .status-dot.error { background: var(--red); }
+.status-dot.starting, .status-dot.stopping { background: var(--amber); animation: pulse 1s ease-in-out infinite alternate; }
+@keyframes pulse { to { opacity: .3; } }
+.lab-log { max-height: 220px; overflow: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; font-size: 12px; margin-bottom: 14px; }
 .lab-ex { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 10px; background: var(--panel); }
 .lab-ex.done { border-color: #1f5132; }
 .lab-ex header { display: flex; justify-content: space-between; gap: 10px; align-items: center; }

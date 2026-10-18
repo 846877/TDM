@@ -1,0 +1,48 @@
+title: GitOps avec Argo CD
+level: avance
+order: 2
+tags: [gitops, argocd, kubernetes, helm, vagrant]
+summary: Déployer depuis un dépôt Git avec Argo CD, sur Minikube en VM.
+vagrant: argoCD/argoCD_ubuntu22
+description: |
+  Lab Vagrant de ta formation : Minikube + Argo CD, Helm, kustomize et le CLI `argocd`. L'interface
+  web est sur le port **30000** de l'IP 192.168.x affichée à la fin du `vagrant up` (identifiant
+  `admin`). Un dépôt Git nu est prêt dans `/repos`.
+
+  `kubectl` s'utilise en root : `sudo -i` ou `sudo kubectl ...`.
+exercises:
+  - id: depot
+    title: Préparer le dépôt GitOps
+    description: |
+      Clone `/repos` dans `/home/vagrant/gitops`, ajoute un dossier `guestbook/` contenant un
+      déploiement `guestbook` (image `nginx:1.27`, 1 réplica) et son service, puis commit et pousse
+      sur la branche `master` (ou `main`).
+    hint: "sudo chown -R vagrant /repos si besoin ; git push origin HEAD"
+    checks:
+      - desc: Le dépôt nu contient guestbook/
+        run: git --git-dir=/repos log --all --name-only --format= | grep -q '^guestbook/'
+  - id: application
+    title: Application Argo CD
+    description: |
+      Crée une Application Argo CD `guestbook` qui suit le dossier `guestbook` du dépôt
+      `file:///repos` (ou monte le dépôt autrement) et déploie dans le namespace `guestbook`.
+      Active la synchronisation automatique.
+    hint: "argocd app create ... --sync-policy automated --dest-namespace guestbook --sync-option CreateNamespace=true"
+    checks:
+      - desc: L'application existe
+        run: sudo kubectl -n argocd get application guestbook
+      - desc: Synchronisation automatique activée
+        run: sudo kubectl -n argocd get application guestbook -o jsonpath='{.spec.syncPolicy.automated}' | grep -q .
+      - desc: Statut Synced et Healthy
+        run: |
+          test "$(sudo kubectl -n argocd get application guestbook -o jsonpath='{.status.sync.status}/{.status.health.status}')" = Synced/Healthy
+  - id: gitops
+    title: Changer l'état par Git
+    description: |
+      Sans toucher à `kubectl`, passe le déploiement `guestbook` à **3 réplicas** en modifiant le dépôt.
+      Argo CD doit appliquer le changement tout seul.
+    checks:
+      - desc: 3 réplicas disponibles dans guestbook
+        run: test "$(sudo kubectl -n guestbook get deploy guestbook -o jsonpath='{.status.availableReplicas}')" = 3
+      - desc: Le dépôt déclare 3 réplicas
+        run: git --git-dir=/repos grep -h 'replicas' $(git --git-dir=/repos rev-parse HEAD) -- guestbook | grep -q 3

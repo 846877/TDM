@@ -6,11 +6,35 @@ Une plateforme web pour s'entraîner **en pratiquant**, organisée en catégorie
 |-----------|-----------------|------------|
 | 🐍 **Python** | 44 exercices du « Bonjour le monde » jusqu'aux métaclasses, asyncio et Dijkstra, avec un éditeur, une console et un vrai terminal | Une **moulinette** lance des tests sur ton code dans un bac à sable |
 | 🌐 **Réseaux** | 19 exercices Cisco IOS (VLAN, trunks, SVI, routage statique, router-on-a-stick, SSH, DHCP, OSPF, port-security, STP, ACL, NAT, projet complet) dans un terminal IOS simulé | La moulinette inspecte la configuration obtenue |
-| 🚀 **DevOps** | Des labs lancés **en un clic** dans Docker (Linux, Git, Nginx pour commencer), avec un terminal dans le navigateur | Des scripts de vérification s'exécutent dans le conteneur du lab |
+| 🚀 **DevOps** | 18 labs lancés **en un clic** : conteneurs Docker (Linux, Git, Docker, Swarm, Ansible, Jenkins, HAProxy, PKI, Terraform, GitLab…) ou machines virtuelles Vagrant (Kubernetes, Minikube, Argo CD, Jenkins multi-nœuds, OpenShift), avec un terminal dans le navigateur | Des scripts de vérification s'exécutent dans le lab |
 
 Chaque catégorie a quatre niveaux : **Débutant, Intermédiaire, Avancé, Expert**. La progression est mémorisée dans le navigateur.
 
-## Démarrer en local
+## Démarrer sous Windows
+
+Prérequis : **Docker Desktop** démarré. Pour les labs en machine virtuelle : **Vagrant**, **VirtualBox**
+et **Python 3** (pour le petit agent qui pilote Vagrant).
+
+1. Double-clique sur `start.bat`.
+2. Au premier lancement, il crée un fichier `.env` avec un jeton secret et le dossier des labs Vagrant
+   (`%USERPROFILE%\Desktop\INFORMATIQUE\devops\vagrant` par défaut ; modifie `TDM_VAGRANT_DIR` si besoin).
+3. Il démarre l'agent Vagrant dans une fenêtre à part (si Vagrant est installé), construit et lance la
+   plateforme dans Docker, puis ouvre <http://localhost:8000>.
+
+Windows peut demander d'autoriser Python dans le pare-feu : accepte pour les **réseaux privés**, c'est ce
+qui permet au conteneur de la plateforme de joindre l'agent. Sous Linux ou macOS : `docker compose up --build`,
+et `python3 scripts/vagrant_agent.py` à côté pour les labs Vagrant.
+
+### Labs Docker et labs Vagrant
+
+- Les **labs Docker** tournent dans des conteneurs démarrés par la plateforme (via le Docker de ta
+  machine). Ils démarrent en quelques secondes.
+- Les **labs Vagrant** (`vagrant:` dans `lab.yaml`) réutilisent les Vagrantfile de ton dossier de
+  formation, sans les copier. L'agent `scripts/vagrant_agent.py` tourne sur ta machine, lance
+  `vagrant up` / `halt` / `destroy` à la demande de la plateforme et ouvre un relais vers le port SSH de
+  la VM : le terminal web et les vérifications passent par SSH.
+
+## Démarrer en local (sans conteneur)
 
 Prérequis : **Python 3.10+**. **Docker** est fortement recommandé (bac à sable isolé + labs DevOps).
 
@@ -41,6 +65,10 @@ cd backend && uvicorn app.main:app --reload
 | `TDM_CONTENT_DIR` | `content` | Dossier des exercices Python et réseau |
 | `TDM_RUN_TIMEOUT` | `10` | Durée maximale d'exécution d'un code (secondes) |
 | `TDM_MEMORY_MB` | `256` | Mémoire maximale d'une exécution |
+| `TDM_VAGRANT_DIR` | | Dossier des labs Vagrant (lu par l'agent) |
+| `TDM_VAGRANT_TOKEN` | | Jeton partagé entre la plateforme et l'agent Vagrant |
+| `TDM_VAGRANT_AGENT_PORT` | `7777` | Port de l'agent Vagrant |
+| `TDM_VAGRANT_HOST` | `host.docker.internal` en conteneur, sinon `127.0.0.1` | Machine où tourne l'agent |
 
 > ⚠️ En mode `local` (sans Docker), le code et le terminal s'exécutent directement sur ta machine.
 > C'est pratique pour un usage personnel, mais n'expose jamais la plateforme sur un réseau dans ce mode.
@@ -54,7 +82,7 @@ navigateur (HTML/JS, CodeMirror, xterm.js)
 backend FastAPI (backend/app)
    ├── python/     moulinette : exécute tests.py contre ton solution.py dans le bac à sable
    ├── network/    simulateur Cisco IOS (modes, abréviations, show, ...) + vérifications
-   ├── devops/     pilote Docker : build/run/exec/stop des labs, scripts de vérification
+   ├── devops/     pilote Docker (build/run/exec/stop) et l'agent Vagrant, scripts de vérification
    ├── sandbox.py  conteneur jetable sans réseau (ou sous-processus limité en mode local)
    └── terminal.py pont WebSocket ⇄ pseudo-terminal (terminal Python et terminal des labs)
 ```

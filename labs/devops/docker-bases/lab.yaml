@@ -1,0 +1,70 @@
+title: Docker, les fondamentaux
+level: debutant
+order: 3
+tags: [docker, conteneurs, images, volumes, réseaux]
+summary: Lancer, construire, persister et relier des conteneurs.
+image: docker:28-dind
+privileged: true
+command: []
+shell: sh
+workdir: /root
+setup: |
+  for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+description: |
+  Un hôte Docker rien qu'à toi (Docker dans Docker) : tu peux tout casser, un clic sur
+  **Réinitialiser** remet tout à zéro. C'est l'équivalent conteneur du lab Vagrant `docker` de ta formation.
+
+  Commandes utiles : `docker run`, `docker ps`, `docker build`, `docker volume`, `docker network`, `docker logs`.
+exercises:
+  - id: premier-conteneur
+    title: Premier conteneur
+    description: |
+      Lance un conteneur **nginx** en arrière-plan nommé `web`, qui publie son port 80 sur le port **8080**
+      de l'hôte. Vérifie avec `curl localhost:8080` (installe curl avec `apk add curl` si besoin).
+    hint: "docker run -d --name web -p 8080:80 nginx"
+    checks:
+      - desc: Le conteneur web tourne
+        run: test "$(docker inspect -f '{{.State.Running}}' web)" = true
+      - desc: Il utilise l'image nginx
+        run: docker inspect -f '{{.Config.Image}}' web | grep -q '^nginx'
+      - desc: Le port 80 est publié sur 8080
+        run: docker port web 80 | grep -q ':8080$'
+  - id: image
+    title: Construire une image
+    description: |
+      Dans `/root/monapp`, écris un `Dockerfile` basé sur `alpine` qui copie un script `app.sh`
+      (il affiche `Bonjour depuis mon image`) et l'exécute au lancement. Construis l'image
+      `monapp:1.0`, puis vérifie que `docker run --rm monapp:1.0` affiche bien le message.
+    hint: "FROM alpine / COPY app.sh /app.sh / RUN chmod +x /app.sh / CMD [\"/app.sh\"]"
+    checks:
+      - desc: Le Dockerfile existe
+        run: test -f /root/monapp/Dockerfile
+      - desc: L'image monapp:1.0 existe
+        run: docker image inspect monapp:1.0 >/dev/null
+      - desc: Le conteneur affiche le message
+        run: docker run --rm monapp:1.0 | grep -q "Bonjour depuis mon image"
+  - id: volume
+    title: Persister des données
+    description: |
+      Crée un volume nommé `donnees`. Lance un conteneur `alpine` jetable qui écrit `persistant` dans
+      `/data/test.txt` sur ce volume. Le fichier doit survivre à la suppression du conteneur.
+    hint: "docker volume create donnees ; docker run --rm -v donnees:/data alpine sh -c 'echo persistant > /data/test.txt'"
+    checks:
+      - desc: Le volume donnees existe
+        run: docker volume inspect donnees >/dev/null
+      - desc: Le fichier est sur le volume
+        run: docker run --rm -v donnees:/data alpine cat /data/test.txt | grep -qx persistant
+  - id: reseau
+    title: Relier deux conteneurs
+    description: |
+      Crée un réseau `backend`. Lance un conteneur `redis` nommé `cache` sur ce réseau, puis vérifie
+      qu'un autre conteneur du même réseau le joint **par son nom** :
+      `docker run --rm --network backend redis redis-cli -h cache ping` doit répondre `PONG`.
+    checks:
+      - desc: Le réseau backend existe
+        run: docker network inspect backend >/dev/null
+      - desc: Le conteneur cache est sur le réseau backend
+        run: docker inspect -f '{{json .NetworkSettings.Networks}}' cache | grep -q '"backend"'
+      - desc: cache répond par son nom
+        run: docker run --rm --network backend redis redis-cli -h cache ping | grep -q PONG
+        timeout: 120

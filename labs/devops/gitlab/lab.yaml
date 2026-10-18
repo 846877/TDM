@@ -1,0 +1,64 @@
+title: GitLab et GitLab CI
+level: avance
+order: 2
+tags: [gitlab, git, ci/cd, runner]
+summary: Héberger ses dépôts et lancer ses premiers pipelines GitLab CI.
+image: gitlab/gitlab-ce:latest
+command: []
+ports: ["8929:80", "2224:22"]
+shell: bash
+workdir: /root
+description: |
+  GitLab CE dans un conteneur (le lab Vagrant `gitlab` de ta formation l'installe avec Ansible et Docker
+  dans une VM de 8 Go). **Prévois au moins 4 Go de RAM libres** : le premier démarrage prend 3 à 5 minutes.
+  Suis l'avancement avec `gitlab-ctl status`.
+
+  Interface web : **http://localhost:8929** (utilisateur `root`).
+exercises:
+  - id: connexion
+    title: Première connexion
+    description: |
+      Récupère le mot de passe initial de `root` dans `/etc/gitlab/initial_root_password`, connecte-toi
+      sur http://localhost:8929 et **change le mot de passe**. Écris ensuite `ok` dans `/root/connexion.txt`.
+    checks:
+      - desc: GitLab répond
+        run: curl -fsS -o /dev/null http://localhost/users/sign_in
+      - desc: Le mot de passe root a été changé
+        run: |
+          gitlab-rails runner 'u = User.find_by_username("root"); exit(u.password_changed_at && u.password_changed_at > u.created_at + 60 ? 0 : 1)'
+        timeout: 240
+  - id: projet
+    title: Créer un projet et pousser du code
+    description: |
+      Crée un projet **public** `tdm-demo` (sous l'utilisateur root), puis depuis le terminal du lab :
+      clone-le (`git clone http://root:<mot de passe>@localhost/root/tdm-demo.git`), ajoute un
+      `README.md` et pousse le commit sur `main`.
+    checks:
+      - desc: Le projet root/tdm-demo existe et est public
+        run: curl -fsS http://localhost/api/v4/projects/root%2Ftdm-demo | grep -q '"visibility":"public"'
+      - desc: README.md est présent sur main
+        run: curl -fsS "http://localhost/api/v4/projects/root%2Ftdm-demo/repository/files/README.md?ref=main" >/dev/null
+  - id: ci
+    title: Premier pipeline
+    description: |
+      Ajoute un fichier `.gitlab-ci.yml` avec deux étapes (`stages`) `build` et `test`, chacune avec un job
+      qui affiche un message. Pousse-le : un pipeline doit apparaître dans **Build > Pipelines**
+      (il restera en attente tant qu'aucun runner n'est enregistré, c'est l'exercice suivant).
+    checks:
+      - desc: .gitlab-ci.yml est présent sur main
+        run: curl -fsS "http://localhost/api/v4/projects/root%2Ftdm-demo/repository/files/.gitlab-ci.yml?ref=main" >/dev/null
+      - desc: Un pipeline a été créé
+        run: curl -fsS http://localhost/api/v4/projects/root%2Ftdm-demo/pipelines | grep -q '"id"'
+  - id: runner
+    title: Enregistrer un runner
+    description: |
+      Installe `gitlab-runner` **dans ce conteneur** (exécuteur `shell`), enregistre-le sur ton instance
+      avec un jeton créé dans **Admin > CI/CD > Runners**, puis relance le pipeline : il doit réussir.
+    hint: "curl -L https://packages.gitlab.com/install/repositories/runner/gitlab-runner/script.deb.sh | bash && apt-get install -y gitlab-runner"
+    checks:
+      - desc: Un runner est en ligne
+        run: |
+          gitlab-rails runner 'exit(Ci::Runner.online.any? ? 0 : 1)'
+        timeout: 240
+      - desc: Le dernier pipeline de tdm-demo a réussi
+        run: curl -fsS "http://localhost/api/v4/projects/root%2Ftdm-demo/pipelines?per_page=1" | grep -q '"status":"success"'

@@ -1,0 +1,46 @@
+title: Jenkins maître + agents
+level: avance
+order: 3
+tags: [jenkins, ci, agents, docker, vagrant]
+summary: Raccorder des agents Jenkins et répartir les builds.
+vagrant: Jenkins_multinodes/jenkins_multinodes_ubuntu22
+description: |
+  Lab Vagrant de ta formation : une VM (192.168.99.10) qui lance avec docker compose un maître
+  Jenkins (http://192.168.99.10:8080) et deux conteneurs agents `agent1` et `agent2` dans
+  `/home/vagrant/jenkins-docker`.
+
+  Les nœuds `agent1` et `agent2` sont créés côté maître, mais les conteneurs agents ne reçoivent ni
+  URL ni secret : **ils ne se connectent pas tout seuls**. Le premier exercice consiste à les raccorder.
+  Le mot de passe initial : `docker compose exec jenkins-master cat /var/jenkins_home/secrets/initialAdminPassword`.
+exercises:
+  - id: agents
+    title: Raccorder les agents
+    description: |
+      Récupère le secret de chaque nœud dans Jenkins (page du nœud, ou
+      `http://jenkins-master:8080/computer/agent1/jenkins-agent.jnlp`) et complète le
+      `docker-compose.yml` avec `JENKINS_URL`, `JENKINS_AGENT_NAME`, `JENKINS_SECRET` et
+      `JENKINS_WEB_SOCKET=true` pour que les deux agents se connectent.
+    hint: "Le service maître s'appelle jenkins-master sur le réseau jenkins"
+    checks:
+      - desc: agent1 est connecté
+        run: |
+          cd /home/vagrant/jenkins-docker && docker compose logs agent1 2>&1 | grep -q 'INFO: Connected'
+      - desc: agent2 est connecté
+        run: |
+          cd /home/vagrant/jenkins-docker && docker compose logs agent2 2>&1 | grep -q 'INFO: Connected'
+  - id: labels
+    title: Labels et pipeline réparti
+    description: |
+      Donne le label `linux` aux deux agents, passe le nombre d'exécuteurs du maître à **0**, puis crée
+      un job pipeline `reparti` dont les étapes s'exécutent sur `agent { label 'linux' }`. Lance-le avec
+      succès.
+    checks:
+      - desc: Le maître n'a plus d'exécuteur
+        run: cd /home/vagrant/jenkins-docker && docker compose exec -T jenkins-master grep -q '<numExecutors>0</numExecutors>' /var/jenkins_home/config.xml
+      - desc: Les agents ont le label linux
+        run: cd /home/vagrant/jenkins-docker && docker compose exec -T jenkins-master sh -c "grep -l '<label>.*linux' /var/jenkins_home/nodes/*/config.xml | wc -l" | grep -q 2
+      - desc: Le job reparti a réussi sur un agent
+        run: |
+          cd /home/vagrant/jenkins-docker && docker compose exec -T jenkins-master sh -c '
+            f=$(ls -d /var/jenkins_home/jobs/reparti/builds/[0-9]* | sort -n -t/ -k7 | tail -1)/log
+            grep -q "Finished: SUCCESS" "$f" && grep -q "Running on agent" "$f"'

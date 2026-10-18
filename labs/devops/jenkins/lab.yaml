@@ -1,0 +1,67 @@
+title: Jenkins, intégration continue
+level: intermediaire
+order: 3
+tags: [jenkins, ci/cd, pipeline]
+summary: Installer Jenkins, créer un job puis un pipeline déclaratif.
+image: jenkins/jenkins:lts-jdk17
+command: []
+ports: ["8081:8080"]
+shell: bash
+workdir: /var/jenkins_home
+description: |
+  Le conteneur Jenkins officiel, comme dans le lab Vagrant `jenkins` de ta formation (qui le lance avec
+  docker compose). L'interface web est sur **http://localhost:8081** une fois le lab démarré
+  (Jenkins met environ une minute à démarrer).
+
+  Ton terminal est dans le conteneur (utilisateur `jenkins`, dossier `/var/jenkins_home`).
+exercises:
+  - id: installation
+    title: Terminer l'installation
+    description: |
+      Récupère le mot de passe initial (`cat /var/jenkins_home/secrets/initialAdminPassword`), ouvre
+      http://localhost:8081, installe les **plugins suggérés** et crée l'utilisateur administrateur `admin`.
+    checks:
+      - desc: L'assistant d'installation est terminé
+        run: test -f /var/jenkins_home/jenkins.install.InstallUtil.lastExecVersion
+      - desc: L'utilisateur admin existe
+        run: ls /var/jenkins_home/users/ | grep -q '^admin_'
+      - desc: Le plugin Pipeline est installé
+        run: test -d /var/jenkins_home/plugins/workflow-aggregator
+  - id: freestyle
+    title: Premier job
+    description: |
+      Crée un job **freestyle** nommé `hello-tdm` avec une étape « Exécuter un script shell » qui lance
+      `echo "Bonjour depuis Jenkins" && uname -a`, puis lance un build qui réussit.
+    checks:
+      - desc: Le job hello-tdm existe
+        run: test -f /var/jenkins_home/jobs/hello-tdm/config.xml
+      - desc: Il exécute un script shell
+        run: grep -q "hudson.tasks.Shell" /var/jenkins_home/jobs/hello-tdm/config.xml
+      - desc: Un build a réussi
+        run: grep -Eq "lastSuccessfulBuild [1-9]" /var/jenkins_home/jobs/hello-tdm/builds/permalinks
+  - id: pipeline
+    title: Pipeline déclaratif
+    description: |
+      Crée un job de type **Pipeline** nommé `pipeline-tdm` dont le script contient trois étapes
+      (`stages`) : `Build`, `Test` et `Deploy`, chacune affichant un message avec `echo`. Lance-le avec succès.
+    hint: "pipeline { agent any; stages { stage('Build') { steps { echo 'build' } } ... } }"
+    checks:
+      - desc: C'est un job Pipeline
+        run: grep -q "flow-definition" /var/jenkins_home/jobs/pipeline-tdm/config.xml
+      - desc: Les étapes Build, Test et Deploy sont définies
+        run: for s in Build Test Deploy; do grep -q "stage(&apos;$s&apos;)\|stage(\"$s\")\|stage('$s')" /var/jenkins_home/jobs/pipeline-tdm/config.xml || exit 1; done
+      - desc: Un build a réussi
+        run: grep -Eq "lastSuccessfulBuild [1-9]" /var/jenkins_home/jobs/pipeline-tdm/builds/permalinks
+  - id: parametres
+    title: Paramètres et déclencheur
+    description: |
+      Ajoute à `pipeline-tdm` un paramètre texte `ENV` (valeur par défaut `dev`) affiché dans l'étape Deploy
+      (`echo "Déploiement sur ${params.ENV}"`), et un déclencheur périodique **toutes les 15 minutes**
+      (`triggers { cron('H/15 * * * *') }`). Lance un build avec `ENV=prod`.
+    checks:
+      - desc: Paramètre ENV défini
+        run: grep -q "<name>ENV</name>" /var/jenkins_home/jobs/pipeline-tdm/config.xml
+      - desc: Déclencheur cron toutes les 15 minutes
+        run: grep -q "H/15" /var/jenkins_home/jobs/pipeline-tdm/config.xml
+      - desc: Un build a été lancé avec ENV=prod
+        run: grep -lq "Déploiement sur prod\|Deploiement sur prod" /var/jenkins_home/jobs/pipeline-tdm/builds/*/log

@@ -1,0 +1,70 @@
+title: PKI et certificats TLS
+level: intermediaire
+order: 5
+tags: [pki, tls, openssl, nginx]
+summary: Créer une autorité de certification et publier un site en HTTPS.
+compose: docker-compose.yml
+service: webserver
+shell: sh
+workdir: /pki
+description: |
+  Le lab Vagrant `pki` de ta formation fournit deux machines vierges, `ca` et `webserver`.
+  Ici, ton terminal est sur **webserver** (nginx + openssl) et le dossier `/pki` est partagé avec la
+  machine `ca`. Pour la rigueur, tu peux travailler la partie CA dans `/pki/ca` et la partie serveur
+  dans `/pki/webserver`.
+
+  Le port 443 est publié sur **https://localhost:8443**.
+exercises:
+  - id: ca
+    title: Autorité de certification racine
+    description: |
+      Dans `/pki/ca`, crée la clé privée `ca.key` (RSA 4096) et le certificat **auto-signé** `ca.crt`
+      valable 10 ans, avec le CN `TDM Root CA`. Le certificat doit être marqué comme CA
+      (`basicConstraints=critical,CA:TRUE`).
+    hint: "openssl req -x509 -new -newkey rsa:4096 -nodes -keyout ca.key -out ca.crt -days 3650 -subj '/CN=TDM Root CA' -addext 'basicConstraints=critical,CA:TRUE'"
+    checks:
+      - desc: ca.key est une clé RSA 4096 bits
+        run: openssl rsa -in /pki/ca/ca.key -noout -text 2>/dev/null | grep -q "4096 bit"
+      - desc: ca.crt est auto-signé avec le CN TDM Root CA
+        run: openssl x509 -in /pki/ca/ca.crt -noout -subject -issuer | grep -c "CN *= *TDM Root CA" | grep -qx 2
+      - desc: C'est bien une CA
+        run: openssl x509 -in /pki/ca/ca.crt -noout -text | grep -q "CA:TRUE"
+  - id: certificat
+    title: Certificat du serveur
+    description: |
+      Dans `/pki/webserver`, crée la clé `server.key` et une demande `server.csr` pour le CN `webserver`,
+      puis **signe-la avec ta CA** pour obtenir `server.crt` (1 an), avec les noms alternatifs (SAN)
+      `DNS:webserver` et `DNS:localhost`.
+    hint: "echo 'subjectAltName=DNS:webserver,DNS:localhost' > san.ext ; openssl x509 -req -in server.csr -CA ../ca/ca.crt -CAkey ../ca/ca.key -CAcreateserial -out server.crt -days 365 -extfile san.ext"
+    checks:
+      - desc: server.crt est signé par la CA
+        run: |
+          openssl verify -CAfile /pki/ca/ca.crt /pki/webserver/server.crt | grep -q ': OK'
+      - desc: La clé correspond au certificat
+        run: test "$(openssl x509 -in /pki/webserver/server.crt -noout -pubkey | openssl sha256)" = "$(openssl pkey -in /pki/webserver/server.key -pubout | openssl sha256)"
+      - desc: SAN webserver et localhost
+        run: openssl x509 -in /pki/webserver/server.crt -noout -text | grep -A1 "Subject Alternative Name" | grep -q "DNS:webserver" && openssl x509 -in /pki/webserver/server.crt -noout -text | grep -A1 "Subject Alternative Name" | grep -q "DNS:localhost"
+  - id: https
+    title: Site en HTTPS
+    description: |
+      Configure nginx pour servir HTTPS sur le port 443 avec `server.crt` / `server.key`
+      (fichier `/etc/nginx/conf.d/tls.conf`), puis recharge-le (`nginx -s reload`).
+      `curl --cacert /pki/ca/ca.crt https://localhost` doit fonctionner **sans** `-k`.
+    hint: "server { listen 443 ssl; ssl_certificate /pki/webserver/server.crt; ssl_certificate_key /pki/webserver/server.key; root /usr/share/nginx/html; }"
+    checks:
+      - desc: nginx accepte la configuration
+        run: nginx -t
+      - desc: HTTPS validé par ta CA
+        run: curl -fsS --cacert /pki/ca/ca.crt https://localhost/ >/dev/null
+  - id: durcissement
+    title: Durcissement
+    description: |
+      Restreins nginx à **TLS 1.2 et 1.3** uniquement (`ssl_protocols`) et ajoute l'en-tête
+      `Strict-Transport-Security` (HSTS). Les droits de `server.key` doivent être `600`.
+    checks:
+      - desc: TLS 1.1 refusé
+        run: "! curl -s --cacert /pki/ca/ca.crt --tls-max 1.1 https://localhost/ >/dev/null 2>&1"
+      - desc: En-tête HSTS présent
+        run: curl -fsSI --cacert /pki/ca/ca.crt https://localhost/ | grep -qi "strict-transport-security"
+      - desc: server.key en 600
+        run: test "$(stat -c %a /pki/webserver/server.key)" = 600

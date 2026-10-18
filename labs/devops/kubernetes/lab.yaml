@@ -1,0 +1,80 @@
+title: Kubernetes multi-nœuds (kubeadm)
+level: avance
+order: 1
+tags: [kubernetes, kubeadm, kubectl, vagrant]
+summary: Un vrai cluster master + worker en VM, pour s'entraîner comme à la certification.
+vagrant: kubernetes/kubernetes_ubuntu22
+machine: master
+description: |
+  Lab Vagrant de ta formation : deux VM Ubuntu 22.04 (`master` 192.168.99.10 et `worker1`
+  192.168.99.11) avec Kubernetes 1.31 installé par kubeadm. Le premier démarrage prend du temps
+  (installation via Ansible).
+
+  Le terminal s'ouvre sur `master`. `kubectl` s'utilise en root : `sudo -i` ou `sudo kubectl ...`.
+  Il faut environ 4 Go de RAM libres pour les deux VM.
+exercises:
+  - id: cluster
+    title: État du cluster
+    description: |
+      Vérifie que les deux nœuds sont `Ready`, puis ajoute le label `role=worker` au nœud worker.
+    hint: "kubectl get nodes -o wide, kubectl label node <nom> role=worker"
+    checks:
+      - desc: Deux nœuds Ready
+        run: test "$(sudo kubectl get nodes --no-headers | grep -c ' Ready')" -ge 2
+      - desc: Un nœud porte le label role=worker
+        run: sudo kubectl get nodes -l role=worker --no-headers | grep -q .
+  - id: deployment
+    title: Déploiement et service
+    description: |
+      Crée le namespace `web`, puis un déploiement `nginx` (image `nginx:1.27`, 3 réplicas) exposé par
+      un service NodePort `nginx` sur le port **30080**.
+    hint: "kubectl create deployment ... --replicas=3, kubectl expose ... --type=NodePort, puis kubectl edit svc pour fixer nodePort"
+    checks:
+      - desc: 3 réplicas disponibles dans le namespace web
+        run: test "$(sudo kubectl -n web get deploy nginx -o jsonpath='{.status.availableReplicas}')" = 3
+      - desc: Le service est en NodePort 30080
+        run: test "$(sudo kubectl -n web get svc nginx -o jsonpath='{.spec.ports[0].nodePort}')" = 30080
+      - desc: nginx répond sur le NodePort
+        run: curl -fsS --max-time 5 http://192.168.99.10:30080 | grep -qi nginx
+  - id: config
+    title: ConfigMap et Secret
+    description: |
+      Dans `web`, crée une ConfigMap `app-config` avec `MODE=production` et un Secret `app-secret`
+      avec `DB_PASSWORD=s3cret`. Lance un pod `app` (image `busybox:1.36`, commande `sleep 3600`) qui
+      reçoit les deux en variables d'environnement.
+    hint: "envFrom: configMapRef / secretRef"
+    checks:
+      - desc: Le pod app tourne
+        run: test "$(sudo kubectl -n web get pod app -o jsonpath='{.status.phase}')" = Running
+      - desc: MODE vaut production dans le pod
+        run: test "$(sudo kubectl -n web exec app -- printenv MODE)" = production
+      - desc: DB_PASSWORD vient du secret
+        run: test "$(sudo kubectl -n web exec app -- printenv DB_PASSWORD)" = s3cret
+  - id: scheduling
+    title: Placement et ressources
+    description: |
+      Crée un déploiement `api` (image `nginx:1.27`, 2 réplicas) dans `web` dont les pods ne tournent
+      **que** sur le nœud `role=worker`, avec une requête de 100m CPU / 64Mi et une limite de 128Mi.
+    hint: "nodeSelector, resources.requests / resources.limits"
+    checks:
+      - desc: 2 réplicas disponibles
+        run: test "$(sudo kubectl -n web get deploy api -o jsonpath='{.status.availableReplicas}')" = 2
+      - desc: Tous les pods api sont sur le worker
+        run: |
+          w=$(sudo kubectl get nodes -l role=worker -o jsonpath='{.items[0].metadata.name}')
+          test -n "$w" && test -z "$(sudo kubectl -n web get pods -l app=api -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | grep -v "^$w$")"
+      - desc: Requêtes et limites définies
+        run: |
+          sudo kubectl -n web get deploy api -o jsonpath='{.spec.template.spec.containers[0].resources}' | grep -q '"memory":"128Mi"' &&
+          sudo kubectl -n web get deploy api -o jsonpath='{.spec.template.spec.containers[0].resources.requests.cpu}' | grep -q '100m'
+  - id: drain
+    title: Maintenance d'un nœud
+    description: |
+      Simule une maintenance : vide (`drain`) le worker puis remets-le en service. À la fin, le worker
+      doit être planifiable et une annotation `maintenance=faite` doit être posée dessus.
+    hint: "kubectl drain --ignore-daemonsets --delete-emptydir-data, kubectl uncordon, kubectl annotate"
+    checks:
+      - desc: Le worker est planifiable
+        run: test -z "$(sudo kubectl get nodes -l role=worker -o jsonpath='{.items[0].spec.unschedulable}')"
+      - desc: L'annotation maintenance=faite est posée
+        run: test "$(sudo kubectl get nodes -l role=worker -o jsonpath='{.items[0].metadata.annotations.maintenance}')" = faite

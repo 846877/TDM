@@ -1,0 +1,21 @@
+# Répartiteur HAProxy + backends, comme dans le lab Vagrant `haproxy-squid` de la formation.
+services:
+  haproxy:
+    build: ./lb
+    hostname: haproxy
+    ports:
+      - "8090:80"
+      - "8404:8404"
+  red:
+    image: kodekloud/webapp-color
+    environment: {APP_COLOR: red}
+  blue:
+    image: kodekloud/webapp-color
+    environment: {APP_COLOR: blue}
+  site1:
+    build: ./site1
+  site2:
+    build: ./site2
+  squid:
+    image: ubuntu/squid:latest
+    hostname: squid

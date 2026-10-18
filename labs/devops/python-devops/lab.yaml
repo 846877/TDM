@@ -1,0 +1,55 @@
+title: Python pour le DevOps
+level: debutant
+order: 4
+tags: [python, venv, pip, api, flask]
+summary: Environnements virtuels, scripts d'automatisation et petite API.
+image: python:3.12-slim
+ports: ["5001:5000"]
+shell: bash
+workdir: /root
+setup: |
+  mkdir -p /root/projet && printf '{"serveurs": [{"nom": "web1", "cpu": 82}, {"nom": "web2", "cpu": 35}, {"nom": "db1", "cpu": 91}]}\n' > /root/projet/metrics.json
+description: |
+  Le lab Vagrant `python` de ta formation est une VM de bureau avec PyCharm. Ici, on se concentre sur
+  l'usage de Python en ops, dans un conteneur Python 3.12. Pour l'apprentissage du langage, il y a
+  la catégorie **Python** de la plateforme.
+
+  Travaille dans `/root/projet`. Le port 5000 du conteneur est publié sur **http://localhost:5001**.
+exercises:
+  - id: venv
+    title: Environnement virtuel
+    description: |
+      Crée un environnement virtuel `/root/projet/.venv`, installe-y `requests` et `flask`, et fige les
+      dépendances dans `/root/projet/requirements.txt` (`pip freeze`).
+    checks:
+      - desc: L'environnement virtuel existe
+        run: test -x /root/projet/.venv/bin/python
+      - desc: requests et flask sont installés dans le venv
+        run: /root/projet/.venv/bin/python -c "import requests, flask"
+      - desc: requirements.txt liste flask et requests
+        run: grep -qi '^flask==' /root/projet/requirements.txt && grep -qi '^requests==' /root/projet/requirements.txt
+  - id: script
+    title: Script d'alerte
+    description: |
+      Écris `/root/projet/alerte.py` qui lit `metrics.json` et affiche, une par ligne et **triés par nom**,
+      les serveurs dont le CPU dépasse un seuil passé en argument (`python alerte.py 80` affiche `db1` puis `web1`).
+      Le script doit renvoyer le code de sortie `1` s'il y a au moins une alerte, `0` sinon.
+    hint: "sys.argv, json.load, sys.exit"
+    checks:
+      - desc: Seuil 80 -> db1 et web1
+        run: cd /root/projet && test "$(python alerte.py 80 | tr '\n' ' ')" = "db1 web1 "
+      - desc: Code de sortie 1 en cas d'alerte
+        run: cd /root/projet && python alerte.py 80 >/dev/null; test $? -eq 1
+      - desc: Code de sortie 0 sans alerte
+        run: cd /root/projet && python alerte.py 95 >/dev/null
+  - id: api
+    title: API de santé
+    description: |
+      Écris `/root/projet/app.py` : une application Flask avec une route `GET /health` qui renvoie
+      `{"status": "ok"}` et une route `GET /serveurs` qui renvoie le contenu de `metrics.json`.
+      Lance-la en arrière-plan sur `0.0.0.0:5000` (`nohup .venv/bin/flask --app app run --host 0.0.0.0 &`).
+    checks:
+      - desc: /health répond status ok
+        run: python -c "import urllib.request,json; assert json.load(urllib.request.urlopen('http://localhost:5000/health'))['status']=='ok'"
+      - desc: /serveurs renvoie les 3 serveurs
+        run: python -c "import urllib.request,json; assert len(json.load(urllib.request.urlopen('http://localhost:5000/serveurs'))['serveurs'])==3"

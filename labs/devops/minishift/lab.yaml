@@ -1,0 +1,37 @@
+title: OpenShift 3 avec Minishift
+level: expert
+order: 1
+tags: [openshift, minishift, oc, vagrant]
+summary: Déployer des applications sur OpenShift avec la commande oc.
+vagrant: minishift/minishift_centos7
+machine: minishift
+description: |
+  Lab Vagrant de ta formation : deux VM CentOS 7, `openshift` (192.168.99.11, l'hôte Docker) et
+  `minishift` (192.168.99.10, qui pilote OpenShift 3.10). Le déploiement prend plus de 10 minutes.
+
+  Le terminal s'ouvre sur `minishift`. `oc` s'utilise en root : `sudo -i`, puis
+  `oc login -u developer -p developer`. Console : https://192.168.99.11:8443.
+exercises:
+  - id: projet
+    title: Projet et application
+    description: |
+      Connecté en `developer`, crée le projet `demo` et déploie l'application
+      `openshift/hello-openshift` sous le nom `hello`.
+    hint: "oc new-project demo, oc new-app openshift/hello-openshift --name=hello"
+    checks:
+      - desc: Le projet demo existe
+        run: sudo oc get project demo
+      - desc: Un pod hello tourne
+        run: sudo oc -n demo get pods --no-headers | grep hello | grep -q Running
+  - id: route
+    title: Exposer avec une route
+    description: |
+      Expose le service `hello` par une route `hello` et monte l'application à 2 réplicas.
+    hint: "oc expose svc/hello, oc scale"
+    checks:
+      - desc: La route hello existe
+        run: sudo oc -n demo get route hello
+      - desc: 2 pods hello en cours
+        run: test "$(sudo oc -n demo get pods --no-headers | grep hello | grep -c Running)" -ge 2
+      - desc: L'application répond par la route
+        run: curl -fsS --max-time 10 "http://$(sudo oc -n demo get route hello -o jsonpath='{.spec.host}')" | grep -qi hello

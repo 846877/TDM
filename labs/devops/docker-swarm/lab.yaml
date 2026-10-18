@@ -1,0 +1,67 @@
+title: Cluster Docker Swarm
+level: avance
+order: 1
+tags: [docker, swarm, orchestration]
+summary: Former un cluster, déployer et mettre à jour des services répliqués.
+compose: docker-compose.yml
+service: manager
+shell: sh
+workdir: /root
+description: |
+  Trois hôtes Docker : `manager`, `worker1` et `worker2` (équivalent conteneur des labs Vagrant
+  `docker-swarm` et `docker-ee` de ta formation). Ton terminal est sur **manager**.
+
+  Les workers sont pilotables à distance : `docker -H tcp://worker1:2375 <commande>`.
+exercises:
+  - id: init
+    title: Initialiser le cluster
+    description: |
+      Initialise Swarm sur le manager, puis fais rejoindre **worker1** et **worker2** en tant que workers.
+      Récupère le jeton avec `docker swarm join-token -q worker`, puis lance sur chaque worker :
+      `docker -H tcp://worker1:2375 swarm join --token <jeton> manager:2377`.
+    hint: "docker swarm init --advertise-addr $(hostname -i)"
+    checks:
+      - desc: Le manager est en mode Swarm
+        run: test "$(docker info -f '{{.Swarm.LocalNodeState}}')" = active
+      - desc: Le cluster compte 3 nœuds prêts
+        run: test "$(docker node ls -f role=worker --format '{{.Status}}' | grep -c Ready)" -ge 2
+  - id: service
+    title: Déployer un service répliqué
+    description: |
+      Déploie le service `web` (image `nginx:alpine`) avec **3 réplicas**, publié sur le port **8080**.
+      Observe la répartition avec `docker service ps web`.
+    hint: "docker service create --name web --replicas 3 -p 8080:80 nginx:alpine"
+    checks:
+      - desc: Le service web existe avec 3 réplicas demandés
+        run: test "$(docker service inspect web -f '{{.Spec.Mode.Replicated.Replicas}}')" = 3
+      - desc: Les 3 réplicas tournent
+        run: test "$(docker service ps web -f desired-state=running --format '{{.CurrentState}}' | grep -c Running)" = 3
+        timeout: 90
+      - desc: Le port 8080 est publié
+        run: docker service inspect web -f '{{json .Endpoint.Ports}}' | grep -q '"PublishedPort":8080'
+  - id: scale-update
+    title: Mise à l'échelle et mise à jour progressive
+    description: |
+      Passe `web` à **5 réplicas**, puis mets-le à jour vers l'image `nginx:1.27-alpine`
+      en **rolling update**, un conteneur à la fois (`--update-parallelism 1`).
+    checks:
+      - desc: 5 réplicas
+        run: test "$(docker service inspect web -f '{{.Spec.Mode.Replicated.Replicas}}')" = 5
+      - desc: Image nginx:1.27-alpine
+        run: docker service inspect web -f '{{.Spec.TaskTemplate.ContainerSpec.Image}}' | grep -q '^nginx:1.27-alpine'
+      - desc: Parallélisme de mise à jour à 1
+        run: test "$(docker service inspect web -f '{{.Spec.UpdateConfig.Parallelism}}')" = 1
+  - id: stack
+    title: Déployer une stack
+    description: |
+      Écris `/root/stack.yml` (format compose) avec un service `redis` (`redis:alpine`, 1 réplica) et un
+      service `viz` (`nginx:alpine`, 2 réplicas, **placés uniquement sur les workers** :
+      `deploy.placement.constraints: [node.role == worker]`). Déploie-le sous le nom `demo`.
+    hint: "docker stack deploy -c /root/stack.yml demo"
+    checks:
+      - desc: La stack demo existe
+        run: docker stack ls --format '{{.Name}}' | grep -qx demo
+      - desc: viz n'est placé que sur les workers
+        run: docker service inspect demo_viz -f '{{json .Spec.TaskTemplate.Placement.Constraints}}' | grep -q 'node.role *== *worker'
+      - desc: viz a 2 réplicas
+        run: test "$(docker service inspect demo_viz -f '{{.Spec.Mode.Replicated.Replicas}}')" = 2

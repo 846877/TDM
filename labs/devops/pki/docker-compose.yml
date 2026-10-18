@@ -1,0 +1,15 @@
+# Une autorité de certification et un serveur web, comme les VM `ca` et `webserver`
+# du lab Vagrant `pki`. Le volume `pki` est partagé entre les deux.
+services:
+  ca:
+    image: alpine/openssl:latest
+    hostname: ca
+    entrypoint: ["sleep", "infinity"]
+    volumes: [pki:/pki]
+  webserver:
+    build: ./webserver
+    hostname: webserver
+    ports: ["8443:443"]
+    volumes: [pki:/pki]
+volumes:
+  pki:

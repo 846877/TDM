@@ -1,0 +1,31 @@
+title: OpenShift 4 avec CodeReady Containers
+level: expert
+order: 2
+tags: [openshift, crc, oc, vagrant]
+summary: OpenShift 4 local (CRC), pour les machines bien dotées.
+vagrant: code-ready-container/crc_ubuntu22
+description: |
+  Lab Vagrant de ta formation : une VM Ubuntu 22.04 (12 Go de RAM, 4 CPU) avec CRC 2.30.
+
+  **Avant de lancer** : dépose ton *pull secret* Red Hat (gratuit sur console.redhat.com) dans
+  `/home/vagrant/pull-secret.json` de la VM, puis lance `scripts/start_crc.sh`. CRC demande la
+  virtualisation imbriquée (KVM dans VirtualBox), qui échoue souvent sous Windows ; si `crc setup`
+  refuse, ce lab ne pourra pas tourner sur ta machine.
+exercises:
+  - id: demarrage
+    title: Démarrer le cluster
+    description: |
+      Démarre CRC et connecte-toi en `developer` avec `oc` (`eval $(crc oc-env)`).
+    checks:
+      - desc: CRC est démarré
+        run: crc status 2>/dev/null | grep -q 'OpenShift:.*Running'
+  - id: application
+    title: Déployer une application
+    description: |
+      Crée le projet `demo` et déploie `quay.io/openshift/origin-hello-openshift` sous le nom `hello`,
+      exposé par une route.
+    checks:
+      - desc: Un pod hello tourne
+        run: eval $(crc oc-env) && oc -n demo get pods --no-headers | grep hello | grep -q Running
+      - desc: La route hello existe
+        run: eval $(crc oc-env) && oc -n demo get route hello

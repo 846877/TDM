@@ -1,0 +1,46 @@
+title: Kubernetes avec Minikube
+level: intermediaire
+order: 5
+tags: [kubernetes, minikube, kubectl, vagrant]
+summary: Un Kubernetes mono-nœud dans une VM pour débuter avec kubectl.
+vagrant: minikube/minikube_ubuntu22
+description: |
+  Lab Vagrant de ta formation : une VM Ubuntu 22.04 avec Minikube (driver `none`, Kubernetes 1.32).
+  `kubectl` s'utilise en root : `sudo -i` ou `sudo kubectl ...`. Prévois 4 Go de RAM libres.
+exercises:
+  - id: premier-pod
+    title: Premier pod
+    description: |
+      Lance un pod `hello` (image `nginx:1.27`) dans le namespace `default`, avec le label `app=hello`.
+    hint: "kubectl run hello --image=... --labels=app=hello"
+    checks:
+      - desc: Le pod hello tourne
+        run: test "$(sudo kubectl get pod hello -o jsonpath='{.status.phase}')" = Running
+      - desc: Il porte le label app=hello
+        run: sudo kubectl get pods -l app=hello --no-headers | grep -q hello
+  - id: manifeste
+    title: Déploiement par manifeste
+    description: |
+      Écris `/home/vagrant/whoami.yaml` qui décrit un déploiement `whoami` (image `traefik/whoami:v1.10`,
+      2 réplicas) et un service ClusterIP `whoami` sur le port 80. Applique-le.
+    checks:
+      - desc: Le manifeste existe
+        run: |
+          grep -q 'kind: Deployment' /home/vagrant/whoami.yaml && grep -q 'kind: Service' /home/vagrant/whoami.yaml
+      - desc: 2 réplicas disponibles
+        run: test "$(sudo kubectl get deploy whoami -o jsonpath='{.status.availableReplicas}')" = 2
+      - desc: Le service répond
+        run: curl -fsS --max-time 5 "http://$(sudo kubectl get svc whoami -o jsonpath='{.spec.clusterIP}')" | grep -q Hostname
+  - id: mise-a-jour
+    title: Mise à jour progressive
+    description: |
+      Passe le déploiement `whoami` en image `traefik/whoami:v1.11` puis monte-le à 4 réplicas.
+      L'historique doit contenir au moins 2 révisions.
+    hint: "kubectl set image, kubectl scale, kubectl rollout history"
+    checks:
+      - desc: Image v1.11
+        run: sudo kubectl get deploy whoami -o jsonpath='{.spec.template.spec.containers[0].image}' | grep -q 'v1.11'
+      - desc: 4 réplicas disponibles
+        run: test "$(sudo kubectl get deploy whoami -o jsonpath='{.status.availableReplicas}')" = 4
+      - desc: Au moins 2 révisions
+        run: test "$(sudo kubectl rollout history deploy/whoami | grep -cE '^[0-9]+')" -ge 2

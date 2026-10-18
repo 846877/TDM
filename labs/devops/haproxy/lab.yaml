@@ -1,0 +1,75 @@
+title: HAProxy et Squid
+level: intermediaire
+order: 4
+tags: [haproxy, load balancing, proxy, squid]
+summary: Répartition de charge, routage par URL, statistiques et proxy sortant.
+compose: docker-compose.yml
+service: haproxy
+shell: bash
+workdir: /usr/local/etc/haproxy
+description: |
+  Reprend le lab Vagrant `haproxy-squid` : un répartiteur **haproxy** et des backends sur le même réseau :
+  `red:8080` et `blue:8080` (application colorée), `site1:80` et `site2:80`, plus un proxy **squid:3128**.
+
+  Ton terminal est sur haproxy, dans `/usr/local/etc/haproxy`. HAProxy n'est pas encore démarré :
+  - tester la configuration : `haproxy -c -f haproxy.cfg`
+  - démarrer : `haproxy -D -f haproxy.cfg -p /run/haproxy.pid`
+  - recharger après une modification : `haproxy -D -f haproxy.cfg -p /run/haproxy.pid -sf $(cat /run/haproxy.pid)`
+
+  Le port 80 est publié sur **http://localhost:8090** et les statistiques sur **http://localhost:8404**.
+exercises:
+  - id: round-robin
+    title: Répartition de charge
+    description: |
+      Crée un `frontend` qui écoute sur le port **80** et envoie le trafic vers un `backend` `couleurs`
+      contenant `red:8080` et `blue:8080` en **roundrobin**. Démarre HAProxy : en rafraîchissant
+      http://localhost:8090, la couleur doit alterner.
+    checks:
+      - desc: La configuration est valide
+        run: haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+      - desc: HAProxy tourne
+        run: test -f /run/haproxy.pid && kill -0 "$(cat /run/haproxy.pid)"
+      - desc: Les deux backends répondent à tour de rôle
+        run: for i in 1 2 3 4; do curl -fsS http://localhost/ 2>/dev/null || wget -qO- http://localhost/; done | grep -o 'red\|blue' | sort -u | wc -l | grep -qx 2
+  - id: health
+    title: Vérifications de santé
+    description: |
+      Active les **health checks** (`check`) sur les serveurs du backend `couleurs`, avec une vérification
+      HTTP (`option httpchk GET /`). Recharge HAProxy.
+    checks:
+      - desc: option httpchk dans la configuration
+        run: grep -Eq '^\s*option\s+httpchk' /usr/local/etc/haproxy/haproxy.cfg
+      - desc: Les serveurs ont le mot-clé check
+        run: test "$(grep -Ec '^\s*server\s+.*(red|blue):8080.*\scheck' /usr/local/etc/haproxy/haproxy.cfg)" -ge 2
+  - id: acl
+    title: Routage par chemin
+    description: |
+      Avec des **ACL**, envoie `/site1` vers le backend `site1` (`site1:80`) et `/site2` vers `site2`
+      (`site2:80`), le reste allant toujours vers `couleurs`. Pense à retirer le préfixe du chemin
+      (`http-request replace-path /site[12](.*) /\1`) ou à servir `/` côté backend.
+    checks:
+      - desc: /site1 renvoie le site 1
+        run: (curl -fsS http://localhost/site1 2>/dev/null || wget -qO- http://localhost/site1) | grep -q "Site 1"
+      - desc: /site2 renvoie le site 2
+        run: (curl -fsS http://localhost/site2 2>/dev/null || wget -qO- http://localhost/site2) | grep -q "Site 2"
+  - id: stats
+    title: Page de statistiques
+    description: |
+      Expose la page de statistiques sur le port **8404** à l'adresse `/stats` (`stats enable`,
+      `stats uri /stats`), protégée par l'utilisateur `admin` / `tdm`.
+    checks:
+      - desc: /stats est protégé par mot de passe
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8404/stats)" = 401
+      - desc: admin/tdm donne accès aux statistiques
+        run: curl -fsS -u admin:tdm http://localhost:8404/stats | grep -qi "statistics report"
+  - id: squid
+    title: Proxy sortant Squid
+    description: |
+      Vérifie depuis haproxy que le proxy Squid fonctionne :
+      `curl -x http://squid:3128 -I http://site1/`. Ensuite, écris dans `/root/squid.txt` le
+      **code HTTP** obtenu (juste le nombre).
+    checks:
+      - desc: Squid relaie bien vers site1
+        run: curl -fsS -x http://squid:3128 http://site1/ | grep -q "Site 1"
+      - desc: Le code noté est correct
+        run: test "$(tr -d '[:space:]' < /root/squid.txt)" = "$(curl -s -o /dev/null -w '%{http_code}' -x http://squid:3128 http://site1/)"

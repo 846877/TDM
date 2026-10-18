@@ -1,5 +1,5 @@
 # Lancement de la plateforme dans Docker (recommandé sous Windows et macOS) :
-#   docker compose up --build
+#   docker compose up --build        (ou start.bat sous Windows)
 # puis http://localhost:8000
 services:
   tdm:
@@ -8,6 +8,11 @@ services:
     container_name: tdm
     ports:
       - "127.0.0.1:8000:8000"
+    environment:
+      TDM_VAGRANT_TOKEN: ${TDM_VAGRANT_TOKEN:-}
+      TDM_VAGRANT_AGENT_PORT: ${TDM_VAGRANT_AGENT_PORT:-7777}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./content:/app/content

@@ -16,6 +16,7 @@ import yaml
 
 from .. import config
 from ..catalog import LEVELS
+from . import vagrant
 
 
 class LabError(RuntimeError):
@@ -43,7 +44,7 @@ def load_labs(labs_dir: Path | None = None) -> list[dict[str, Any]]:
         if not data.get("description"):
             readme = path.parent / "README.md"
             data["description"] = readme.read_text(encoding="utf-8") if readme.exists() else ""
-        if not any(k in data for k in ("image", "build", "compose")):
+        if not any(k in data for k in ("image", "build", "compose", "vagrant")):
             if (path.parent / "Dockerfile").exists():
                 data["build"] = "."
             elif (path.parent / "docker-compose.yml").exists():
@@ -68,6 +69,7 @@ def public(lab: dict[str, Any]) -> dict[str, Any]:
         "summary": lab.get("summary", ""),
         "description": lab["description"],
         "ports": lab.get("ports", []),
+        "kind": "vagrant" if "vagrant" in lab else "docker",
         "exercises": [
             {k: e.get(k) for k in ("id", "title", "description", "hint") if e.get(k) is not None}
             for e in lab["exercises"]
@@ -100,6 +102,16 @@ def _compose_base(lab: dict[str, Any]) -> list[str]:
 
 
 def status(lab: dict[str, Any]) -> str:
+    return status_with_log(lab)[0]
+
+
+def status_with_log(lab: dict[str, Any]) -> tuple[str, str]:
+    if "vagrant" in lab:
+        return vagrant.status(lab)
+    return _docker_status(lab), ""
+
+
+def _docker_status(lab: dict[str, Any]) -> str:
     if not config.docker_available():
         return "unavailable"
     if "compose" in lab:
@@ -110,6 +122,8 @@ def status(lab: dict[str, Any]) -> str:
 
 
 def start(lab: dict[str, Any]) -> str:
+    if "vagrant" in lab:
+        return _agent(vagrant.start, lab)
     _require_docker()
     if status(lab) == "running":
         return "running"
@@ -147,12 +161,40 @@ def start(lab: dict[str, Any]) -> str:
 
 
 def stop(lab: dict[str, Any]) -> str:
+    if "vagrant" in lab:
+        return _agent(vagrant.stop, lab)
     _require_docker()
     if "compose" in lab:
         _run(_compose_base(lab) + ["down", "-v"], cwd=lab["dir"])
     else:
         _run(["docker", "rm", "-f", container_name(lab)], timeout=60)
     return "stopped"
+
+
+def reset(lab: dict[str, Any]) -> str:
+    if "vagrant" in lab:
+        return _agent(vagrant.reset, lab)
+    stop(lab)
+    return start(lab)
+
+
+def _agent(fn, *args):
+    try:
+        return fn(*args)
+    except vagrant.AgentError as exc:
+        raise LabError(str(exc)) from exc
+
+
+def terminal_argv(lab: dict[str, Any]) -> list[str]:
+    if "vagrant" in lab:
+        return _agent(vagrant.ssh_argv, lab)
+    return exec_argv(lab, [lab["shell"]], interactive=True)
+
+
+def _check_argv(lab: dict[str, Any], item: dict[str, Any]) -> list[str]:
+    if "vagrant" in lab:
+        return _agent(vagrant.ssh_argv, lab, item["run"], item.get("machine"))
+    return exec_argv(lab, ["sh", "-c", item["run"]], interactive=False)
 
 
 def exec_argv(lab: dict[str, Any], command: list[str], interactive: bool) -> list[str]:
@@ -171,7 +213,8 @@ def exec_argv(lab: dict[str, Any], command: list[str], interactive: bool) -> lis
 
 
 def check(lab: dict[str, Any], exercise_id: str) -> dict[str, Any]:
-    _require_docker()
+    if "vagrant" not in lab:
+        _require_docker()
     exercise = next((e for e in lab["exercises"] if e["id"] == exercise_id), None)
     if exercise is None:
         raise LabError("Exercice inconnu")
@@ -180,7 +223,7 @@ def check(lab: dict[str, Any], exercise_id: str) -> dict[str, Any]:
     checks = exercise.get("checks") or [{"desc": exercise.get("title", exercise_id), "run": exercise["check"]}]
     results = []
     for item in checks:
-        result = _run(exec_argv(lab, ["sh", "-c", item["run"]], interactive=False), timeout=60)
+        result = _run(_check_argv(lab, item), timeout=item.get("timeout", 60))
         ok = result.returncode == 0
         message = "" if ok else (item.get("hint") or (result.stdout + result.stderr).strip()[-500:])
         results.append({"name": item.get("desc", "vérification"), "passed": ok, "message": message})

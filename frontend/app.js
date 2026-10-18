@@ -250,7 +250,8 @@ async function renderList(cat) {
             h("div", {},
               h("div", { class: "title" }, it.title),
               it.summary ? h("div", { class: "summary" }, it.summary) : null,
-              cat === "devops" ? h("div", { class: "summary" }, `${labDoneCount(it)} / ${it.exercise_count} exercice(s)`) : null,
+              cat === "devops" ? h("div", { class: "summary" },
+                `${it.kind === "vagrant" ? "🖥 VM Vagrant" : "🐳 Docker"} · ${labDoneCount(it)} / ${it.exercise_count} exercice(s)`) : null,
               h("div", { class: "tags" }, (it.tags || []).map((t) => h("span", { class: "tag" }, t)))));
         }))));
     }
@@ -617,7 +618,9 @@ async function renderLab(id) {
   });
 
   app.replaceChildren(h("div", { class: "workspace" },
-    h("section", { class: "left" }, ...exerciseHeader("devops", lab), markdown(lab.description),
+    h("section", { class: "left" }, ...exerciseHeader("devops", lab),
+      lab.kind === "vagrant" ? h("p", {}, h("span", { class: "badge warn" }, "🖥 Machine virtuelle Vagrant")) : null,
+      markdown(lab.description),
       h("div", { class: "lab-controls" }, statusDot, statusText, startBtn, stopBtn, resetBtn), errorBox,
       h("h3", {}, `Exercices (${lab.exercises.length})`), ...exerciseCards,
       exerciseNav("devops", items, id)),
@@ -639,19 +642,47 @@ async function renderLab(id) {
   };
   onLeave(closeTerminal);
 
-  const setStatus = (status) => {
+  const isVm = lab.kind === "vagrant";
+  const logBox = h("pre", { class: "output lab-log" });
+  logBox.style.display = "none";
+  errorBox.after(logBox);
+  let pollTimer = null;
+  onLeave(() => clearTimeout(pollTimer));
+
+  const STATUS_LABELS = {
+    running: "En cours d'exécution",
+    stopped: "Arrêté",
+    starting: isVm ? "Démarrage de la VM (plusieurs minutes au premier lancement)…" : "Démarrage…",
+    stopping: "Arrêt en cours…",
+    error: "Échec du dernier lancement (voir le journal)",
+    unavailable: isVm ? "Agent Vagrant injoignable" : "Docker indisponible",
+  };
+  const setStatus = (status, log = "") => {
+    const busy = status === "starting" || status === "stopping";
     statusDot.className = `status-dot ${status}`;
-    statusText.textContent = { running: "En cours d'exécution", stopped: "Arrêté", unavailable: "Docker indisponible" }[status] || status;
-    startBtn.style.display = status === "running" ? "none" : "";
+    statusText.textContent = STATUS_LABELS[status] || status;
+    startBtn.style.display = status === "running" || busy ? "none" : "";
     stopBtn.style.display = resetBtn.style.display = status === "running" ? "" : "none";
     startBtn.disabled = status === "unavailable";
+    logBox.style.display = log && (busy || status === "error") ? "" : "none";
+    logBox.textContent = log;
     if (status === "running") openTerminal(); else closeTerminal();
+    clearTimeout(pollTimer);
+    if (busy) {
+      pollTimer = setTimeout(async () => {
+        try {
+          const fresh = await api(`/api/devops/labs/${encodeURIComponent(id)}`);
+          setStatus(fresh.status, fresh.log);
+        } catch { setStatus(status, log); }
+      }, 4000);
+    }
   };
 
   const action = async (name, btn, label) => {
     errorBox.replaceChildren();
     btn.disabled = true;
-    btn.replaceChildren(h("span", { class: "spinner" }), name === "stop" ? " Arrêt…" : " Démarrage (construction de l'image au premier lancement)…");
+    const waiting = name === "stop" ? " Arrêt…" : isVm ? " Envoi à Vagrant…" : " Démarrage (construction de l'image au premier lancement)…";
+    btn.replaceChildren(h("span", { class: "spinner" }), waiting);
     try {
       closeTerminal();
       const res = await api(`/api/devops/labs/${encodeURIComponent(id)}/${name}`, { method: "POST" });
@@ -666,9 +697,11 @@ async function renderLab(id) {
   startBtn.addEventListener("click", () => action("start", startBtn, "▶ Démarrer le lab"));
   stopBtn.addEventListener("click", () => action("stop", stopBtn, "■ Arrêter"));
   resetBtn.addEventListener("click", () => action("reset", resetBtn, "↺ Réinitialiser"));
-  setStatus(lab.status);
+  setStatus(lab.status, lab.log);
   if (lab.status === "unavailable") {
-    errorBox.append(h("div", { class: "error-box" }, "Docker n'est pas disponible : installe-le et lance-le pour utiliser les labs DevOps."));
+    errorBox.append(h("div", { class: "error-box" }, isVm
+      ? "Ce lab tourne dans une machine virtuelle : lance l'agent Vagrant sur ta machine (start.bat le démarre automatiquement si Vagrant est installé)."
+      : "Docker n'est pas disponible : installe-le et lance-le pour utiliser les labs DevOps."));
   }
 }
 

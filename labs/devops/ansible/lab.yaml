@@ -1,0 +1,76 @@
+title: Ansible, de l'inventaire aux rôles
+level: intermediaire
+order: 2
+tags: [ansible, automatisation, ssh]
+summary: Inventaire, commandes ad hoc, playbooks et rôles sur deux clients.
+compose: docker-compose.yml
+service: ansible
+shell: sh
+workdir: /home/ansible
+description: |
+  Reprend le lab Vagrant `ansible` de ta formation : un nœud de contrôle **ansible** et deux clients
+  **client1** et **client2** (utilisateur `vagrant`, mot de passe `vagrant`, sudo autorisé).
+  Ton terminal est sur le nœud de contrôle, dans `/home/ansible`.
+
+  Particularité : les clients n'ont **pas Python**, qu'Ansible utilise pour la plupart de ses modules.
+  Tu vas commencer par l'installer avec Ansible lui-même.
+exercises:
+  - id: inventaire
+    title: Inventaire et connexion SSH par clé
+    description: |
+      1. Génère une paire de clés SSH (`ssh-keygen`) et copie la clé publique sur les deux clients
+         (`ssh-copy-id vagrant@client1`, mot de passe `vagrant`).
+      2. Écris l'inventaire `/home/ansible/hosts` avec un groupe `clients` contenant `client1` et `client2`,
+         l'utilisateur `ansible_user=vagrant` et `ansible_become_password=vagrant` (sudo demande le mot de passe).
+
+      Le port SSH des clients (2222) est déjà configuré dans `~/.ssh/config`.
+    checks:
+      - desc: Connexion par clé sans mot de passe vers client1 et client2
+        run: for h in client1 client2; do ssh -o BatchMode=yes -o StrictHostKeyChecking=no vagrant@$h true || exit 1; done
+      - desc: L'inventaire contient le groupe clients
+        run: ansible-inventory -i /home/ansible/hosts --list 2>/dev/null | grep -q '"clients"' && ansible -i /home/ansible/hosts clients --list-hosts | grep -q client2
+  - id: bootstrap
+    title: Installer Python avec le module raw
+    description: |
+      Les clients sont des Alpine sans Python. Utilise une commande **ad hoc** avec le module `raw`
+      (qui n'a pas besoin de Python) et `--become` pour installer `python3` (`apk add python3`),
+      puis vérifie que `ansible -i hosts clients -m ping` répond `pong`.
+    hint: "ansible -i hosts clients -m raw -a 'apk add --no-cache python3' --become"
+    checks:
+      - desc: Le module ping répond sur les deux clients
+        run: ansible -i /home/ansible/hosts clients -m ping | grep -c SUCCESS | grep -qx 2
+        timeout: 90
+  - id: playbook
+    title: Premier playbook
+    description: |
+      Écris `/home/ansible/site.yml` qui, sur le groupe `clients` et avec `become: true` :
+      - installe le paquet `nginx` (module `community.general.apk` ou `package`),
+      - crée le fichier `/etc/motd` contenant `Gere par Ansible`,
+      - crée l'utilisateur `deploy`.
+
+      Lance-le avec `ansible-playbook -i hosts site.yml`. Un deuxième lancement ne doit rien changer (`changed=0`).
+    checks:
+      - desc: nginx installé sur les clients
+        run: ansible -i /home/ansible/hosts clients -m command -a 'which nginx' | grep -c 'rc=0' | grep -qx 2
+        timeout: 90
+      - desc: /etc/motd contient « Gere par Ansible »
+        run: ansible -i /home/ansible/hosts clients -m command -a 'grep -q "Gere par Ansible" /etc/motd' | grep -c 'rc=0' | grep -qx 2
+        timeout: 90
+      - desc: L'utilisateur deploy existe
+        run: ansible -i /home/ansible/hosts clients -m command -a 'id deploy' | grep -c 'rc=0' | grep -qx 2
+        timeout: 90
+      - desc: Le playbook est idempotent
+        run: ansible-playbook -i /home/ansible/hosts /home/ansible/site.yml | grep -E 'client[12] .*changed=0' | wc -l | grep -qx 2
+        timeout: 180
+  - id: role
+    title: Organiser en rôle avec variables
+    description: |
+      Crée un rôle `webserver` (`ansible-galaxy init roles/webserver`) qui dépose une page
+      `/var/www/localhost/htdocs/index.html` à partir d'un **template** `index.html.j2` affichant
+      `Bienvenue sur {{ inventory_hostname }}`. Utilise ce rôle depuis un playbook `/home/ansible/web.yml`.
+    checks:
+      - desc: Le rôle a une tâche et un template
+        run: test -f /home/ansible/roles/webserver/tasks/main.yml && test -f /home/ansible/roles/webserver/templates/index.html.j2
+      - desc: Chaque client affiche son propre nom
+        run: for h in client1 client2; do ansible -i /home/ansible/hosts $h -m command -a 'cat /var/www/localhost/htdocs/index.html' | grep -q "Bienvenue sur $h" || exit 1; done
+        timeout: 90

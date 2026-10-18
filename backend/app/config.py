@@ -49,3 +49,7 @@ def use_docker_sandbox() -> bool:
     if SANDBOX_MODE == "local":
         return False
     return docker_available()
+
+
+def running_in_container() -> bool:
+    return Path("/.dockerenv").exists()

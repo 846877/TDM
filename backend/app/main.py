@@ -82,7 +82,7 @@ def categories():
             {"id": "reseaux", "title": "Réseaux", "count": len(network_catalog.all()),
              "description": "Configuration Cisco IOS dans un terminal simulé : VLAN, trunks, routage, sécurité."},
             {"id": "devops", "title": "DevOps", "count": len(devops.load_labs()),
-             "description": "Des labs lancés en un clic dans des conteneurs, avec exercices vérifiés."},
+             "description": "Des labs lancés en un clic, en conteneur Docker ou en VM Vagrant, avec exercices vérifiés."},
         ],
     }
 
@@ -243,7 +243,8 @@ def devops_labs():
 @app.get("/api/devops/labs/{lab_id}")
 def devops_lab(lab_id: str):
     lab = _lab(lab_id)
-    return devops.public(lab) | {"status": devops.status(lab)}
+    status, log = devops.status_with_log(lab)
+    return devops.public(lab) | {"status": status, "log": log}
 
 
 def _lab_action(fn, *args):
@@ -266,8 +267,7 @@ def devops_stop(lab_id: str):
 @app.post("/api/devops/labs/{lab_id}/reset")
 def devops_reset(lab_id: str):
     lab = _lab(lab_id)
-    _lab_action(devops.stop, lab)
-    return {"status": _lab_action(devops.start, lab)}
+    return {"status": _lab_action(devops.reset, lab)}
 
 
 @app.post("/api/devops/labs/{lab_id}/exercises/{exercise_id}/check")
@@ -283,7 +283,12 @@ async def devops_terminal(websocket: WebSocket, lab_id: str):
         await websocket.send_text("\x1b[31mLe lab n'est pas démarré.\x1b[0m\r\n")
         await websocket.close()
         return
-    argv = devops.exec_argv(lab, [lab["shell"]], interactive=True)
+    try:
+        argv = await asyncio.to_thread(devops.terminal_argv, lab)
+    except devops.LabError as exc:
+        await websocket.send_text(f"\x1b[31m{exc}\x1b[0m\r\n")
+        await websocket.close()
+        return
     await terminal.bridge(websocket, argv)
 
 
