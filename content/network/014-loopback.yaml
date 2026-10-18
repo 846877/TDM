@@ -1,0 +1,40 @@
+title: Interface loopback
+level: debutant
+order: 14
+device: router
+hostname: R-SIEGE
+tags: [loopback, routeur, interfaces]
+summary: Créer l'interface virtuelle qui ne tombe jamais.
+description: |
+  Une interface **loopback** est virtuelle : elle reste active tant que le routeur fonctionne,
+  quel que soit l'état des câbles. On s'en sert comme adresse d'administration et comme
+  identifiant du routeur (OSPF, supervision...).
+
+  1. Crée `interface loopback 0` avec l'adresse `10.255.255.1` et le masque **/32**
+     (`255.255.255.255`) ;
+  2. ajoute la description `ADMIN-R-SIEGE` ;
+  3. active aussi l'interface `G0/0` (adresse `192.168.1.1/24`, déjà configurée mais éteinte).
+
+  Vérifie avec `show ip interface brief`.
+initial: |
+  interface g0/0
+  ip address 192.168.1.1 255.255.255.0
+checks:
+  - desc: Loopback0 existe
+    expr: has_intf("lo0")
+    hint: "interface loopback 0"
+  - desc: Loopback0 en 10.255.255.1/32
+    expr: intf("lo0").ip == "10.255.255.1" and prefix(intf("lo0").mask) == 32
+  - desc: Description ADMIN-R-SIEGE sur Loopback0
+    expr: intf("lo0").description == "ADMIN-R-SIEGE"
+  - desc: G0/0 activée
+    expr: not intf("g0/0").shutdown
+    hint: "Les interfaces d'un routeur sont éteintes par défaut : no shutdown"
+solution: |
+  configure terminal
+  interface loopback 0
+  description ADMIN-R-SIEGE
+  ip address 10.255.255.1 255.255.255.255
+  interface g0/0
+  no shutdown
+  end

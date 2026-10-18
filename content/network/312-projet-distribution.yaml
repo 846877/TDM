@@ -1,0 +1,122 @@
+title: "Projet : switch de distribution de niveau 3"
+level: expert
+order: 12
+device: switch
+hostname: SW-DIST-A
+tags: [projet, niveau 3, hsrp, etherchannel, ospf, stp]
+summary: Configurer de bout en bout le switch de distribution d'un bâtiment.
+description: |
+  Le bâtiment A reçoit un nouveau switch de distribution multicouche, `SW-DIST-A`. Il route entre
+  les VLAN, assure la passerelle redondante avec son jumeau `SW-DIST-B` et se raccorde au cœur
+  de réseau en OSPF.
+
+  **1. VLAN et spanning tree**
+  - VLAN `10 ADMIN`, `20 COMPTA`, `30 PROD`, `99 MGMT` ;
+  - Rapid PVST+, `SW-DIST-A` **racine primaire** des VLAN 10, 20, 30 et 99.
+
+  **2. Lien vers le switch d'accès** — EtherChannel LACP `Port-channel 1` sur `Gi0/1` et `Gi0/2` :
+  trunk, VLAN natif `99`, VLAN autorisés `10,20,30,99`.
+
+  **3. Passerelles (SVI) avec HSRP** — `ip routing`, puis pour chaque VLAN utilisateur :
+
+  | SVI      | Adresse réelle    | HSRP (groupe = VLAN)   |
+  |----------|-------------------|------------------------|
+  | `Vlan10` | 192.168.10.2/24   | virtuelle 192.168.10.1 |
+  | `Vlan20` | 192.168.20.2/24   | virtuelle 192.168.20.1 |
+  | `Vlan30` | 192.168.30.2/24   | virtuelle 192.168.30.1 |
+
+  priorité `110` et préemption sur chaque groupe ; relais DHCP `ip helper-address 10.0.0.10` sur
+  ces trois SVI. `Vlan99` : `192.168.99.2/24` (sans HSRP).
+
+  **4. Lien routé vers le cœur** — `Fa0/24` : `no switchport`, `10.255.0.2/30`.
+
+  **5. OSPF** — processus `1`, router-id `2.2.2.2`, zone `0` pour `10.255.0.0/30` et les réseaux
+  `192.168.10.0/24`, `192.168.20.0/24`, `192.168.30.0/24`, `192.168.99.0/24` ;
+  `passive-interface default` puis `no passive-interface fa0/24`.
+
+  **6.** Sauvegarde la configuration.
+checks:
+  - desc: VLAN créés et nommés
+    expr: vlan(10) == "ADMIN" and vlan(20) == "COMPTA" and vlan(30) == "PROD" and vlan(99) == "MGMT"
+  - desc: Rapid PVST+, racine primaire des VLAN 10, 20, 30 et 99
+    expr: d.stp_mode == "rapid-pvst" and all(d.stp_priority.get(v, 32768) <= 24576 for v in (10, 20, 30, 99))
+  - desc: EtherChannel LACP Gi0/1-2 en Port-channel 1
+    expr: members(1) == ["Gi0/1", "Gi0/2"] and all(i.channel_mode == "active" for i in ports("g0/1-2"))
+  - desc: Port-channel 1 trunk, natif 99, VLAN 10, 20, 30, 99
+    expr: intf("po1").mode == "trunk" and intf("po1").native_vlan == 99 and intf("po1").allowed_vlans() == {10, 20, 30, 99}
+  - desc: Routage IPv4 activé et SVI adressées
+    expr: d.ip_routing and all(intf("vlan%d" % v).ip == "192.168.%d.2" % v and not intf("vlan%d" % v).shutdown for v in (10, 20, 30, 99))
+    hint: "N'oublie pas no shutdown sur chaque SVI."
+  - desc: HSRP sur les SVI 10, 20, 30 (virtuelle .1, priorité 110, préemption)
+    expr: all(hsrp("vlan%d" % v, v).ip == "192.168.%d.1" % v and hsrp("vlan%d" % v, v).priority == 110 and hsrp("vlan%d" % v, v).preempt for v in (10, 20, 30))
+    hint: "Sur interface vlan 10 : standby 10 ip 192.168.10.1, standby 10 priority 110, standby 10 preempt"
+  - desc: Relais DHCP vers 10.0.0.10 sur les SVI utilisateurs
+    expr: all("10.0.0.10" in intf("vlan%d" % v).helper_addresses for v in (10, 20, 30))
+  - desc: Fa0/24 port routé en 10.255.0.2/30
+    expr: not intf("fa0/24").is_switchport and intf("fa0/24").ip == "10.255.0.2" and prefix(intf("fa0/24").mask) == 30
+  - desc: OSPF 1, router-id 2.2.2.2, tous les réseaux en zone 0
+    expr: d.ospf[1].router_id == "2.2.2.2" and ospf_net("10.255.0.0", "0.0.0.3", 0) and all(ospf_net("192.168.%d.0" % v, "0.0.0.255", 0) for v in (10, 20, 30, 99))
+  - desc: OSPF passif partout sauf vers le cœur
+    expr: d.ospf[1].passive_default and not d.ospf[1].is_passive("fa0/24") and d.ospf[1].is_passive("vlan10")
+  - desc: Configuration sauvegardée
+    expr: d.saved
+solution: |
+  configure terminal
+  vlan 10
+  name ADMIN
+  vlan 20
+  name COMPTA
+  vlan 30
+  name PROD
+  vlan 99
+  name MGMT
+  exit
+  spanning-tree mode rapid-pvst
+  spanning-tree vlan 10,20,30,99 root primary
+  interface range g0/1 - 2
+  channel-group 1 mode active
+  interface port-channel 1
+  switchport mode trunk
+  switchport trunk native vlan 99
+  switchport trunk allowed vlan 10,20,30,99
+  exit
+  ip routing
+  interface vlan 10
+  ip address 192.168.10.2 255.255.255.0
+  standby 10 ip 192.168.10.1
+  standby 10 priority 110
+  standby 10 preempt
+  ip helper-address 10.0.0.10
+  no shutdown
+  interface vlan 20
+  ip address 192.168.20.2 255.255.255.0
+  standby 20 ip 192.168.20.1
+  standby 20 priority 110
+  standby 20 preempt
+  ip helper-address 10.0.0.10
+  no shutdown
+  interface vlan 30
+  ip address 192.168.30.2 255.255.255.0
+  standby 30 ip 192.168.30.1
+  standby 30 priority 110
+  standby 30 preempt
+  ip helper-address 10.0.0.10
+  no shutdown
+  interface vlan 99
+  ip address 192.168.99.2 255.255.255.0
+  no shutdown
+  interface fa0/24
+  no switchport
+  ip address 10.255.0.2 255.255.255.252
+  exit
+  router ospf 1
+  router-id 2.2.2.2
+  passive-interface default
+  no passive-interface fa0/24
+  network 10.255.0.0 0.0.0.3 area 0
+  network 192.168.10.0 0.0.0.255 area 0
+  network 192.168.20.0 0.0.0.255 area 0
+  network 192.168.30.0 0.0.0.255 area 0
+  network 192.168.99.0 0.0.0.255 area 0
+  end
+  copy running-config startup-config

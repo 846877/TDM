@@ -1,0 +1,39 @@
+title: Accès à distance par Telnet
+level: debutant
+order: 11
+device: switch
+hostname: SW-LABO
+tags: [vty, telnet, mots de passe]
+summary: Configurer les lignes virtuelles pour administrer le switch à distance.
+description: |
+  Au laboratoire de tests, on administre les switchs à distance via les **lignes VTY**
+  (les sessions Telnet/SSH). Sans mot de passe sur les VTY, IOS refuse toute connexion.
+
+  1. Mot de passe du mode privilégié chiffré : `enable secret Lab0Secret` ;
+  2. lignes `vty 0 15` : mot de passe `Labo2024`, `login`, et `transport input telnet` ;
+  3. chiffre les mots de passe en clair avec `service password-encryption`.
+
+  ⚠️ Telnet fait circuler les mots de passe **en clair** : on ne l'utilise que dans un labo isolé.
+  Tu passeras à SSH au niveau intermédiaire.
+checks:
+  - desc: enable secret configuré
+    expr: d.enable_secret == "Lab0Secret"
+  - desc: Mot de passe Labo2024 sur les VTY
+    expr: line("vty").password == "Labo2024"
+    hint: "line vty 0 15 puis password Labo2024"
+  - desc: Authentification demandée sur les VTY
+    expr: line("vty").login == "login"
+  - desc: Telnet autorisé sur les VTY
+    expr: line("vty").transport_input == "telnet"
+  - desc: Mots de passe chiffrés dans la configuration
+    expr: d.password_encryption
+solution: |
+  configure terminal
+  enable secret Lab0Secret
+  line vty 0 15
+  password Labo2024
+  login
+  transport input telnet
+  exit
+  service password-encryption
+  end

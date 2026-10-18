@@ -1,0 +1,41 @@
+title: Vitesse et duplex
+level: debutant
+order: 9
+device: switch
+hostname: SW-PROD
+tags: [speed, duplex, interface]
+summary: Forcer la vitesse et le duplex d'équipements anciens.
+description: |
+  Par défaut, un port négocie automatiquement sa **vitesse** et son **duplex** (`auto`).
+  Certains vieux équipements négocient mal : le lien monte en *half-duplex* et devient très lent.
+  On fixe alors les deux paramètres **des deux côtés**.
+
+  | Port    | Équipement             | Vitesse | Duplex |
+  |---------|------------------------|---------|--------|
+  | `Fa0/5` | Imprimante réseau      | 100     | full   |
+  | `Fa0/6` | Automate de production | 10      | half   |
+
+  ```
+  interface fa0/5
+   speed 100
+   duplex full
+  ```
+
+  Ne touche pas aux autres ports. Vérifie avec `show interfaces status` (colonnes *Duplex* et *Speed*).
+checks:
+  - desc: Fa0/5 en 100 Mbit/s full-duplex
+    expr: intf("fa0/5").speed == "100" and intf("fa0/5").duplex == "full"
+    hint: "interface fa0/5 puis speed 100 et duplex full"
+  - desc: Fa0/6 en 10 Mbit/s half-duplex
+    expr: intf("fa0/6").speed == "10" and intf("fa0/6").duplex == "half"
+  - desc: Les autres ports restent en négociation automatique
+    expr: all(i.speed == "auto" and i.duplex == "auto" for i in ports("fa0/1-4") + ports("fa0/7-24"))
+solution: |
+  configure terminal
+  interface fa0/5
+  speed 100
+  duplex full
+  interface fa0/6
+  speed 10
+  duplex half
+  end

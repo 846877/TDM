@@ -1,0 +1,47 @@
+title: EtherChannel PAgP et statique
+level: avance
+order: 14
+device: switch
+hostname: SW-ACCES2
+tags: [etherchannel, pagp, port-channel]
+summary: Agréger vers un ancien switch Cisco et vers un serveur.
+description: |
+  Deux agrégats à monter sur `SW-ACCES2` :
+
+  **Vers l'ancien switch de l'étage** (il ne parle que PAgP, le protocole Cisco)
+  - `Fa0/23` et `Fa0/24` dans le groupe `2` en mode `desirable` ;
+  - `Port-channel 2` : trunk, VLAN natif `99`, VLAN autorisés `10`, `20`, `99`.
+
+  **Vers le serveur de fichiers** (agrégation de cartes réseau sans protocole de négociation)
+  - `Fa0/21` et `Fa0/22` dans le groupe `3` en mode `on` (statique) ;
+  - `Port-channel 3` : access dans le VLAN `20`.
+
+  ⚠️ Les deux extrémités doivent être compatibles : `desirable`↔`desirable/auto`, `on`↔`on`.
+initial: |
+  vlan 10
+  vlan 20
+  vlan 99
+checks:
+  - desc: Fa0/23-24 dans le groupe 2 en PAgP desirable
+    expr: all(i.channel_group == 2 and i.channel_mode == "desirable" for i in ports("fa0/23-24"))
+  - desc: Port-channel 2 en trunk (natif 99, VLAN 10, 20, 99)
+    expr: intf("po2").mode == "trunk" and intf("po2").native_vlan == 99 and intf("po2").allowed_vlans() == {10, 20, 99}
+  - desc: Fa0/21-22 dans le groupe 3 en mode on
+    expr: all(i.channel_group == 3 and i.channel_mode == "on" for i in ports("fa0/21-22"))
+    hint: "channel-group 3 mode on"
+  - desc: Port-channel 3 en access dans le VLAN 20
+    expr: intf("po3").mode == "access" and intf("po3").access_vlan == 20
+solution: |
+  configure terminal
+  interface range fa0/23 - 24
+  channel-group 2 mode desirable
+  interface port-channel 2
+  switchport mode trunk
+  switchport trunk native vlan 99
+  switchport trunk allowed vlan 10,20,99
+  interface range fa0/21 - 22
+  channel-group 3 mode on
+  interface port-channel 3
+  switchport mode access
+  switchport access vlan 20
+  end

@@ -1,0 +1,49 @@
+title: Corriger la configuration d'un collègue
+level: debutant
+order: 15
+device: switch
+tags: [dépannage, vlan, sauvegarde]
+summary: Repérer les erreurs avec les commandes show, corriger, puis sauvegarder.
+description: |
+  Un collègue a préparé le switch de la comptabilité mais a laissé des erreurs.
+  Commence par observer : `show running-config`, `show vlan brief`.
+
+  Le cahier des charges demandait :
+
+  - nom d'hôte `SW-COMPTA` ;
+  - tous les ports `Fa0/1` à `Fa0/8` dans le VLAN `20 COMPTA` ;
+  - **aucun** VLAN de test sur le switch de production.
+
+  Corrige les erreurs (`no vlan ...` supprime un VLAN), puis **sauvegarde** la configuration
+  (`copy running-config startup-config`).
+initial: |
+  hostname SW-COMPTE
+  vlan 20
+  name COMPTA
+  vlan 30
+  name TEST
+  interface range fa0/1 - 8
+  switchport mode access
+  switchport access vlan 20
+  interface fa0/5
+  switchport access vlan 30
+checks:
+  - desc: Le switch s'appelle SW-COMPTA
+    expr: d.hostname == "SW-COMPTA"
+  - desc: Fa0/1 à Fa0/8 sont tous dans le VLAN 20
+    expr: all(i.mode == "access" and i.access_vlan == 20 for i in ports("fa0/1-8"))
+    hint: "show vlan brief : un port n'est pas dans le bon VLAN."
+  - desc: Le VLAN de test 30 est supprimé
+    expr: 30 not in d.vlans
+    hint: "no vlan 30"
+  - desc: Configuration sauvegardée après les corrections
+    expr: d.saved
+solution: |
+  configure terminal
+  hostname SW-COMPTA
+  interface fa0/5
+  switchport access vlan 20
+  exit
+  no vlan 30
+  end
+  copy running-config startup-config

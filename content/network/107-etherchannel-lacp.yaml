@@ -1,0 +1,48 @@
+title: EtherChannel LACP
+level: intermediaire
+order: 7
+device: switch
+hostname: SW-DIST1
+tags: [etherchannel, lacp, trunk, port-channel]
+summary: Agréger deux liens pour doubler le débit et survivre à une coupure.
+description: |
+  `SW-DIST1` est relié au cœur de réseau par **deux** câbles (`Gi0/1` et `Gi0/2`). Sans agrégation,
+  le spanning tree bloque l'un des deux liens. Avec un **EtherChannel**, les deux liens forment
+  un seul lien logique, l'interface `Port-channel 1`.
+
+  1. Sur `Gi0/1` et `Gi0/2` : `channel-group 1 mode active` (LACP, norme IEEE 802.3ad) ;
+  2. configure ensuite l'interface logique `interface port-channel 1` :
+     - mode trunk,
+     - VLAN natif `99`,
+     - VLAN autorisés `10`, `20` et `99`.
+
+  Vérifie avec `show etherchannel summary` puis `show interfaces trunk`.
+
+  Rappel des modes : `active`/`passive` = LACP, `desirable`/`auto` = PAgP (Cisco), `on` = statique.
+initial: |
+  vlan 10
+  name ADMIN
+  vlan 20
+  name COMPTA
+  vlan 99
+  name MGMT
+checks:
+  - desc: Gi0/1 et Gi0/2 dans le groupe 1 en mode LACP active
+    expr: all(i.channel_group == 1 and i.channel_mode == "active" for i in ports("g0/1-2"))
+    hint: "interface range g0/1 - 2 puis channel-group 1 mode active"
+  - desc: Le Port-channel 1 regroupe exactement Gi0/1 et Gi0/2
+    expr: members(1) == ["Gi0/1", "Gi0/2"]
+  - desc: Port-channel 1 en trunk
+    expr: intf("po1").mode == "trunk"
+    hint: "La configuration du trunk se fait sur interface port-channel 1"
+  - desc: VLAN natif 99 et VLAN autorisés 10, 20, 99 sur le Port-channel
+    expr: intf("po1").native_vlan == 99 and intf("po1").allowed_vlans() == {10, 20, 99}
+solution: |
+  configure terminal
+  interface range g0/1 - 2
+  channel-group 1 mode active
+  interface port-channel 1
+  switchport mode trunk
+  switchport trunk native vlan 99
+  switchport trunk allowed vlan 10,20,99
+  end

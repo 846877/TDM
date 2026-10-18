@@ -1,0 +1,108 @@
+title: "Projet : routeur de bordure Internet"
+level: expert
+order: 13
+device: router
+hostname: R-BORDURE
+tags: [projet, nat, acl, ssh, ospf, supervision]
+summary: Mettre en service le routeur qui relie le siège à Internet.
+description: |
+  Mets en service `R-BORDURE`, entre le LAN du siège et le FAI.
+
+  **1. Interfaces**
+  - `G0/0` : description `LAN`, `192.168.0.1/24` ;
+  - `G0/1` : description `FAI`, `203.0.113.2/29`, **sans CDP** ;
+  - active les deux interfaces ; route par défaut vers `203.0.113.1`.
+
+  **2. NAT**
+  - `G0/0` inside, `G0/1` outside ;
+  - PAT du LAN : ACL standard `NAT-LAN` (`192.168.0.0/24`) puis surcharge sur `G0/1` ;
+  - serveur web publié : `192.168.0.10` ↔ `203.0.113.3` (NAT statique).
+
+  **3. Filtrage** — ACL étendue `INTERNET-IN` en **entrée** de `G0/1` :
+  `permit tcp any host 203.0.113.3 eq 443`, `permit tcp any any established`,
+  `permit icmp any any echo-reply`, puis `deny ip any any log`.
+  (En entrée de l'interface outside, l'ACL voit encore l'adresse **publique** du serveur.)
+
+  **4. Routage interne** — OSPF `1` : réseau `192.168.0.0/24` en zone 0 et propagation de la route
+  par défaut.
+
+  **5. Administration**
+  - domaine `tdm.local`, utilisateur `netadmin` privilège 15 (secret au choix), clés RSA 2048, SSH v2 ;
+  - VTY : `login local`, SSH uniquement, et `access-class` avec une ACL standard `ADMIN-VTY`
+    n'autorisant que `192.168.0.0/24` ;
+  - `no ip http server` ; NTP `192.168.0.5` ; syslog `192.168.0.6`.
+
+  **6.** Sauvegarde.
+checks:
+  - desc: Interfaces adressées, décrites et actives
+    expr: intf("g0/0").ip == "192.168.0.1" and prefix(intf("g0/0").mask) == 24 and intf("g0/1").ip == "203.0.113.2" and prefix(intf("g0/1").mask) == 29 and intf("g0/0").description == "LAN" and intf("g0/1").description == "FAI" and not intf("g0/0").shutdown and not intf("g0/1").shutdown
+  - desc: CDP désactivé côté FAI
+    expr: not intf("g0/1").cdp_enabled
+  - desc: Route par défaut vers 203.0.113.1
+    expr: route("0.0.0.0", "0.0.0.0", "203.0.113.1")
+  - desc: NAT inside/outside, PAT du LAN et NAT statique du serveur web
+    expr: intf("g0/0").nat == "inside" and intf("g0/1").nat == "outside" and "permit 192.168.0.0 0.0.0.255" in acl("NAT-LAN") and nat("ip nat inside source list NAT-LAN interface g0/1 overload") and nat("ip nat inside source static 192.168.0.10 203.0.113.3")
+  - desc: ACL INTERNET-IN complète et dans le bon ordre
+    expr: acl("INTERNET-IN") == ["permit tcp any host 203.0.113.3 eq 443", "permit tcp any any established", "permit icmp any any echo-reply", "deny ip any any log"]
+  - desc: INTERNET-IN appliquée en entrée de G0/1
+    expr: intf("g0/1").access_groups.get("in") == "INTERNET-IN"
+  - desc: OSPF annonce le LAN et la route par défaut
+    expr: ospf_net("192.168.0.0", "0.0.0.255", 0) and any(p.default_originate for p in d.ospf.values())
+  - desc: SSH v2 avec netadmin privilège 15
+    expr: d.domain_name == "tdm.local" and d.users.get("netadmin", {}).get("privilege") == 15 and (d.rsa_modulus or 0) >= 2048 and d.ssh_version == 2
+  - desc: VTY en login local, SSH seul, filtrées par ADMIN-VTY
+    expr: line("vty").login == "local" and line("vty").transport_input == "ssh" and line("vty").access_class.get("in") == "ADMIN-VTY" and acl("ADMIN-VTY")[:1] == ["permit 192.168.0.0 0.0.0.255"]
+  - desc: Serveur HTTP désactivé, NTP et syslog configurés
+    expr: not d.http_server and "192.168.0.5" in d.ntp_servers and "192.168.0.6" in d.logging_hosts
+  - desc: Configuration sauvegardée
+    expr: d.saved
+solution: |
+  configure terminal
+  interface g0/0
+  description LAN
+  ip address 192.168.0.1 255.255.255.0
+  ip nat inside
+  no shutdown
+  interface g0/1
+  description FAI
+  ip address 203.0.113.2 255.255.255.248
+  ip nat outside
+  no cdp enable
+  no shutdown
+  exit
+  ip route 0.0.0.0 0.0.0.0 203.0.113.1
+  ip access-list standard NAT-LAN
+  permit 192.168.0.0 0.0.0.255
+  exit
+  ip nat inside source list NAT-LAN interface g0/1 overload
+  ip nat inside source static 192.168.0.10 203.0.113.3
+  ip access-list extended INTERNET-IN
+  permit tcp any host 203.0.113.3 eq 443
+  permit tcp any any established
+  permit icmp any any echo-reply
+  deny ip any any log
+  exit
+  interface g0/1
+  ip access-group INTERNET-IN in
+  exit
+  router ospf 1
+  network 192.168.0.0 0.0.0.255 area 0
+  default-information originate
+  exit
+  ip domain-name tdm.local
+  username netadmin privilege 15 secret N3t@dminB0rd
+  crypto key generate rsa general-keys modulus 2048
+  ip ssh version 2
+  ip access-list standard ADMIN-VTY
+  permit 192.168.0.0 0.0.0.255
+  exit
+  line vty 0 4
+  login local
+  transport input ssh
+  access-class ADMIN-VTY in
+  exit
+  no ip http server
+  ntp server 192.168.0.5
+  logging host 192.168.0.6
+  end
+  copy running-config startup-config

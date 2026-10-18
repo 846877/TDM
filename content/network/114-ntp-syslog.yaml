@@ -1,0 +1,42 @@
+title: Heure exacte et journaux centralisés
+level: intermediaire
+order: 14
+device: router
+hostname: R-LYON
+tags: [ntp, syslog, supervision]
+summary: Des journaux horodatés correctement et envoyés au serveur syslog.
+description: |
+  En cas d'incident, il faut pouvoir corréler les journaux de tous les équipements :
+  ils doivent être **à l'heure** et **centralisés**.
+
+  1. Fuseau horaire : `clock timezone CET 1` ;
+  2. serveurs de temps internes : `ntp server 10.0.0.10` et `ntp server 10.0.0.11` ;
+  3. horodatage des messages : `service timestamps log datetime msec` ;
+  4. envoie les journaux au serveur syslog `10.0.0.20` (`logging host 10.0.0.20`) ;
+  5. n'envoie que les messages de niveau **warnings** (4) et plus graves : `logging trap warnings`.
+
+  Contrôle avec `show ntp associations` et `show logging`.
+initial: |
+  interface g0/0
+  ip address 10.0.0.1 255.255.255.0
+  no shutdown
+checks:
+  - desc: Fuseau horaire CET +1
+    expr: d.clock_timezone == ("CET", 1)
+  - desc: Serveurs NTP 10.0.0.10 et 10.0.0.11
+    expr: '"10.0.0.10" in d.ntp_servers and "10.0.0.11" in d.ntp_servers'
+  - desc: Journaux envoyés à 10.0.0.20
+    expr: '"10.0.0.20" in d.logging_hosts'
+    hint: "logging host 10.0.0.20"
+  - desc: Niveau syslog warnings
+    expr: d.logging_trap == "warnings"
+    hint: "logging trap warnings (ou logging trap 4)"
+solution: |
+  configure terminal
+  clock timezone CET 1
+  ntp server 10.0.0.10
+  ntp server 10.0.0.11
+  service timestamps log datetime msec
+  logging host 10.0.0.20
+  logging trap warnings
+  end

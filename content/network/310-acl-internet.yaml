@@ -1,0 +1,57 @@
+title: Filtrer le trafic entrant d'Internet
+level: expert
+order: 10
+device: router
+hostname: R-EDGE
+tags: [acl, anti-usurpation, established, sécurité]
+summary: Une ACL d'entrée anti-usurpation qui ne laisse passer que l'utile.
+description: |
+  Écris l'ACL étendue nommée `INTERNET-IN` et applique-la en **entrée** de l'interface Internet
+  `G0/1`. L'ordre des lignes est déterminant (la première qui correspond s'applique) :
+
+  1. **anti-usurpation** : refuse les paquets venant d'Internet avec une adresse source privée ou
+     de bouclage — `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `127.0.0.0/8`
+     (`deny ip 10.0.0.0 0.255.255.255 any`, etc.) ;
+  2. autorise les **réponses** aux connexions TCP ouvertes depuis l'intérieur :
+     `permit tcp any any established` ;
+  3. autorise HTTPS vers le serveur publié `203.0.113.5` ;
+  4. autorise les réponses au ping : `permit icmp any any echo-reply` ;
+  5. refuse et journalise tout le reste : `deny ip any any log`.
+initial: |
+  interface g0/0
+  ip address 192.168.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 203.0.113.2 255.255.255.248
+  no shutdown
+checks:
+  - desc: Les quatre plages privées et de bouclage sont refusées
+    expr: all(e in acl("INTERNET-IN") for e in ["deny ip 10.0.0.0 0.255.255.255 any", "deny ip 172.16.0.0 0.15.255.255 any", "deny ip 192.168.0.0 0.0.255.255 any", "deny ip 127.0.0.0 0.255.255.255 any"])
+    hint: "172.16.0.0/12 a pour wildcard 0.15.255.255"
+  - desc: Les refus anti-usurpation sont placés avant toute autorisation
+    expr: max(acl("INTERNET-IN").index(e) for e in acl("INTERNET-IN") if e.startswith("deny ip") and not e.startswith("deny ip any")) < min(acl("INTERNET-IN").index(e) for e in acl("INTERNET-IN") if e.startswith("permit"))
+  - desc: Réponses TCP autorisées (established)
+    expr: '"permit tcp any any established" in acl("INTERNET-IN")'
+  - desc: HTTPS vers 203.0.113.5 autorisé
+    expr: '"permit tcp any host 203.0.113.5 eq 443" in acl("INTERNET-IN")'
+  - desc: Réponses au ping autorisées
+    expr: '"permit icmp any any echo-reply" in acl("INTERNET-IN")'
+  - desc: Tout le reste refusé et journalisé
+    expr: acl("INTERNET-IN")[-1:] == ["deny ip any any log"]
+  - desc: ACL appliquée en entrée de G0/1
+    expr: intf("g0/1").access_groups.get("in") == "INTERNET-IN"
+solution: |
+  configure terminal
+  ip access-list extended INTERNET-IN
+  deny ip 10.0.0.0 0.255.255.255 any
+  deny ip 172.16.0.0 0.15.255.255 any
+  deny ip 192.168.0.0 0.0.255.255 any
+  deny ip 127.0.0.0 0.255.255.255 any
+  permit tcp any any established
+  permit tcp any host 203.0.113.5 eq 443
+  permit icmp any any echo-reply
+  deny ip any any log
+  exit
+  interface g0/1
+  ip access-group INTERNET-IN in
+  end

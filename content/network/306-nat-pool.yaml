@@ -1,0 +1,48 @@
+title: NAT avec un pool d'adresses publiques
+level: expert
+order: 6
+device: router
+hostname: R-SIEGE
+tags: [nat, pool, pat]
+summary: Traduire deux LAN vers une plage d'adresses publiques.
+description: |
+  Le FAI a attribué au siège la plage `203.0.113.16/28`. Les adresses `.17` à `.30` sont utilisables
+  pour la traduction des postes ; le lien vers le FAI est sur `G0/1`.
+
+  1. `G0/0` (bureaux, `10.10.1.0/24`) et `G0/2` (atelier, `10.10.2.0/24`) sont `inside` ; `G0/1` est `outside` ;
+  2. ACL standard numérotée `10` autorisant **les deux LAN** en une seule ligne : `10.10.0.0 0.0.255.255` ;
+  3. pool `PUBLIC` : `ip nat pool PUBLIC 203.0.113.17 203.0.113.30 netmask 255.255.255.240` ;
+  4. traduction avec surcharge sur le pool :
+     `ip nat inside source list 10 pool PUBLIC overload`.
+initial: |
+  interface g0/0
+  ip address 10.10.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 198.51.100.2 255.255.255.252
+  no shutdown
+  interface g0/2
+  ip address 10.10.2.1 255.255.255.0
+  no shutdown
+  ip route 0.0.0.0 0.0.0.0 198.51.100.1
+checks:
+  - desc: G0/0 et G0/2 inside, G0/1 outside
+    expr: intf("g0/0").nat == "inside" and intf("g0/2").nat == "inside" and intf("g0/1").nat == "outside"
+  - desc: ACL 10 autorise 10.10.0.0/16
+    expr: '"permit 10.10.0.0 0.0.255.255" in acl(10)'
+  - desc: Pool PUBLIC de 203.0.113.17 à 203.0.113.30
+    expr: nat("ip nat pool PUBLIC 203.0.113.17 203.0.113.30 netmask 255.255.255.240")
+    hint: "ip nat pool PUBLIC 203.0.113.17 203.0.113.30 netmask 255.255.255.240"
+  - desc: Traduction de la liste 10 vers le pool avec surcharge
+    expr: nat("ip nat inside source list 10 pool PUBLIC overload")
+solution: |
+  configure terminal
+  interface range g0/0, g0/2
+  ip nat inside
+  interface g0/1
+  ip nat outside
+  exit
+  access-list 10 permit 10.10.0.0 0.0.255.255
+  ip nat pool PUBLIC 203.0.113.17 203.0.113.30 netmask 255.255.255.240
+  ip nat inside source list 10 pool PUBLIC overload
+  end

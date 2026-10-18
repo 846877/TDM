@@ -1,0 +1,32 @@
+title: Une console agréable à utiliser
+level: debutant
+order: 10
+device: switch
+hostname: SW-RDC
+tags: [console, line, dns]
+summary: Fini les recherches DNS sur une faute de frappe et les messages qui coupent la saisie.
+description: |
+  Trois réglages que tout administrateur applique dès la première connexion :
+
+  1. `no ip domain-lookup` : sans cela, une commande mal tapée (`sow run`) est prise pour un
+     nom d'hôte et le switch tente une **résolution DNS** pendant de longues secondes ;
+  2. sur la **ligne console** (`line console 0`), `logging synchronous` : les messages système
+     ne coupent plus la commande en cours de saisie ;
+  3. toujours sur la console, `exec-timeout 15 0` : la session se ferme après **15 minutes**
+     d'inactivité (minutes puis secondes).
+checks:
+  - desc: Résolution DNS désactivée
+    expr: not d.domain_lookup
+    hint: "En mode configuration : no ip domain-lookup"
+  - desc: logging synchronous sur la console
+    expr: line("console").logging_synchronous
+  - desc: Déconnexion après 15 minutes d'inactivité sur la console
+    expr: line("console").exec_timeout in ("15", "15 0")
+    hint: "Dans line console 0 : exec-timeout 15 0"
+solution: |
+  configure terminal
+  no ip domain-lookup
+  line console 0
+  logging synchronous
+  exec-timeout 15 0
+  end

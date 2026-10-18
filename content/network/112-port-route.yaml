@@ -1,0 +1,39 @@
+title: Port routé vers le cœur de réseau
+level: intermediaire
+order: 12
+device: switch
+hostname: SW-ETG2
+tags: [no switchport, niveau 3, routage]
+summary: Transformer un port de switch en interface de routeur.
+description: |
+  Entre un switch de distribution et le cœur de réseau, on préfère un **lien routé** à un trunk :
+  pas de spanning tree, convergence rapide. Sur un switch multicouche, `no switchport`
+  transforme un port de niveau 2 en port **routé**, qui accepte une adresse IP.
+
+  1. Active le routage : `ip routing` ;
+  2. sur `Gi0/1` :
+     - description `LIEN-CORE`,
+     - `no switchport`,
+     - adresse `10.0.0.2/30` ;
+  3. route par défaut vers le cœur : `10.0.0.1`.
+checks:
+  - desc: Routage IPv4 activé
+    expr: d.ip_routing
+  - desc: Gi0/1 est un port routé
+    expr: not intf("g0/1").is_switchport
+    hint: "interface g0/1 puis no switchport"
+  - desc: Gi0/1 en 10.0.0.2/30 avec la description LIEN-CORE
+    expr: intf("g0/1").ip == "10.0.0.2" and prefix(intf("g0/1").mask) == 30 and intf("g0/1").description == "LIEN-CORE"
+    hint: "L'adresse IP n'est acceptée qu'après no switchport."
+  - desc: Route par défaut vers 10.0.0.1
+    expr: route("0.0.0.0", "0.0.0.0", "10.0.0.1")
+solution: |
+  configure terminal
+  ip routing
+  interface g0/1
+  description LIEN-CORE
+  no switchport
+  ip address 10.0.0.2 255.255.255.252
+  exit
+  ip route 0.0.0.0 0.0.0.0 10.0.0.1
+  end

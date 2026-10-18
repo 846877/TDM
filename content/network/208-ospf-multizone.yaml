@@ -1,0 +1,57 @@
+title: OSPF multizone et zone stub
+level: avance
+order: 8
+device: router
+hostname: R-ABR
+tags: [ospf, zones, abr, stub]
+summary: Configurer un routeur de bordure de zone (ABR).
+description: |
+  Le réseau OSPF a grandi : le site de production passe dans une **zone 10** séparée de la
+  zone 0 (backbone). `R-ABR` est à la frontière (*Area Border Router*).
+
+  | Interface | Réseau             | Zone |
+  |-----------|--------------------|------|
+  | `G0/1`    | `10.0.0.0/30`      | 0    |
+  | `G0/0`    | `172.16.10.0/24`   | 10   |
+  | `G0/2`    | `172.16.11.0/24`   | 10   |
+
+  1. processus OSPF `1`, router-id `3.3.3.3` ;
+  2. lien backbone avec une commande `network` : `network 10.0.0.0 0.0.0.3 area 0` ;
+  3. pour la zone 10, utilise l'autre méthode, **directement sur l'interface** :
+     `ip ospf 1 area 10` sur `G0/0` et `G0/2` (une commande `network` est aussi acceptée) ;
+  4. la zone 10 n'a qu'une sortie : déclare-la **stub** (`area 10 stub`) pour réduire la base
+     topologique de ses routeurs.
+initial: |
+  interface g0/0
+  ip address 172.16.10.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.0.0.2 255.255.255.252
+  no shutdown
+  interface g0/2
+  ip address 172.16.11.1 255.255.255.0
+  no shutdown
+checks:
+  - desc: Processus 1 avec router-id 3.3.3.3
+    expr: 1 in d.ospf and d.ospf[1].router_id == "3.3.3.3"
+  - desc: Lien 10.0.0.0/30 en zone 0
+    expr: ospf_net("10.0.0.0", "0.0.0.3", 0)
+  - desc: G0/0 (172.16.10.0/24) en zone 10
+    expr: intf("g0/0").ospf_area == (1, "10") or ospf_net("172.16.10.0", "0.0.0.255", 10)
+    hint: "interface g0/0 puis ip ospf 1 area 10"
+  - desc: G0/2 (172.16.11.0/24) en zone 10
+    expr: intf("g0/2").ospf_area == (1, "10") or ospf_net("172.16.11.0", "0.0.0.255", 10)
+  - desc: Zone 10 stub
+    expr: 1 in d.ospf and d.ospf[1].area_types.get("10") == "stub"
+solution: |
+  configure terminal
+  router ospf 1
+  router-id 3.3.3.3
+  network 10.0.0.0 0.0.0.3 area 0
+  area 10 stub
+  exit
+  interface g0/0
+  ip ospf 1 area 10
+  interface g0/2
+  ip ospf 1 area 10
+  end

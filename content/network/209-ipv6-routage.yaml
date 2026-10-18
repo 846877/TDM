@@ -1,0 +1,48 @@
+title: Routage statique IPv6
+level: avance
+order: 9
+device: router
+hostname: R-V6
+tags: [ipv6, routage, static]
+summary: Activer le routage IPv6 et écrire des routes statiques.
+description: |
+  Les interfaces IPv6 de `R-V6` sont configurées, mais le routeur ne route pas encore.
+
+  1. active le routage IPv6 ;
+  2. route vers le réseau du labo `2001:db8:acad:30::/64` via le routeur `2001:db8:acad:ff::2` ;
+  3. route vers le réseau des serveurs `2001:db8:acad:40::/64` via ce même routeur ;
+  4. route par défaut IPv6 (`::/0`) vers le FAI `2001:db8:feed::1`.
+
+  ```
+  ipv6 route 2001:db8:acad:30::/64 2001:db8:acad:ff::2
+  ```
+
+  Contrôle avec `show ipv6 route`.
+initial: |
+  interface g0/0
+  ipv6 address 2001:db8:acad:10::1/64
+  no shutdown
+  interface g0/1
+  ipv6 address 2001:db8:acad:ff::1/64
+  no shutdown
+  interface g0/2
+  ipv6 address 2001:db8:feed::2/64
+  no shutdown
+checks:
+  - desc: Routage IPv6 activé
+    expr: d.ipv6_routing
+    hint: "ipv6 unicast-routing"
+  - desc: Route vers 2001:db8:acad:30::/64 via 2001:db8:acad:ff::2
+    expr: route6("2001:db8:acad:30::/64", "2001:db8:acad:ff::2")
+  - desc: Route vers 2001:db8:acad:40::/64 via 2001:db8:acad:ff::2
+    expr: route6("2001:db8:acad:40::/64", "2001:db8:acad:ff::2")
+  - desc: Route par défaut IPv6 vers 2001:db8:feed::1
+    expr: route6("::/0", "2001:db8:feed::1")
+    hint: "ipv6 route ::/0 2001:db8:feed::1"
+solution: |
+  configure terminal
+  ipv6 unicast-routing
+  ipv6 route 2001:db8:acad:30::/64 2001:db8:acad:ff::2
+  ipv6 route 2001:db8:acad:40::/64 2001:db8:acad:ff::2
+  ipv6 route ::/0 2001:db8:feed::1
+  end

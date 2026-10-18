@@ -1,0 +1,64 @@
+title: Double accès Internet en double pile
+level: expert
+order: 11
+device: router
+hostname: R-AGENCE
+tags: [routage, route flottante, ipv6, ospf]
+summary: Deux FAI, IPv4 et IPv6, et une seule route par défaut annoncée en interne.
+description: |
+  L'agence a deux opérateurs : `FAI-A` sur `G0/1` (principal) et `FAI-B` sur `G0/2` (secours).
+  Le réseau interne apprend ses routes par OSPF via `G0/0`.
+
+  **IPv4**
+  - route par défaut principale via `203.0.113.1` ;
+  - route par défaut flottante via `198.51.100.1`, distance administrative `20`.
+
+  **IPv6**
+  - active le routage IPv6 ;
+  - route par défaut principale via `2001:db8:a::1` ;
+  - route par défaut flottante via `2001:db8:b::1`, distance `20`
+    (`ipv6 route ::/0 2001:db8:b::1 20`).
+
+  **Diffusion interne**
+  - le processus OSPF `1` existe : fais-lui annoncer la route par défaut aux routeurs internes
+    (`default-information originate`).
+initial: |
+  interface g0/0
+  ip address 10.1.0.1 255.255.255.0
+  ipv6 address 2001:db8:acad:1::1/64
+  no shutdown
+  interface g0/1
+  ip address 203.0.113.2 255.255.255.252
+  ipv6 address 2001:db8:a::2/64
+  no shutdown
+  interface g0/2
+  ip address 198.51.100.2 255.255.255.252
+  ipv6 address 2001:db8:b::2/64
+  no shutdown
+  router ospf 1
+  router-id 10.1.0.1
+  network 10.1.0.0 0.0.0.255 area 0
+checks:
+  - desc: Route par défaut IPv4 principale via 203.0.113.1
+    expr: route("0.0.0.0", "0.0.0.0", "203.0.113.1", 1)
+  - desc: Route par défaut IPv4 flottante via 198.51.100.1 (distance 20)
+    expr: route("0.0.0.0", "0.0.0.0", "198.51.100.1", 20)
+  - desc: Routage IPv6 activé
+    expr: d.ipv6_routing
+  - desc: Route par défaut IPv6 principale via 2001:db8:a::1
+    expr: route6("::/0", "2001:db8:a::1", 1)
+  - desc: Route par défaut IPv6 flottante via 2001:db8:b::1 (distance 20)
+    expr: route6("::/0", "2001:db8:b::1", 20)
+    hint: "ipv6 route ::/0 2001:db8:b::1 20"
+  - desc: OSPF propage la route par défaut
+    expr: d.ospf[1].default_originate
+solution: |
+  configure terminal
+  ip route 0.0.0.0 0.0.0.0 203.0.113.1
+  ip route 0.0.0.0 0.0.0.0 198.51.100.1 20
+  ipv6 unicast-routing
+  ipv6 route ::/0 2001:db8:a::1
+  ipv6 route ::/0 2001:db8:b::1 20
+  router ospf 1
+  default-information originate
+  end

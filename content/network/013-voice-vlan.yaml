@@ -1,0 +1,38 @@
+title: Téléphones IP et VLAN voix
+level: debutant
+order: 13
+device: switch
+hostname: SW-OPENSPACE
+tags: [vlan, voice vlan, téléphonie]
+summary: Brancher un PC derrière un téléphone IP sur le même port.
+description: |
+  Dans l'open space, chaque PC est branché **derrière un téléphone IP**. Le port du switch
+  transporte donc deux VLAN : les données du PC (non étiquetées) et la voix (étiquetée).
+
+  1. Crée le VLAN `150` nommé `VOIX` (le VLAN `10 DATA` existe déjà) ;
+  2. sur `Fa0/1` à `Fa0/12` :
+     - mode access, VLAN d'accès `10`,
+     - VLAN voix `150` : `switchport voice vlan 150`.
+checks:
+  - desc: VLAN 150 nommé VOIX
+    expr: vlan(150) == "VOIX"
+  - desc: Fa0/1-12 en access dans le VLAN 10
+    expr: all(i.mode == "access" and i.access_vlan == 10 for i in ports("fa0/1-12"))
+  - desc: VLAN voix 150 sur Fa0/1-12
+    expr: all(i.voice_vlan == 150 for i in ports("fa0/1-12"))
+    hint: "interface range fa0/1 - 12 puis switchport voice vlan 150"
+  - desc: Les autres ports n'ont pas de VLAN voix
+    expr: not any(i.voice_vlan for i in ports("fa0/13-24"))
+solution: |
+  configure terminal
+  vlan 150
+  name VOIX
+  exit
+  interface range fa0/1 - 12
+  switchport mode access
+  switchport access vlan 10
+  switchport voice vlan 150
+  end
+initial: |
+  vlan 10
+  name DATA
