@@ -1,6 +1,7 @@
 """Tests de l'API HTTP (mode d'exécution local, sans Docker)."""
 
 import json
+import subprocess
 
 import pytest
 
@@ -80,7 +81,13 @@ def test_terminal_python_local(tmp_path, monkeypatch):
     assert (tmp_path / "test" / "003-addition" / "solution.py").exists()
 
 
-@pytest.mark.skipif(not config.docker_available(), reason="Docker indisponible")
+def _sandbox_image_present() -> bool:
+    if not config.docker_available():
+        return False
+    return subprocess.run(["docker", "image", "inspect", config.SANDBOX_IMAGE], capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(not _sandbox_image_present(), reason="Image du bac à sable absente")
 def test_terminal_python_docker(monkeypatch):
     monkeypatch.setattr("app.config.SANDBOX_MODE", "docker")
     with client.websocket_connect("/ws/python/003-addition") as ws:

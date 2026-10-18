@@ -14,6 +14,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r backend/requirements-dev.txt
+      - name: Image du bac à sable Python
+        run: docker build -t tdm-python-sandbox -f sandbox/python.Dockerfile sandbox
       - name: Moulinettes, simulateur réseau et API (mode local)
         working-directory: backend
         run: python -m pytest -q
