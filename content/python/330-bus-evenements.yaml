@@ -1,0 +1,242 @@
+title: Bus d'événements (patron Observateur)
+level: expert
+order: 30
+tags: [patrons de conception, observateur, weakref, décorateurs]
+summary: Abonnements avec priorités, jokers, désabonnement et références faibles.
+description: |
+  Le patron **Observateur** découple ceux qui publient des événements de ceux qui y réagissent.
+  Crée une classe `Bus` :
+
+  **Abonnement**
+
+  - `abonner(motif, rappel, priorite=0, faible=False)` enregistre `rappel` et renvoie une fonction
+    **sans argument** qui le désabonne (l'appeler deux fois est sans effet) ;
+  - `@bus.sur(motif, priorite=0)` : même chose sous forme de décorateur (renvoie la fonction intacte) ;
+  - `une_fois(motif, rappel)` : le rappel est automatiquement désabonné après son premier appel.
+
+  **Motifs** : les noms d'événements sont découpés en segments par des points (`"commande.payee"`).
+  Dans un motif, `*` remplace **exactement un** segment et `#` remplace **zéro, un ou plusieurs**
+  segments : `"commande.*"` reçoit `"commande.payee"` mais pas `"commande"` ni `"commande.a.b"` ;
+  `"#"` reçoit tout ; `"#.erreur"` reçoit `"erreur"` et `"db.lecture.erreur"`.
+
+  **Publication** : `publier(evenement, **donnees)` appelle chaque rappel concerné avec
+  `rappel(evenement, **donnees)` et renvoie la liste de leurs valeurs de retour :
+
+  - ordre : **priorité décroissante**, puis ordre d'abonnement ;
+  - un rappel qui se désabonne (ou en abonne un autre) pendant la publication ne doit pas perturber
+    la publication en cours ;
+  - si des rappels lèvent une exception, les autres sont **quand même** appelés ; à la fin, `publier`
+    lève `ErreursAbonnes` (à définir, sous-classe d'`Exception`) dont l'attribut `erreurs` liste les
+    exceptions, dans l'ordre des appels.
+
+  **Références faibles** : avec `faible=True` et une **méthode liée** (`objet.methode`), le bus ne doit
+  pas empêcher le ramasse-miettes de détruire `objet` ; une fois l'objet détruit, l'abonnement disparaît
+  tout seul. Indice : `weakref.WeakMethod`.
+starter: |
+  import itertools
+  import weakref
+
+
+  class ErreursAbonnes(Exception):
+      pass
+
+
+  class Bus:
+      pass
+tests: |
+  import gc
+
+  def test_publier():
+      "Publication simple et valeurs de retour"
+      bus = solution.Bus()
+      bus.abonner("salut", lambda e, nom: f"bonjour {nom}")
+      bus.abonner("salut", lambda e, nom: len(nom))
+      assert bus.publier("salut", nom="ada") == ["bonjour ada", 3]
+      assert bus.publier("autre") == []
+
+  def test_priorites():
+      "Priorité décroissante puis ordre d'abonnement"
+      bus = solution.Bus()
+      bus.abonner("e", lambda e: "normal1")
+      bus.abonner("e", lambda e: "urgent", priorite=10)
+      bus.abonner("e", lambda e: "bas", priorite=-1)
+      bus.abonner("e", lambda e: "normal2")
+      assert bus.publier("e") == ["urgent", "normal1", "normal2", "bas"]
+
+  def test_desabonner():
+      "Désabonnement"
+      bus = solution.Bus()
+      stop = bus.abonner("e", lambda e: 1)
+      bus.abonner("e", lambda e: 2)
+      stop()
+      stop()
+      assert bus.publier("e") == [2]
+
+  def test_decorateur():
+      "Décorateur sur"
+      bus = solution.Bus()
+      @bus.sur("commande.*", priorite=5)
+      def journal(e, **d):
+          return f"journal {e}"
+      assert callable(journal) and journal("x") == "journal x", "le décorateur doit renvoyer la fonction"
+      assert bus.publier("commande.payee", montant=3) == ["journal commande.payee"]
+
+  def test_jokers():
+      "Jokers * et #"
+      bus = solution.Bus()
+      bus.abonner("commande.*", lambda e: "étoile")
+      bus.abonner("#", lambda e: "tout")
+      bus.abonner("#.erreur", lambda e: "erreur")
+      bus.abonner("commande.#", lambda e: "commande#")
+      assert bus.publier("commande.payee") == ["étoile", "tout", "commande#"]
+      assert bus.publier("commande") == ["tout", "commande#"]
+      assert bus.publier("commande.a.b") == ["tout", "commande#"]
+      assert bus.publier("erreur") == ["tout", "erreur"]
+      assert bus.publier("db.lecture.erreur") == ["tout", "erreur"]
+      assert bus.publier("commandes.x") == ["tout"]
+
+  def test_une_fois():
+      "Abonnement à usage unique"
+      bus = solution.Bus()
+      bus.une_fois("pret", lambda e: "une fois")
+      assert bus.publier("pret") == ["une fois"]
+      assert bus.publier("pret") == []
+
+  def test_modification_pendant_publication():
+      "Se désabonner ou abonner pendant une publication"
+      bus = solution.Bus()
+      arrets = {}
+      def a(e):
+          arrets["a"]()
+          bus.abonner("e", lambda e: "nouveau")
+          return "a"
+      arrets["a"] = bus.abonner("e", a)
+      bus.abonner("e", lambda e: "b")
+      assert bus.publier("e") == ["a", "b"]
+      assert bus.publier("e") == ["b", "nouveau"]
+
+  def test_erreurs():
+      "Les erreurs n'empêchent pas les autres rappels"
+      bus = solution.Bus()
+      vus = []
+      def casse1(e):
+          raise ValueError("un")
+      def casse2(e):
+          raise KeyError("deux")
+      bus.abonner("e", casse1)
+      bus.abonner("e", lambda e: vus.append("ok"))
+      bus.abonner("e", casse2)
+      try:
+          bus.publier("e")
+      except solution.ErreursAbonnes as exc:
+          assert [type(x) for x in exc.erreurs] == [ValueError, KeyError]
+      else:
+          raise AssertionError("ErreursAbonnes attendue")
+      assert vus == ["ok"]
+
+  def test_reference_faible():
+      "Abonnement faible sur une méthode liée"
+      bus = solution.Bus()
+      class Ecran:
+          def afficher(self, e, **d):
+              return "affiché"
+      ecran = Ecran()
+      bus.abonner("maj", ecran.afficher, faible=True)
+      assert bus.publier("maj") == ["affiché"]
+      del ecran
+      gc.collect()
+      assert bus.publier("maj") == [], "l'objet détruit ne doit plus être appelé"
+
+  def test_reference_forte_par_defaut():
+      "Par défaut, le bus garde le rappel en vie"
+      bus = solution.Bus()
+      class Ecran:
+          def afficher(self, e):
+              return "toujours là"
+      bus.abonner("maj", Ecran().afficher)
+      gc.collect()
+      assert bus.publier("maj") == ["toujours là"]
+solution: |
+  import itertools
+  import weakref
+
+
+  class ErreursAbonnes(Exception):
+      def __init__(self, erreurs):
+          super().__init__(f"{len(erreurs)} abonné(s) en erreur")
+          self.erreurs = erreurs
+
+
+  def _correspond(motif, segments):
+      if not motif:
+          return not segments
+      tete, reste = motif[0], motif[1:]
+      if tete == "#":
+          return any(_correspond(reste, segments[i:]) for i in range(len(segments) + 1))
+      if not segments:
+          return False
+      return (tete == "*" or tete == segments[0]) and _correspond(reste, segments[1:])
+
+
+  class _Abonnement:
+      def __init__(self, motif, rappel, priorite, faible, numero):
+          self.motif = motif.split(".")
+          self.priorite = priorite
+          self.numero = numero
+          self.actif = True
+          if faible:
+              self._ref = weakref.WeakMethod(rappel)
+          else:
+              self._ref = lambda: rappel
+
+      def rappel(self):
+          return self._ref()
+
+
+  class Bus:
+      def __init__(self):
+          self._abonnements = []
+          self._numeros = itertools.count()
+
+      def abonner(self, motif, rappel, priorite=0, faible=False):
+          abo = _Abonnement(motif, rappel, priorite, faible, next(self._numeros))
+          self._abonnements.append(abo)
+          self._abonnements.sort(key=lambda a: (-a.priorite, a.numero))
+
+          def desabonner():
+              abo.actif = False
+              if abo in self._abonnements:
+                  self._abonnements.remove(abo)
+          return desabonner
+
+      def sur(self, motif, priorite=0):
+          def decorateur(fonction):
+              self.abonner(motif, fonction, priorite)
+              return fonction
+          return decorateur
+
+      def une_fois(self, motif, rappel):
+          def enveloppe(*args, **kwargs):
+              arret()
+              return rappel(*args, **kwargs)
+          arret = self.abonner(motif, enveloppe)
+          return arret
+
+      def publier(self, evenement, **donnees):
+          segments = evenement.split(".")
+          resultats, erreurs = [], []
+          for abo in list(self._abonnements):           # copie : la liste peut changer pendant la boucle
+              if not abo.actif or not _correspond(abo.motif, segments):
+                  continue
+              rappel = abo.rappel()
+              if rappel is None:                        # référence faible morte
+                  abo.actif = False
+                  self._abonnements.remove(abo)
+                  continue
+              try:
+                  resultats.append(rappel(evenement, **donnees))
+              except Exception as exc:
+                  erreurs.append(exc)
+          if erreurs:
+              raise ErreursAbonnes(erreurs)
+          return resultats

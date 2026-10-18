@@ -1,0 +1,179 @@
+title: Tri topologique et dépendances
+level: expert
+order: 18
+tags: [graphes, algorithmes, heapq, dépendances]
+summary: Ordonner des tâches, les regrouper par étapes et expliquer les cycles.
+description: |
+  Un gestionnaire de paquets ou un outil de build doit installer chaque élément **après** ses
+  dépendances. Les dépendances sont données par un dictionnaire `{tache: [prerequis, ...]}` ;
+  un prérequis peut ne pas être lui-même une clé (il n'a alors aucune dépendance).
+
+  1. `ordre(dependances)` : liste de toutes les tâches, chaque prérequis avant les tâches qui en
+     dépendent. Quand plusieurs tâches sont disponibles en même temps, prends toujours la **plus
+     petite** (ordre alphabétique) : le résultat est ainsi unique. (Algorithme de Kahn + `heapq`.)
+
+  2. `etapes(dependances)` : liste d'étapes pouvant s'exécuter **en parallèle** : la première contient
+     les tâches sans prérequis, la suivante celles dont tous les prérequis sont dans les étapes
+     précédentes, etc. Chaque étape est triée.
+
+  3. En cas de dépendance circulaire, les deux fonctions lèvent `CycleError` (à définir, sous-classe
+     de `ValueError`) dont l'attribut `cycle` contient un cycle sous la forme
+     `[t0, t1, ..., t0]` où chaque `t(i+1)` est un **prérequis** de `t(i)`.
+
+  ```python
+  deps = {"app": ["lib", "config"], "lib": ["base"], "config": ["base"]}
+  ordre(deps)    # ["base", "config", "lib", "app"]
+  etapes(deps)   # [["base"], ["config", "lib"], ["app"]]
+
+  ordre({"a": ["b"], "b": ["c"], "c": ["a"]})   # CycleError, cycle == ["a", "b", "c", "a"] par exemple
+  ```
+starter: |
+  import heapq
+
+
+  class CycleError(ValueError):
+      pass
+
+
+  def ordre(dependances):
+      pass
+
+
+  def etapes(dependances):
+      pass
+tests: |
+  DEPS = {"app": ["lib", "config"], "lib": ["base"], "config": ["base"]}
+
+  def verifier_cycle(deps, cycle):
+      assert len(cycle) >= 2 and cycle[0] == cycle[-1], f"cycle mal formé : {cycle}"
+      for t, suivant in zip(cycle, cycle[1:]):
+          assert suivant in deps.get(t, []), f"{suivant} n'est pas un prérequis de {t} (cycle {cycle})"
+
+  def test_ordre():
+      "Ordre avec préférence alphabétique"
+      assert solution.ordre(DEPS) == ["base", "config", "lib", "app"]
+
+  def test_prerequis_non_cles():
+      "Prérequis absents des clés"
+      assert solution.ordre({"b": ["a"], "c": []}) == ["a", "b", "c"]
+      assert solution.ordre({}) == []
+
+  def test_ordre_unique():
+      "Toujours la plus petite tâche disponible"
+      deps = {"z": [], "y": ["z"], "a": ["y"], "m": []}
+      assert solution.ordre(deps) == ["m", "z", "y", "a"], f"obtenu {solution.ordre(deps)}"
+
+  def test_etapes():
+      "Étapes parallèles"
+      assert solution.etapes(DEPS) == [["base"], ["config", "lib"], ["app"]]
+      assert solution.etapes({"d": ["a", "c"], "c": ["b"], "e": []}) == [["a", "b", "e"], ["c"], ["d"]]
+
+  def test_cycle():
+      "Cycle détecté et décrit"
+      deps = {"a": ["b"], "b": ["c"], "c": ["a"], "x": []}
+      for fonction in (solution.ordre, solution.etapes):
+          try:
+              fonction(deps)
+          except solution.CycleError as exc:
+              assert isinstance(exc, ValueError), "CycleError doit hériter de ValueError"
+              verifier_cycle(deps, exc.cycle)
+          else:
+              raise AssertionError(f"{fonction.__name__} : CycleError attendue")
+
+  def test_cycle_partiel():
+      "Cycle au milieu d'un graphe plus grand"
+      deps = {"app": ["web"], "web": ["auth", "db"], "auth": ["session"], "session": ["auth"], "db": []}
+      try:
+          solution.ordre(deps)
+      except solution.CycleError as exc:
+          verifier_cycle(deps, exc.cycle)
+          assert set(exc.cycle) == {"auth", "session"}, f"cycle {exc.cycle}"
+      else:
+          raise AssertionError("CycleError attendue")
+
+  def test_auto_dependance():
+      "Une tâche qui dépend d'elle-même"
+      try:
+          solution.ordre({"a": ["a"]})
+      except solution.CycleError as exc:
+          assert exc.cycle == ["a", "a"]
+      else:
+          raise AssertionError("CycleError attendue")
+
+  def test_grand():
+      "Chaîne de 5 000 tâches"
+      n = 5000
+      deps = {f"t{i:05d}": [f"t{i - 1:05d}"] for i in range(1, n)}
+      r = solution.ordre(deps)
+      assert r == [f"t{i:05d}" for i in range(n)]
+      assert len(solution.etapes(deps)) == n
+solution: |
+  import heapq
+
+
+  class CycleError(ValueError):
+      def __init__(self, cycle):
+          super().__init__("dépendance circulaire : " + " -> ".join(map(str, cycle)))
+          self.cycle = cycle
+
+
+  def _graphe(dependances):
+      taches = set(dependances)
+      for prerequis in dependances.values():
+          taches.update(prerequis)
+      restants = {t: len(set(dependances.get(t, []))) for t in taches}
+      dependants = {t: [] for t in taches}
+      for t, prerequis in dependances.items():
+          for p in set(prerequis):
+              dependants[p].append(t)
+      return restants, dependants
+
+
+  def _trouver_cycle(dependances, bloquees):
+      # on suit les prérequis bloqués jusqu'à retomber sur un sommet déjà vu
+      depart = min(bloquees)
+      chemin, position = [], {}
+      t = depart
+      while t not in position:
+          position[t] = len(chemin)
+          chemin.append(t)
+          t = min(p for p in dependances.get(t, []) if p in bloquees)
+      return chemin[position[t]:] + [t]
+
+
+  def ordre(dependances):
+      restants, dependants = _graphe(dependances)
+      tas = [t for t, n in restants.items() if n == 0]
+      heapq.heapify(tas)
+      resultat = []
+      while tas:
+          t = heapq.heappop(tas)
+          resultat.append(t)
+          for d in dependants[t]:
+              restants[d] -= 1
+              if restants[d] == 0:
+                  heapq.heappush(tas, d)
+      if len(resultat) < len(restants):
+          bloquees = {t for t, n in restants.items() if n > 0}
+          raise CycleError(_trouver_cycle(dependances, bloquees))
+      return resultat
+
+
+  def etapes(dependances):
+      restants, dependants = _graphe(dependances)
+      courante = sorted(t for t, n in restants.items() if n == 0)
+      resultat, traitees = [], 0
+      while courante:
+          resultat.append(courante)
+          traitees += len(courante)
+          suivante = []
+          for t in courante:
+              for d in dependants[t]:
+                  restants[d] -= 1
+                  if restants[d] == 0:
+                      suivante.append(d)
+          courante = sorted(suivante)
+      if traitees < len(restants):
+          bloquees = {t for t, n in restants.items() if n > 0}
+          raise CycleError(_trouver_cycle(dependances, bloquees))
+      return resultat

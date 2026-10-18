@@ -1,0 +1,129 @@
+title: La boîte à outils itertools
+level: avance
+order: 13
+tags: [itertools, itérateurs, générateurs]
+summary: Fenêtres glissantes, entrelacement et combinaisons.
+description: |
+  Le module `itertools` (et `collections.deque`) permet d'écrire en quelques lignes des traitements
+  qui fonctionnent sur **n'importe quel itérable**, y compris un générateur qu'on ne peut lire qu'une fois.
+
+  1. `fenetres(iterable, n)` : générateur des fenêtres glissantes de taille `n`, sous forme de tuples.
+     Rien n'est produit si l'itérable contient moins de `n` éléments ; `ValueError` si `n < 1`.
+  2. `maximums_courants(nombres)` : liste des maximums successifs (`itertools.accumulate`).
+  3. `entrelacer(*iterables)` : générateur qui prend un élément de chaque itérable à tour de rôle,
+     en continuant avec les autres quand l'un est épuisé. Attention : `None` peut être une vraie valeur !
+  4. `combinaisons_somme(nombres, cible)` : liste de toutes les combinaisons (de 1 à `len(nombres)`
+     éléments, tailles croissantes, dans l'ordre de `itertools.combinations`) dont la somme vaut `cible`.
+
+  ```python
+  list(fenetres([1, 2, 3, 4], 3))         # [(1, 2, 3), (2, 3, 4)]
+  maximums_courants([3, 1, 4, 1, 5])      # [3, 3, 4, 4, 5]
+  list(entrelacer("abc", [1], "xy"))      # ["a", 1, "x", "b", "y", "c"]
+  combinaisons_somme([1, 2, 3, 4], 5)     # [(1, 4), (2, 3)]
+  ```
+starter: |
+  import itertools
+  from collections import deque
+
+
+  def fenetres(iterable, n):
+      pass
+
+
+  def maximums_courants(nombres):
+      pass
+
+
+  def entrelacer(*iterables):
+      pass
+
+
+  def combinaisons_somme(nombres, cible):
+      pass
+tests: |
+  import itertools
+
+  def test_fenetres():
+      "Fenêtres glissantes"
+      assert list(solution.fenetres([1, 2, 3, 4], 3)) == [(1, 2, 3), (2, 3, 4)]
+      assert list(solution.fenetres("ab", 1)) == [("a",), ("b",)]
+
+  def test_fenetres_courtes():
+      "Pas de fenêtre si l'itérable est trop court"
+      assert list(solution.fenetres([1, 2], 3)) == []
+      assert list(solution.fenetres([], 1)) == []
+
+  def test_fenetres_generateur():
+      "Fenêtres sur un générateur infini (paresseux)"
+      fen = solution.fenetres(itertools.count(), 2)
+      assert list(itertools.islice(fen, 3)) == [(0, 1), (1, 2), (2, 3)]
+
+  def test_fenetres_invalide():
+      "n < 1 refusé"
+      try:
+          list(solution.fenetres([1], 0))
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("ValueError attendue")
+
+  def test_maximums():
+      "Maximums courants"
+      assert solution.maximums_courants([3, 1, 4, 1, 5]) == [3, 3, 4, 4, 5]
+      assert solution.maximums_courants([]) == []
+      assert solution.maximums_courants(iter([-2, -5, -1])) == [-2, -2, -1]
+
+  def test_entrelacer():
+      "Entrelacement de longueurs différentes"
+      assert list(solution.entrelacer("abc", [1], "xy")) == ["a", 1, "x", "b", "y", "c"]
+      assert list(solution.entrelacer()) == []
+
+  def test_entrelacer_none():
+      "None est une valeur comme une autre"
+      r = list(solution.entrelacer([None, None], [0]))
+      assert r == [None, 0, None], f"obtenu {r}"
+
+  def test_combinaisons():
+      "Combinaisons de somme donnée"
+      assert solution.combinaisons_somme([1, 2, 3, 4], 5) == [(1, 4), (2, 3)]
+      assert solution.combinaisons_somme([1, 2, 3, 4], 6) == [(2, 4), (1, 2, 3)]
+      assert solution.combinaisons_somme([5], 5) == [(5,)]
+      assert solution.combinaisons_somme([1, 2], 10) == []
+solution: |
+  import itertools
+  from collections import deque
+
+
+  def fenetres(iterable, n):
+      if n < 1:
+          raise ValueError("n doit valoir au moins 1")
+      iterateur = iter(iterable)
+      fenetre = deque(itertools.islice(iterateur, n), maxlen=n)
+      if len(fenetre) == n:
+          yield tuple(fenetre)
+      for element in iterateur:
+          fenetre.append(element)
+          yield tuple(fenetre)
+
+
+  def maximums_courants(nombres):
+      return list(itertools.accumulate(nombres, max))
+
+
+  _FIN = object()
+
+
+  def entrelacer(*iterables):
+      for groupe in itertools.zip_longest(*iterables, fillvalue=_FIN):
+          for element in groupe:
+              if element is not _FIN:
+                  yield element
+
+
+  def combinaisons_somme(nombres, cible):
+      return [
+          combi
+          for taille in range(1, len(nombres) + 1)
+          for combi in itertools.combinations(nombres, taille)
+          if sum(combi) == cible
+      ]

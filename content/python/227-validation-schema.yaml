@@ -1,0 +1,153 @@
+title: Valider des données avec un schéma
+level: avance
+order: 27
+tags: [validation, récursivité, dictionnaires, regex]
+summary: Un mini-validateur de données imbriquées avec des messages d'erreur précis.
+description: |
+  Écris `valider(donnees, schema)` qui renvoie la **liste triée** des erreurs trouvées dans le
+  dictionnaire `donnees` (liste vide si tout est correct). Chaque erreur est une chaîne
+  `"<chemin>: <message>"`.
+
+  Le schéma associe à chaque champ un dictionnaire de règles :
+
+  ```python
+  SCHEMA = {
+      "nom":     {"type": str, "requis": True, "min": 2, "max": 30},
+      "age":     {"type": int, "min": 0, "max": 150},
+      "email":   {"type": str, "motif": r"[^@\s]+@[^@\s]+\.\w+"},
+      "role":    {"type": str, "choix": ["admin", "user"]},
+      "tags":    {"type": list, "elements": {"type": str, "min": 1}},
+      "adresse": {"type": dict, "schema": {"ville": {"type": str, "requis": True}}},
+  }
+  ```
+
+  | Règle | Erreur produite |
+  |-------|-----------------|
+  | `requis` (défaut `False`) et champ absent | `nom: champ requis` |
+  | champ présent dans les données mais pas dans le schéma | `x: champ inconnu` |
+  | `type` (attention : `True` n'est **pas** un `int` valide ici) | `age: type attendu int` |
+  | `min` / `max` sur un nombre | `age: doit être >= 0` / `age: doit être <= 150` |
+  | `min` / `max` sur une chaîne ou une liste (longueur) | `nom: longueur minimale 2` / `nom: longueur maximale 30` |
+  | `motif` (la chaîne entière doit correspondre : `re.fullmatch`) | `email: format invalide` |
+  | `choix` | `role: valeur non autorisée` |
+  | `elements` : schéma appliqué à chaque élément d'une liste | `tags[1]: type attendu str` |
+  | `schema` : validation récursive d'un dictionnaire imbriqué | `adresse.ville: champ requis` |
+
+  Si le type d'une valeur est incorrect, on ne vérifie pas ses autres règles.
+  Les chemins se composent : `commandes[0].lignes[2].quantite`.
+starter: |
+  import re
+
+
+  def valider(donnees, schema):
+      pass
+tests: |
+  SCHEMA = {
+      "nom":     {"type": str, "requis": True, "min": 2, "max": 30},
+      "age":     {"type": int, "min": 0, "max": 150},
+      "email":   {"type": str, "motif": r"[^@\s]+@[^@\s]+\.\w+"},
+      "role":    {"type": str, "choix": ["admin", "user"]},
+      "tags":    {"type": list, "elements": {"type": str, "min": 1}},
+      "adresse": {"type": dict, "schema": {"ville": {"type": str, "requis": True}, "cp": {"type": str, "motif": r"\d{5}"}}},
+  }
+
+  def v(donnees, schema=SCHEMA):
+      return solution.valider(donnees, schema)
+
+  def test_valide():
+      "Données valides"
+      d = {"nom": "Alice", "age": 30, "email": "a@b.fr", "role": "admin", "tags": ["x"],
+           "adresse": {"ville": "Lyon", "cp": "69001"}}
+      assert v(d) == [], f"aucune erreur attendue, obtenu {v(d)}"
+      assert v({"nom": "Al"}) == []
+
+  def test_requis_inconnu():
+      "Champ requis et champ inconnu"
+      assert v({"age": 3, "pseudo": "x"}) == ["nom: champ requis", "pseudo: champ inconnu"]
+
+  def test_types():
+      "Types incorrects (bool n'est pas un int)"
+      assert v({"nom": 42}) == ["nom: type attendu str"]
+      assert v({"nom": "Al", "age": True}) == ["age: type attendu int"]
+      assert v({"nom": "Al", "age": "12"}) == ["age: type attendu int"]
+
+  def test_bornes():
+      "Bornes numériques et longueurs"
+      assert v({"nom": "A", "age": -1}) == ["age: doit être >= 0", "nom: longueur minimale 2"]
+      assert v({"nom": "x" * 31, "age": 151}) == ["age: doit être <= 150", "nom: longueur maximale 30"]
+
+  def test_motif_choix():
+      "Motif et choix"
+      assert v({"nom": "Al", "email": "pas-un-email"}) == ["email: format invalide"]
+      assert v({"nom": "Al", "email": "a@b.fr en trop"}) == ["email: format invalide"], "le motif doit couvrir toute la chaîne"
+      assert v({"nom": "Al", "role": "root"}) == ["role: valeur non autorisée"]
+
+  def test_elements():
+      "Éléments d'une liste"
+      assert v({"nom": "Al", "tags": ["ok", 3, ""]}) == ["tags[1]: type attendu str", "tags[2]: longueur minimale 1"]
+      assert v({"nom": "Al", "tags": "x"}) == ["tags: type attendu list"]
+
+  def test_imbrique():
+      "Dictionnaire imbriqué"
+      assert v({"nom": "Al", "adresse": {"cp": "123", "pays": "FR"}}) == [
+          "adresse.cp: format invalide", "adresse.pays: champ inconnu", "adresse.ville: champ requis"]
+
+  def test_profond():
+      "Chemins composés sur plusieurs niveaux"
+      schema = {"commandes": {"type": list, "elements": {"type": dict, "schema": {
+          "lignes": {"type": list, "min": 1, "elements": {"type": dict, "schema": {
+              "quantite": {"type": int, "min": 1, "requis": True}}}}}}}}
+      d = {"commandes": [{"lignes": [{"quantite": 2}, {"quantite": 0}, {}]}, {"lignes": []}]}
+      assert v(d, schema) == [
+          "commandes[0].lignes[1].quantite: doit être >= 1",
+          "commandes[0].lignes[2].quantite: champ requis",
+          "commandes[1].lignes: longueur minimale 1",
+      ], f"obtenu {v(d, schema)}"
+solution: |
+  import re
+
+
+  def _verifier(valeur, regles, chemin, erreurs):
+      type_attendu = regles.get("type")
+      if type_attendu is not None:
+          mauvais_bool = isinstance(valeur, bool) and type_attendu is not bool
+          if not isinstance(valeur, type_attendu) or mauvais_bool:
+              erreurs.append(f"{chemin}: type attendu {type_attendu.__name__}")
+              return
+      if isinstance(valeur, (int, float)) and not isinstance(valeur, bool):
+          if "min" in regles and valeur < regles["min"]:
+              erreurs.append(f"{chemin}: doit être >= {regles['min']}")
+          if "max" in regles and valeur > regles["max"]:
+              erreurs.append(f"{chemin}: doit être <= {regles['max']}")
+      elif isinstance(valeur, (str, list)):
+          if "min" in regles and len(valeur) < regles["min"]:
+              erreurs.append(f"{chemin}: longueur minimale {regles['min']}")
+          if "max" in regles and len(valeur) > regles["max"]:
+              erreurs.append(f"{chemin}: longueur maximale {regles['max']}")
+      if "motif" in regles and not re.fullmatch(regles["motif"], valeur):
+          erreurs.append(f"{chemin}: format invalide")
+      if "choix" in regles and valeur not in regles["choix"]:
+          erreurs.append(f"{chemin}: valeur non autorisée")
+      if "elements" in regles:
+          for i, element in enumerate(valeur):
+              _verifier(element, regles["elements"], f"{chemin}[{i}]", erreurs)
+      if "schema" in regles:
+          _valider_dict(valeur, regles["schema"], chemin + ".", erreurs)
+
+
+  def _valider_dict(donnees, schema, prefixe, erreurs):
+      for cle, regles in schema.items():
+          if cle not in donnees:
+              if regles.get("requis", False):
+                  erreurs.append(f"{prefixe}{cle}: champ requis")
+          else:
+              _verifier(donnees[cle], regles, prefixe + cle, erreurs)
+      for cle in donnees:
+          if cle not in schema:
+              erreurs.append(f"{prefixe}{cle}: champ inconnu")
+
+
+  def valider(donnees, schema):
+      erreurs = []
+      _valider_dict(donnees, schema, "", erreurs)
+      return sorted(erreurs)

@@ -1,0 +1,223 @@
+title: Cache LRU avec expiration
+level: expert
+order: 28
+tags: [cache, structures de données, décorateurs, temps]
+summary: Durée de vie des entrées, éviction LRU et décorateur de mémoïsation.
+description: |
+  Combine deux politiques de cache : une **durée de vie** (TTL, *time to live*) par entrée et une
+  éviction **LRU** quand le cache est plein. Comme pour le limiteur de débit, l'heure vient d'une
+  **horloge injectée** (fonction sans argument, en secondes).
+
+  **`CacheTTL(capacite, ttl, horloge=time.monotonic)`**
+
+  - `put(cle, valeur, ttl=None)` : ajoute ou remplace une entrée, qui expire `ttl` secondes plus tard
+    (le `ttl` du cache par défaut). Une entrée est expirée dès que `horloge() >= instant_d_expiration` ;
+  - `get(cle, defaut=None)` : valeur si l'entrée existe et n'a pas expiré (elle devient alors la plus
+    **récemment utilisée**), sinon `defaut` ; une entrée expirée rencontrée est supprimée ;
+  - `cle in cache` : même test, sans changer l'ordre LRU ;
+  - `len(cache)` : nombre d'entrées **non expirées** ;
+  - quand on ajoute une **nouvelle** clé alors que le cache est plein, on supprime d'abord les entrées
+    expirées ; s'il est toujours plein, on évince la moins récemment utilisée ;
+  - `purger()` : supprime les entrées expirées et renvoie leur nombre.
+
+  **`memoiser_ttl(ttl, capacite=128, horloge=time.monotonic)`** : décorateur paramétré qui met en cache
+  les résultats d'une fonction (clé : arguments positionnels **et** nommés, ces derniers dans
+  n'importe quel ordre) dans un `CacheTTL`. La fonction décorée expose `statistiques`, un dictionnaire
+  `{"succes": ..., "echecs": ...}` (nombre d'appels servis par le cache / calculés).
+  Attention : une fonction peut légitimement renvoyer `None` !
+starter: |
+  import functools
+  import time
+  from collections import OrderedDict
+
+
+  class CacheTTL:
+      def __init__(self, capacite, ttl, horloge=time.monotonic):
+          pass
+
+
+  def memoiser_ttl(ttl, capacite=128, horloge=time.monotonic):
+      pass
+tests: |
+  class Horloge:
+      def __init__(self):
+          self.t = 0.0
+      def __call__(self):
+          return self.t
+
+  def test_get_put():
+      "get / put simples"
+      h = Horloge()
+      c = solution.CacheTTL(3, 10, h)
+      c.put("a", 1)
+      assert c.get("a") == 1 and c.get("x") is None and c.get("x", 0) == 0
+
+  def test_expiration():
+      "Les entrées expirent"
+      h = Horloge()
+      c = solution.CacheTTL(3, 10, h)
+      c.put("a", 1)
+      h.t = 9.5
+      assert c.get("a") == 1 and "a" in c
+      h.t = 10
+      assert c.get("a") is None and "a" not in c, "expirée à t = 10"
+      assert len(c) == 0
+
+  def test_ttl_par_entree():
+      "TTL spécifique à une entrée et remplacement"
+      h = Horloge()
+      c = solution.CacheTTL(3, 10, h)
+      c.put("court", 1, ttl=2)
+      c.put("long", 2)
+      h.t = 3
+      assert c.get("court") is None and c.get("long") == 2
+      c.put("long", 3)            # remplacer relance la durée de vie
+      h.t = 12
+      assert c.get("long") == 3
+
+  def test_lru():
+      "Éviction LRU"
+      h = Horloge()
+      c = solution.CacheTTL(2, 100, h)
+      c.put("a", 1); c.put("b", 2)
+      c.get("a")                  # a devient récent
+      c.put("c", 3)               # évince b
+      assert "b" not in c and c.get("a") == 1 and c.get("c") == 3
+
+  def test_contains_sans_effet():
+      "`in` ne change pas l'ordre LRU"
+      h = Horloge()
+      c = solution.CacheTTL(2, 100, h)
+      c.put("a", 1); c.put("b", 2)
+      assert "a" in c
+      c.put("c", 3)               # a reste le moins récent
+      assert "a" not in c and "b" in c
+
+  def test_expirees_avant_lru():
+      "Les expirées partent avant les entrées valides"
+      h = Horloge()
+      c = solution.CacheTTL(2, 100, h)
+      c.put("vieux", 1)
+      c.put("ephemere", 2, ttl=1)
+      h.t = 5
+      c.put("nouveau", 3)
+      assert c.get("vieux") == 1 and c.get("nouveau") == 3 and len(c) == 2
+
+  def test_purger():
+      "purger"
+      h = Horloge()
+      c = solution.CacheTTL(10, 5, h)
+      for i in range(6):
+          c.put(i, i, ttl=i + 1)
+      h.t = 3
+      assert c.purger() == 3 and len(c) == 3 and c.purger() == 0
+
+  def test_remplacement_plein():
+      "Remplacer une clé d'un cache plein n'évince rien"
+      h = Horloge()
+      c = solution.CacheTTL(2, 100, h)
+      c.put("a", 1); c.put("b", 2); c.put("a", 10)
+      assert c.get("a") == 10 and c.get("b") == 2
+
+  def test_memoiser():
+      "Décorateur memoiser_ttl"
+      h = Horloge()
+      appels = []
+      @solution.memoiser_ttl(ttl=60, horloge=h)
+      def lent(x, y=0):
+          "doc"
+          appels.append((x, y))
+          return None if x < 0 else x + y
+      assert lent(1, y=2) == 3 and lent(1, y=2) == 3
+      assert lent(-1) is None and lent(-1) is None, "None doit aussi être mis en cache"
+      assert appels == [(1, 2), (-1, 0)], f"appels réels : {appels}"
+      assert lent.statistiques == {"succes": 2, "echecs": 2}
+      assert lent.__name__ == "lent"
+      h.t = 60
+      lent(1, y=2)
+      assert len(appels) == 3, "après expiration, la fonction doit être rappelée"
+
+  def test_memoiser_kwargs():
+      "Arguments nommés dans un ordre quelconque"
+      h = Horloge()
+      n = []
+      @solution.memoiser_ttl(ttl=5, capacite=2, horloge=h)
+      def f(a=0, b=0):
+          n.append(1)
+          return a * 10 + b
+      assert f(a=1, b=2) == 12 and f(b=2, a=1) == 12
+      assert len(n) == 1
+solution: |
+  import functools
+  import time
+  from collections import OrderedDict
+
+
+  class CacheTTL:
+      def __init__(self, capacite, ttl, horloge=time.monotonic):
+          self.capacite = capacite
+          self.ttl = ttl
+          self.horloge = horloge
+          self._donnees = OrderedDict()      # cle -> (valeur, expiration)
+
+      def _vivante(self, cle):
+          entree = self._donnees.get(cle)
+          if entree is None:
+              return False
+          if self.horloge() >= entree[1]:
+              del self._donnees[cle]
+              return False
+          return True
+
+      def get(self, cle, defaut=None):
+          if not self._vivante(cle):
+              return defaut
+          self._donnees.move_to_end(cle)
+          return self._donnees[cle][0]
+
+      def __contains__(self, cle):
+          return self._vivante(cle)
+
+      def put(self, cle, valeur, ttl=None):
+          expiration = self.horloge() + (self.ttl if ttl is None else ttl)
+          if cle not in self._donnees and len(self._donnees) >= self.capacite:
+              self.purger()
+              if len(self._donnees) >= self.capacite:
+                  self._donnees.popitem(last=False)
+          self._donnees[cle] = (valeur, expiration)
+          self._donnees.move_to_end(cle)
+
+      def purger(self):
+          maintenant = self.horloge()
+          expirees = [c for c, (_, exp) in self._donnees.items() if maintenant >= exp]
+          for cle in expirees:
+              del self._donnees[cle]
+          return len(expirees)
+
+      def __len__(self):
+          maintenant = self.horloge()
+          return sum(1 for _, exp in self._donnees.values() if maintenant < exp)
+
+
+  _ABSENT = object()
+
+
+  def memoiser_ttl(ttl, capacite=128, horloge=time.monotonic):
+      def decorateur(fonction):
+          cache = CacheTTL(capacite, ttl, horloge)
+
+          @functools.wraps(fonction)
+          def enveloppe(*args, **kwargs):
+              cle = (args, tuple(sorted(kwargs.items())))
+              resultat = cache.get(cle, _ABSENT)
+              if resultat is _ABSENT:
+                  enveloppe.statistiques["echecs"] += 1
+                  resultat = fonction(*args, **kwargs)
+                  cache.put(cle, resultat)
+              else:
+                  enveloppe.statistiques["succes"] += 1
+              return resultat
+
+          enveloppe.statistiques = {"succes": 0, "echecs": 0}
+          return enveloppe
+      return decorateur

@@ -1,0 +1,156 @@
+title: Bellman-Ford et cycles négatifs
+level: expert
+order: 17
+tags: [graphes, algorithmes, plus court chemin]
+summary: Plus courts chemins avec poids négatifs, et détection d'arbitrage de devises.
+description: |
+  Dijkstra ne fonctionne pas avec des poids négatifs ; **Bellman-Ford** si, et il sait détecter les
+  **cycles de poids négatif**.
+
+  1. `bellman_ford(n, aretes, source)` : sommets numérotés de `0` à `n - 1`, `aretes` est une liste de
+     triplets `(u, v, poids)` (arcs **orientés**). Renvoie un couple `(distances, predecesseurs)` :
+     - `distances[v]` : distance minimale depuis `source`, ou `math.inf` si `v` est inaccessible ;
+     - `predecesseurs[v]` : sommet précédent sur un plus court chemin (`None` pour la source et les
+       sommets inaccessibles).
+
+     Si un cycle négatif est **accessible depuis la source**, lève `ValueError` (un cycle négatif
+     inaccessible ne gêne pas).
+
+  2. `chemin(predecesseurs, source, cible)` : liste des sommets de `source` à `cible`, ou `None`.
+
+  3. `arbitrage_possible(taux)` : `taux[i][j]` est le nombre d'unités de la devise `j` obtenues pour
+     une unité de `i`. Renvoie `True` s'il existe une suite de conversions qui fait gagner de l'argent
+     (produit des taux le long d'un cycle `> 1`). Astuce : avec des poids `-log(taux)`, un cycle
+     rentable devient un cycle **négatif**. Prévois une tolérance de `1e-9` sur les flottants.
+
+  Rappel : on relâche toutes les arêtes `n - 1` fois ; si une `n`-ième passe améliore encore une
+  distance, il y a un cycle négatif.
+starter: |
+  import math
+
+
+  def bellman_ford(n, aretes, source):
+      pass
+
+
+  def chemin(predecesseurs, source, cible):
+      pass
+
+
+  def arbitrage_possible(taux):
+      pass
+tests: |
+  import math
+
+  ARETES = [(0, 1, 4), (0, 2, 5), (1, 2, -3), (2, 3, 4), (3, 1, 2), (4, 3, 1)]
+
+  def test_distances():
+      "Distances avec poids négatifs"
+      d, _ = solution.bellman_ford(5, ARETES, 0)
+      assert d[:4] == [0, 4, 1, 5], f"distances {d}"
+      assert d[4] == math.inf, "le sommet 4 est inaccessible depuis 0"
+
+  def test_predecesseurs():
+      "Prédécesseurs et chemin"
+      _, p = solution.bellman_ford(5, ARETES, 0)
+      assert p[0] is None and p[4] is None
+      assert solution.chemin(p, 0, 3) == [0, 1, 2, 3]
+      assert solution.chemin(p, 0, 0) == [0]
+      assert solution.chemin(p, 0, 4) is None
+
+  def test_cycle_negatif():
+      "Cycle négatif accessible : ValueError"
+      aretes = [(0, 1, 1), (1, 2, -2), (2, 1, 1), (2, 3, 1)]
+      try:
+          solution.bellman_ford(4, aretes, 0)
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("cycle 1 → 2 → 1 de poids -1 non détecté")
+
+  def test_cycle_inaccessible():
+      "Cycle négatif inaccessible : pas d'erreur"
+      aretes = [(0, 1, 2), (2, 3, -5), (3, 2, 1)]
+      d, _ = solution.bellman_ford(4, aretes, 0)
+      assert d[:2] == [0, 2] and d[2] == math.inf and d[3] == math.inf
+
+  def test_sans_arete():
+      "Graphe sans arête"
+      d, p = solution.bellman_ford(3, [], 1)
+      assert d == [math.inf, 0, math.inf] and p == [None, None, None]
+
+  def test_comparaison_dijkstra():
+      "Mêmes résultats que Dijkstra sur des poids positifs"
+      import heapq, random
+      rng = random.Random(4)
+      n = 60
+      aretes = [(rng.randrange(n), rng.randrange(n), rng.randint(1, 50)) for _ in range(400)]
+      dist = [math.inf] * n; dist[0] = 0; tas = [(0, 0)]
+      while tas:
+          du, u = heapq.heappop(tas)
+          if du > dist[u]:
+              continue
+          for a, b, w in aretes:
+              if a == u and du + w < dist[b]:
+                  dist[b] = du + w
+                  heapq.heappush(tas, (dist[b], b))
+      d, p = solution.bellman_ford(n, aretes, 0)
+      assert d == dist
+      poids = {}
+      for a, b, w in aretes:
+          poids[(a, b)] = min(w, poids.get((a, b), math.inf))
+      for v in range(n):
+          c = solution.chemin(p, 0, v)
+          if dist[v] < math.inf:
+              assert sum(poids[(a, b)] for a, b in zip(c, c[1:])) == dist[v], f"chemin vers {v} incohérent"
+
+  def test_arbitrage():
+      "Arbitrage de devises"
+      sans = [[1, 0.9, 0.8], [1 / 0.9, 1, 0.8 / 0.9], [1 / 0.8, 0.9 / 0.8, 1]]
+      assert solution.arbitrage_possible(sans) is False, "taux cohérents : pas d'arbitrage"
+      avec = [[1, 0.9, 0.8], [1.12, 1, 0.9], [1.3, 1.1, 1]]
+      assert solution.arbitrage_possible(avec) is True
+      assert solution.arbitrage_possible([[1]]) is False
+solution: |
+  import math
+
+
+  def bellman_ford(n, aretes, source):
+      distances = [math.inf] * n
+      predecesseurs = [None] * n
+      distances[source] = 0
+      for _ in range(n - 1):
+          modifie = False
+          for u, v, poids in aretes:
+              if distances[u] + poids < distances[v]:
+                  distances[v] = distances[u] + poids
+                  predecesseurs[v] = u
+                  modifie = True
+          if not modifie:
+              break
+      for u, v, poids in aretes:
+          if distances[u] + poids < distances[v]:
+              raise ValueError("cycle de poids négatif accessible depuis la source")
+      return distances, predecesseurs
+
+
+  def chemin(predecesseurs, source, cible):
+      resultat = [cible]
+      while resultat[-1] != source:
+          precedent = predecesseurs[resultat[-1]]
+          if precedent is None:
+              return None
+          resultat.append(precedent)
+      return resultat[::-1]
+
+
+  def arbitrage_possible(taux):
+      n = len(taux)
+      aretes = [(i, j, -math.log(taux[i][j])) for i in range(n) for j in range(n) if i != j]
+      # un sommet virtuel relié à tous permet de détecter n'importe quel cycle
+      distances = [0.0] * n
+      for _ in range(n):
+          for u, v, w in aretes:
+              if distances[u] + w < distances[v] - 1e-9:
+                  distances[v] = distances[u] + w
+      return any(distances[u] + w < distances[v] - 1e-9 for u, v, w in aretes)

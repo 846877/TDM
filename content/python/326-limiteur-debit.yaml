@@ -1,0 +1,186 @@
+title: Limiteur de débit (token bucket)
+level: expert
+order: 26
+tags: [algorithmes, temps, conception, tests]
+summary: Le seau à jetons des API, testable grâce à une horloge injectée.
+description: |
+  Les API limitent le nombre de requêtes avec l'algorithme du **seau à jetons** : un seau contient au plus
+  `capacite` jetons et se remplit **en continu** de `debit` jetons par seconde ; chaque requête consomme
+  des jetons, et elle est refusée s'il n'y en a pas assez.
+
+  Pour pouvoir tester sans attendre réellement, l'heure est fournie par une **horloge injectée** :
+  une fonction sans argument qui renvoie un temps en secondes (par défaut `time.monotonic`).
+
+  1. `LimiteurDebit(capacite, debit, horloge=time.monotonic)` — le seau est **plein** à la création.
+     - `autoriser(cout=1)` : si le seau contient au moins `cout` jetons, les retire et renvoie `True` ;
+       sinon renvoie `False` sans rien retirer ;
+     - `attente(cout=1)` : nombre de secondes à attendre pour que `autoriser(cout)` réussisse
+       (`0` si c'est déjà possible) ; ne consomme rien ;
+     - propriété `jetons` : nombre (décimal) de jetons disponibles maintenant ;
+     - `cout > capacite` → `ValueError` (la requête ne pourrait jamais passer) ;
+       `capacite <= 0` ou `debit <= 0` → `ValueError`.
+
+  2. `LimiteurParCle(capacite, debit, horloge=time.monotonic)` — un seau **indépendant par client** :
+     `autoriser(cle, cout=1)`. Les seaux sont créés à la demande (pleins).
+
+  Conseil : ne recalcule le remplissage qu'au moment d'un appel :
+  `jetons = min(capacite, jetons + (maintenant - dernier_instant) * debit)`.
+
+  ```python
+  temps = [0.0]
+  lim = LimiteurDebit(capacite=2, debit=1, horloge=lambda: temps[0])
+  lim.autoriser(), lim.autoriser(), lim.autoriser()   # (True, True, False)
+  lim.attente()                                       # 1.0
+  temps[0] = 1.0
+  lim.autoriser()                                     # True
+  ```
+starter: |
+  import time
+
+
+  class LimiteurDebit:
+      def __init__(self, capacite, debit, horloge=time.monotonic):
+          pass
+
+
+  class LimiteurParCle:
+      def __init__(self, capacite, debit, horloge=time.monotonic):
+          pass
+tests: |
+  import math
+
+  class Horloge:
+      def __init__(self):
+          self.t = 1000.0
+      def __call__(self):
+          return self.t
+      def avancer(self, s):
+          self.t += s
+
+  def proche(a, b):
+      return math.isclose(a, b, abs_tol=1e-9)
+
+  def test_rafale():
+      "Rafale limitée par la capacité"
+      h = Horloge()
+      lim = solution.LimiteurDebit(3, 1, h)
+      assert [lim.autoriser() for _ in range(5)] == [True, True, True, False, False]
+
+  def test_remplissage():
+      "Remplissage continu"
+      h = Horloge()
+      lim = solution.LimiteurDebit(4, 2, h)
+      for _ in range(4):
+          lim.autoriser()
+      assert proche(lim.jetons, 0)
+      h.avancer(0.25)
+      assert proche(lim.jetons, 0.5) and not lim.autoriser()
+      h.avancer(0.25)
+      assert lim.autoriser() and not lim.autoriser()
+
+  def test_plafond():
+      "Jamais plus que la capacité"
+      h = Horloge()
+      lim = solution.LimiteurDebit(2, 10, h)
+      h.avancer(3600)
+      assert proche(lim.jetons, 2)
+      assert [lim.autoriser() for _ in range(3)] == [True, True, False]
+
+  def test_cout():
+      "Requêtes de coût variable"
+      h = Horloge()
+      lim = solution.LimiteurDebit(10, 1, h)
+      assert lim.autoriser(7) and not lim.autoriser(4), "un refus ne doit rien consommer"
+      assert lim.autoriser(3) and proche(lim.jetons, 0)
+
+  def test_attente():
+      "Temps d'attente"
+      h = Horloge()
+      lim = solution.LimiteurDebit(2, 4, h)
+      assert lim.attente() == 0
+      lim.autoriser(2)
+      assert proche(lim.attente(), 0.25) and proche(lim.attente(2), 0.5)
+      h.avancer(0.125)
+      assert proche(lim.attente(), 0.125)
+      assert not lim.autoriser(), "attente() ne doit rien consommer"
+      h.avancer(0.125)
+      assert lim.autoriser()
+
+  def test_valeurs_invalides():
+      "Paramètres invalides"
+      h = Horloge()
+      for appel in (lambda: solution.LimiteurDebit(0, 1, h), lambda: solution.LimiteurDebit(1, 0, h),
+                    lambda: solution.LimiteurDebit(5, 1, h).autoriser(6), lambda: solution.LimiteurDebit(5, 1, h).attente(6)):
+          try:
+              appel()
+          except ValueError:
+              continue
+          raise AssertionError("ValueError attendue")
+
+  def test_horloge_par_defaut():
+      "Horloge réelle par défaut"
+      lim = solution.LimiteurDebit(1, 1)
+      assert lim.autoriser() is True
+
+  def test_par_cle():
+      "Un seau par client"
+      h = Horloge()
+      lim = solution.LimiteurParCle(2, 1, h)
+      assert [lim.autoriser("alice") for _ in range(3)] == [True, True, False]
+      assert lim.autoriser("bob") and lim.autoriser("bob", 1)
+      assert not lim.autoriser("bob")
+      h.avancer(1)
+      assert lim.autoriser("alice") and not lim.autoriser("alice")
+solution: |
+  import time
+
+
+  class LimiteurDebit:
+      def __init__(self, capacite, debit, horloge=time.monotonic):
+          if capacite <= 0 or debit <= 0:
+              raise ValueError("capacite et debit doivent être strictement positifs")
+          self.capacite = capacite
+          self.debit = debit
+          self.horloge = horloge
+          self._jetons = float(capacite)
+          self._dernier = horloge()
+
+      def _remplir(self):
+          maintenant = self.horloge()
+          ecoule = max(0.0, maintenant - self._dernier)
+          self._jetons = min(self.capacite, self._jetons + ecoule * self.debit)
+          self._dernier = maintenant
+
+      def _verifier(self, cout):
+          if cout > self.capacite:
+              raise ValueError("coût supérieur à la capacité")
+
+      @property
+      def jetons(self):
+          self._remplir()
+          return self._jetons
+
+      def autoriser(self, cout=1):
+          self._verifier(cout)
+          self._remplir()
+          if self._jetons + 1e-12 >= cout:
+              self._jetons = max(0.0, self._jetons - cout)
+              return True
+          return False
+
+      def attente(self, cout=1):
+          self._verifier(cout)
+          self._remplir()
+          manque = cout - self._jetons
+          return 0 if manque <= 1e-12 else manque / self.debit
+
+
+  class LimiteurParCle:
+      def __init__(self, capacite, debit, horloge=time.monotonic):
+          self.capacite, self.debit, self.horloge = capacite, debit, horloge
+          self._seaux = {}
+
+      def autoriser(self, cle, cout=1):
+          if cle not in self._seaux:
+              self._seaux[cle] = LimiteurDebit(self.capacite, self.debit, self.horloge)
+          return self._seaux[cle].autoriser(cout)
