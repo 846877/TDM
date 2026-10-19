@@ -295,3 +295,83 @@ exercises:
         run: tcpdump -nr /root/capture.pcap -A 2>/dev/null | grep -q 'GET / HTTP/1.1'
       - desc: La capture contient l'établissement de connexion (SYN)
         run: tcpdump -nr /root/capture.pcap 'tcp[tcpflags] & tcp-syn != 0 and host 10.89.10.80' 2>/dev/null | grep -q .
+  - id: rl-hosts
+    title: Résolution locale avec /etc/hosts
+    description: |
+      Le poste n'utilise pas le DNS de l'entreprise, et `getent hosts intranet.tdm.lab` ne renvoie rien.
+      Sans toucher au serveur DNS, fais en sorte que le poste résolve localement :
+      - `intranet.tdm.lab` vers **la même adresse** que celle donnée par le DNS `10.89.10.53` ;
+      - `base.tdm.lab` vers `10.89.20.10`.
+
+      Vérifie avec `getent hosts` (qui suit l'ordre de `/etc/nsswitch.conf`) et non avec `dig` (qui interroge
+      toujours un serveur DNS).
+    hint: "echo '10.89.10.80 intranet.tdm.lab' >> /etc/hosts (vérifie l'adresse avec dig @10.89.10.53 intranet.tdm.lab +short)"
+    cours: |
+      Avant même d'interroger un serveur DNS, le système consulte `/etc/hosts` : une ligne par adresse, suivie
+      d'un ou plusieurs noms (`10.89.10.80 intranet.tdm.lab intranet`). L'ordre des sources est fixé par la
+      ligne `hosts:` de `/etc/nsswitch.conf` (en général `files dns` : le fichier d'abord).
+
+      C'est pratique pour un test (pointer un nom vers un nouveau serveur avant de modifier le DNS), mais
+      dangereux à long terme : ces entrées locales sont oubliées et masquent les changements du DNS.
+
+      Distingue les outils :
+      - `getent hosts nom` et `ping` utilisent la résolution du **système** (fichier puis DNS) ;
+      - `dig` et `nslookup` interrogent **directement** un serveur DNS et ignorent `/etc/hosts`.
+
+      Le serveur DNS utilisé par défaut se trouve dans `/etc/resolv.conf` (ligne `nameserver`).
+    checks:
+      - desc: intranet.tdm.lab est résolu comme dans le DNS
+        run: test -n "$(getent hosts intranet.tdm.lab)" && test "$(getent hosts intranet.tdm.lab | awk '{print $1}' | head -1)" = "$(dig @10.89.10.53 intranet.tdm.lab +short | tail -1)"
+      - desc: base.tdm.lab est résolu en 10.89.20.10
+        run: test "$(getent hosts base.tdm.lab | awk '{print $1}' | head -1)" = 10.89.20.10
+  - id: rl-arp
+    title: Adresses MAC et table ARP
+    description: |
+      Sur un réseau local, les trames Ethernet sont adressées par **adresse MAC**. Le protocole ARP fait la
+      correspondance entre IP et MAC.
+      1. Écris dans `/root/mac-poste.txt` l'adresse MAC de l'interface `eth0` du poste.
+      2. Fais en sorte que le poste connaisse l'adresse MAC du serveur `web` (`10.89.10.80`), puis écris-la dans
+         `/root/mac-web.txt`.
+
+      Format attendu : `aa:bb:cc:dd:ee:ff` (minuscules).
+    hint: "ip link show eth0 ; ping -c1 10.89.10.80 puis ip neigh show 10.89.10.80"
+    cours: |
+      Chaque carte réseau possède une adresse **MAC** de 48 bits (`02:42:0a:59:0a:0a`), utilisée pour
+      acheminer les trames sur le réseau local. `ip link show` l'affiche après `link/ether`.
+
+      Pour envoyer un paquet à une IP du même réseau, la machine doit connaître sa MAC : elle diffuse une
+      requête **ARP** (« qui a 10.89.10.80 ? »), la machine concernée répond, et la réponse est gardée en cache
+      dans la **table des voisins** : `ip neigh` (anciennement `arp -n`). Les états `REACHABLE`, `STALE`,
+      `FAILED` indiquent la fraîcheur de l'entrée.
+
+      Pour une IP d'un **autre** réseau, la machine ne cherche pas la MAC de la destination mais celle de sa
+      passerelle. Un conflit d'adresses IP ou une usurpation ARP (*ARP spoofing*) se diagnostiquent en observant
+      cette table et avec `tcpdump arp`.
+    checks:
+      - desc: La MAC du poste est correcte
+        run: test -s /root/mac-poste.txt && test "$(tr -d '[:space:]' < /root/mac-poste.txt)" = "$(cat /sys/class/net/eth0/address)"
+      - desc: La MAC de web est correcte
+        run: test -s /root/mac-web.txt && ping -c1 -W2 10.89.10.80 >/dev/null 2>&1; test "$(tr -d '[:space:]' < /root/mac-web.txt)" = "$(ip neigh show 10.89.10.80 | awk '{print $5}')"
+  - id: rl-redis
+    title: Parler un protocole à la main avec nc
+    description: |
+      Beaucoup de protocoles applicatifs sont du **texte** : on peut les parler sans client dédié. Grâce à la
+      route de l'exercice « Atteindre un autre réseau », la base Redis `10.89.20.10:6380` est joignable.
+
+      Avec `nc` uniquement (pas de `redis-cli`), enregistre dans Redis la clé **`tdm:eleve`** avec la valeur
+      **`connecte`**, puis relis-la.
+    hint: "printf 'SET tdm:eleve connecte\\r\\n' | nc -q1 10.89.20.10 6380 (Redis répond +OK)"
+    cours: |
+      `nc` (netcat) ouvre une connexion TCP (ou UDP avec `-u`) et relie ton terminal au service distant : ce que
+      tu tapes est envoyé, ce qui revient est affiché. C'est le couteau suisse du diagnostic : tester un port,
+      observer une bannière, rejouer une requête.
+
+      De nombreux protocoles historiques sont textuels : HTTP/1.1, SMTP, POP3, FTP… et Redis, dont les commandes
+      simples peuvent être envoyées en clair, terminées par `\r\n` (retour chariot + saut de ligne). Redis
+      répond `+OK` pour un succès, `$<longueur>` suivi de la valeur pour une chaîne, `-ERR ...` pour une erreur.
+
+      `printf` (contrairement à `echo`) interprète `\r\n` de façon portable. L'option `-q1` de `nc` ferme la
+      connexion une seconde après la fin de l'entrée, sinon il attend indéfiniment.
+    checks:
+      - desc: La clé tdm:eleve vaut connecte
+        run: printf 'GET tdm:eleve\r\n' | nc -q1 -w3 10.89.20.10 6380 | tr -d '\r' | grep -qx connecte
