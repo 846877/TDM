@@ -1,0 +1,198 @@
+title: Explorer des dossiers avec pathlib
+level: intermediaire
+order: 35
+tags: [fichiers, pathlib, dictionnaires]
+summary: Manipuler chemins et arborescences avec pathlib.Path.
+description: |
+  Utilise `pathlib.Path`. Les fonctions reçoivent des chemins sous forme de chaînes ou de
+  `Path`.
+
+  1. `decomposer(chemin)` renvoie le tuple `(dossier_parent, nom, nom_sans_extension,
+     extension)` sous forme de chaînes ; l'extension inclut le point (`".log"`), ou `""`.
+     `decomposer("/var/log/nginx/access.log")` → `("/var/log/nginx", "access.log", "access", ".log")`.
+  2. `changer_extension(chemin, ext)` renvoie le chemin (chaîne) avec la nouvelle extension :
+     `changer_extension("rapport.txt", ".csv")` → `"rapport.csv"`.
+  3. `inventaire(dossier)` parcourt **récursivement** le dossier et renvoie un dictionnaire
+     `{extension: nombre de fichiers}` (extension en minuscules, `""` pour les fichiers sans
+     extension). Les dossiers eux-mêmes ne comptent pas.
+  4. `plus_gros(dossier, n)` renvoie la liste des `n` plus gros fichiers (récursivement),
+     sous forme de couples `(chemin relatif au dossier avec des "/", taille en octets)`, du
+     plus gros au plus petit ; à taille égale, par chemin croissant.
+  5. `creer_arborescence(racine, chemins)` crée tous les fichiers (vides) de la liste de
+     chemins relatifs, en créant les dossiers intermédiaires, puis renvoie le nombre de
+     fichiers créés.
+
+  ```python
+  creer_arborescence("projet", ["src/main.py", "src/utils.py", "docs/README"])   # 3
+  inventaire("projet")    # {".py": 2, "": 1}
+  ```
+starter: |
+  from pathlib import Path
+
+
+  def decomposer(chemin):
+      pass
+
+
+  def changer_extension(chemin, ext):
+      pass
+
+
+  def inventaire(dossier):
+      pass
+
+
+  def plus_gros(dossier, n):
+      pass
+
+
+  def creer_arborescence(racine, chemins):
+      pass
+tests: |
+  import os
+  import tempfile
+  from pathlib import Path
+
+  def test_decomposer():
+      "decomposer"
+      r = solution.decomposer("/var/log/nginx/access.log")
+      assert tuple(r) == ("/var/log/nginx", "access.log", "access", ".log"), f"obtenu {r!r}"
+      r = solution.decomposer("dossier/README")
+      assert tuple(r) == ("dossier", "README", "README", ""), f"obtenu {r!r}"
+      r = solution.decomposer("sauvegarde.tar.gz")
+      assert tuple(r)[2:] == ("sauvegarde.tar", ".gz"), f"obtenu {r!r}"
+
+  def test_changer_extension():
+      "changer_extension"
+      assert solution.changer_extension("rapport.txt", ".csv") == "rapport.csv"
+      assert solution.changer_extension("a/b/notes", ".md") == os.path.join("a", "b", "notes.md")
+
+  def test_creer_et_inventaire():
+      "creer_arborescence puis inventaire"
+      with tempfile.TemporaryDirectory() as d:
+          n = solution.creer_arborescence(d, ["src/main.py", "src/utils.PY", "docs/README", "docs/img/logo.png"])
+          assert n == 4, f"renvoie {n!r}"
+          assert (Path(d) / "docs" / "img" / "logo.png").is_file()
+          r = solution.inventaire(d)
+          assert r == {".py": 2, "": 1, ".png": 1}, f"obtenu {r!r}"
+
+  def test_inventaire_vide():
+      "inventaire d'un dossier vide"
+      with tempfile.TemporaryDirectory() as d:
+          (Path(d) / "sous-dossier").mkdir()
+          assert solution.inventaire(d) == {}
+
+  def test_plus_gros():
+      "plus_gros"
+      with tempfile.TemporaryDirectory() as d:
+          p = Path(d)
+          (p / "logs").mkdir()
+          (p / "a.txt").write_text("x" * 10)
+          (p / "logs" / "b.log").write_text("x" * 300)
+          (p / "logs" / "c.log").write_text("x" * 50)
+          (p / "z.bin").write_bytes(b"0" * 50)
+          r = solution.plus_gros(d, 3)
+          assert r == [("logs/b.log", 300), ("logs/c.log", 50), ("z.bin", 50)], f"obtenu {r!r}"
+solution: |
+  from pathlib import Path
+
+
+  def decomposer(chemin):
+      p = Path(chemin)
+      return (str(p.parent), p.name, p.stem, p.suffix)
+
+
+  def changer_extension(chemin, ext):
+      return str(Path(chemin).with_suffix(ext))
+
+
+  def inventaire(dossier):
+      compte = {}
+      for f in Path(dossier).rglob("*"):
+          if f.is_file():
+              ext = f.suffix.lower()
+              compte[ext] = compte.get(ext, 0) + 1
+      return compte
+
+
+  def plus_gros(dossier, n):
+      racine = Path(dossier)
+      fichiers = [(f.relative_to(racine).as_posix(), f.stat().st_size)
+                  for f in racine.rglob("*") if f.is_file()]
+      fichiers.sort(key=lambda c: (-c[1], c[0]))
+      return fichiers[:n]
+
+
+  def creer_arborescence(racine, chemins):
+      base = Path(racine)
+      for relatif in chemins:
+          cible = base / relatif
+          cible.parent.mkdir(parents=True, exist_ok=True)
+          cible.touch()
+      return len(chemins)
+cours: |
+  ## Des chemins objets plutôt que des chaînes
+
+  Concaténer des chemins avec `+` est fragile (oubli du `/`, `\` sous Windows). `pathlib`
+  représente un chemin par un objet `Path` :
+
+  ```python
+  from pathlib import Path
+  p = Path("/var/log") / "nginx" / "access.log"   # l'opérateur / assemble
+  p.name        # "access.log"
+  p.stem        # "access"
+  p.suffix      # ".log"   (p.suffixes -> [".tar", ".gz"] pour une archive)
+  p.parent      # Path("/var/log/nginx")
+  p.parts       # ("/", "var", "log", "nginx", "access.log")
+  p.with_suffix(".old")    # nouveau chemin, autre extension
+  ```
+
+  Le même code fonctionne sous Linux et Windows. `str(p)` reconvertit en chaîne, et
+  `p.as_posix()` force les `/` (utile pour un affichage identique partout).
+
+  ## Interroger le système de fichiers
+
+  ```python
+  p.exists(), p.is_file(), p.is_dir()
+  p.stat().st_size            # taille en octets
+  p.stat().st_mtime           # date de modification (timestamp)
+  p.read_text(encoding="utf-8")
+  p.write_text("contenu", encoding="utf-8")
+  ```
+
+  ## Parcourir une arborescence
+
+  - `dossier.iterdir()` : le contenu direct ;
+  - `dossier.glob("*.log")` : motif dans le dossier ;
+  - `dossier.rglob("*")` : **récursivement**, tout le contenu (fichiers et dossiers) ;
+  - `chemin.relative_to(racine)` : le chemin vu depuis la racine.
+
+  L'ordre de parcours n'est pas garanti : trie le résultat si l'ordre compte.
+
+  ## Créer
+
+  ```python
+  Path("a/b/c").mkdir(parents=True, exist_ok=True)   # comme mkdir -p
+  Path("a/b/c/vide.txt").touch()                      # comme touch
+  ```
+
+  `parents=True` crée les dossiers intermédiaires ; `exist_ok=True` évite une erreur si le
+  dossier existe déjà.
+
+  ## Supprimer, déplacer
+
+  `p.unlink()` supprime un fichier, `p.rmdir()` un dossier **vide**, `p.rename(cible)`
+  déplace. Pour supprimer une arborescence entière : `shutil.rmtree` (avec prudence !).
+
+  ## Tester sans risque
+
+  Les tests utilisent `tempfile.TemporaryDirectory()` : un dossier temporaire supprimé
+  automatiquement. C'est la bonne pratique pour tout code qui touche au disque.
+
+  Cas d'usage : trouver les plus gros fichiers d'un serveur, compter les types de fichiers
+  d'un partage, préparer l'arborescence d'un nouveau projet.
+docs:
+  - title: Module pathlib
+    url: https://docs.python.org/fr/3/library/pathlib.html
+  - title: Module tempfile
+    url: https://docs.python.org/fr/3/library/tempfile.html
