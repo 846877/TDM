@@ -28,9 +28,116 @@ description: |
   arrêt : `pkill keepalived` ; journal : `grep Keepalived /var/log/syslog` (rsyslog est démarré).
 
   Pour l'instant, la passerelle `.254` n'existe pas : pc ne joint pas srv.
+cours: |
+  ## Le problème : la passerelle unique
+
+  Tous les postes d'un LAN ont **une** passerelle par défaut configurée. Si ce routeur tombe, plus aucun
+  poste ne sort du réseau, même si un second routeur est branché à côté : les postes ne savent pas qu'il
+  existe.
+
+  ## La solution : une adresse virtuelle
+
+  ```
+            pc (passerelle = 192.168.50.254)
+                     │
+         ┌───────────┴───────────┐
+   r1 192.168.50.2          r2 192.168.50.3
+   priorité 150             priorité 100
+   MAÎTRE : porte la VIP    SECOURS : écoute les annonces
+   192.168.50.254
+         │  annonces VRRP toutes les secondes (multicast 224.0.0.18, protocole IP 112)
+  ```
+
+  - Les routeurs d'un même groupe (**VRID**) s'élisent un **maître** : la priorité la plus haute gagne.
+  - Le maître porte l'**adresse IP virtuelle** (VIP) et une **adresse MAC virtuelle**
+    (`00:00:5e:00:01:<VRID>`), et envoie des annonces.
+  - Si le secours ne reçoit plus d'annonce pendant environ 3 intervalles, il prend la VIP et envoie un
+    **ARP gratuit** pour que les commutateurs et les postes mettent à jour leurs tables.
+  - **Préemption** : quand un routeur plus prioritaire revient, il reprend la main (désactivable avec
+    `nopreempt`).
+
+  Protocoles équivalents : **HSRP** (Cisco, propriétaire), **GLBP**, et CARP (BSD, pfSense).
+
+  ## keepalived
+
+  ```
+  global_defs {
+      script_user root
+      enable_script_security
+  }
+  vrrp_script chk_maintenance {
+      script "/usr/bin/test ! -e /etc/keepalived/maintenance"
+      interval 2
+      weight -60                 # priorité - 60 si le script échoue
+  }
+  vrrp_instance VI_LAN {
+      state MASTER               # état de départ (BACKUP sur l'autre routeur)
+      interface lan
+      virtual_router_id 50       # identique sur les deux routeurs
+      priority 150               # 100 sur le secours
+      advert_int 1
+      virtual_ipaddress { 192.168.50.254/24 }
+      track_script { chk_maintenance }
+  }
+  vrrp_sync_group VG_DURAND {
+      group { VI_LAN VI_SRV }    # basculent ensemble
+      notify /etc/keepalived/notify.sh
+  }
+  ```
+
+  | Besoin                    | Commande                                        |
+  |---------------------------|-------------------------------------------------|
+  | Qui porte la VIP ?        | `ip -br addr show lan`                          |
+  | Voir les annonces         | `tcpdump -ni lan vrrp`                          |
+  | Vérifier la configuration | `keepalived -t` (versions récentes)             |
+  | Journal                   | `grep Keepalived /var/log/syslog`, `journalctl -u keepalived` |
+  | Simuler une panne         | arrêter keepalived, couper l'interface, mode maintenance |
+
+  ## Pourquoi un groupe de synchronisation
+
+  Avec deux VIP (une par réseau), si seule celle du LAN basculait, les paquets aller passeraient par r2
+  et les réponses par r1 : un pare-feu à états les rejetterait (routage **asymétrique**). Le
+  `vrrp_sync_group` force les instances à changer d'état ensemble.
+
+  ## Pièges courants
+
+  - `virtual_router_id` différent entre les deux routeurs : chacun se croit seul, deux maîtres (*split
+    brain*) et conflit d'adresse.
+  - Multicast filtré par un commutateur ou un cloud : les deux deviennent maîtres. Solution : unicast.
+  - Pare-feu local qui bloque le protocole VRRP (112).
+  - Tester la haute disponibilité une fois à l'installation, puis plus jamais : la bascule doit être
+    testée régulièrement, en heures creuses.
+
+  ## Bonnes pratiques en entreprise
+
+  - Redondance de bout en bout : deux routeurs, mais aussi deux alimentations, deux liens, deux
+    commutateurs (sinon on a juste déplacé le point unique de défaillance).
+  - Scripts de surveillance (lien amont, service) pour basculer quand le routeur est vivant mais inutile.
+  - Notification et supervision des changements d'état, journal des bascules.
+  - Mêmes principes pour d'autres services : un VIP keepalived devant deux HAProxy, deux serveurs DNS...
+docs:
+  - title: Documentation de keepalived
+    url: https://keepalived.readthedocs.io/
+  - title: keepalived.conf(5) - syntaxe (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/keepalived.conf.5.html
+  - title: Wikipédia - Virtual Router Redundancy Protocol
+    url: https://fr.wikipedia.org/wiki/Virtual_Router_Redundancy_Protocol
 exercises:
   - id: vip-lan
     title: Adresse virtuelle côté LAN
+    cours: |
+      Une instance VRRP se décrit dans un bloc `vrrp_instance <nom> { ... }` de
+      `/etc/keepalived/keepalived.conf` :
+
+      - `state` : état de départ (`MASTER` ou `BACKUP`) ;
+      - `interface` : interface où envoyer les annonces ;
+      - `virtual_router_id` : numéro du groupe, **identique** sur tous les routeurs du groupe ;
+      - `priority` : la plus haute devient maître ;
+      - `advert_int` : intervalle des annonces en secondes ;
+      - `virtual_ipaddress { ... }` : la ou les VIP.
+
+      `ip -br addr show lan` montre la VIP sur le maître seulement. Les postes utilisent la VIP comme
+      passerelle, jamais l'adresse réelle d'un routeur.
     description: |
       Configure sur r1 et r2 une instance VRRP `VI_LAN` sur l'interface `lan` :
       - `virtual_router_id 50` (identique sur les deux routeurs), `advert_int 1` ;
@@ -49,6 +156,14 @@ exercises:
 
   - id: groupe-sync
     title: Deuxième VIP et groupe de synchronisation
+    cours: |
+      Chaque réseau a sa propre instance VRRP (avec son propre `virtual_router_id`). Si les instances étaient
+      indépendantes, une panne partielle pourrait laisser la VIP du LAN sur r1 et celle des serveurs sur r2 :
+      trafic asymétrique, souvent bloqué par les pare-feu à états.
+
+      Un `vrrp_sync_group <nom> { group { <instance1> <instance2> } }` lie les instances : si l'une passe en
+      secours ou en panne, toutes suivent. Après modification, redémarre keepalived sur les deux routeurs et
+      vérifie où sont les deux VIP.
     description: |
       Le serveur utilise lui aussi une passerelle virtuelle. Ajoute une instance `VI_SRV` sur l'interface
       `serveurs` (`virtual_router_id 51`, VIP `10.50.0.254/24`, mêmes priorités), puis un
@@ -67,6 +182,15 @@ exercises:
 
   - id: bascule
     title: Tester la bascule
+    cours: |
+      Tester une haute disponibilité, c'est provoquer la panne et mesurer l'interruption :
+
+      - arrêter keepalived sur le maître (`pkill keepalived`) simule une panne du routeur ;
+      - sur le secours, la VIP apparaît dans `ip addr` après environ 3 intervalles d'annonce ;
+      - un `ping` continu depuis un poste montre combien de paquets sont perdus.
+
+      Au redémarrage du maître, la **préemption** (comportement par défaut) lui rend la main car sa
+      priorité est plus haute. Le journal (`/var/log/syslog`) trace chaque transition d'état.
     description: |
       Teste la panne du maître : arrête keepalived sur r1 et observe sur r2 (`ip addr`, journal) la reprise
       des deux VIP ; depuis pc, un `ping 10.50.0.10` lancé pendant la bascule ne perd que quelques paquets.
@@ -100,6 +224,17 @@ exercises:
 
   - id: surveillance
     title: Script de surveillance
+    cours: |
+      Un `vrrp_script` exécute une commande à intervalle régulier ; son code de retour décide de l'état :
+      0 = sain, autre = en échec. Avec `weight -N`, un échec retire N points à la priorité de l'instance qui
+      le suit (`track_script`), ce qui peut faire passer l'autre routeur devant.
+
+      Choisis le poids pour que la priorité du maître en échec tombe **sous** celle du secours. Les
+      directives `script_user` et `enable_script_security` dans `global_defs` encadrent l'exécution des
+      scripts (keepalived refuse sinon les scripts modifiables par d'autres utilisateurs).
+
+      `touch` et `rm` d'un fichier « maintenance » sont un moyen simple et sûr de basculer pour une
+      intervention.
     description: |
       Un routeur peut être vivant mais inutilisable (maintenance, lien amont coupé). Sur r1 **et** r2,
       ajoute un `vrrp_script chk_maintenance` qui échoue si le fichier `/etc/keepalived/maintenance` existe
@@ -131,6 +266,16 @@ exercises:
 
   - id: notifications
     title: Notifications de changement d'état
+    cours: |
+      keepalived peut lancer un script à chaque changement d'état, avec la directive `notify` (dans une
+      instance ou un groupe). Il lui passe trois arguments : le type (`GROUP` ou `INSTANCE`), le nom, et le
+      nouvel état (`MASTER`, `BACKUP`, `FAULT`).
+
+      Le script doit être exécutable, appartenir à root et ne pas être modifiable par d'autres (sécurité des
+      scripts). `>>` ajoute une ligne au fichier de journal ; `date '+%F %T'` donne date et heure.
+
+      En production, ce script envoie un mail, un message dans un outil de discussion ou une alerte à la
+      supervision.
     description: |
       L'équipe veut être prévenue de chaque bascule. Écris sur r1 et r2 le script
       `/etc/keepalived/notify.sh` (exécutable, propriétaire root) qui ajoute à `/var/log/vrrp-etat.log` une
@@ -146,6 +291,16 @@ exercises:
 
   - id: unicast
     title: VRRP en unicast
+    cours: |
+      Par défaut, VRRP envoie ses annonces en **multicast** (`224.0.0.18`). Certains réseaux le filtrent :
+      chaque routeur se croit alors seul et devient maître.
+
+      En **unicast**, chaque instance indique :
+      - `unicast_src_ip` : sa propre adresse sur l'interface de l'instance ;
+      - `unicast_peer { ... }` : l'adresse (ou les adresses) des autres routeurs du groupe.
+
+      La configuration diffère donc entre r1 et r2 (adresses inversées). `tcpdump -ni lan vrrp` montre les
+      annonces et leur destination.
     description: |
       Dans beaucoup d'environnements (clouds, certains commutateurs filtrants), le multicast VRRP
       (224.0.0.18) ne passe pas. Configure les deux instances en **unicast** : `unicast_src_ip` (adresse du
