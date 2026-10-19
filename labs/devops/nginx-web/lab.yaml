@@ -342,3 +342,90 @@ exercises:
           curl -s -o /dev/null -D - http://localhost:8080/lb/ | grep -Eqi '^x-upstream: 127\.0\.0\.1:900[12]'
       - desc: La page d'accueil fonctionne toujours
         run: curl -fsS http://localhost:8080 | grep -q "Bienvenue sur TDM"
+  - id: ng-redirection
+    title: Redirections permanentes
+    description: |
+      Le site a été réorganisé : l'ancienne adresse `/ancien` doit renvoyer **définitivement** (code `301`) vers
+      `/nouveau/`, qui sert la page `/var/www/tdm/nouveau/index.html` contenant `Nouvelle page`.
+
+      Ajoute aussi une redirection **temporaire** (`302`) de `/aide` vers `https://nginx.org/en/docs/`.
+    hint: "location = /ancien { return 301 /nouveau/; } ; location = /aide { return 302 https://nginx.org/en/docs/; }"
+    cours: |
+      Une **redirection** est une réponse 3xx accompagnée d'un en-tête `Location` : le navigateur fait alors une
+      nouvelle requête vers cette adresse. Le code compte :
+      - `301` (*Moved Permanently*) ou `308` : définitif. Les navigateurs et les moteurs de recherche
+        mémorisent la nouvelle adresse ;
+      - `302` (*Found*) ou `307` : temporaire (maintenance, campagne).
+
+      Dans nginx, `return CODE URL;` est la façon la plus simple et la plus rapide de rediriger. Une
+      `location = /chemin` (correspondance **exacte**) évite de capturer d'autres chemins qui commenceraient
+      pareil. Une URL relative (`/nouveau/`) est complétée par nginx avec le schéma et l'hôte de la requête.
+
+      `rewrite` existe aussi pour des réécritures à base d'expressions régulières. Pour tester sans suivre la
+      redirection : `curl -I` ; pour la suivre : `curl -L`.
+    checks:
+      - desc: /ancien redirige en 301 vers /nouveau/
+        run: test "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' http://localhost:8080/ancien)" = "301 http://localhost:8080/nouveau/"
+      - desc: /nouveau/ affiche la nouvelle page
+        run: curl -fsSL http://localhost:8080/ancien | grep -q 'Nouvelle page'
+      - desc: /aide redirige en 302 vers la documentation nginx
+        run: test "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' http://localhost:8080/aide)" = "302 https://nginx.org/en/docs/"
+  - id: ng-limitation
+    title: Limiter le débit des requêtes
+    description: |
+      Protège la page de connexion `/connexion/` (fichier `/var/www/tdm/connexion/index.html` contenant
+      `Connexion`) contre le forçage de mots de passe :
+      - déclare une zone de limitation `connexion` (10 Mo de mémoire) à **1 requête par seconde** par adresse IP ;
+      - applique-la à `/connexion/` avec une rafale tolérée de **5** requêtes, sans délai (`nodelay`) ;
+      - au-delà, nginx doit répondre **`429`** au lieu du `503` par défaut.
+
+      Le reste du site ne doit pas être limité.
+    hint: "limit_req_zone $binary_remote_addr zone=connexion:10m rate=1r/s; (contexte http) puis dans location /connexion/ : limit_req zone=connexion burst=5 nodelay; limit_req_status 429;"
+    cours: |
+      Le module `limit_req` limite le **débit** de requêtes selon une clé, avec l'algorithme du seau percé
+      (*leaky bucket*) :
+      - `limit_req_zone CLE zone=NOM:TAILLE rate=N r/s;` (contexte `http`) déclare la zone. La clé
+        `$binary_remote_addr` (l'IP du client sous forme compacte) donne une limite par client ; 10 Mo
+        suffisent pour environ 160 000 adresses ;
+      - `limit_req zone=NOM burst=N nodelay;` (dans un `server` ou une `location`) applique la limite.
+        `burst` tolère une rafale au-dessus du débit ; avec `nodelay`, ces requêtes sont servies tout de suite
+        plutôt que retardées ;
+      - `limit_req_status 429;` remplace le code par défaut (503) par le code standard *Too Many Requests*.
+
+      `limit_conn` limite, lui, le nombre de connexions simultanées. Pour tester, une boucle de requêtes
+      rapides avec `curl -w '%{http_code}\n'` montre les refus.
+    checks:
+      - desc: La page de connexion répond
+        run: curl -fsS http://localhost:8080/connexion/ | grep -q 'Connexion'
+      - desc: Une rafale de requêtes reçoit des 429
+        run: sleep 2; for i in $(seq 1 15); do curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/connexion/; done | grep -q '^429$'
+      - desc: Le reste du site n'est pas limité
+        run: sleep 2; for i in $(seq 1 15); do curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/; done | sort -u | grep -qx 200
+  - id: ng-spa
+    title: Servir une application monopage
+    description: |
+      Une application monopage (React, Vue…) gère ses propres routes dans le navigateur : `/app/clients/42` n'existe
+      pas sur le disque, mais doit renvoyer `/var/www/tdm/app/index.html` (qui contient `Application TDM`) avec
+      le code **200**.
+
+      En revanche, un fichier statique existant (crée `/var/www/tdm/app/app.js` contenant `console.log("tdm")`) doit
+      être servi tel quel.
+    hint: "location /app/ { try_files $uri $uri/ /app/index.html; }"
+    cours: |
+      `try_files` essaie une liste de chemins dans l'ordre et sert le premier qui existe ; le dernier élément
+      est le repli (une URI interne ou un code comme `=404`). Les variables utiles : `$uri` (le chemin demandé)
+      et `$uri/` (le même en tant que dossier, qui déclenche la directive `index`).
+
+      `try_files $uri $uri/ /app/index.html;` signifie donc : le fichier s'il existe, sinon le dossier, sinon la
+      page de l'application. C'est la configuration standard pour une application monopage, dont le routeur
+      JavaScript lit l'URL dans le navigateur.
+
+      La même directive sert aussi devant une application : `try_files $uri @backend;` envoie au proxy tout ce
+      qui n'est pas un fichier statique, avec une `location @backend` nommée.
+    checks:
+      - desc: Une route de l'application renvoie index.html en 200
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/app/clients/42)" = 200 && curl -fsS http://localhost:8080/app/clients/42 | grep -q 'Application TDM'
+      - desc: Un fichier statique existant est servi tel quel
+        run: curl -fsS http://localhost:8080/app/app.js | grep -q 'console.log'
+      - desc: La racine de l'application répond
+        run: curl -fsS http://localhost:8080/app/ | grep -q 'Application TDM'

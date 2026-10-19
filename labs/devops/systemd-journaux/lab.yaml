@@ -382,3 +382,67 @@ exercises:
         run: test "$(systemctl show -p CPUQuotaPerSecUSec --value tdm-api)" = 200ms
       - desc: Le service tourne toujours
         run: test "$(systemctl is-active tdm-api)" = active
+  - id: sd-envfile
+    title: Configuration par fichier d'environnement
+    description: |
+      Sépare la configuration de l'unité :
+      1. crée `/etc/tdm/config.env` contenant `APP_MODE=production` et `APP_PORT=8443` (droits `640`) ;
+      2. écris l'unité `tdm-config.service`, de type `oneshot` qui **reste active** après son exécution
+         (`RemainAfterExit=yes`), qui charge ce fichier (`EnvironmentFile=`) et lance
+         `/bin/sh -c 'echo "mode=$APP_MODE port=$APP_PORT" > /run/tdm-config.txt'` ;
+      3. active-la et démarre-la.
+
+      `/run/tdm-config.txt` doit contenir `mode=production port=8443`.
+    hint: "[Service] Type=oneshot / RemainAfterExit=yes / EnvironmentFile=/etc/tdm/config.env / ExecStart=... ; [Install] WantedBy=multi-user.target"
+    cours: |
+      Plutôt que d'écrire les paramètres dans le fichier d'unité, on les range dans un **fichier
+      d'environnement** : `EnvironmentFile=/chemin` charge des lignes `NOM=valeur` (sans `export`). Le fichier
+      peut être géré par Ansible, contenir des secrets protégés par ses droits, et changer sans toucher à
+      l'unité. Un `-` devant le chemin (`EnvironmentFile=-/etc/...`) rend le fichier facultatif.
+
+      Les variables sont transmises au processus ; systemd sait aussi les remplacer lui-même dans `ExecStart`
+      avec la syntaxe `${NOM}`. Avec `sh -c '...'`, c'est le shell qui les remplace : attention aux guillemets.
+
+      `Type=oneshot` décrit une tâche qui se termine ; avec `RemainAfterExit=yes`, l'unité reste `active`
+      après la fin du processus, ce qui permet de l'utiliser comme une étape d'initialisation dont d'autres
+      unités dépendent. `systemctl show -p EnvironmentFiles` vérifie le fichier chargé.
+    checks:
+      - desc: Le fichier d'environnement existe avec les bons droits
+        run: test "$(stat -c %a /etc/tdm/config.env)" = 640 && grep -qx 'APP_MODE=production' /etc/tdm/config.env && grep -qx 'APP_PORT=8443' /etc/tdm/config.env
+      - desc: tdm-config est active, activée et charge le fichier
+        run: test "$(systemctl is-active tdm-config)" = active && test "$(systemctl is-enabled tdm-config)" = enabled && systemctl show -p EnvironmentFiles --value tdm-config | grep -q '/etc/tdm/config.env'
+      - desc: Le service a utilisé les variables
+        run: test "$(cat /run/tdm-config.txt)" = "mode=production port=8443"
+  - id: sd-durcissement
+    title: Durcir un service (sandbox systemd)
+    description: |
+      systemd sait enfermer un service sans conteneur. Ajoute à `tdm-api` un **second** drop-in
+      `/etc/systemd/system/tdm-api.service.d/durcissement.conf` qui active :
+      - `NoNewPrivileges=yes` ;
+      - `PrivateTmp=yes` ;
+      - `ProtectSystem=strict` ;
+      - `ProtectHome=yes`.
+
+      Recharge et redémarre : l'API doit toujours répondre sur le port 8000. Observe la note avec
+      `systemd-analyze security tdm-api`.
+    hint: "[Service] puis les quatre directives ; systemctl daemon-reload && systemctl restart tdm-api"
+    cours: |
+      systemd utilise les mêmes mécanismes du noyau que les conteneurs (espaces de noms, cgroups, capabilities)
+      pour **restreindre** un service, simplement par des directives de l'unité :
+      - `NoNewPrivileges=yes` : le processus et ses enfants ne peuvent jamais gagner de privilèges (setuid) ;
+      - `PrivateTmp=yes` : un `/tmp` privé, invisible des autres services ;
+      - `ProtectSystem=strict` : tout le système de fichiers est en lecture seule pour le service, sauf ce qui
+        est autorisé par `ReadWritePaths=` ;
+      - `ProtectHome=yes` : `/home`, `/root` et `/run/user` deviennent inaccessibles ;
+      - et bien d'autres : `CapabilityBoundingSet=`, `RestrictAddressFamilies=`, `SystemCallFilter=`.
+
+      `systemd-analyze security unite` attribue une note d'exposition (de 0 à 10) et liste les mesures
+      possibles. Plusieurs drop-ins peuvent coexister dans le dossier `.d/` : ils sont appliqués par ordre
+      alphabétique.
+    checks:
+      - desc: Le drop-in durcissement.conf existe
+        run: test -f /etc/systemd/system/tdm-api.service.d/durcissement.conf
+      - desc: Les protections sont appliquées
+        run: test "$(systemctl show -p NoNewPrivileges --value tdm-api) $(systemctl show -p PrivateTmp --value tdm-api) $(systemctl show -p ProtectSystem --value tdm-api) $(systemctl show -p ProtectHome --value tdm-api)" = "yes yes strict yes"
+      - desc: L'API répond toujours
+        run: test "$(systemctl is-active tdm-api)" = active && curl -fsS --max-time 5 http://localhost:8000/health | grep -q ok
