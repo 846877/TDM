@@ -13,6 +13,9 @@ if (-not (Test-Path "$embed\python.exe")) {
 }
 
 python -m pip install -r desktop\requirements.txt
+# « labs » embarque aussi labs\systemes-windows (Vagrantfile + scripts des VM Windows) : l'agent Vagrant
+# les copie dans %LOCALAPPDATA%\TDM\vagrant avant de les lancer (ne lance pas `vagrant up` dans le dépôt :
+# l'état .vagrant serait embarqué dans l'exe).
 python -m PyInstaller --noconfirm --clean --onefile --windowed --name TDM `
     --paths backend --paths scripts `
     --add-data "frontend;frontend" `

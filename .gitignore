@@ -9,3 +9,5 @@ dist/
 *.spec
 .data/
 .claude/
+.vagrant/
+labs/systemes-windows/*/.tdm/
