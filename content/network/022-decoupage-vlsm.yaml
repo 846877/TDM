@@ -1,0 +1,105 @@
+title: Découper un réseau en sous-réseaux (VLSM)
+level: debutant
+order: 22
+device: router
+hostname: R-AGENCE
+tags: [sous-réseaux, vlsm, masque, ipv4]
+summary: Calculer les masques adaptés à chaque besoin et adresser le routeur.
+description: |
+  L'agence dispose du réseau `192.168.50.0/24`. Il faut le découper ainsi, **du plus grand au plus
+  petit besoin**, en partant de `192.168.50.0` :
+
+  | Réseau      | Besoin   | Interface | Adresse du routeur        |
+  |-------------|----------|-----------|---------------------------|
+  | Bureaux     | 50 hôtes | `G0/0`    | 1ʳᵉ adresse utilisable    |
+  | Atelier     | 20 hôtes | `G0/1`    | 1ʳᵉ adresse utilisable    |
+  | Lien WAN    | 2 hôtes  | `S0/0/0`  | 1ʳᵉ adresse utilisable    |
+
+  Pour chaque réseau, trouve le **plus petit masque** qui convient, calcule l'adresse du réseau,
+  puis configure l'interface et active-la.
+
+  Astuce : un /26 contient 64 adresses (62 utilisables), un /27 32 (30), un /30 4 (2).
+checks:
+  - desc: G0/0 (bureaux, 50 hôtes) en 192.168.50.1/26
+    expr: intf("g0/0").ip == "192.168.50.1" and intf("g0/0").mask == "255.255.255.192"
+    hint: "50 hôtes -> /26 (255.255.255.192) : réseau 192.168.50.0, routeur en .1"
+  - desc: G0/1 (atelier, 20 hôtes) en 192.168.50.65/27
+    expr: intf("g0/1").ip == "192.168.50.65" and intf("g0/1").mask == "255.255.255.224"
+    hint: "Le /26 des bureaux s'arrête à .63 : l'atelier commence en .64"
+  - desc: S0/0/0 (WAN) en 192.168.50.97/30
+    expr: intf("s0/0/0").ip == "192.168.50.97" and intf("s0/0/0").mask == "255.255.255.252"
+    hint: "L'atelier (/27) va de .64 à .95 : le WAN commence en .96"
+  - desc: Les trois interfaces sont activées
+    expr: not any(intf(n).shutdown for n in ("g0/0", "g0/1", "s0/0/0"))
+solution: |
+  configure terminal
+  interface g0/0
+  ip address 192.168.50.1 255.255.255.192
+  no shutdown
+  interface g0/1
+  ip address 192.168.50.65 255.255.255.224
+  no shutdown
+  interface s0/0/0
+  ip address 192.168.50.97 255.255.255.252
+  no shutdown
+  end
+cours: |
+  ## Le principe du découpage
+
+  Une adresse IPv4 est formée d'une partie **réseau** et d'une partie **hôte**. Le masque (ou la
+  longueur de préfixe `/n`) indique où se trouve la frontière. Dans un sous-réseau de préfixe `/n` :
+
+  - nombre d'adresses = 2^(32 − n) ;
+  - adresses utilisables = 2^(32 − n) − 2 (la première est l'adresse **du réseau**, la dernière
+    celle de **diffusion**).
+
+  | Préfixe | Masque            | Adresses | Utilisables |
+  |---------|-------------------|----------|-------------|
+  | /24     | 255.255.255.0     | 256      | 254         |
+  | /25     | 255.255.255.128   | 128      | 126         |
+  | /26     | 255.255.255.192   | 64       | 62          |
+  | /27     | 255.255.255.224   | 32       | 30          |
+  | /28     | 255.255.255.240   | 16       | 14          |
+  | /29     | 255.255.255.248   | 8        | 6           |
+  | /30     | 255.255.255.252   | 4        | 2           |
+
+  ### La méthode VLSM
+
+  **VLSM** (*Variable Length Subnet Mask*) consiste à donner à chaque réseau un masque adapté à
+  sa taille, au lieu d'un masque unique. Méthode :
+
+  1. classer les besoins du **plus grand au plus petit** ;
+  2. pour chacun, choisir le plus petit bloc qui convient (en comptant le routeur !) ;
+  3. placer les blocs les uns après les autres ; chaque bloc commence sur un **multiple de sa
+     taille** (un /27 commence en .0, .32, .64, .96...).
+
+  Exemple avec `10.4.8.0/24` et des besoins de 100, 25 et 2 hôtes :
+
+  | Besoin | Bloc | Réseau          | Plage utilisable         | Diffusion  |
+  |--------|------|-----------------|--------------------------|------------|
+  | 100    | /25  | 10.4.8.0/25     | 10.4.8.1 – 10.4.8.126    | 10.4.8.127 |
+  | 25     | /27  | 10.4.8.128/27   | 10.4.8.129 – 10.4.8.158  | 10.4.8.159 |
+  | 2      | /30  | 10.4.8.160/30   | 10.4.8.161 – 10.4.8.162  | 10.4.8.163 |
+
+  Sur IOS, l'adresse se configure toujours avec le masque en notation décimale :
+  `ip address 10.4.8.129 255.255.255.224`.
+
+  ### Pièges fréquents
+
+  - Commencer par les petits réseaux : les grands blocs ne trouvent plus d'emplacement aligné.
+  - Oublier les adresses réseau et diffusion : 30 hôtes ne tiennent pas dans un /27 si l'on ajoute
+    le routeur et une imprimante... compte large.
+  - Donner au routeur l'adresse de réseau (`.64`) : IOS répond `Bad mask` ou refuse l'adresse.
+  - Négliger la croissance : on laisse souvent de la place entre les blocs.
+
+  ### Pour le CCNA
+
+  Le calcul de sous-réseaux doit devenir un **réflexe** : réseau, première et dernière adresse,
+  diffusion et nombre d'hôtes, en moins d'une minute et sans calculatrice.
+docs:
+  - title: Wikipédia — Sous-réseau
+    url: https://fr.wikipedia.org/wiki/Sous-r%C3%A9seau
+  - title: Wikipédia — Classless Inter-Domain Routing
+    url: https://fr.wikipedia.org/wiki/Classless_Inter-Domain_Routing
+  - title: RFC 4632 — Classless Inter-domain Routing (CIDR)
+    url: https://www.rfc-editor.org/rfc/rfc4632

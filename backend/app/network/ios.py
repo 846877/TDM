@@ -3690,7 +3690,7 @@ class Session:
 
     def rtr_redistribute(self, args, negate):
         words = args[0].split()
-        if not words or words[0].lower() not in ("static", "connected", "ospf", "eigrp", "rip"):
+        if not words or words[0].lower() not in ("static", "connected", "ospf", "eigrp", "rip", "bgp"):
             raise CommandError(INVALID)
         text = " ".join([words[0].lower(), *words[1:]])
         proc = self._process()
