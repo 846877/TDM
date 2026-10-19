@@ -1,0 +1,186 @@
+title: Adressage IP et diagnostic réseau
+level: debutant
+order: 3
+tags: [ip, masque, passerelle, dns, ping, traceroute, ss, tcpdump, nmap]
+summary: Lire et calculer un plan d'adressage, configurer passerelle et DNS, diagnostiquer avec ping, traceroute, dig, ss et tcpdump.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Premier jour chez *Ateliers Durand*. Ton poste d'administration est branché sur le LAN
+  des utilisateurs mais « Internet ne marche pas » : il n'a pas de passerelle et utilise un mauvais DNS.
+  Avant de le réparer, tu dois comprendre le plan d'adressage, puis cartographier le réseau.
+
+  **Topologie.**
+
+  ```
+   LAN 192.168.10.0/24                      SERVEURS 10.0.20.0/24
+   admin       192.168.10.50 ──┐        ┌── srv-web  10.0.20.10  (intranet)
+   imprimante  192.168.10.?? ──┼─ routeur ─┼── srv-bdd  10.0.20.30
+                               │ .254  .254 └── srv-dns  10.0.20.53  (DNS durand.lan)
+  ```
+
+  Ton terminal est sur **admin** (`root`). Les réponses demandées s'écrivent dans
+  `/root/reponses.txt`, une par ligne, au format `cle=valeur` (par exemple `ip=10.1.2.3`).
+
+  Outils : `ip a`, `ip route`, `ipcalc`, `ping`, `traceroute`, `mtr`, `dig`, `getent hosts`, `ss`,
+  `nc`, `nmap`, `curl`, `tcpdump`.
+exercises:
+  - id: ma-config
+    title: Lire la configuration de son poste
+    description: |
+      Avec `ip -br addr` et `ip link`, relève la configuration de l'interface `eth0` d'admin et écris dans
+      `/root/reponses.txt` :
+
+      ```
+      ip=<adresse IPv4>
+      prefixe=<longueur du préfixe, ex. 16>
+      masque=<masque en notation décimale pointée>
+      mac=<adresse MAC>
+      reseau=<adresse du réseau>
+      broadcast=<adresse de diffusion>
+      ```
+    hint: "ipcalc 192.168.10.50/24 donne réseau, masque et broadcast ; la MAC est sur la ligne link/ether de ip link"
+    checks:
+      - desc: ip, prefixe et masque
+        run: |
+          f=/root/reponses.txt
+          grep -Eqi '^ip *= *192\.168\.10\.50 *$' $f && grep -Eqi '^prefixe *= */?24 *$' $f && grep -Eqi '^masque *= *255\.255\.255\.0 *$' $f
+      - desc: adresse MAC
+        run: grep -Eqi '^mac *= *02:42:c0:a8:0a:32 *$' /root/reponses.txt
+      - desc: réseau et broadcast
+        run: grep -Eqi '^reseau *= *192\.168\.10\.0(/24)? *$' /root/reponses.txt && grep -Eqi '^broadcast *= *192\.168\.10\.255 *$' /root/reponses.txt
+
+  - id: calcul
+    title: Calculs de sous-réseaux
+    description: |
+      Le responsable prépare l'extension du réseau. Calcule (à la main, puis vérifie avec `ipcalc`) et ajoute
+      à `/root/reponses.txt` :
+
+      1. Pour le réseau des sites distants `172.16.40.0/21` :
+         - `c1_masque=` le masque décimal,
+         - `c1_broadcast=` l'adresse de diffusion,
+         - `c1_hotes=` le nombre d'adresses utilisables pour des machines,
+         - `c1_appartient=` `oui` ou `non` : l'adresse `172.16.45.200` fait-elle partie de ce réseau ?
+      2. Le réseau `192.168.50.0/24` est découpé en **4 sous-réseaux de même taille** (pour 4 étages).
+         Pour le **quatrième** (le dernier) :
+         - `c2_masque=` le masque décimal,
+         - `c2_reseau=` l'adresse de réseau,
+         - `c2_premier=` la première adresse utilisable,
+         - `c2_dernier=` la dernière adresse utilisable.
+    hint: "/21 = 255.255.248.0 (blocs de 8 sur le 3e octet) ; 4 sous-réseaux d'un /24 = des /26 (blocs de 64)"
+    checks:
+      - desc: Réseau 172.16.40.0/21
+        run: |
+          f=/root/reponses.txt
+          grep -Eqi '^c1_masque *= *255\.255\.248\.0 *$' $f && grep -Eqi '^c1_broadcast *= *172\.16\.47\.255 *$' $f &&
+          grep -Eqi '^c1_hotes *= *2046 *$' $f && grep -Eqi '^c1_appartient *= *oui *$' $f
+      - desc: Quatrième sous-réseau de 192.168.50.0/24
+        run: |
+          f=/root/reponses.txt
+          grep -Eqi '^c2_masque *= *255\.255\.255\.192 *$' $f && grep -Eqi '^c2_reseau *= *192\.168\.50\.192(/26)? *$' $f &&
+          grep -Eqi '^c2_premier *= *192\.168\.50\.193 *$' $f && grep -Eqi '^c2_dernier *= *192\.168\.50\.254 *$' $f
+
+  - id: passerelle
+    title: Configurer la passerelle par défaut
+    description: |
+      `ping 10.0.20.10` échoue : `Network is unreachable`. Affiche la table de routage (`ip route`) : il n'y a
+      que le réseau directement connecté.
+
+      Vérifie que le routeur répond (`ping -c2 192.168.10.254`), puis ajoute-le comme **passerelle par
+      défaut** du poste. Le serveur web `10.0.20.10` doit alors répondre au ping et en HTTP.
+    hint: ip route add default via 192.168.10.254
+    checks:
+      - desc: La route par défaut passe par 192.168.10.254
+        run: ip route show default | grep -q 'via 192.168.10.254'
+      - desc: srv-web répond au ping
+        run: ping -c2 -W2 10.0.20.10 >/dev/null
+      - desc: L'intranet répond en HTTP
+        run: curl -fsS -m5 http://10.0.20.10/ | grep -q Intranet
+
+  - id: traceroute
+    title: Suivre le chemin des paquets
+    description: |
+      Lance `traceroute -n 10.0.20.30` et enregistre sa sortie dans `/root/traceroute.txt`.
+
+      Ajoute ensuite à `/root/reponses.txt` :
+      - `sauts=` le nombre de sauts (lignes) pour atteindre srv-bdd ;
+      - `routeur_lan=` l'adresse par laquelle le routeur apparaît dans le traceroute.
+
+      Question à te poser : pourquoi le routeur apparaît-il avec son adresse du LAN et pas celle du réseau
+      serveurs ?
+    hint: traceroute -n 10.0.20.30 | tee /root/traceroute.txt
+    checks:
+      - desc: traceroute.txt montre le routeur puis srv-bdd
+        run: grep -q '192\.168\.10\.254' /root/traceroute.txt && grep -q '10\.0\.20\.30' /root/traceroute.txt
+      - desc: Réponses sauts et routeur_lan
+        run: grep -Eqi '^sauts *= *2 *$' /root/reponses.txt && grep -Eqi '^routeur_lan *= *192\.168\.10\.254 *$' /root/reponses.txt
+
+  - id: dns
+    title: Configurer et interroger le DNS interne
+    description: |
+      Le DNS de l'entreprise est `srv-dns` (`10.0.20.53`), il sert la zone `durand.lan`.
+
+      1. Configure le résolveur du poste dans `/etc/resolv.conf` : serveur `10.0.20.53` et domaine de
+         recherche `durand.lan` (pour que `ping srv-web` fonctionne sans le nom complet).
+      2. Avec `dig`, trouve et ajoute à `/root/reponses.txt` :
+         - `dns_mx=` le serveur de messagerie de `durand.lan` (enregistrement MX) ;
+         - `dns_intranet=` le nom canonique vers lequel pointe `intranet.durand.lan` (CNAME) ;
+         - `dns_inverse=` le nom associé à l'adresse `10.0.20.30` (résolution inverse, `dig -x`).
+    hint: "printf 'nameserver 10.0.20.53\nsearch durand.lan\n' > /etc/resolv.conf ; dig MX durand.lan ; dig -x 10.0.20.30"
+    checks:
+      - desc: resolv.conf utilise 10.0.20.53 et le domaine durand.lan
+        run: grep -Eq '^nameserver +10\.0\.20\.53' /etc/resolv.conf && grep -Eq '^(search|domain) +.*durand\.lan' /etc/resolv.conf
+      - desc: Le nom court srv-web se résout
+        run: getent hosts srv-web | grep -q '^10\.0\.20\.10'
+      - desc: Réponses MX, CNAME et inverse
+        run: |
+          f=/root/reponses.txt
+          grep -Eqi '^dns_mx *= *messagerie\.durand\.lan\.? *$' $f &&
+          grep -Eqi '^dns_intranet *= *srv-web\.durand\.lan\.? *$' $f &&
+          grep -Eqi '^dns_inverse *= *srv-bdd\.durand\.lan\.? *$' $f
+
+  - id: ports
+    title: Ports et services
+    description: |
+      1. Le serveur `srv-bdd` héberge une base de données, mais personne ne sait sur quel port. Trouve-le
+         avec `nmap` (ou `nc -zv srv-bdd 1-10000`), puis récupère la bannière avec `nc`. Réponse : `bdd_port=`.
+      2. Sur **ton propre poste**, un agent d'inventaire écoute en TCP. Avec `ss -ltnp`, trouve son port et
+         le nom de son processus. Réponses : `agent_port=` et `agent_processus=`.
+    hint: "nmap -p- srv-bdd ; ss -ltnp"
+    checks:
+      - desc: Port de la base de données
+        run: grep -Eqi '^bdd_port *= *5432 *$' /root/reponses.txt
+      - desc: Port et processus de l'agent local
+        run: grep -Eqi '^agent_port *= *8731 *$' /root/reponses.txt && grep -Eqi '^agent_processus *= *inventaire-agt *$' /root/reponses.txt
+
+  - id: decouverte
+    title: Retrouver une machine sur le LAN
+    description: |
+      Une imprimante a été branchée sur le LAN mais personne n'a noté son adresse. Fais un balayage du réseau
+      (`nmap -sn 192.168.10.0/24`, ou une boucle de `ping`), consulte la table ARP (`ip neigh`) puis sa page
+      web d'administration.
+
+      Réponses : `imprimante_ip=` et `imprimante_serie=` (le numéro de série affiché sur sa page).
+    hint: "nmap -sn 192.168.10.0/24 puis curl http://<adresse>/"
+    checks:
+      - desc: Adresse de l'imprimante
+        run: grep -Eqi '^imprimante_ip *= *192\.168\.10\.77 *$' /root/reponses.txt
+      - desc: Numéro de série
+        run: grep -Eqi '^imprimante_serie *= *IMP-4821-DR *$' /root/reponses.txt
+
+  - id: capture
+    title: Capturer le trafic avec tcpdump
+    description: |
+      Pour prouver à un collègue que le poste interroge bien le bon DNS, capture le trafic DNS
+      (port 53) dans le fichier `/root/capture-dns.pcap` pendant que tu résous `srv-bdd.durand.lan`.
+
+      Lance la capture en arrière-plan, fais la requête, puis arrête tcpdump. Relis la capture avec
+      `tcpdump -nr /root/capture-dns.pcap` : on doit y voir la question **et** la réponse du serveur.
+    hint: "tcpdump -i eth0 -w /root/capture-dns.pcap port 53 &  puis  dig srv-bdd.durand.lan  puis  kill %1"
+    checks:
+      - desc: La capture contient la requête A pour srv-bdd.durand.lan
+        run: tcpdump -nr /root/capture-dns.pcap 2>/dev/null | grep -q 'A? srv-bdd\.durand\.lan'
+      - desc: La capture contient la réponse 10.0.20.30 envoyée par 10.0.20.53
+        run: tcpdump -nr /root/capture-dns.pcap 2>/dev/null | grep '10\.0\.20\.53\.53 >' | grep -q 'A 10\.0\.20\.30'

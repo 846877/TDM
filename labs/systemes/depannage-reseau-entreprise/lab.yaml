@@ -1,0 +1,154 @@
+title: Dépannage réseau – le lundi noir d'Ateliers Durand
+level: expert
+order: 1
+tags: [dépannage, réseau, routage, dns, nftables, nat, nginx, méthodologie]
+summary: Pannes réelles injectées sur un réseau d'entreprise (passerelle, routage, pare-feu, DNS, NAT, service web) à diagnostiquer couche par couche et à corriger durablement.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Lundi 8 h. Pendant le week-end, un prestataire (« JPL ») a « fait de la migration » sur
+  le réseau d'*Ateliers Durand* sans rien documenter. Depuis, les tickets s'accumulent. Tu es seul de
+  permanence : diagnostique **méthodiquement** (couche 1 → 7 : lien, adresse, passerelle, routage,
+  filtrage, nom, service) et corrige chaque panne **à la source**, sans réinstaller.
+
+  **Plan du réseau** (tel qu'il devrait fonctionner) :
+
+  | Machine   | LAN 192.168.20.0/24 | Serveurs 10.20.0.0/24 | WAN 198.51.100.0/24 | Rôle |
+  |-----------|---------------------|-----------------------|---------------------|------|
+  | `admin`   | .5                  |                       |                     | ton poste (passerelle .254) |
+  | `poste`   | .10                 |                       |                     | poste d'une utilisatrice |
+  | `routeur` | .254                | .254                  | .2                  | routeur, pare-feu nftables, NAT vers Internet |
+  | `srv-web` |                     | .10                   |                     | intranet nginx → `http://intranet.durand.lan` |
+  | `srv-dns` |                     | .53                   |                     | DNS dnsmasq de la zone `durand.lan` |
+  | `internet`|                     |                       | .80                 | « Internet » : `http://198.51.100.80` renvoie l'IP source vue de l'extérieur |
+
+  - `ssh <machine>` depuis admin (root, par clé) passe par un réseau d'administration **séparé**
+    (10.99.5.0/24) qui, lui, fonctionne : ne t'en sers pas pour conclure qu'une machine « marche ».
+  - Pas de systemd : `nginx -t` puis `nginx -s reload` ; `pkill dnsmasq; dnsmasq` ;
+    `nft -f /etc/nftables.conf` ; `sysctl -p /etc/sysctl.d/99-routeur.conf`.
+  - Outils : `ip a`, `ip r`, `ping`, `traceroute`, `mtr`, `dig`, `getent hosts`, `curl -v`, `ss -ltnp`,
+    `nft list ruleset`, `tcpdump -ni <interface>`.
+exercises:
+  - id: panne-passerelle-poste
+    title: "Ticket 1 : « Je n'ai plus rien, à part l'imprimante »"
+    description: |
+      L'utilisatrice de **poste** joint les machines de son propre réseau, mais plus rien au-delà, même
+      l'interface « serveurs » du routeur. admin, sur le même réseau, n'a pas ce problème. Compare la
+      configuration IP des deux machines et corrige celle de `poste`.
+    hint: "ssh poste ip route ; la route par défaut doit passer par 192.168.20.254 (ip route replace default via …)"
+    checks:
+      - desc: La route par défaut de poste passe par 192.168.20.254
+        run: ssh poste ip route show default | grep -q 'via 192\.168\.20\.254'
+      - desc: poste joint l'interface serveurs du routeur
+        run: ssh poste ping -c 2 -W 2 10.20.0.254
+
+  - id: panne-routage
+    title: "Ticket 2 : « Les serveurs sont injoignables »"
+    description: |
+      Depuis admin, `ping 10.20.0.254` répond mais `ping 10.20.0.10` non, alors que srv-web est allumé et
+      a la bonne adresse. Le routeur reçoit-il les paquets ? Les fait-il suivre ? (`tcpdump` sur ses
+      interfaces `lan` et `serveurs`.) Corrige le routeur **pour l'instant** (la persistance sera traitée
+      au ticket 8).
+    hint: "ssh routeur sysctl net.ipv4.ip_forward  →  sysctl -w net.ipv4.ip_forward=1"
+    checks:
+      - desc: Le routage IP est actif sur le routeur
+        run: test "$(ssh routeur sysctl -n net.ipv4.ip_forward)" = 1
+      - desc: admin pingue srv-web à travers le routeur
+        run: ping -c 2 -W 2 10.20.0.10
+
+  - id: panne-intranet-web
+    title: "Ticket 3 : « L'intranet ne s'affiche pas »"
+    description: |
+      srv-web répond au ping, mais `curl -v http://10.20.0.10/` échoue. Il y a **deux** problèmes
+      successifs sur srv-web : trouve le premier (`ss -ltnp`), corrige, reteste… et regarde le journal
+      d'erreurs de nginx pour le second. Le site doit être servi sur toutes les interfaces, sans rendre
+      les fichiers modifiables par tous.
+    hint: "ss -ltnp | grep :80 → nginx n'écoute que sur 127.0.0.1 (listen 80 default_server;) ; puis tail /var/log/nginx/error.log → Permission denied → chmod 644 index.html"
+    checks:
+      - desc: nginx écoute sur toutes les interfaces
+        run: ssh srv-web "ss -Hltn 'sport = :80'" | grep -Eq '(0\.0\.0\.0|\*|\[::\]):80'
+      - desc: La page de l'intranet est servie à admin (code 200)
+        run: curl -sf --max-time 5 http://10.20.0.10/ | grep -q 'Intranet Ateliers Durand'
+      - desc: index.html n'est pas modifiable par les autres
+        run: test "$(ssh srv-web stat -c %A /var/www/intranet/index.html | cut -c9)" = -
+
+  - id: panne-enregistrement-dns
+    title: "Ticket 4 : « intranet.durand.lan pointe dans le vide »"
+    description: |
+      Directement sur srv-dns, `dig @127.0.0.1 intranet.durand.lan` répond… avec une ancienne adresse.
+      Le serveur intranet est désormais **srv-web (10.20.0.10)**. Corrige la zone et redémarre dnsmasq.
+      Ajoute aussi l'enregistrement `poste.durand.lan` → `192.168.20.10`.
+    hint: "ssh srv-dns ; vi /etc/dnsmasq.d/durand.conf (address=/intranet.durand.lan/10.20.0.10 ou host-record=…) ; pkill dnsmasq; dnsmasq"
+    checks:
+      - desc: intranet.durand.lan résout en 10.20.0.10 sur srv-dns
+        run: test "$(ssh srv-dns dig +short @127.0.0.1 intranet.durand.lan A)" = 10.20.0.10
+      - desc: poste.durand.lan résout en 192.168.20.10
+        run: test "$(ssh srv-dns dig +short @127.0.0.1 poste.durand.lan A)" = 192.168.20.10
+
+  - id: panne-filtrage-dns
+    title: "Ticket 5 : « Le DNS marche sur le serveur mais pas chez nous »"
+    description: |
+      Sur srv-dns la résolution fonctionne, mais depuis le LAN `dig @10.20.0.53 intranet.durand.lan`
+      expire (*timed out*), alors que le ping de 10.20.0.53 passe. Le coupable est sur le chemin.
+      Corrige-le **dans le jeu de règles actif** (sans tout vider ni désactiver le pare-feu).
+    hint: "ssh routeur nft -a list chain inet filtre forward ; nft delete rule inet filtre forward handle <n>"
+    checks:
+      - desc: admin résout intranet.durand.lan via srv-dns
+        run: test "$(dig +short +time=2 +tries=1 @10.20.0.53 intranet.durand.lan A)" = 10.20.0.10
+      - desc: La politique de la chaîne forward est toujours drop
+        run: ssh routeur nft list chain inet filtre forward | grep -q 'policy drop'
+
+  - id: panne-resolution-poste
+    title: "Ticket 6 : « Sur mon PC l'intranet ne marche toujours pas »"
+    description: |
+      Tout fonctionne depuis admin, mais pas depuis **poste** : `getent hosts intranet.durand.lan` y
+      renvoie une mauvaise adresse, et les autres noms ne résolvent pas. Il y a **deux** erreurs de
+      configuration locales sur poste. Corrige-les (le DNS de l'entreprise est 10.20.0.53, domaine de
+      recherche `durand.lan`).
+    hint: "Ordre de résolution : /etc/hosts avant le DNS (nsswitch.conf). Regarde /etc/hosts et /etc/resolv.conf de poste."
+    checks:
+      - desc: poste utilise le DNS 10.20.0.53
+        run: ssh poste cat /etc/resolv.conf | grep -Eq '^nameserver[[:space:]]+10\.20\.0\.53'
+      - desc: poste résout intranet.durand.lan en 10.20.0.10 et srv-dns par son nom court
+        run: |
+          test "$(ssh poste getent hosts intranet.durand.lan | awk '{print $1}')" = 10.20.0.10 && ssh poste getent hosts srv-dns | grep -q 10.20.0.53
+      - desc: poste affiche l'intranet par son nom
+        run: ssh poste curl -sf --max-time 5 http://intranet.durand.lan/ | grep -q 'Intranet Ateliers Durand'
+
+  - id: panne-nat-internet
+    title: "Ticket 7 : « Plus personne n'a Internet »"
+    description: |
+      `curl http://198.51.100.80` n'aboutit ni depuis admin ni depuis poste. Avec `tcpdump` sur
+      l'interface `wan` du routeur, regarde l'adresse source des paquets qui sortent, et pourquoi
+      `internet` ne peut pas répondre. Corrige la traduction d'adresses (NAT).
+    hint: "ssh routeur nft list table ip nat ; l'interface WAN s'appelle « wan » (ip -br link) ; oifname \"wan\" masquerade"
+    checks:
+      - desc: admin sort sur Internet avec l'adresse publique du routeur
+        run: curl -sf --max-time 5 http://198.51.100.80/ | grep -qx 'client=198\.51\.100\.2'
+      - desc: poste aussi
+        run: ssh poste curl -sf --max-time 5 http://198.51.100.80/ | grep -qx 'client=198\.51\.100\.2'
+
+  - id: panne-persistance
+    title: "Ticket 8 : « Et au prochain redémarrage ? »"
+    description: |
+      Tes corrections sur le routeur sont actives en mémoire, mais un redémarrage rechargerait
+      `/etc/sysctl.d/99-routeur.conf` et `/etc/nftables.conf`… tels que JPL les a laissés. Rends tes
+      corrections **persistantes** dans ces deux fichiers (la règle de test DNS ne doit plus y figurer),
+      vérifie la syntaxe sans appliquer (`nft -c -f`), puis recharge-les pour prouver qu'ils sont bons.
+
+      Pour finir, rédige `/root/rapport.txt` : une ligne par ticket au format `ticketN=cause` (N de 1 à 7).
+    hint: "nft list ruleset > /etc/nftables.conf (ajoute « flush ruleset » en tête) ; echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/99-routeur.conf"
+    checks:
+      - desc: Le routage est activé dans le fichier sysctl
+        run: |
+          ssh routeur cat /etc/sysctl.d/99-routeur.conf | grep -Eq '^[[:space:]]*net\.ipv4\.ip_forward[[:space:]]*=[[:space:]]*1'
+      - desc: nftables.conf est valide, masque sur wan et ne bloque plus le DNS
+        run: |
+          ssh routeur 'nft -c -f /etc/nftables.conf' && ssh routeur cat /etc/nftables.conf > /tmp/nft.conf && grep -Eq 'oifname "?wan"? +masquerade' /tmp/nft.conf && ! grep -Eq 'dport 53 +drop' /tmp/nft.conf
+      - desc: Après rechargement des fichiers, tout fonctionne encore
+        run: |
+          ssh routeur 'sysctl -q -p /etc/sysctl.d/99-routeur.conf && nft -f /etc/nftables.conf' && curl -sf --max-time 5 http://198.51.100.80/ | grep -q 'client=198.51.100.2' && test "$(dig +short +time=2 +tries=1 @10.20.0.53 intranet.durand.lan A)" = 10.20.0.10
+      - desc: Le rapport d'incident contient les 7 tickets
+        run: test "$(grep -Ec '^ticket[1-7] *= *.{5,}' /root/rapport.txt)" -ge 7

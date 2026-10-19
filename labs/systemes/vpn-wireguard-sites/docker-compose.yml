@@ -1,0 +1,66 @@
+# Deux sites reliés par « Internet » (198.51.100.0/24) et un nomade, à interconnecter en WireGuard.
+#   siège   10.10.0.0/24 : gw-siege .254, pc-siege .10 (intranet web)
+#   agence  10.20.0.0/24 : gw-agence .254, pc-agence .10
+#   Internet 198.51.100.0/24 : gw-siege .10, gw-agence .20, nomade .30
+#   mgmt    10.99.2.0/24 : réseau d'administration hors bande (ssh depuis admin)
+# WireGuard utilise le module du noyau s'il existe, sinon wireguard-go (espace utilisateur, /dev/net/tun).
+x-vpn: &vpn
+  build: {context: ., dockerfile: noeud/Dockerfile}
+  cap_add: [NET_ADMIN]
+  devices: ["/dev/net/tun:/dev/net/tun"]
+  volumes: [cles:/lab-ssh]
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    cap_add: [NET_ADMIN]
+    environment: {IFNAMES: "10.99.2.=mgmt"}
+    volumes: [cles:/lab-ssh]
+    networks:
+      mgmt: {ipv4_address: 10.99.2.5}
+  gw-siege:
+    <<: *vpn
+    hostname: gw-siege
+    sysctls: {net.ipv4.ip_forward: "1"}
+    environment: {IFNAMES: "10.10.0.=lan 198.51.100.=internet 10.99.2.=mgmt"}
+    networks:
+      siege: {ipv4_address: 10.10.0.254}
+      internet: {ipv4_address: 198.51.100.10}
+      mgmt: {ipv4_address: 10.99.2.10}
+  gw-agence:
+    <<: *vpn
+    hostname: gw-agence
+    sysctls: {net.ipv4.ip_forward: "1"}
+    environment: {IFNAMES: "10.20.0.=lan 198.51.100.=internet 10.99.2.=mgmt"}
+    networks:
+      agence: {ipv4_address: 10.20.0.254}
+      internet: {ipv4_address: 198.51.100.20}
+      mgmt: {ipv4_address: 10.99.2.20}
+  nomade:
+    <<: *vpn
+    hostname: nomade
+    environment: {IFNAMES: "198.51.100.=internet 10.99.2.=mgmt"}
+    networks:
+      internet: {ipv4_address: 198.51.100.30}
+      mgmt: {ipv4_address: 10.99.2.30}
+  pc-siege:
+    <<: *vpn
+    hostname: pc-siege
+    environment: {ROLE: intranet, IFNAMES: "10.10.0.=lan 10.99.2.=mgmt", PASSERELLE: 10.10.0.254}
+    networks:
+      siege: {ipv4_address: 10.10.0.10}
+      mgmt: {ipv4_address: 10.99.2.11}
+  pc-agence:
+    <<: *vpn
+    hostname: pc-agence
+    environment: {IFNAMES: "10.20.0.=lan 10.99.2.=mgmt", PASSERELLE: 10.20.0.254}
+    networks:
+      agence: {ipv4_address: 10.20.0.10}
+      mgmt: {ipv4_address: 10.99.2.21}
+volumes:
+  cles:
+networks:
+  siege: {internal: true, ipam: {config: [{subnet: 10.10.0.0/24}]}}
+  agence: {internal: true, ipam: {config: [{subnet: 10.20.0.0/24}]}}
+  internet: {internal: true, ipam: {config: [{subnet: 198.51.100.0/24}]}}
+  mgmt: {internal: true, ipam: {config: [{subnet: 10.99.2.0/24}]}}

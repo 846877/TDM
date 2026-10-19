@@ -1,0 +1,142 @@
+title: PowerShell pour l'administrateur
+level: debutant
+order: 6
+tags: [powershell, scripts, csv, json, automatisation, windows]
+summary: Scripts PowerShell 7 d'administration - paramètres, CSV, génération de logins, module, JSON, rapports et gestion d'erreurs.
+build: .
+shell: pwsh
+workdir: /srv/ps
+description: |
+  **Contexte.** Le service informatique d'*Ateliers Durand* automatise ses tâches répétitives en
+  **PowerShell**, le langage d'administration de Windows Server et d'Active Directory (disponible aussi
+  sous Linux en version 7). Les ressources humaines envoient chaque mois la liste des arrivées, et la
+  direction veut des rapports d'inventaire et de sécurité.
+
+  **Machine.** Conteneur PowerShell 7.4 officiel, ton terminal est déjà dans `pwsh`, dossier `/srv/ps` :
+
+  | Fichier                   | Contenu                                                     |
+  |---------------------------|-------------------------------------------------------------|
+  | `nouveaux.csv`            | arrivées du mois (séparateur `;`, UTF-8 avec accents)       |
+  | `inventaire.json`         | inventaire du parc (nom, OS, RAM, disque libre)             |
+  | `journal-securite.csv`    | ouvertures de session (4624 = réussite, 4625 = échec)       |
+  | `a-copier.txt`            | fichiers à copier (certains n'existent plus)                |
+
+  Écris tes scripts dans `/srv/ps/scripts` et tes résultats dans `/srv/ps/sortie`.
+
+  Cmdlets utiles : `Get-Help`, `Get-Member`, `Import-Csv`, `Export-Csv`, `Where-Object`, `Select-Object`,
+  `ForEach-Object`, `Group-Object`, `Sort-Object`, `ConvertFrom-Json`, `ConvertTo-Html`, `Copy-Item`,
+  `Test-Path`, `try { } catch { }`.
+exercises:
+  - id: premier-script
+    title: Premier script avec paramètre
+    description: |
+      Crée le script `/srv/ps/scripts/bonjour.ps1` qui déclare un paramètre **obligatoire** `-Nom` (bloc
+      `param()` avec `[Parameter(Mandatory)]`) et affiche `Bonjour <Nom>`.
+
+      `./scripts/bonjour.ps1 -Nom Marie` doit afficher `Bonjour Marie`.
+    hint: "param([Parameter(Mandatory)][string]$Nom)  puis  \"Bonjour $Nom\""
+    checks:
+      - desc: Le script affiche Bonjour Marie
+        run: pwsh -NoProfile -File /srv/ps/scripts/bonjour.ps1 -Nom Marie | grep -qx 'Bonjour Marie'
+      - desc: Le paramètre Nom est obligatoire
+        run: |
+          pwsh -NoProfile -Command '$p = (Get-Command /srv/ps/scripts/bonjour.ps1).Parameters["Nom"]; if ($p -and $p.Attributes.Mandatory -contains $true) { exit 0 } else { exit 1 }'
+
+  - id: filtrer-csv
+    title: Filtrer un fichier CSV
+    description: |
+      Importe `nouveaux.csv` (attention au séparateur `;`) et exporte dans `/srv/ps/sortie/compta.csv` les
+      arrivées du service **Compta** uniquement, avec seulement les colonnes `Prenom` et `Nom`, en UTF-8 et
+      sans ligne de type (`-NoTypeInformation` est le comportement par défaut en PowerShell 7).
+    hint: "Import-Csv nouveaux.csv -Delimiter ';' | Where-Object Service -eq 'Compta' | Select-Object Prenom,Nom | Export-Csv sortie/compta.csv -Encoding utf8"
+    checks:
+      - desc: compta.csv contient les 4 arrivées de la compta, colonnes Prenom et Nom
+        run: |
+          pwsh -NoProfile -Command '$c = @(Import-Csv /srv/ps/sortie/compta.csv); $cols = ($c[0].PSObject.Properties.Name -join ","); if ($c.Count -eq 4 -and $cols -eq "Prenom,Nom" -and ($c.Nom -contains "Gérard") -and ($c.Nom -contains "Bonnet")) { exit 0 } else { exit 1 }'
+
+  - id: logins
+    title: Générer les identifiants
+    description: |
+      La règle de nommage des comptes est : **première lettre du prénom + nom**, en minuscules, **sans
+      accents** et sans aucun caractère autre que `a-z` (apostrophes, tirets et espaces supprimés).
+      Exemples : `Élodie Gérard` → `egerard`, `Kévin N'Diaye` → `kndiaye`.
+
+      Produis `/srv/ps/sortie/comptes.csv` avec les colonnes `Prenom`, `Nom`, `Service` et `Login` pour les
+      dix arrivées. Pour enlever les accents :
+      `$t.Normalize([Text.NormalizationForm]::FormD) -replace '\p{Mn}', ''`.
+    hint: "Select-Object Prenom,Nom,Service,@{n='Login';e={ (($_.Prenom.Substring(0,1) + $_.Nom).Normalize([Text.NormalizationForm]::FormD) -replace '\\p{Mn}','').ToLower() -replace '[^a-z]','' }}"
+    checks:
+      - desc: comptes.csv contient les dix logins attendus
+        run: |
+          pwsh -NoProfile -Command '$attendu = "adurand","cduboispetit","egerard","hbonnet","jrobert","kndiaye","lfrancois","mlefevre","smartin","tmoreau"; $l = @(Import-Csv /srv/ps/sortie/comptes.csv | ForEach-Object Login | Sort-Object); if (($l -join ",") -ceq ($attendu -join ",")) { exit 0 } else { Write-Output ($l -join ","); exit 1 }'
+      - desc: Les colonnes Prenom, Nom, Service et Login sont présentes
+        run: |
+          pwsh -NoProfile -Command '$n = (Import-Csv /srv/ps/sortie/comptes.csv)[0].PSObject.Properties.Name; foreach ($c in "Prenom","Nom","Service","Login") { if ($n -notcontains $c) { exit 1 } }'
+
+  - id: module
+    title: Une fonction réutilisable dans un module
+    description: |
+      Crée le module `/srv/ps/scripts/Outils.psm1` contenant la fonction `New-MotDePasse` :
+      - paramètre `-Longueur` (entier, **12 par défaut**, validé entre **8 et 64** avec `[ValidateRange()]`) ;
+      - renvoie un mot de passe aléatoire de cette longueur contenant **au moins** une majuscule, une
+        minuscule, un chiffre et un caractère spécial (parmi `!@#$%&*-_+=?`).
+
+      Teste : `Import-Module ./scripts/Outils.psm1 -Force ; New-MotDePasse -Longueur 16`.
+    hint: "Tire un caractère de chaque catégorie, complète avec Get-Random -Count dans l'ensemble complet, puis mélange avec Get-Random -Shuffle (ou Sort-Object {Get-Random}) et -join ''"
+    checks:
+      - desc: 30 mots de passe de 14 caractères respectent la complexité
+        run: |
+          pwsh -NoProfile -Command 'Import-Module /srv/ps/scripts/Outils.psm1 -Force; foreach ($i in 1..30) { $p = New-MotDePasse -Longueur 14; if ($p.Length -ne 14 -or $p -cnotmatch "[A-Z]" -or $p -cnotmatch "[a-z]" -or $p -notmatch "[0-9]" -or $p -notmatch "[^A-Za-z0-9]") { Write-Output "refuse : $p"; exit 1 } }'
+      - desc: Longueur 12 par défaut et mots de passe différents
+        run: |
+          pwsh -NoProfile -Command 'Import-Module /srv/ps/scripts/Outils.psm1 -Force; $a = New-MotDePasse; $b = New-MotDePasse; if ($a.Length -eq 12 -and $a -cne $b) { exit 0 } else { exit 1 }'
+      - desc: Une longueur de 4 est refusée
+        run: |
+          pwsh -NoProfile -Command 'Import-Module /srv/ps/scripts/Outils.psm1 -Force; try { New-MotDePasse -Longueur 4 -ErrorAction Stop | Out-Null; exit 1 } catch { exit 0 }'
+
+  - id: inventaire-json
+    title: Rapport d'inventaire en HTML
+    description: |
+      Lis `inventaire.json` (`Get-Content -Raw | ConvertFrom-Json`) et produis le rapport
+      `/srv/ps/sortie/disques.html` (avec `ConvertTo-Html`) listant les machines ayant **moins de 20 Go**
+      de disque libre, triées de la plus critique à la moins critique, avec les colonnes `Nom`, `OS` et
+      `DisqueLibreGo`.
+    hint: "Get-Content inventaire.json -Raw | ConvertFrom-Json | Where-Object DisqueLibreGo -lt 20 | Sort-Object DisqueLibreGo | Select-Object Nom,OS,DisqueLibreGo | ConvertTo-Html -Title 'Disques' | Set-Content sortie/disques.html"
+    checks:
+      - desc: Le rapport liste PC-RH-02, PC-COMPTA-01 et SRV-FICHIERS dans cet ordre
+        run: |
+          f=/srv/ps/sortie/disques.html
+          grep -o 'PC-RH-02\|PC-COMPTA-01\|SRV-FICHIERS\|SRV-WEB\|PC-RH-01\|SRV-AD01\|PC-INFO-01\|PC-COMPTA-02' $f | tr '\n' ' ' | grep -qx 'PC-RH-02 PC-COMPTA-01 SRV-FICHIERS '
+      - desc: C'est un tableau HTML
+        run: grep -qi '<table' /srv/ps/sortie/disques.html
+
+  - id: securite
+    title: Analyse des échecs de connexion
+    description: |
+      Dans `journal-securite.csv`, l'événement **4625** est un échec d'ouverture de session. Compte les
+      échecs par utilisateur (`Group-Object`) et exporte dans `/srv/ps/sortie/echecs.csv` deux colonnes,
+      `Utilisateur` et `Nombre`, triées par nombre **décroissant**.
+    hint: "Import-Csv journal-securite.csv | Where-Object EventId -eq 4625 | Group-Object Utilisateur | Sort-Object Count -Descending | Select-Object @{n='Utilisateur';e={$_.Name}},@{n='Nombre';e={$_.Count}} | Export-Csv sortie/echecs.csv"
+    checks:
+      - desc: echecs.csv est exact et trié
+        run: |
+          pwsh -NoProfile -Command '$e = @(Import-Csv /srv/ps/sortie/echecs.csv); $s = ($e | ForEach-Object { "$($_.Utilisateur)=$($_.Nombre)" }) -join ","; if ($s -eq "admin=7,invite=5,mdupont=3,jmartin=1") { exit 0 } else { Write-Output $s; exit 1 }'
+
+  - id: erreurs
+    title: Gérer les erreurs sans s'arrêter
+    description: |
+      Écris `/srv/ps/scripts/copie.ps1` qui lit la liste de fichiers de `/srv/ps/a-copier.txt` et copie
+      chacun dans `/srv/ps/sortie/copies/` (à créer s'il n'existe pas). Si un fichier est absent, le script
+      **ne doit pas s'arrêter** : il écrit une ligne contenant le chemin manquant dans
+      `/srv/ps/sortie/erreurs.log` et passe au suivant.
+
+      Utilise `try { Copy-Item ... -ErrorAction Stop } catch { ... }`.
+    hint: "foreach ($f in Get-Content /srv/ps/a-copier.txt) { try { Copy-Item $f /srv/ps/sortie/copies/ -ErrorAction Stop } catch { \"$(Get-Date -Format s) introuvable : $f\" | Add-Content /srv/ps/sortie/erreurs.log } }"
+    checks:
+      - desc: Le script s'exécute jusqu'au bout et copie les fichiers présents
+        run: |
+          rm -rf /srv/ps/sortie/copies /srv/ps/sortie/erreurs.log
+          pwsh -NoProfile -File /srv/ps/scripts/copie.ps1 >/dev/null 2>&1
+          for f in facture-001.pdf contrat-a.docx planning.xlsx; do test -f /srv/ps/sortie/copies/$f || exit 1; done
+      - desc: Les fichiers manquants sont journalisés
+        run: grep -q 'facture-002.pdf' /srv/ps/sortie/erreurs.log && grep -q 'contrat-b.docx' /srv/ps/sortie/erreurs.log && ! grep -q 'planning.xlsx' /srv/ps/sortie/erreurs.log

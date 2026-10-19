@@ -1,0 +1,8 @@
+# Accès root par clé aux machines du lab (clé générée au démarrage, voir /usr/local/bin/admin-init.sh).
+Host *
+    User root
+    IdentityFile /root/.ssh/id_ed25519
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    LogLevel ERROR
+    ConnectTimeout 5

@@ -1,0 +1,67 @@
+# Projet de synthèse : l'infrastructure complète d'une PME, à construire.
+#   LAN       192.168.100.0/24 : admin .5, poste .20 (+ adresse DHCP), gw .254
+#   SERVEURS  10.100.0.0/24    : srv .10, nas .20, gw .254
+#   WAN       203.0.113.0/24   : gw .2, internet .80
+#   MGMT      10.99.6.0/24     : réseau d'administration hors bande (ssh et vérifications)
+x-routeur: &routeur
+  build: {context: ., dockerfile: routeur/Dockerfile}
+  cap_add: [NET_ADMIN]
+  volumes: [cles:/lab-ssh]
+x-serveur: &serveur
+  build: {context: ., dockerfile: serveur/Dockerfile}
+  cap_add: [NET_ADMIN]
+  volumes: [cles:/lab-ssh]
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    cap_add: [NET_ADMIN]
+    environment: {IFNAMES: "192.168.100.=lan 10.99.6.=mgmt", PASSERELLE: 192.168.100.254}
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 192.168.100.5}
+      mgmt: {ipv4_address: 10.99.6.5}
+  gw:
+    <<: *routeur
+    hostname: gw
+    sysctls: {net.ipv4.ip_forward: "1"}
+    environment: {ROLE: gw, IFNAMES: "192.168.100.=lan 10.100.0.=serveurs 203.0.113.=wan 10.99.6.=mgmt"}
+    networks:
+      lan: {ipv4_address: 192.168.100.254}
+      serveurs: {ipv4_address: 10.100.0.254}
+      wan: {ipv4_address: 203.0.113.2}
+      mgmt: {ipv4_address: 10.99.6.254}
+  internet:
+    <<: *routeur
+    hostname: internet
+    environment: {ROLE: internet, IFNAMES: "203.0.113.=wan 10.99.6.=mgmt"}
+    networks:
+      wan: {ipv4_address: 203.0.113.80}
+      mgmt: {ipv4_address: 10.99.6.80}
+  srv:
+    <<: *serveur
+    hostname: srv
+    environment: {ROLE: srv, IFNAMES: "10.100.0.=serveurs 10.99.6.=mgmt", PASSERELLE: 10.100.0.254}
+    networks:
+      serveurs: {ipv4_address: 10.100.0.10}
+      mgmt: {ipv4_address: 10.99.6.10}
+  nas:
+    <<: *serveur
+    hostname: nas
+    environment: {ROLE: nas, IFNAMES: "10.100.0.=serveurs 10.99.6.=mgmt", PASSERELLE: 10.100.0.254}
+    networks:
+      serveurs: {ipv4_address: 10.100.0.20}
+      mgmt: {ipv4_address: 10.99.6.20}
+  poste:
+    build: {context: ., dockerfile: client/Dockerfile}
+    hostname: poste
+    cap_add: [NET_ADMIN]
+    networks:
+      lan: {ipv4_address: 192.168.100.20, mac_address: "02:00:00:00:00:20"}
+volumes:
+  cles:
+networks:
+  lan: {internal: true, ipam: {config: [{subnet: 192.168.100.0/24, ip_range: 192.168.100.0/27}]}}
+  serveurs: {internal: true, ipam: {config: [{subnet: 10.100.0.0/24}]}}
+  wan: {internal: true, ipam: {config: [{subnet: 203.0.113.0/24}]}}
+  mgmt: {internal: true, ipam: {config: [{subnet: 10.99.6.0/24}]}}

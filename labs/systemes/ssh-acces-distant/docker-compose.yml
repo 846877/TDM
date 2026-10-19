@@ -1,0 +1,11 @@
+# Un poste d'administration et deux serveurs Linux accessibles en SSH (tech / Tech2024!).
+services:
+  admin:
+    build: ./admin
+    hostname: admin
+  srv-fichiers:
+    build: ./serveur
+    hostname: srv-fichiers
+  srv-web:
+    build: ./serveur
+    hostname: srv-web

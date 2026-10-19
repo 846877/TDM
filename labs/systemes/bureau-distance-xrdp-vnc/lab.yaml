@@ -1,0 +1,153 @@
+title: Bureaux à distance - RDP (xrdp) et VNC
+level: intermediaire
+order: 5
+tags: [rdp, xrdp, vnc, tigervnc, bureau à distance, tls, ssh]
+summary: Mettre en service un serveur RDP (xrdp) restreint à un groupe, avec certificat TLS et bureau XFCE, puis un VNC accessible seulement par tunnel SSH.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Les commerciaux d'*Ateliers Durand* doivent accéder à un bureau Linux depuis leur PC
+  Windows avec le client **Connexion Bureau à distance** (RDP, port 3389). Le support veut aussi pouvoir
+  prendre la main en **VNC**, mais uniquement à travers SSH.
+
+  **Machines.**
+
+  | Machine  | Rôle                                                                     |
+  |----------|--------------------------------------------------------------------------|
+  | `admin`  | ton poste (`root`) ; `ssh bureau` ouvre une session root par clé          |
+  | `bureau` | serveur de bureaux : `xrdp`, `xorgxrdp`, TigerVNC et XFCE installés, rien n'est configuré |
+
+  Le port RDP du serveur est publié sur **le port 9489 de ta machine** : une fois l'exercice 4 réussi, tu
+  peux ouvrir `mstsc` (Windows) ou Remmina (Linux) vers `localhost:9489`.
+
+  xrdp n'a pas de systemd ici : démarrage avec `xrdp-sesman` puis `xrdp` ; arrêt avec
+  `pkill xrdp; pkill xrdp-sesman`. Journaux : `/var/log/xrdp.log` et `/var/log/xrdp-sesman.log`.
+exercises:
+  - id: comptes
+    title: Comptes et groupe autorisé
+    description: |
+      Sur `bureau`, crée :
+      - le groupe `tsusers` (utilisateurs autorisés à ouvrir une session RDP) ;
+      - l'utilisatrice `lgarnier` (Lucie Garnier, commerciale), mot de passe `Commercial2024!`, membre de
+        `tsusers` ;
+      - l'utilisateur `support` (mot de passe `Support2024!`), **non** membre de `tsusers`.
+    hint: "groupadd tsusers ; useradd -m -s /bin/bash -c 'Lucie Garnier' -G tsusers lgarnier ; echo 'lgarnier:Commercial2024!' | chpasswd"
+    checks:
+      - desc: lgarnier est membre de tsusers
+        run: ssh bureau 'id -nG lgarnier' | grep -qw tsusers
+      - desc: support existe sans être dans tsusers
+        run: ssh bureau 'id support' >/dev/null && ! ssh bureau 'id -nG support' | grep -qw tsusers
+      - desc: Mot de passe de lgarnier
+        run: |
+          ssh bureau "h=\$(awk -F: '\$1==\"lgarnier\"{print \$2}' /etc/shadow); perl -e 'exit(crypt(\$ARGV[0],\$ARGV[1]) eq \$ARGV[1] ? 0 : 1)' 'Commercial2024!' \"\$h\""
+
+  - id: rdp-certificat
+    title: Certificat TLS du serveur RDP
+    description: |
+      Par défaut, xrdp utilise un certificat générique (« snakeoil »). Génère un certificat auto-signé
+      propre au serveur, valable **2 ans**, avec le CN `bureau.durand.lan` et une clé RSA **2048** bits :
+      `/etc/xrdp/cert.pem` et `/etc/xrdp/key.pem`. La clé doit être lisible par root et par le groupe
+      `ssl-cert` seulement (xrdp en fait partie) : propriétaire `root:ssl-cert`, droits `640`.
+    hint: "openssl req -x509 -newkey rsa:2048 -nodes -days 730 -subj '/CN=bureau.durand.lan' -keyout /etc/xrdp/key.pem -out /etc/xrdp/cert.pem"
+    checks:
+      - desc: Certificat avec le CN bureau.durand.lan
+        run: ssh bureau 'openssl x509 -in /etc/xrdp/cert.pem -noout -subject' | grep -q 'CN *= *bureau.durand.lan'
+      - desc: La clé correspond au certificat
+        run: |
+          ssh bureau 'test "$(openssl x509 -in /etc/xrdp/cert.pem -noout -pubkey | openssl sha256)" = "$(openssl pkey -in /etc/xrdp/key.pem -pubout | openssl sha256)"'
+      - desc: Clé en 640, root:ssl-cert
+        run: test "$(ssh bureau stat -c %a:%U:%G /etc/xrdp/key.pem)" = 640:root:ssl-cert
+
+  - id: configuration
+    title: Configurer xrdp et le gestionnaire de sessions
+    description: |
+      1. Dans `/etc/xrdp/xrdp.ini` (section `[Globals]`) : port `3389`, `security_layer=tls` (on refuse
+         l'ancienne sécurité RDP native), `crypt_level=high`, `certificate` et `key_file` pointant vers tes
+         fichiers.
+      2. Dans `/etc/xrdp/sesman.ini` (section `[Security]`) : `AllowRootLogin=false`,
+         `TerminalServerUsers=tsusers` et `AlwaysGroupCheck=true`, pour que **seuls** les membres de
+         `tsusers` puissent ouvrir une session.
+    hint: "sed -i 's/^security_layer=.*/security_layer=tls/' /etc/xrdp/xrdp.ini (idem pour les autres clés)"
+    checks:
+      - desc: xrdp.ini - TLS, chiffrement élevé, certificat
+        run: |
+          ssh bureau cat /etc/xrdp/xrdp.ini > /tmp/xrdp.ini
+          grep -Eq '^security_layer *= *tls' /tmp/xrdp.ini && grep -Eq '^crypt_level *= *high' /tmp/xrdp.ini &&
+          grep -Eq '^certificate *= */etc/xrdp/cert.pem' /tmp/xrdp.ini && grep -Eq '^key_file *= */etc/xrdp/key.pem' /tmp/xrdp.ini &&
+          grep -Eq '^port *= *(3389|tcp://:3389)' /tmp/xrdp.ini
+      - desc: sesman.ini - restriction au groupe tsusers, root interdit
+        run: |
+          ssh bureau cat /etc/xrdp/sesman.ini > /tmp/sesman.ini
+          grep -Eq '^AllowRootLogin *= *(false|no|0)' /tmp/sesman.ini && grep -Eq '^TerminalServerUsers *= *tsusers' /tmp/sesman.ini &&
+          grep -Eq '^AlwaysGroupCheck *= *(true|yes|1)' /tmp/sesman.ini
+
+  - id: rdp-demarrage
+    title: Démarrer le service RDP
+    description: |
+      Démarre `xrdp-sesman` puis `xrdp` sur `bureau`. Le serveur doit répondre à une négociation RDP en
+      choisissant **TLS**. La vérification envoie elle-même une demande de connexion RDP (trame X.224) et
+      analyse la réponse.
+
+      Depuis ta machine, connecte-toi à `localhost:9489` avec `lgarnier` (accepte le certificat, compare
+      son empreinte), puis essaie avec `support` : la session doit être refusée.
+    hint: "ssh bureau 'xrdp-sesman && xrdp' ; ss -ltnp | grep 3389"
+    checks:
+      - desc: xrdp et xrdp-sesman tournent
+        run: ssh bureau 'pgrep -x xrdp >/dev/null && pgrep -x xrdp-sesman >/dev/null'
+      - desc: Le serveur répond à la négociation RDP en choisissant TLS
+        run: |
+          set -- $( (printf '\003\000\000\023\016\340\000\000\000\000\000\001\000\010\000\003\000\000\000'; sleep 2) | nc -w3 bureau 3389 | od -An -tx1 -v )
+          test "$1" = 03 && test "$6" = d0 && test "${12}" = 02 && test "${16}" = 01
+
+  - id: session-xfce
+    title: Ouvrir un bureau XFCE
+    description: |
+      À la connexion, xrdp lance `/etc/xrdp/startwm.sh`, qui démarre par défaut la session système. Pour que
+      chaque utilisateur obtienne un bureau **XFCE**, crée pour `lgarnier` le fichier `~/.xsession`
+      contenant `startxfce4` (ou modifie `startwm.sh` pour lancer `startxfce4`).
+
+      Connecte-toi en RDP : tu dois voir le bureau XFCE. Côté serveur, `ps -u lgarnier` montre alors
+      `xfce4-session`.
+    hint: "echo startxfce4 > /home/lgarnier/.xsession && chown lgarnier: /home/lgarnier/.xsession"
+    checks:
+      - desc: La session de lgarnier lance XFCE
+        run: ssh bureau 'grep -qs startxfce4 /home/lgarnier/.xsession || grep -q "^[^#]*startxfce4" /etc/xrdp/startwm.sh'
+
+  - id: vnc
+    title: Serveur VNC pour le support
+    description: |
+      Pour le support, configure TigerVNC pour l'utilisateur `support` :
+      1. mot de passe VNC (`vncpasswd`, en tant que support) ;
+      2. démarre le serveur sur l'affichage **:1** (port 5901), résolution `1280x800`, en écoutant
+         **uniquement sur la boucle locale** (`-localhost yes`) : VNC chiffre mal, il passera par SSH.
+
+      Le serveur doit exiger une authentification (pas de `SecurityTypes None`).
+    hint: "su - support -c 'vncpasswd' puis su - support -c 'vncserver :1 -geometry 1280x800 -localhost yes'"
+    checks:
+      - desc: Un serveur VNC de support écoute sur 127.0.0.1:5901
+        run: ssh bureau 'pgrep -u support -f "Xtigervnc|Xvnc" >/dev/null && nc -z 127.0.0.1 5901'
+      - desc: Le serveur VNC exige une authentification
+        run: |
+          ssh bureau '(printf "RFB 003.008\n"; sleep 2) | nc -w3 127.0.0.1 5901 | od -An -tx1 -v' > /tmp/rfb.txt
+          set -- $(cat /tmp/rfb.txt)
+          test "$1" = 52 || exit 1
+          shift 12; n=$((0x$1)); shift
+          test "$n" -ge 1 || exit 1
+          t=" $* "; echo "$t" | grep -q ' 01 ' && exit 1
+          echo "$t" | grep -Eq ' (02|13|12) '
+      - desc: Le port 5901 n'est pas joignable depuis le réseau
+        run: "! nc -z -w2 bureau 5901"
+
+  - id: tunnel-vnc
+    title: Prise en main VNC à travers SSH
+    description: |
+      Depuis admin, ouvre en arrière-plan un tunnel SSH (`-f -N -L`) avec le compte `support` (mot de passe
+      `Support2024!`) pour que le port **5901 local d'admin** mène au VNC de bureau. Un client VNC
+      pointant sur `127.0.0.1:5901` d'admin atteindrait alors la session, chiffrée par SSH.
+    hint: ssh -f -N -L 5901:127.0.0.1:5901 support@bureau
+    checks:
+      - desc: Le port 5901 d'admin mène au serveur VNC
+        run: |
+          (sleep 2) | nc -w3 127.0.0.1 5901 | head -c 12 | grep -q 'RFB 003'

@@ -1,0 +1,149 @@
+title: Dépannage Active Directory – comptes, DNS, approbation, winbind, SSSD
+level: expert
+order: 3
+tags: [dépannage, active directory, samba, kerberos, dns, winbind, sssd, smb]
+summary: Domaine Samba AD en production avec des pannes injectées (comptes désactivé et expiré, DNS faux, groupe erroné, relation d'approbation rompue, NSS, partage, SSSD) à résoudre depuis les symptômes des utilisateurs.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Le domaine `DURAND.LAN` tourne depuis un an. Un intérimaire a « fait du ménage » dans
+  l'annuaire et le serveur de fichiers a été restauré depuis un vieil instantané. Depuis ce matin, le
+  support croule sous les appels. Tu pars des **symptômes** remontés par les utilisateurs : à toi de
+  trouver la cause (annuaire, DNS, Kerberos, machine membre…) et de la corriger proprement.
+
+  **Machines** (réseau `10.62.0.0/24`, DNS = 10.62.0.10 ; `ssh <machine>` en root par clé) :
+
+  | Machine        | Adresse    | Rôle                                                       |
+  |----------------|------------|------------------------------------------------------------|
+  | `admin`        | 10.62.0.5  | ton poste (`kinit`, `smbclient`, `sshpass`, `dig`)          |
+  | `dc1`          | 10.62.0.10 | contrôleur de domaine Samba AD (`samba-tool`, `ldbsearch`) |
+  | `srv-fichiers` | 10.62.0.20 | serveur de fichiers Samba + winbind, membre du domaine     |
+  | `poste01`      | 10.62.0.30 | poste Linux (SSSD), membre du domaine                      |
+
+  **Annuaire** (domaine NetBIOS `DURAND`, Administrator / `Durand@dmin2024`) — **état attendu** :
+
+  | Compte     | Mot de passe      | Groupe            | Accès attendu                         |
+  |------------|-------------------|-------------------|---------------------------------------|
+  | `mdupont`  | `Compta!2024pass` | `GG_Compta`       | partage `\\srv-fichiers\compta`       |
+  | `jmartin`  | `RhDurand!2024`   | `GG_RH`           | partage `\\srv-fichiers\rh`           |
+  | `tbernard` | `Technicien!2024` | `GG_Informatique` | ouverture de session sur `poste01`    |
+
+  Au premier lancement, compte environ **2 minutes** : dc1 se provisionne puis les membres se joignent
+  (`ssh dc1 test -f /run/lab-pret`, puis `ssh srv-fichiers test -f /etc/lab-initialise`).
+  Services sans systemd : `winbindd`, `smbd` (`smbcontrol all reload-config`), `sssd -D`
+  (`pkill sssd; sssd -D`). Journaux : `/var/log/samba/`, `/var/log/sssd/`.
+exercises:
+  - id: ad-compte-desactive
+    title: "Appel 1 : Marie Dupont ne peut plus ouvrir de session"
+    description: |
+      Marie (`mdupont`) a le bon mot de passe, mais toute authentification échoue. Reproduis depuis
+      admin avec `kinit mdupont` et lis le message d'erreur Kerberos, puis examine son compte sur dc1
+      (`samba-tool user show mdupont`, attribut `userAccountControl`). Corrige.
+    hint: "ssh dc1 samba-tool user enable mdupont"
+    checks:
+      - desc: mdupont obtient un ticket Kerberos
+        run: |
+          echo 'Compta!2024pass' | KRB5CCNAME=FILE:/tmp/krb5cc_verif1 kinit mdupont@DURAND.LAN >/dev/null 2>&1
+
+  - id: ad-compte-expire
+    title: "Appel 2 : Julien Martin non plus, mais pas pour la même raison"
+    description: |
+      `kinit jmartin` échoue aussi, avec un autre message. Julien est en CDI : son compte ne doit pas
+      avoir de date de fin. Trouve l'attribut en cause (`accountExpires`) et corrige-le.
+    hint: "ssh dc1 samba-tool user setexpiry jmartin --noexpiry"
+    checks:
+      - desc: jmartin obtient un ticket Kerberos
+        run: |
+          echo 'RhDurand!2024' | KRB5CCNAME=FILE:/tmp/krb5cc_verif2 kinit jmartin@DURAND.LAN >/dev/null 2>&1
+      - desc: Le compte de jmartin n'expire jamais
+        run: |
+          ssh dc1 'ldbsearch -H /var/lib/samba/private/sam.ldb "(sAMAccountName=jmartin)" accountExpires' | grep -Eq '^accountExpires: (0|9223372036854775807)$'
+
+  - id: ad-dns-enregistrement
+    title: "Appel 3 : « \\\\srv-fichiers est introuvable »"
+    description: |
+      Les partages sont injoignables par leur nom, alors que `ping 10.62.0.20` répond. Interroge le DNS
+      du domaine (`dig @10.62.0.10 srv-fichiers.durand.lan`), compare avec l'adresse réelle du serveur et
+      corrige l'enregistrement dans la zone `durand.lan` du DNS intégré de Samba (sans laisser de doublon).
+    hint: "ssh dc1 samba-tool dns update 127.0.0.1 durand.lan srv-fichiers A 10.62.0.200 10.62.0.20 -U administrator%'Durand@dmin2024'"
+    checks:
+      - desc: srv-fichiers.durand.lan résout uniquement en 10.62.0.20
+        run: test "$(dig +short @10.62.0.10 srv-fichiers.durand.lan A)" = 10.62.0.20
+
+  - id: ad-appartenance-groupe
+    title: "Appel 4 : le nouveau technicien est dans le mauvais service"
+    description: |
+      Thomas Bernard (`tbernard`), technicien, voit les dossiers RH mais ne peut pas administrer les postes.
+      Vérifie ses groupes (`samba-tool user getgroups tbernard`) : il doit être dans **GG_Informatique**
+      et **plus** dans GG_RH.
+    hint: "samba-tool group addmembers GG_Informatique tbernard ; samba-tool group removemembers GG_RH tbernard"
+    checks:
+      - desc: tbernard est membre de GG_Informatique
+        run: ssh dc1 samba-tool group listmembers GG_Informatique | grep -qx tbernard
+      - desc: tbernard n'est plus membre de GG_RH
+        run: ssh dc1 samba-tool group listmembers GG_RH > /tmp/gg_rh.txt && grep -qx jmartin /tmp/gg_rh.txt && ! grep -qx tbernard /tmp/gg_rh.txt
+
+  - id: ad-relation-approbation
+    title: "Appel 5 : le serveur de fichiers refuse tout le monde"
+    description: |
+      Sur srv-fichiers, même les comptes valides sont refusés. Le serveur a été restauré depuis un
+      instantané ancien : le mot de passe de son **compte ordinateur** ne correspond plus à celui de
+      l'annuaire. Diagnostique avec `net ads testjoin` puis rétablis la relation d'approbation (sans
+      supprimer les partages ni la configuration Samba).
+    hint: "ssh srv-fichiers net ads testjoin ; net ads join -U administrator%'Durand@dmin2024' --no-dns-updates"
+    checks:
+      - desc: La jonction de srv-fichiers est valide
+        run: ssh srv-fichiers 'net ads testjoin 2>&1' | grep -qi 'join is ok'
+      - desc: Le compte ordinateur est toujours dans OU=Serveurs
+        run: |
+          ssh dc1 'ldbsearch -H /var/lib/samba/private/sam.ldb "(sAMAccountName=SRV-FICHIERS\$)" dn' | grep -qi '^dn: CN=SRV-FICHIERS,OU=Serveurs,OU=Durand,DC=durand,DC=lan'
+
+  - id: ad-winbind-nss
+    title: "Appel 6 : les comptes du domaine inconnus de Linux"
+    description: |
+      Sur srv-fichiers, `ls -l /srv/partages` affiche des numéros au lieu des groupes et
+      `getent passwd mdupont` ne renvoie rien. Deux éléments manquent pour que Linux voie les comptes du
+      domaine : un **service** et une ligne de **configuration NSS**.
+    hint: "winbindd ; passwd: files winbind  /  group: files winbind  dans /etc/nsswitch.conf ; wbinfo -p"
+    checks:
+      - desc: winbind répond
+        run: ssh srv-fichiers 'wbinfo -p' | grep -qi succeeded
+      - desc: getent passwd mdupont et getent group gg_compta fonctionnent
+        run: ssh srv-fichiers 'getent passwd mdupont' | grep -q '^mdupont:' && ssh srv-fichiers 'getent group gg_compta' | grep -qi mdupont
+      - desc: Le dossier compta appartient au groupe gg_compta
+        run: test "$(ssh srv-fichiers stat -c %G /srv/partages/compta)" = gg_compta
+
+  - id: ad-partage-compta
+    title: "Appel 7 : la comptabilité n'accède pas à son partage"
+    description: |
+      Marie s'authentifie, mais `\\srv-fichiers\compta` lui répond « accès refusé ». Teste depuis admin
+      (`smbclient //srv-fichiers/compta -U 'DURAND\mdupont%Compta!2024pass' -c ls`), lis la section du
+      partage dans `smb.conf` (`testparm -s`) et corrige. Le partage doit rester **interdit** aux autres
+      services.
+    hint: "valid users = @gg_compta (et non @gg_comptes) ; smbcontrol all reload-config"
+    checks:
+      - desc: mdupont lit le bilan dans compta
+        run: |
+          smbclient //srv-fichiers/compta -U 'DURAND\mdupont%Compta!2024pass' -c 'get bilan-2024.txt /tmp/bilan.txt' >/dev/null 2>&1 && grep -q Bilan /tmp/bilan.txt
+      - desc: jmartin (RH) n'accède pas à compta
+        run: |
+          ssh srv-fichiers testparm -s 2>/dev/null | grep -qi 'valid users = @gg_compta' && ! smbclient //srv-fichiers/compta -U 'DURAND\jmartin%RhDurand!2024' -c ls >/dev/null 2>&1
+
+  - id: ad-poste-sssd
+    title: "Appel 8 : le technicien ne peut pas ouvrir de session sur poste01"
+    description: |
+      Sur poste01, `id tbernard` ne renvoie rien et `ssh tbernard@poste01` échoue. Le poste est bien
+      joint au domaine (`klist -k`). Trouve pourquoi **SSSD** ne démarre pas (`sssd -i -d 3` pour le voir
+      en direct), puis pourquoi tbernard serait refusé même une fois SSSD lancé. Seuls les membres de
+      GG_Informatique doivent pouvoir se connecter.
+    hint: "chmod 600 /etc/sssd/sssd.conf ; simple_allow_groups = gg_informatique ; pkill sssd; sssd -D ; sss_cache -E"
+    checks:
+      - desc: sssd.conf est en 600 et SSSD tourne
+        run: test "$(ssh poste01 stat -c %a /etc/sssd/sssd.conf)" = 600 && ssh poste01 pgrep -x sssd >/dev/null
+      - desc: tbernard ouvre une session SSH sur poste01 avec son mot de passe du domaine
+        run: test "$(sshpass -p 'Technicien!2024' ssh -o PubkeyAuthentication=no -o StrictHostKeyChecking=no tbernard@poste01 id -un 2>/dev/null)" = tbernard
+      - desc: mdupont (comptabilité) est refusée sur poste01
+        run: |
+          ssh poste01 cat /etc/sssd/sssd.conf | grep -Eq '^\s*simple_allow_groups\s*=\s*gg_informatique\s*$' && ! sshpass -p 'Compta!2024pass' ssh -o PubkeyAuthentication=no -o StrictHostKeyChecking=no mdupont@poste01 true 2>/dev/null

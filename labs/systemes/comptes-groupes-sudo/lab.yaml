@@ -1,0 +1,205 @@
+title: Comptes, groupes et sudo
+level: debutant
+order: 1
+tags: [linux, utilisateurs, groupes, sudo, mots de passe]
+summary: Créer les comptes d'une PME, gérer mots de passe, droits sudo et départs de salariés.
+build: .
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Tu es technicien systèmes et réseaux chez *Ateliers Durand* (35 salariés). Le nouveau
+  serveur de fichiers Ubuntu 24.04 vient d'être installé : il faut y créer les comptes des services,
+  déléguer l'administration et traiter le départ d'un salarié, comme le demande la procédure interne.
+
+  **Machine.** Un serveur Ubuntu, ton terminal est en `root` dans `/root`.
+
+  Commandes utiles : `groupadd`, `useradd`, `usermod`, `passwd`, `chpasswd`, `chage`, `id`, `getent`,
+  `visudo`, `sudo -l -U <utilisateur>`, `tar`.
+
+  Rappels : `/etc/passwd` (comptes), `/etc/shadow` (mots de passe et dates d'expiration),
+  `/etc/group` (groupes), `/etc/sudoers.d/` (délégations sudo, toujours éditées avec `visudo -f`).
+exercises:
+  - id: groupes-services
+    title: Groupes de services
+    description: |
+      La politique de l'entreprise impose des GID fixes (identiques sur tous les serveurs, pour les
+      partages réseau). Crée les groupes suivants :
+
+      | Groupe         | GID  |
+      |----------------|------|
+      | `compta`       | 2001 |
+      | `rh`           | 2002 |
+      | `informatique` | 2003 |
+    hint: groupadd -g 2001 compta (idem pour les autres)
+    checks:
+      - desc: compta a le GID 2001
+        run: |
+          test "$(getent group compta | cut -d: -f3)" = 2001
+      - desc: rh a le GID 2002
+        run: |
+          test "$(getent group rh | cut -d: -f3)" = 2002
+      - desc: informatique a le GID 2003
+        run: |
+          test "$(getent group informatique | cut -d: -f3)" = 2003
+
+  - id: utilisateurs-locaux
+    title: Comptes des collaborateurs
+    description: |
+      Crée les comptes suivants avec un **dossier personnel** dans `/home`, le shell `/bin/bash`, le nom
+      complet en commentaire (champ GECOS) et le groupe de service en **groupe secondaire** :
+
+      | Login      | Nom complet      | Groupe secondaire |
+      |------------|------------------|-------------------|
+      | `mdupont`  | Marie Dupont     | `compta`          |
+      | `jmartin`  | Julien Martin    | `rh`              |
+      | `tbernard` | Thomas Bernard   | `informatique`    |
+
+      Vérifie le résultat avec `id mdupont` et `getent passwd mdupont`.
+    hint: useradd -m -s /bin/bash -c "Marie Dupont" -G compta mdupont
+    checks:
+      - desc: Les trois comptes existent avec /bin/bash et un dossier personnel qui leur appartient
+        run: |
+          for u in mdupont jmartin tbernard; do
+            getent passwd $u | cut -d: -f7 | grep -qx /bin/bash || exit 1
+            test -d /home/$u && test "$(stat -c %U /home/$u)" = "$u" || exit 1
+          done
+      - desc: Les noms complets sont renseignés
+        run: |
+          getent passwd mdupont | cut -d: -f5 | grep -q "Marie Dupont" &&
+          getent passwd jmartin | cut -d: -f5 | grep -q "Julien Martin" &&
+          getent passwd tbernard | cut -d: -f5 | grep -q "Thomas Bernard"
+      - desc: Chacun est membre de son groupe de service
+        run: id -nG mdupont | grep -qw compta && id -nG jmartin | grep -qw rh && id -nG tbernard | grep -qw informatique
+
+  - id: mots-de-passe
+    title: Mots de passe et politique d'expiration
+    description: |
+      1. Donne à `mdupont` le mot de passe provisoire `Bienvenue2024!` et **oblige-la à le changer** à sa
+         première connexion.
+      2. Applique la politique de l'entreprise aux trois comptes de l'exercice précédent : mot de passe
+         valable **90 jours maximum**, avertissement **7 jours** avant expiration.
+
+      Contrôle avec `chage -l mdupont`.
+    hint: "echo 'mdupont:Bienvenue2024!' | chpasswd ; chage -d 0 mdupont ; chage -M 90 -W 7 <login>"
+    checks:
+      - desc: Le mot de passe de mdupont est Bienvenue2024!
+        run: |
+          h=$(awk -F: '$1=="mdupont"{print $2}' /etc/shadow)
+          perl -e 'exit(crypt($ARGV[0], $ARGV[1]) eq $ARGV[1] ? 0 : 1)' 'Bienvenue2024!' "$h"
+      - desc: mdupont devra changer son mot de passe à la prochaine connexion
+        run: |
+          awk -F: '$1=="mdupont"{found=1; exit !($3=="0")} END{if(!found) exit 1}' /etc/shadow
+      - desc: Durée maximale 90 jours et avertissement 7 jours pour les trois comptes
+        run: |
+          for u in mdupont jmartin tbernard; do
+            awk -F: -v u=$u '$1==u{ok=($5=="90" && $6=="7")} END{exit !ok}' /etc/shadow || exit 1
+          done
+
+  - id: sudo-admins
+    title: Délégation d'administration
+    description: |
+      Les membres du groupe `informatique` doivent pouvoir exécuter **toutes** les commandes en tant que
+      n'importe quel utilisateur via sudo (avec leur mot de passe).
+
+      Crée pour cela le fichier `/etc/sudoers.d/informatique` **avec `visudo -f`** (qui vérifie la syntaxe :
+      une erreur dans sudoers peut bloquer toute l'administration du serveur). Le fichier doit avoir les
+      droits `440`. Les autres salariés ne doivent avoir aucun droit sudo.
+    hint: "visudo -f /etc/sudoers.d/informatique  →  %informatique ALL=(ALL:ALL) ALL  puis chmod 440"
+    checks:
+      - desc: La configuration sudo est valide
+        run: visudo -c
+      - desc: /etc/sudoers.d/informatique a les droits 440
+        run: test "$(stat -c %a /etc/sudoers.d/informatique)" = 440
+      - desc: tbernard a tous les droits
+        run: |
+          sudo -l -U tbernard | grep -q '(ALL : ALL) ALL'
+      - desc: mdupont n'a aucun droit sudo
+        run: "test -f /etc/sudoers.d/informatique && ! sudo -l -U mdupont | grep -q '(ALL'"
+
+  - id: sudo-support
+    title: Délégation limitée au support
+    description: |
+      Le support de premier niveau doit pouvoir **réinitialiser les mots de passe** des utilisateurs, et
+      rien d'autre.
+
+      1. Crée le groupe `support` et le compte `hdesk` (Hotline Support) qui en est membre.
+      2. Dans `/etc/sudoers.d/support`, autorise le groupe `support` à lancer `/usr/bin/passwd` suivi d'un
+         nom d'utilisateur, **sans mot de passe**, mais **jamais** `passwd root`.
+
+      Astuce : le motif `[a-z]*` après la commande impose que l'argument commence par une lettre, ce qui
+      interdit aussi les options comme `-d` (suppression du mot de passe).
+    hint: "%support ALL=(root) NOPASSWD: /usr/bin/passwd [a-z]*, !/usr/bin/passwd root"
+    checks:
+      - desc: hdesk est membre de support
+        run: id -nG hdesk | grep -qw support
+      - desc: hdesk peut lancer passwd mdupont sans mot de passe
+        run: sudo -l -U hdesk /usr/bin/passwd mdupont >/dev/null && sudo -l -U hdesk | grep -q 'NOPASSWD'
+      - desc: hdesk ne peut pas changer le mot de passe de root
+        run: "! sudo -l -U hdesk /usr/bin/passwd root >/dev/null 2>&1"
+      - desc: hdesk ne peut ni ouvrir un shell ni utiliser d'option
+        run: "! sudo -l -U hdesk /bin/bash >/dev/null 2>&1 && ! sudo -l -U hdesk /usr/bin/passwd -d mdupont >/dev/null 2>&1"
+      - desc: La configuration sudo est valide
+        run: visudo -c
+
+  - id: depart
+    title: Départ d'un salarié
+    description: |
+      Paul Leroy (`pleroy`) a quitté l'entreprise. Applique la procédure de départ :
+
+      1. **Verrouille** son mot de passe et fais **expirer** le compte (il ne doit plus pouvoir se connecter
+         d'aucune façon, même par clé SSH).
+      2. Remplace son shell par `/usr/sbin/nologin`.
+      3. Archive son dossier personnel dans `/root/archives/pleroy.tar.gz` (pour le service RH), puis
+         **supprime** le dossier `/home/pleroy`. Le compte lui-même est conservé (traçabilité des fichiers).
+    hint: "usermod -L -e 1 -s /usr/sbin/nologin pleroy ; tar -czf /root/archives/pleroy.tar.gz -C /home pleroy"
+    checks:
+      - desc: Mot de passe verrouillé
+        run: passwd -S pleroy | awk '{print $2}' | grep -qx L
+      - desc: Compte expiré
+        run: |
+          today=$(( $(date -u +%s) / 86400 ))
+          awk -F: -v t=$today '$1=="pleroy"{ok=($8!="" && $8+0 <= t)} END{exit !ok}' /etc/shadow
+      - desc: Shell nologin
+        run: |
+          getent passwd pleroy | cut -d: -f7 | grep -Eq '/(nologin|false)$'
+      - desc: L'archive contient ses documents
+        run: tar -tzf /root/archives/pleroy.tar.gz | grep -q 'Documents/inventaire.txt'
+      - desc: Le dossier personnel a été supprimé mais le compte existe
+        run: test ! -e /home/pleroy && getent passwd pleroy >/dev/null
+
+  - id: skel-stagiaire
+    title: Modèle de compte et compte temporaire
+    description: |
+      1. Chaque nouveau compte doit recevoir la charte informatique : crée `/etc/skel/LISEZMOI.txt` contenant
+         la phrase `Charte informatique` (le contenu de `/etc/skel` est copié dans chaque nouveau dossier
+         personnel).
+      2. Crée le compte `stagiaire1` (dossier personnel, shell bash) qui **expire automatiquement le
+         30 juin 2027** (fin du stage).
+    hint: "useradd -m -s /bin/bash -e 2027-06-30 stagiaire1   (ou chage -E 2027-06-30 stagiaire1)"
+    checks:
+      - desc: /etc/skel/LISEZMOI.txt contient la charte
+        run: grep -q "Charte informatique" /etc/skel/LISEZMOI.txt
+      - desc: stagiaire1 a reçu le fichier dans son dossier personnel
+        run: grep -q "Charte informatique" /home/stagiaire1/LISEZMOI.txt
+      - desc: Le compte expire le 30/06/2027
+        run: |
+          test "$(awk -F: '$1=="stagiaire1"{print $8}' /etc/shadow)" = "$(( $(date -u -d 2027-06-30 +%s) / 86400 ))"
+
+  - id: audit
+    title: Audit des comptes
+    description: |
+      La direction demande la liste des comptes « humains » du serveur. Écris dans `/root/audit-comptes.txt`
+      les logins de **tous** les comptes dont l'UID est compris entre 1000 et 59999, un par ligne, triés par
+      ordre alphabétique. Fais-le avec une commande (pas à la main) : tu la réutiliseras.
+
+      Écris aussi dans `/root/admins.txt` la liste des membres du groupe `informatique` (un par ligne).
+    hint: "awk -F: '$3>=1000 && $3<60000 {print $1}' /etc/passwd | sort > /root/audit-comptes.txt"
+    checks:
+      - desc: audit-comptes.txt est exact
+        run: |
+          test -s /root/audit-comptes.txt &&
+          test "$(awk -F: '$3>=1000 && $3<60000{print $1}' /etc/passwd | sort)" = "$(sed 's/[[:space:]]*$//' /root/audit-comptes.txt | grep -v '^$')"
+      - desc: admins.txt liste les membres d'informatique
+        run: |
+          test -s /root/admins.txt &&
+          test "$(getent group informatique | cut -d: -f4 | tr ',' '\n' | grep -v '^$' | sort)" = "$(sed 's/[[:space:]]*$//' /root/admins.txt | grep -v '^$' | sort)"

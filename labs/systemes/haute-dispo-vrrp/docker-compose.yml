@@ -1,0 +1,53 @@
+# Deux routeurs redondants (r1, r2) entre le LAN et le réseau des serveurs, à rendre hautement
+# disponibles avec VRRP (keepalived). Passerelle virtuelle : 192.168.50.254 côté LAN, 10.50.0.254 côté serveurs.
+x-noeud: &noeud
+  build: {context: ., dockerfile: noeud/Dockerfile}
+  cap_add: [NET_ADMIN]
+  volumes: [cles:/lab-ssh]
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    cap_add: [NET_ADMIN]
+    environment: {IFNAMES: "10.99.3.=mgmt"}
+    volumes: [cles:/lab-ssh]
+    networks:
+      mgmt: {ipv4_address: 10.99.3.5}
+  r1:
+    <<: *noeud
+    hostname: r1
+    sysctls: {net.ipv4.ip_forward: "1"}
+    environment: {IFNAMES: "192.168.50.=lan 10.50.0.=serveurs 10.99.3.=mgmt"}
+    networks:
+      lan: {ipv4_address: 192.168.50.2}
+      serveurs: {ipv4_address: 10.50.0.2}
+      mgmt: {ipv4_address: 10.99.3.11}
+  r2:
+    <<: *noeud
+    hostname: r2
+    sysctls: {net.ipv4.ip_forward: "1"}
+    environment: {IFNAMES: "192.168.50.=lan 10.50.0.=serveurs 10.99.3.=mgmt"}
+    networks:
+      lan: {ipv4_address: 192.168.50.3}
+      serveurs: {ipv4_address: 10.50.0.3}
+      mgmt: {ipv4_address: 10.99.3.12}
+  pc:
+    <<: *noeud
+    hostname: pc
+    environment: {IFNAMES: "192.168.50.=lan 10.99.3.=mgmt", PASSERELLE: 192.168.50.254}
+    networks:
+      lan: {ipv4_address: 192.168.50.10}
+      mgmt: {ipv4_address: 10.99.3.21}
+  srv:
+    <<: *noeud
+    hostname: srv
+    environment: {ROLE: web, IFNAMES: "10.50.0.=serveurs 10.99.3.=mgmt", PASSERELLE: 10.50.0.254}
+    networks:
+      serveurs: {ipv4_address: 10.50.0.10}
+      mgmt: {ipv4_address: 10.99.3.22}
+volumes:
+  cles:
+networks:
+  lan: {internal: true, ipam: {config: [{subnet: 192.168.50.0/24}]}}
+  serveurs: {internal: true, ipam: {config: [{subnet: 10.50.0.0/24}]}}
+  mgmt: {internal: true, ipam: {config: [{subnet: 10.99.3.0/24}]}}

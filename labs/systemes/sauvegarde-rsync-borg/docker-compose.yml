@@ -1,0 +1,21 @@
+# Serveur de fichiers à sauvegarder et serveur de sauvegarde (rsync + dépôt BorgBackup).
+x-serveur: &serveur
+  build: {context: ., dockerfile: serveur/Dockerfile}
+  volumes: [cles:/lab-ssh]
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    volumes: [cles:/lab-ssh]
+  srv-fichiers:
+    <<: *serveur
+    hostname: srv-fichiers
+    environment: {ROLE: fichiers}
+  srv-sauvegarde:
+    <<: *serveur
+    hostname: srv-sauvegarde
+    environment: {ROLE: sauvegarde}
+    volumes: [cles:/lab-ssh, depots:/srv]
+volumes:
+  cles:
+  depots:

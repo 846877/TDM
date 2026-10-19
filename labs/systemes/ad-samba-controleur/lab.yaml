@@ -1,0 +1,220 @@
+title: Active Directory - contrôleur de domaine Samba
+level: avance
+order: 1
+tags: [active directory, samba, ad dc, kerberos, dns, ou, gpo, stratégie de mot de passe]
+summary: Créer le domaine DURAND.LAN avec Samba AD - DNS intégré, OU, utilisateurs, groupes, stratégie de mots de passe, Kerberos, cycle de vie des comptes et sauvegarde.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** *Ateliers Durand* passe d'un réseau « groupe de travail » à un **domaine Active
+  Directory** pour centraliser comptes, mots de passe et droits. Pour des raisons de budget, le
+  contrôleur de domaine est un **Samba AD DC** sous Linux : il est compatible avec les outils et les postes
+  Windows (RSAT, jonction au domaine, GPO, Kerberos).
+
+  **Machines** (réseau `10.60.0.0/24`) :
+
+  | Machine | Adresse    | Rôle                                                                 |
+  |---------|------------|----------------------------------------------------------------------|
+  | `admin` | 10.60.0.5  | ton poste (`kinit`, `smbclient`, `dig`) ; son DNS est 10.60.0.10      |
+  | `dc1`   | 10.60.0.10 | futur contrôleur de domaine, `ssh dc1` (root par clé) ; Samba installé, rien n'est provisionné |
+
+  **Paramètres du domaine** :
+
+  | Paramètre                  | Valeur              |
+  |----------------------------|---------------------|
+  | Domaine DNS / royaume Kerberos | `durand.lan` / `DURAND.LAN` |
+  | Nom NetBIOS                | `DURAND`            |
+  | Mot de passe Administrator | `Durand@dmin2024`   |
+
+  Les commandes `samba-tool` se lancent sur **dc1** (en root, elles accèdent directement à l'annuaire ;
+  pour les commandes réseau comme `samba-tool dns`, ajoute `-U administrator%'Durand@dmin2024'`).
+  Démarrer le contrôleur : `samba` ; l'arrêter : `pkill samba`. Journaux : `samba -i -d 2` au premier plan.
+exercises:
+  - id: provision
+    title: Provisionner le domaine
+    description: |
+      Sur dc1 :
+      1. supprime la configuration d'exemple `/etc/samba/smb.conf` (le provisionnement en crée une) ;
+      2. provisionne le domaine avec `samba-tool domain provision` : royaume `DURAND.LAN`, domaine
+         `DURAND`, rôle `dc`, DNS **interne** de Samba (`SAMBA_INTERNAL`), attributs Unix RFC2307
+         (`--use-rfc2307`), adresse `10.60.0.10`, mot de passe Administrator `Durand@dmin2024` ;
+      3. utilise le `krb5.conf` généré (`/var/lib/samba/private/krb5.conf` → `/etc/krb5.conf`) ;
+      4. démarre `samba`.
+
+      Contrôle : `smbclient -L //dc1 -N` (depuis admin) doit lister les partages `sysvol` et `netlogon`.
+    hint: "rm /etc/samba/smb.conf ; samba-tool domain provision --realm=DURAND.LAN --domain=DURAND --server-role=dc --dns-backend=SAMBA_INTERNAL --use-rfc2307 --host-ip=10.60.0.10 --adminpass='Durand@dmin2024' ; cp /var/lib/samba/private/krb5.conf /etc/krb5.conf ; samba"
+    checks:
+      - desc: Le service samba tourne sur dc1
+        run: ssh dc1 'pgrep -x samba' >/dev/null
+      - desc: Les partages sysvol et netlogon sont publiés
+        run: smbclient -N -L //10.60.0.10 2>/dev/null | grep -qi 'sysvol' && smbclient -N -L //10.60.0.10 2>/dev/null | grep -qi 'netlogon'
+      - desc: Le domaine DURAND.LAN existe
+        run: ssh dc1 'samba-tool domain info 127.0.0.1' 2>/dev/null | grep -qi 'durand.lan'
+
+  - id: dns-ad
+    title: DNS intégré à l'annuaire
+    description: |
+      Active Directory repose sur le DNS : les postes trouvent les contrôleurs grâce aux enregistrements
+      **SRV** créés au provisionnement. Vérifie-les depuis admin (`dig -t SRV _ldap._tcp.durand.lan`,
+      `_kerberos._udp.durand.lan`).
+
+      Ajoute ensuite, avec `samba-tool dns` :
+      - les enregistrements A `srv-fichiers` → `10.60.0.20` et `poste01` → `10.60.0.101` ;
+      - la zone inverse `0.60.10.in-addr.arpa` avec les PTR de `dc1` (10) et `srv-fichiers` (20).
+    hint: "samba-tool dns add 127.0.0.1 durand.lan srv-fichiers A 10.60.0.20 -U administrator%'Durand@dmin2024' ; samba-tool dns zonecreate 127.0.0.1 0.60.10.in-addr.arpa -U ... ; samba-tool dns add 127.0.0.1 0.60.10.in-addr.arpa 20 PTR srv-fichiers.durand.lan -U ..."
+    checks:
+      - desc: Les SRV LDAP et Kerberos pointent vers dc1
+        run: dig +short @10.60.0.10 -t SRV _ldap._tcp.durand.lan | grep -qi 'dc1.durand.lan' && dig +short @10.60.0.10 -t SRV _kerberos._udp.durand.lan | grep -qi 'dc1.durand.lan'
+      - desc: srv-fichiers et poste01 sont résolus
+        run: test "$(dig +short @10.60.0.10 srv-fichiers.durand.lan)" = 10.60.0.20 && test "$(dig +short @10.60.0.10 poste01.durand.lan)" = 10.60.0.101
+      - desc: Résolution inverse de dc1 et srv-fichiers
+        run: dig +short @10.60.0.10 -x 10.60.0.10 | grep -qi '^dc1.durand.lan.$' && dig +short @10.60.0.10 -x 10.60.0.20 | grep -qi '^srv-fichiers.durand.lan.$'
+
+  - id: ou
+    title: Arborescence d'unités d'organisation
+    description: |
+      Crée l'arborescence d'OU de l'entreprise (elle servira à déléguer et à appliquer des GPO) :
+
+      ```
+      OU=Durand
+      ├── OU=Utilisateurs
+      │   ├── OU=Compta
+      │   ├── OU=RH
+      │   └── OU=Informatique
+      ├── OU=Groupes
+      ├── OU=Ordinateurs
+      └── OU=Serveurs
+      ```
+    hint: "samba-tool ou create 'OU=Durand' ; samba-tool ou create 'OU=Utilisateurs,OU=Durand' ; samba-tool ou create 'OU=Compta,OU=Utilisateurs,OU=Durand' ..."
+    checks:
+      - desc: Les huit OU existent au bon endroit
+        run: |
+          ssh dc1 'B="DC=durand,DC=lan"; for ou in "OU=Durand" "OU=Utilisateurs,OU=Durand" "OU=Compta,OU=Utilisateurs,OU=Durand" "OU=RH,OU=Utilisateurs,OU=Durand" "OU=Informatique,OU=Utilisateurs,OU=Durand" "OU=Groupes,OU=Durand" "OU=Ordinateurs,OU=Durand" "OU=Serveurs,OU=Durand"; do ldbsearch -H /var/lib/samba/private/sam.ldb -s base -b "$ou,$B" dn 2>/dev/null | grep -q "^dn: " || { echo "absente : $ou"; exit 1; }; done'
+
+  - id: ad-utilisateurs
+    title: Comptes utilisateurs
+    description: |
+      Crée les comptes suivants dans leur OU, avec prénom, nom et adresse mail `<login>@durand.lan` :
+
+      | Login      | Prénom Nom      | OU                                   | Mot de passe       |
+      |------------|-----------------|--------------------------------------|--------------------|
+      | `mdupont`  | Marie Dupont    | `OU=Compta,OU=Utilisateurs,OU=Durand` | `Compta!2024pass`  |
+      | `jmartin`  | Julien Martin   | `OU=RH,OU=Utilisateurs,OU=Durand`     | `RhDurand!2024`    |
+      | `tbernard` | Thomas Bernard  | `OU=Informatique,OU=Utilisateurs,OU=Durand` | `Technicien!2024` |
+
+      Le mot de passe de `mdupont` est provisoire : elle devra le **changer à sa première ouverture de
+      session**.
+    hint: "samba-tool user create mdupont 'Compta!2024pass' --given-name=Marie --surname=Dupont --mail-address=mdupont@durand.lan --userou='OU=Compta,OU=Utilisateurs,OU=Durand' --must-change-at-next-login"
+    checks:
+      - desc: Chaque compte est dans son OU
+        run: |
+          ssh dc1 'for e in mdupont:Compta jmartin:RH tbernard:Informatique; do u=${e%%:*}; o=${e#*:}; ldbsearch -H /var/lib/samba/private/sam.ldb "(sAMAccountName=$u)" dn 2>/dev/null | grep -qi "^dn: CN=.*,OU=$o,OU=Utilisateurs,OU=Durand,DC=durand,DC=lan" || { echo "$u mal placé"; exit 1; }; done'
+      - desc: Prénom, nom et mail renseignés
+        run: |
+          ssh dc1 'ldbsearch -H /var/lib/samba/private/sam.ldb "(sAMAccountName=mdupont)" givenName sn mail' > /tmp/mdupont.txt
+          grep -q '^givenName: Marie' /tmp/mdupont.txt && grep -q '^sn: Dupont' /tmp/mdupont.txt && grep -q '^mail: mdupont@durand.lan' /tmp/mdupont.txt
+      - desc: mdupont doit changer son mot de passe (pwdLastSet = 0)
+        run: |
+          ssh dc1 'ldbsearch -H /var/lib/samba/private/sam.ldb "(sAMAccountName=mdupont)" pwdLastSet' | grep -q '^pwdLastSet: 0$'
+
+  - id: ad-groupes
+    title: Groupes de sécurité
+    description: |
+      Dans `OU=Groupes,OU=Durand`, crée les groupes de sécurité globaux `GG_Compta`, `GG_RH` et
+      `GG_Informatique`, avec respectivement `mdupont`, `jmartin` et `tbernard` comme membres. Les droits
+      sur les partages seront donnés aux **groupes**, jamais directement aux utilisateurs.
+
+      Ajoute aussi `tbernard` au groupe `Domain Admins`.
+    hint: "samba-tool group add GG_Compta --groupou='OU=Groupes,OU=Durand' ; samba-tool group addmembers GG_Compta mdupont"
+    checks:
+      - desc: Les groupes sont dans OU=Groupes
+        run: |
+          ssh dc1 'for g in GG_Compta GG_RH GG_Informatique; do ldbsearch -H /var/lib/samba/private/sam.ldb "(&(objectClass=group)(sAMAccountName=$g))" dn | grep -qi "^dn: CN=$g,OU=Groupes,OU=Durand,DC=durand,DC=lan" || exit 1; done'
+      - desc: Les membres sont corrects
+        run: |
+          ssh dc1 'samba-tool group listmembers GG_Compta | grep -qx mdupont && samba-tool group listmembers GG_RH | grep -qx jmartin && samba-tool group listmembers GG_Informatique | grep -qx tbernard'
+      - desc: tbernard est administrateur du domaine
+        run: ssh dc1 'samba-tool group listmembers "Domain Admins"' | grep -qx tbernard
+
+  - id: strategie-mdp
+    title: Stratégie de mots de passe et de verrouillage
+    description: |
+      Applique la politique de sécurité de l'entreprise à tout le domaine :
+
+      | Paramètre                                | Valeur |
+      |------------------------------------------|--------|
+      | Longueur minimale                        | 12     |
+      | Complexité                               | activée |
+      | Historique                               | 24     |
+      | Âge maximal (jours)                      | 90     |
+      | Seuil de verrouillage (tentatives)       | 5      |
+      | Durée de verrouillage (minutes)          | 15     |
+      | Réinitialisation du compteur (minutes)   | 15     |
+
+      Un mot de passe de 10 caractères comme `Abcdef1234` (accepté par la stratégie par défaut) doit alors être refusé.
+    hint: "samba-tool domain passwordsettings set --min-pwd-length=12 --complexity=on --history-length=24 --max-pwd-age=90 --account-lockout-threshold=5 --account-lockout-duration=15 --reset-account-lockout-after=15"
+    checks:
+      - desc: Paramètres de la stratégie
+        run: |
+          ssh dc1 'samba-tool domain passwordsettings show' > /tmp/pwd.txt
+          grep -Eq 'complexity: *on' /tmp/pwd.txt && grep -Eq 'Minimum password length: *12$' /tmp/pwd.txt && grep -Eq 'history length: *24$' /tmp/pwd.txt &&
+          grep -Eq 'Maximum password age \(days\): *90$' /tmp/pwd.txt && grep -Eq 'lockout threshold \(attempts\): *5$' /tmp/pwd.txt &&
+          grep -Eq 'lockout duration \(mins\): *15$' /tmp/pwd.txt && grep -Eq 'lockout after \(mins\): *15$' /tmp/pwd.txt
+      - desc: Un mot de passe de 10 caractères (Abcdef1234) est refusé
+        run: |
+          ssh dc1 'samba-tool domain passwordsettings show >/dev/null 2>&1 || exit 1; if samba-tool user create verif-faible "Abcdef1234" >/dev/null 2>&1; then samba-tool user delete verif-faible >/dev/null 2>&1; exit 1; fi'
+
+  - id: kerberos
+    title: Authentification Kerberos depuis le poste
+    description: |
+      Sur **admin**, complète `/etc/krb5.conf` avec `default_realm = DURAND.LAN` (les KDC sont trouvés par
+      les enregistrements SRV du DNS). Obtiens un ticket pour `tbernard` (`kinit tbernard`), affiche-le
+      (`klist`), puis accède au partage `netlogon` du contrôleur **par Kerberos**, sans mot de passe :
+      `smbclient //dc1.durand.lan/netlogon --use-kerberos=required -c ls`.
+
+      Kerberos refuse un écart d'horloge de plus de 5 minutes entre le client et le KDC : en production, la
+      synchronisation NTP des postes sur les contrôleurs est indispensable.
+    hint: "Dans [libdefaults] : default_realm = DURAND.LAN ; en cas de souci, ajoute [realms] DURAND.LAN = { kdc = dc1.durand.lan }"
+    checks:
+      - desc: Le royaume par défaut est DURAND.LAN
+        run: grep -Eq '^\s*default_realm\s*=\s*DURAND\.LAN' /etc/krb5.conf
+      - desc: kinit tbernard réussit et délivre un TGT
+        run: |
+          export KRB5CCNAME=FILE:/tmp/krb5cc_verif
+          echo 'Technicien!2024' | kinit tbernard@DURAND.LAN >/dev/null 2>&1 && klist | grep -q 'krbtgt/DURAND.LAN@DURAND.LAN'
+      - desc: Accès SMB par Kerberos au partage netlogon
+        run: |
+          export KRB5CCNAME=FILE:/tmp/krb5cc_verif
+          smbclient //dc1.durand.lan/netlogon --use-kerberos=required -c ls >/dev/null 2>&1 && klist | grep -qi 'cifs/dc1.durand.lan'
+
+  - id: cycle-de-vie
+    title: Cycle de vie des comptes
+    description: |
+      1. Julien Martin part en congé longue durée : **désactive** son compte (sans le supprimer).
+      2. Crée le compte `stagiaire01` (mot de passe `Stagiaire!2024`, OU Informatique) qui **expire
+         automatiquement dans 90 jours**.
+      3. `tbernard` a saisi plusieurs fois un mauvais mot de passe : il pourrait être verrouillé. Note la
+         commande de déverrouillage dans ta procédure (`samba-tool user unlock`).
+    hint: "samba-tool user disable jmartin ; samba-tool user create stagiaire01 'Stagiaire!2024' --userou='OU=Informatique,OU=Utilisateurs,OU=Durand' ; samba-tool user setexpiry stagiaire01 --days=90"
+    checks:
+      - desc: jmartin est désactivé (bit ACCOUNTDISABLE de userAccountControl)
+        run: |
+          uac=$(ssh dc1 'ldbsearch -H /var/lib/samba/private/sam.ldb "(sAMAccountName=jmartin)" userAccountControl' | sed -n 's/^userAccountControl: //p')
+          test -n "$uac" && test $(( uac & 2 )) -eq 2
+      - desc: stagiaire01 a une date d'expiration
+        run: |
+          e=$(ssh dc1 'ldbsearch -H /var/lib/samba/private/sam.ldb "(sAMAccountName=stagiaire01)" accountExpires' | sed -n 's/^accountExpires: //p')
+          test -n "$e" && test "$e" != 0 && test "$e" != 9223372036854775807
+
+  - id: sauvegarde-ad
+    title: Sauvegarder l'annuaire
+    description: |
+      Un annuaire sans sauvegarde, c'est une entreprise à l'arrêt en cas de panne. Fais une sauvegarde
+      **hors ligne** du contrôleur avec `samba-tool domain backup offline` dans `/root/sauvegarde-ad` sur dc1.
+      L'archive produite permet une restauration complète (`samba-tool domain backup restore`).
+    hint: samba-tool domain backup offline --targetdir=/root/sauvegarde-ad
+    checks:
+      - desc: Une archive samba-backup-*.tar.bz2 existe et contient sam.ldb
+        run: ssh dc1 'f=$(ls /root/sauvegarde-ad/samba-backup-*.tar.bz2 2>/dev/null | head -1); test -n "$f" && tar -tjf "$f" | grep -q "sam.ldb"'

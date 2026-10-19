@@ -1,0 +1,136 @@
+title: VPN WireGuard - site à site et nomades
+level: avance
+order: 5
+tags: [vpn, wireguard, site à site, nomade, chiffrement, nftables]
+summary: Relier le siège et une agence par un tunnel WireGuard, router les deux LAN, raccorder un nomade en split tunnel, filtrer l'accès Internet et révoquer un pair.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** *Ateliers Durand* ouvre une agence. Plutôt qu'une liaison louée hors de prix, les deux
+  sites seront reliés par un **VPN WireGuard** à travers Internet. Les commerciaux en déplacement se
+  connecteront aussi au siège par WireGuard.
+
+  **Topologie.**
+
+  ```
+   SIÈGE 10.10.0.0/24                 INTERNET 198.51.100.0/24               AGENCE 10.20.0.0/24
+   pc-siege .10 ── lan  gw-siege  internet ──────────────── internet  gw-agence  lan ── pc-agence .10
+   (intranet web)       .254    .10         nomade .30            .20    .254
+  ```
+
+  | Machine     | Tunnel `wg0`         | Rôle                                      |
+  |-------------|----------------------|-------------------------------------------|
+  | `gw-siege`  | 10.200.0.1/24        | passerelle VPN du siège, écoute UDP 51820 |
+  | `gw-agence` | 10.200.0.2/24        | passerelle VPN de l'agence                |
+  | `nomade`    | 10.200.0.10/32       | portable d'un commercial                  |
+
+  Les passerelles routent déjà (`ip_forward=1`) et les postes les ont comme passerelle par défaut.
+  Accès : `ssh gw-siege`, `ssh gw-agence`, `ssh nomade`, `ssh pc-siege`, `ssh pc-agence` (réseau
+  d'administration hors bande). Outils : `wg genkey`, `wg pubkey`, `wg show`, `wg-quick up|down wg0`
+  (configuration dans `/etc/wireguard/wg0.conf`). Si le noyau n'a pas le module WireGuard, `wg-quick`
+  bascule automatiquement sur **wireguard-go** (implémentation en espace utilisateur).
+exercises:
+  - id: wg-cles
+    title: Générer les paires de clés
+    description: |
+      Sur **gw-siege** et **gw-agence**, génère une paire de clés WireGuard dans `/etc/wireguard/privatekey`
+      et `/etc/wireguard/publickey`. La clé privée ne doit être lisible que par root (`umask 077`).
+    hint: "umask 077 ; wg genkey | tee /etc/wireguard/privatekey | wg pubkey > /etc/wireguard/publickey"
+    checks:
+      - desc: Clés présentes et cohérentes sur les deux passerelles
+        run: |
+          for g in gw-siege gw-agence; do
+            ssh $g 'test "$(wg pubkey < /etc/wireguard/privatekey)" = "$(cat /etc/wireguard/publickey)"' || { echo "$g : clés absentes ou incohérentes"; exit 1; }
+          done
+      - desc: Clés privées en 600
+        run: for g in gw-siege gw-agence; do test "$(ssh $g stat -c %a /etc/wireguard/privatekey)" = 600 || exit 1; done
+
+  - id: tunnel
+    title: Monter le tunnel site à site
+    description: |
+      Écris `/etc/wireguard/wg0.conf` (droits `600`) sur les deux passerelles :
+      - **gw-siege** : `Address = 10.200.0.1/24`, `ListenPort = 51820`, sa clé privée ; un `[Peer]` agence
+        avec sa clé publique, `Endpoint = 198.51.100.20:51820` et
+        `AllowedIPs = 10.200.0.2/32, 10.20.0.0/24` ;
+      - **gw-agence** : symétrique (`10.200.0.2/24`, endpoint `198.51.100.10:51820`,
+        `AllowedIPs = 10.200.0.1/32, 10.10.0.0/24`), avec `PersistentKeepalive = 25` (l'agence est
+        souvent derrière une box qui fait du NAT).
+
+      Monte les tunnels (`wg-quick up wg0`) : `wg show` doit indiquer une poignée de main récente
+      (*latest handshake*).
+    hint: "[Interface] PrivateKey = ... / Address = 10.200.0.1/24 / ListenPort = 51820  puis  [Peer] PublicKey = ... / Endpoint = 198.51.100.20:51820 / AllowedIPs = 10.200.0.2/32, 10.20.0.0/24"
+    checks:
+      - desc: Les deux passerelles se joignent dans le tunnel
+        run: ssh gw-siege 'ping -c2 -W2 10.200.0.2' >/dev/null
+      - desc: Poignée de main WireGuard établie
+        run: ssh gw-siege 'wg show wg0 latest-handshakes' | awk '$2 > 0 {ok=1} END {exit !ok}'
+      - desc: Keepalive de 25 s côté agence
+        run: ssh gw-agence 'wg show wg0 persistent-keepalive' | grep -q '25'
+
+  - id: lan-lan
+    title: Relier les deux réseaux locaux
+    description: |
+      Grâce aux `AllowedIPs`, `wg-quick` a ajouté les routes vers le LAN distant sur chaque passerelle.
+      Vérifie que **pc-agence** consulte l'intranet du siège (`curl http://10.10.0.10/`) et que
+      **pc-siege** pingue pc-agence. Observe avec `tcpdump -ni internet udp port 51820` sur une passerelle :
+      sur Internet, on ne voit que de l'UDP chiffré.
+    hint: "Si ça ne passe pas : wg show (AllowedIPs), ip route sur les passerelles, puis tcpdump sur wg0"
+    checks:
+      - desc: pc-agence consulte l'intranet du siège
+        run: ssh pc-agence 'curl -s -m5 http://10.10.0.10/' | grep -q 'Intranet du siege'
+      - desc: pc-siege pingue pc-agence
+        run: ssh pc-siege 'ping -c2 -W2 10.20.0.10' >/dev/null
+
+  - id: nomade
+    title: Raccorder un nomade (split tunnel)
+    description: |
+      Sur **nomade**, génère une paire de clés et crée `wg0` avec l'adresse `10.200.0.10/32`, un pair
+      `gw-siege` (endpoint `198.51.100.10:51820`) et `AllowedIPs = 10.200.0.0/24, 10.10.0.0/24` : seul le
+      trafic vers l'entreprise passe dans le tunnel (*split tunnel*), la navigation Internet reste directe.
+
+      Sur **gw-siege**, ajoute le pair nomade (`AllowedIPs = 10.200.0.10/32`) dans `wg0.conf` **et** à chaud
+      (`wg set` ou `wg syncconf wg0 <(wg-quick strip wg0)`), sans couper le tunnel de l'agence.
+    hint: "Sur gw-siege : wg set wg0 peer <clé publique du nomade> allowed-ips 10.200.0.10/32 (et ajoute le bloc [Peer] dans wg0.conf)"
+    checks:
+      - desc: nomade consulte l'intranet du siège via le tunnel
+        run: ssh nomade 'curl -s -m5 http://10.10.0.10/' | grep -q 'Intranet du siege'
+      - desc: Le pair nomade est dans la configuration de gw-siege
+        run: ssh gw-siege 'grep -q "10.200.0.10/32" /etc/wireguard/wg0.conf'
+      - desc: Le tunnel de l'agence fonctionne toujours
+        run: ssh pc-agence 'curl -s -m5 http://10.10.0.10/' | grep -q 'Intranet du siege'
+
+  - id: wg-filtrage
+    title: Exposer uniquement WireGuard sur Internet
+    description: |
+      La passerelle du siège est exposée sur Internet. Avec nftables, sur **gw-siege**, crée une table
+      `inet filtre` dont la chaîne `input` (politique `drop`) n'accepte que : `lo`, l'interface `mgmt`,
+      les connexions établies, le **ping**, et sur l'interface `internet` **uniquement UDP 51820**. Tout ce
+      qui arrive par le tunnel `wg0` et le LAN reste accepté.
+
+      Un scan depuis nomade (`nc -zv 198.51.100.10 22`) ne doit plus rien trouver, mais le VPN doit
+      fonctionner.
+    hint: "chain input { type filter hook input priority 0; policy drop; iif lo accept; iifname { \"mgmt\", \"lan\", \"wg0\" } accept; ct state established,related accept; icmp type echo-request accept; iifname \"internet\" udp dport 51820 accept; }"
+    checks:
+      - desc: input en politique drop sur gw-siege
+        run: ssh gw-siege 'nft list chain inet filtre input' | grep -q 'policy drop'
+      - desc: SSH depuis Internet bloqué
+        run: "! ssh nomade 'nc -z -w3 198.51.100.10 22'"
+      - desc: Le VPN fonctionne toujours (agence et nomade)
+        run: ssh pc-agence 'curl -s -m5 http://10.10.0.10/' | grep -q 'Intranet' && ssh nomade 'curl -s -m5 http://10.10.0.10/' | grep -q 'Intranet'
+
+  - id: revocation
+    title: Révoquer un pair
+    description: |
+      Le portable du commercial a été volé. **Révoque** immédiatement le pair nomade sur gw-siege : retire-le
+      de l'interface active (`wg set wg0 peer <clé> remove`) **et** de `wg0.conf` (sinon il reviendrait au
+      prochain redémarrage). Le nomade ne doit plus atteindre l'intranet ; l'agence, si.
+    hint: "wg set wg0 peer $(ssh nomade cat /etc/wireguard/publickey) remove ; puis supprime le bloc [Peer] du nomade dans /etc/wireguard/wg0.conf"
+    checks:
+      - desc: Le pair nomade a disparu de la configuration et de l'interface
+        run: |
+          ssh gw-siege 'grep -q "10.200.0.2/32" /etc/wireguard/wg0.conf && ! grep -q "10.200.0.10" /etc/wireguard/wg0.conf && ! wg show wg0 allowed-ips | grep -q "10.200.0.10"'
+      - desc: Le nomade n'atteint plus l'intranet, l'agence oui
+        run: |
+          ! ssh nomade 'curl -s -m4 http://10.10.0.10/' | grep -q 'Intranet' && ssh pc-agence 'curl -s -m5 http://10.10.0.10/' | grep -q 'Intranet'

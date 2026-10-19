@@ -1,0 +1,178 @@
+title: Audit de sécurité et durcissement d'un serveur hérité
+level: expert
+order: 6
+tags: [sécurité, durcissement, audit, suid, sudo, comptes, pwquality, sysctl, lynis, cis]
+summary: Auditer un serveur hérité comme un attaquant le ferait (UID 0 cachés, SUID, fichiers modifiables par tous, sudo dangereux, services en clair), corriger, appliquer une politique de mots de passe et mesurer le résultat avec Lynis.
+build: .
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Avant de raccorder le vieux serveur `srv-legacy` au nouveau réseau, le RSSI d'*Ateliers
+  Durand* exige un **audit de sécurité** suivi d'un **durcissement** inspiré des guides ANSSI / CIS.
+  Pense comme un attaquant : chaque point est une vraie technique d'élévation de privilèges ou de
+  persistance. Corrige sans casser le service : les comptes légitimes doivent continuer à fonctionner.
+
+  **Machine.** Serveur Ubuntu, terminal `root`. Comptes : `dev`, `stagiaire`, `comptable` (légitimes),
+  et d'autres à découvrir. Au démarrage, chaque script exécutable de `/etc/demarrage.d/` est lancé.
+
+  Réponses à écrire dans `/root/reponses.txt`, au format `cle=valeur`.
+
+  Outils : `awk -F: '$3 == 0' /etc/passwd`, `find / -xdev -perm -4000`, `find … -perm -o+w`,
+  `sudo -l -U <compte>`, `visudo -c`, `ss -ltnp`, `chage`, `pwscore`, `sysctl`, `lynis audit system`.
+  Référence des contournements sudo/SUID : *GTFOBins*.
+exercises:
+  - id: durc-comptes-caches
+    title: Comptes à privilèges cachés
+    description: |
+      1. Liste les comptes d'**UID 0** : un seul est légitime. Supprime l'autre (une porte dérobée
+         classique : un compte qui *est* root sous un autre nom).
+      2. Trouve le compte **sans mot de passe** (champ vide dans `/etc/shadow`) et verrouille-le.
+
+      Réponses : `compte_uid0=` et `compte_sans_mdp=`.
+    hint: "awk -F: '$3 == 0 {print $1}' /etc/passwd ; awk -F: '$2 == \"\" {print $1}' /etc/shadow ; userdel -f maintenance (le -f est nécessaire : des processus tournent sous l UID 0) ou vipw + vipw -s ; passwd -l test"
+    checks:
+      - desc: root est le seul compte d'UID 0
+        run: |
+          test "$(awk -F: '$3 == 0 {print $1}' /etc/passwd)" = root
+      - desc: Aucun compte n'a un mot de passe vide
+        run: |
+          test -z "$(awk -F: '$2 == "" {print $1}' /etc/shadow)"
+      - desc: Réponses
+        run: grep -Eq '^compte_uid0 *= *maintenance *$' /root/reponses.txt && grep -Eq '^compte_sans_mdp *= *test *$' /root/reponses.txt
+
+  - id: durc-suid
+    title: Binaires SUID suspects
+    description: |
+      Liste tous les exécutables **SUID root** du système et compare avec ce qu'installe normalement
+      Ubuntu (`dpkg -S <fichier>` dit à quel paquet appartient un fichier). Deux d'entre eux n'ont rien à
+      faire là et donnent un shell root à n'importe qui (`<binaire> -p`, `find . -exec /bin/sh -p \;`).
+      Retire-leur le bit SUID (ou supprime-les).
+
+      Réponse : `nb_suid_suspects=`.
+    hint: "find / -xdev -type f -perm -4000 2>/dev/null ; dpkg -S /usr/local/bin/sauvegarde-rapide → aucun paquet ; chmod u-s …"
+    checks:
+      - desc: Plus de SUID sur les deux binaires suspects
+        run: |
+          for f in /usr/local/bin/sauvegarde-rapide /opt/outils/find; do [ ! -e "$f" ] || [ ! -u "$f" ] || exit 1; done
+      - desc: Aucun SUID hors des paquets du système
+        run: |
+          for f in $(find / -xdev -type f -perm -4000 2>/dev/null); do dpkg -S "$f" >/dev/null 2>&1 || dpkg -S "${f#/usr}" >/dev/null 2>&1 || { echo "SUID hors paquet : $f"; exit 1; }; done
+      - desc: Réponse
+        run: grep -Eq '^nb_suid_suspects *= *2 *$' /root/reponses.txt
+
+  - id: durc-ecriture-monde
+    title: Fichiers modifiables par tous
+    description: |
+      Un script lancé **par root** via cron, mais modifiable par n'importe quel utilisateur, revient à
+      donner root à tout le monde. Trouve tous les fichiers ordinaires modifiables par « les autres »
+      sous `/etc` et `/usr/local`, et corrige leurs droits (les fichiers de `/etc/cron.d` doivent être en
+      `644` et appartenir à root, sinon cron les ignore).
+    hint: "find /etc /usr/local -xdev -type f -perm -o+w ; chmod o-w … ; chmod 644 /etc/cron.d/nettoyage ; chmod 755 /usr/local/sbin/maj.sh"
+    checks:
+      - desc: Aucun fichier modifiable par tous sous /etc et /usr/local
+        run: test -z "$(find /etc /usr/local -xdev -type f -perm -o+w 2>/dev/null)"
+      - desc: Le script et la tâche cron restent utilisables
+        run: test -x /usr/local/sbin/maj.sh && test "$(stat -c %a:%U /etc/cron.d/nettoyage)" = 644:root
+
+  - id: durc-sudo
+    title: Règles sudo dangereuses
+    description: |
+      Examine `/etc/sudoers.d/equipe` :
+
+      - `stagiaire` peut lancer `vim` en root : depuis vim, `:!sh` donne un shell root. Remplace ses
+        droits par la seule lecture des journaux : `/usr/bin/tail -n 100 /var/log/syslog` (sans
+        mot de passe), et rien d'autre ;
+      - `dev` est administrateur, mais doit **taper son mot de passe** (pas de `NOPASSWD`).
+
+      Valide toujours avec `visudo -c` (une erreur de syntaxe bloque tout sudo).
+    hint: "visudo -f /etc/sudoers.d/equipe ; dev ALL=(ALL) ALL ; stagiaire ALL=(root) NOPASSWD: /usr/bin/tail -n 100 /var/log/syslog"
+    checks:
+      - desc: La configuration sudo est valide
+        run: visudo -c >/dev/null
+      - desc: stagiaire n'a plus vim ni less, mais garde la lecture du syslog
+        run: |
+          l=$(sudo -l -U stagiaire) && ! echo "$l" | grep -Eq '/usr/bin/(vim|less)' && echo "$l" | grep -q '/usr/bin/tail -n 100 /var/log/syslog'
+      - desc: dev est administrateur avec mot de passe
+        run: |
+          l=$(sudo -l -U dev) && echo "$l" | grep -Eq '\(ALL( : ALL)?\) ALL' && ! echo "$l" | grep -q NOPASSWD
+
+  - id: durc-services-clair
+    title: Services en clair hérités
+    description: |
+      Liste les ports en écoute (`ss -ltnp`). Deux services transmettent mots de passe et données **en
+      clair** (un accès telnet et un FTP anonyme) et n'ont plus d'utilité. Arrête-les **et** empêche
+      leur relance au prochain démarrage, sans casser les autres scripts de démarrage.
+    hint: "ss -ltnp ; kill des processus socat sur 21 et 23 ; chmod -x (ou suppression) de /etc/demarrage.d/telnet.sh et ftp.sh"
+    checks:
+      - desc: Plus rien n'écoute sur les ports 21 et 23
+        run: test -z "$(ss -Hltn '( sport = :21 or sport = :23 )')"
+      - desc: Ils ne seront pas relancés au démarrage, cron l'est toujours
+        run: |
+          for s in telnet ftp; do [ ! -x /etc/demarrage.d/$s.sh ] || exit 1; done; test -x /etc/demarrage.d/cron.sh
+
+  - id: durc-mots-de-passe
+    title: Politique de mots de passe
+    description: |
+      Applique la politique du RSSI :
+
+      - nouveaux mots de passe d'au moins **12 caractères** avec au moins **3 classes** de caractères
+        (`/etc/security/pwquality.conf`, module `pam_pwquality` déjà activé par le paquet) ;
+      - durée de validité maximale de **90 jours** pour les nouveaux comptes (`/etc/login.defs`) **et**
+        pour les comptes existants `dev`, `stagiaire` et `comptable`, avec avertissement 14 jours avant.
+
+      Teste avec `echo 'Court1!' | pwscore` (refusé) et `echo 'Atelier-Durand-2024' | pwscore`.
+    hint: "minlen = 12 et minclass = 3 dans pwquality.conf ; PASS_MAX_DAYS 90 et PASS_WARN_AGE 14 dans login.defs ; chage -M 90 -W 14 dev"
+    checks:
+      - desc: pwquality impose 12 caractères et 3 classes
+        run: |
+          grep -Eq '^\s*minlen\s*=\s*1[2-9]' /etc/security/pwquality.conf && grep -Eq '^\s*minclass\s*=\s*[34]' /etc/security/pwquality.conf && ! echo 'Court1!x' | pwscore >/dev/null 2>&1
+      - desc: login.defs fixe 90 jours et 14 jours d'avertissement
+        run: grep -Eq '^PASS_MAX_DAYS\s+90\s*$' /etc/login.defs && grep -Eq '^PASS_WARN_AGE\s+14\s*$' /etc/login.defs
+      - desc: Les comptes existants expirent au bout de 90 jours
+        run: |
+          for u in dev stagiaire comptable; do test "$(chage -l $u | awk -F': ' '/^Maximum/ {print $2}')" = 90 || exit 1; test "$(chage -l $u | awk -F': ' '/warning/ {print $2}')" = 14 || exit 1; done
+
+  - id: durc-sysctl
+    title: Durcissement réseau du noyau
+    description: |
+      Rédige `/etc/sysctl.d/90-durcissement.conf` avec les réglages réseau recommandés pour un serveur
+      qui n'est **pas** un routeur :
+
+      - ne pas accepter ni envoyer de redirections ICMP (`accept_redirects`, `send_redirects` à 0 pour
+        `all` et `default`) ;
+      - filtrage du chemin inverse strict (`rp_filter = 1`) ;
+      - protection contre l'inondation SYN (`net.ipv4.tcp_syncookies = 1`) ;
+      - ne pas router (`net.ipv4.ip_forward = 0`) ;
+      - journaliser les paquets martiens (`log_martians = 1`).
+
+      Dans un conteneur, `/proc/sys` est en lecture seule : on vérifie le **fichier**, que tu peux
+      contrôler avec `sysctl -p --dry-run` ou une relecture attentive.
+    hint: "net.ipv4.conf.all.accept_redirects = 0 / net.ipv4.conf.default.accept_redirects = 0 / net.ipv4.conf.all.send_redirects = 0 / net.ipv4.conf.all.rp_filter = 1 / net.ipv4.tcp_syncookies = 1 / net.ipv4.ip_forward = 0 / net.ipv4.conf.all.log_martians = 1"
+    checks:
+      - desc: Tous les réglages attendus sont présents avec la bonne valeur
+        run: |
+          f=/etc/sysctl.d/90-durcissement.conf
+          for kv in net.ipv4.conf.all.accept_redirects=0 net.ipv4.conf.default.accept_redirects=0 net.ipv4.conf.all.send_redirects=0 net.ipv4.conf.default.send_redirects=0 net.ipv4.conf.all.rp_filter=1 net.ipv4.tcp_syncookies=1 net.ipv4.ip_forward=0 net.ipv4.conf.all.log_martians=1; do
+            k=${kv%=*}; v=${kv#*=}
+            grep -Eq "^[[:space:]]*$(echo "$k" | sed 's/\./[.\/]/g')[[:space:]]*=[[:space:]]*$v[[:space:]]*$" "$f" || { echo "manquant : $k = $v"; exit 1; }
+          done
+
+  - id: durc-lynis
+    title: Mesurer le résultat avec Lynis
+    description: |
+      Lance un audit **Lynis** complet (`lynis audit system`, 1 à 2 minutes) et lis son rapport : indice
+      de durcissement (*hardening index*), avertissements (*warnings*) et suggestions. Il est enregistré
+      dans `/var/log/lynis-report.dat`.
+
+      Réponses : `indice_lynis=` (l'indice obtenu) et `suggestion=` (l'identifiant d'une suggestion que
+      tu traiterais en priorité, par exemple `AUTH-9230`).
+    hint: "lynis audit system --quick ; grep hardening_index /var/log/lynis-report.dat ; grep ^suggestion /var/log/lynis-report.dat | head"
+    checks:
+      - desc: Un rapport Lynis a été produit
+        run: test -s /var/log/lynis-report.dat && grep -q '^hardening_index=' /var/log/lynis-report.dat
+      - desc: L'indice déclaré correspond au rapport
+        run: |
+          i=$(sed -n 's/^hardening_index=//p' /var/log/lynis-report.dat | tail -1) && grep -Eq "^indice_lynis *= *$i *$" /root/reponses.txt
+      - desc: La suggestion choisie figure dans le rapport
+        run: |
+          s=$(sed -n 's/^suggestion *= *//p' /root/reponses.txt | tr -d ' ') && test -n "$s" && grep -q "^suggestion\[\]=$s|" /var/log/lynis-report.dat
