@@ -1834,6 +1834,7 @@ class Session:
             R(["shutdown"], self.if_shutdown, "Désactiver l'interface"),
             R(["switchport"], self.if_switchport, "Port de niveau 2 (no switchport : port routé)"),
             R(["switchport", "mode", "<mode>"], self.if_sw_mode, "Mode access/trunk"),
+            R(["switchport", "mode", "dynamic", "<kind>"], self.if_sw_dynamic, "Mode DTP dynamique (auto/desirable)"),
             R(["switchport", "access", "vlan", "<id>"], self.if_access_vlan, "VLAN d'accès"),
             R(["switchport", "voice", "vlan", "<id>"], self.if_voice_vlan, "VLAN voix"),
             R(["switchport", "trunk", "allowed", "vlan", "<rest>"], self.if_trunk_allowed, "VLAN autorisés"),
@@ -3216,6 +3217,15 @@ class Session:
             raise CommandError(INVALID)
         for i in self._each_iface():
             i.mode = None if negate else mode
+
+    def if_sw_dynamic(self, args, negate):
+        self._require_switchport()
+        kind = args[0].lower()
+        if not ("auto".startswith(kind) or "desirable".startswith(kind)):
+            raise CommandError(INVALID)
+        for i in self._each_iface():
+            i.mode = None
+            i.nonegotiate = False
 
     def _vlan_id(self, text: str) -> int:
         if not text.isdigit() or not 1 <= int(text) <= 4094:
