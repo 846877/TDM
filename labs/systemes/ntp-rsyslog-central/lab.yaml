@@ -29,9 +29,137 @@ description: |
   `pkill chronyd; sleep 1; chronyd -x`. Pour rsyslog : `rsyslogd -N1` (vérifier la configuration), `rsyslogd`
   (démarrer), `pkill rsyslogd; sleep 1; rsyslogd` (redémarrer). rsyslog s'exécute sous l'utilisateur
   `syslog` : les dossiers où il écrit doivent lui appartenir.
+cours: |
+  ## Pourquoi l'heure compte autant
+
+  Sans horloges synchronisées, impossible de corréler les journaux de plusieurs machines lors d'un
+  incident. Et beaucoup de services **cassent** : Kerberos (donc Active Directory) refuse les tickets au-delà
+  de **5 minutes** d'écart, les certificats TLS paraissent « pas encore valides », les sauvegardes
+  incrémentales se trompent.
+
+  ## NTP et les strates
+
+  ```
+  strate 0   horloges de référence (GPS, atomique)
+  strate 1   serveurs reliés directement (ntp.obspm.fr...)
+  strate 2   pools publics (fr.pool.ntp.org)
+  strate 3   srv-log : serveur de temps interne de l'entreprise
+  strate 4   srv-web, srv-bdd, postes (synchronisés sur srv-log)
+  ```
+
+  La **strate** indique la distance à la référence. NTP (UDP **123**) mesure le délai aller-retour et le
+  décalage, puis corrige l'horloge progressivement (**slew**, sans saut) ou d'un coup (**step**, au
+  démarrage). En entreprise, seuls un ou deux serveurs internes interrogent Internet ; tout le parc se
+  synchronise sur eux. Dans un domaine Active Directory, c'est le contrôleur de domaine **émulateur PDC**
+  qui joue ce rôle.
+
+  ## chrony
+
+  ```
+  # /etc/chrony/chrony.conf (serveur interne)
+  pool fr.pool.ntp.org iburst      # sources (commentées dans le lab : pas d'Internet)
+  allow 10.40.0.0/24               # sert l'heure à ce réseau
+  local stratum 8                  # continue de servir même sans source (horloge locale)
+
+  # client
+  server srv-log iburst            # iburst : 4 requêtes rapides au démarrage
+  ```
+
+  | Commande                 | Usage                                                     |
+  |--------------------------|-----------------------------------------------------------|
+  | `chronyc sources -v`     | sources et état (`^*` = sélectionnée, `^?` = injoignable)  |
+  | `chronyc tracking`       | décalage, strate, source de référence                     |
+  | `chronyc clients`        | clients servis (côté serveur)                             |
+  | `timedatectl`            | état de l'heure et du fuseau (systemd)                    |
+  | `w32tm /query /status`   | équivalent Windows                                        |
+
+  ## Syslog : le format universel des journaux
+
+  Chaque message syslog porte une **facility** (origine) et une **sévérité** (gravité) :
+
+  | Sévérité | Nom      | Exemple                      |
+  |----------|----------|------------------------------|
+  | 0        | emerg    | système inutilisable          |
+  | 1        | alert    | action immédiate             |
+  | 2        | crit     | condition critique           |
+  | 3        | err      | erreur                       |
+  | 4        | warning  | avertissement                |
+  | 5        | notice   | normal mais significatif     |
+  | 6        | info     | information                  |
+  | 7        | debug    | débogage                     |
+
+  Facilities courantes : `auth`/`authpriv` (authentifications), `cron`, `daemon`, `kern`, `mail`, `user`,
+  `local0` à `local7` (libres pour les applications et équipements réseau).
+
+  ## rsyslog : recevoir, filtrer, ranger, transférer
+
+  ```
+  srv-web ──┐  TCP 514 (file d'attente si coupure)
+  srv-bdd ──┼──────────────▶ srv-log : imtcp/imudp → ruleset "distant"
+  switchs ──┘  UDP 514                     ├─ /var/log/central/%HOSTNAME%/%PROGRAMNAME%.log
+                                           └─ alertes.log si sévérité <= 4
+  ```
+
+  ```
+  # Sélecteur classique : facility.sévérité (la sévérité indiquée et plus grave)
+  auth,authpriv.*        /var/log/auth.log
+  *.err                  /var/log/erreurs.log
+
+  # Syntaxe moderne (RainerScript)
+  template(name="ParHote" type="string" string="/var/log/central/%HOSTNAME%/%PROGRAMNAME%.log")
+  ruleset(name="distant") {
+      action(type="omfile" dynaFile="ParHote")
+  }
+  input(type="imtcp" port="514" ruleset="distant")
+  ```
+
+  - **UDP** : simple, mais les messages perdus le sont définitivement (pas d'accusé de réception).
+  - **TCP** + **file d'attente sur disque** : les messages sont conservés pendant une coupure et envoyés au
+    retour du serveur. Pour la confidentialité, rsyslog sait aussi chiffrer en TLS (port 6514).
+  - `rsyslogd -N1` valide la configuration ; `logger -p local3.err -t appli "texte"` génère un message de test.
+
+  ## journald et rsyslog
+
+  Sur les systèmes systemd, **journald** collecte d'abord tous les messages (`journalctl`) et les passe
+  à rsyslog, qui les écrit en fichiers texte et les transfère. Les deux cohabitent.
+
+  ## Pièges courants
+
+  - Dossiers de destination non accessibles à l'utilisateur `syslog` : rien n'est écrit, sans erreur visible.
+  - Oublier que l'ordre des règles compte : un `stop` placé trop tôt écarte des messages voulus.
+  - Pare-feu qui bloque UDP 123 ou TCP/UDP 514.
+  - Rotation sans `postrotate` : rsyslog continue d'écrire dans le fichier renommé.
+
+  ## Bonnes pratiques en entreprise
+
+  - Deux serveurs NTP internes, synchronisés sur des sources publiques fiables ou un boîtier GPS.
+  - Journaux centralisés sur une machine dédiée, aux accès restreints : un attaquant qui compromet un
+    serveur ne peut pas effacer les traces déjà transmises.
+  - Durées de conservation définies (souvent 6 mois à 1 an pour les journaux de connexion) et alertes sur
+    les messages graves. À plus grande échelle : Graylog, ELK/OpenSearch, Loki.
+docs:
+  - title: chrony.conf(5) - configuration de chrony (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/chrony.conf.5.html
+  - title: Documentation de rsyslog
+    url: https://www.rsyslog.com/doc/
+  - title: Wikipédia - Network Time Protocol
+    url: https://fr.wikipedia.org/wiki/Network_Time_Protocol
+  - title: Wikipédia - Syslog
+    url: https://fr.wikipedia.org/wiki/Syslog
 exercises:
   - id: serveur-ntp
     title: Serveur de temps interne
+    cours: |
+      Le fichier `/etc/chrony/chrony.conf` contient des directives simples, une par ligne :
+
+      - `pool` / `server` : sources de temps à interroger ;
+      - `allow <réseau>` : autorise des clients à interroger ce serveur (par défaut, chrony ne sert personne) ;
+      - `local stratum <n>` : continue de servir l'heure avec l'horloge locale, annoncée à la strate `n`,
+        quand aucune source n'est joignable ;
+      - `#` commente une ligne.
+
+      Ubuntu ajoute aussi des fichiers de sources dans `/etc/chrony/sources.d/` : vérifie qu'aucune source
+      Internet ne reste active. `chronyd -Q` (sur le poste de test) interroge un serveur sans régler l'horloge.
     description: |
       Sur **srv-log**, configure chrony (`/etc/chrony/chrony.conf`) pour qu'il serve l'heure au réseau
       `10.40.0.0/24` (`allow`) même sans source extérieure (`local stratum 8`). Supprime ou commente les
@@ -48,6 +176,13 @@ exercises:
 
   - id: clients-ntp
     title: Synchroniser les serveurs
+    cours: |
+      Un client chrony a simplement une ou plusieurs lignes `server <adresse> iburst`. Avec une seule source,
+      pas de vote possible : en production, on en déclare au moins deux (voire trois ou quatre).
+
+      `chronyc -n sources` affiche une ligne par source ; le premier caractère indique le mode (`^` serveur)
+      et le second l'état : `*` sélectionnée, `+` utilisable, `-` écartée, `?` injoignable, `x` fausse.
+      La synchronisation prend quelques secondes à une minute (l'option `iburst` accélère le démarrage).
     description: |
       Sur **srv-web** et **srv-bdd**, configure chrony pour utiliser **uniquement** `srv-log` comme source
       (`server srv-log iburst`) et démarre-le. `chronyc sources` doit afficher srv-log précédé de `^*`
@@ -73,6 +208,18 @@ exercises:
 
   - id: serveur-syslog
     title: Serveur syslog central
+    cours: |
+      rsyslog se configure par modules :
+
+      - `module(load="imtcp")` / `module(load="imudp")` chargent la réception réseau ;
+      - `input(type="imtcp" port="514" ruleset="...")` ouvre l'écoute et rattache les messages reçus à un
+        **ruleset** (un ensemble de règles séparé des journaux locaux) ;
+      - un `template` de type `string` construit un nom de fichier à partir de propriétés (`%HOSTNAME%`,
+        `%PROGRAMNAME%`, `%$YEAR%`...) ;
+      - `action(type="omfile" dynaFile="<template>")` écrit dans un fichier dont le nom dépend du message.
+
+      `rsyslogd -N1` vérifie la syntaxe. rsyslog crée les sous-dossiers, à condition de pouvoir écrire dans
+      le dossier parent.
     description: |
       Sur **srv-log**, crée `/etc/rsyslog.d/10-central.conf` qui :
       - charge les modules de réception **TCP** et **UDP** sur le port **514** (`imtcp`, `imudp`) ;
@@ -101,6 +248,17 @@ exercises:
 
   - id: transfert
     title: Transférer les journaux des serveurs
+    cours: |
+      Le module **omfwd** transfère des messages vers un autre serveur syslog. Le sélecteur `*.*` placé
+      devant l'action désigne tous les messages.
+
+      Paramètres clés de `action(type="omfwd" ...)` : `target`, `port`, `protocol` (`tcp` ou `udp`).
+      Pour ne rien perdre pendant une indisponibilité du serveur central, on ajoute une **file d'attente** :
+      `queue.type="LinkedList"` (en mémoire), `queue.filename` (débordement sur disque) et
+      `action.resumeRetryCount="-1"` (réessayer indéfiniment).
+
+      Les fichiers locaux de `/etc/rsyslog.conf` continuent d'être écrits : le transfert s'ajoute, il ne
+      remplace pas.
     description: |
       Sur **srv-web** et **srv-bdd**, crée `/etc/rsyslog.d/90-central.conf` pour envoyer **tous** les
       messages à srv-log en **TCP** (`omfwd`), avec une **file d'attente** pour ne rien perdre si srv-log
@@ -125,6 +283,14 @@ exercises:
 
   - id: alertes
     title: Fichier d'alertes
+    cours: |
+      rsyslog permet des conditions dans un ruleset, avec la syntaxe `if <condition> then <action>`.
+
+      - `$syslogseverity` vaut de 0 (emerg) à 7 (debug) : **plus le nombre est petit, plus c'est grave** ;
+      - `$syslogfacility-text`, `$programname`, `$hostname`, `$msg` sont d'autres propriétés utilisables ;
+      - une action `omfile` avec `file="..."` écrit dans un fichier fixe.
+
+      Une règle dans un ruleset s'ajoute aux autres : un message peut être écrit à plusieurs endroits.
     description: |
       Sur **srv-log**, copie en plus dans `/var/log/central/alertes.log` tous les messages distants de
       gravité **warning ou plus grave** (warning, err, crit, alert, emerg), quel que soit l'hôte. Les
@@ -146,6 +312,16 @@ exercises:
 
   - id: investigation
     title: Investigation
+    cours: |
+      Une fois les journaux centralisés, l'enquête se fait sur un seul serveur, avec les outils texte :
+
+      - `grep -r '<motif>' <dossier>` cherche dans tous les fichiers d'une arborescence (`-l` pour n'afficher
+        que les noms de fichiers) ;
+      - le chemin du fichier trouvé indique l'hôte et le programme, grâce au rangement par template ;
+      - un message sshd « Failed password for invalid user X from Y » donne le compte essayé et l'adresse
+        source.
+
+      Pense à vérifier dans quel fichier apparaît le message plutôt que de deviner.
     description: |
       Maintenant que les journaux sont centralisés, le RSSI te demande d'enquêter : des échecs
       d'authentification SSH se répètent sur l'un des serveurs. À partir des fichiers de
@@ -164,6 +340,16 @@ exercises:
 
   - id: rotation
     title: Rotation des journaux centralisés
+    cours: |
+      Un fichier logrotate peut lister plusieurs chemins (jokers acceptés) avant le bloc d'options.
+
+      - `sharedscripts` : le script `postrotate` n'est lancé **qu'une fois** pour tous les fichiers du bloc,
+        au lieu d'une fois par fichier ;
+      - `postrotate` ... `endscript` encadre les commandes à lancer après la rotation ;
+      - rsyslog garde ses fichiers ouverts : le signal **HUP** lui demande de les fermer et de les rouvrir
+        (sinon il continue d'écrire dans le fichier renommé).
+
+      `logrotate -d` simule la rotation.
     description: |
       Le serveur central va accumuler beaucoup de journaux. Crée `/etc/logrotate.d/central` sur srv-log pour
       `/var/log/central/*/*.log` et `/var/log/central/alertes.log` : rotation **hebdomadaire**, **12**
@@ -177,3 +363,96 @@ exercises:
         run: |
           ssh srv-log cat /etc/logrotate.d/central > /tmp/central.lr
           grep -Eq '^\s*weekly' /tmp/central.lr && grep -Eq '^\s*rotate\s+12' /tmp/central.lr && grep -Eq '^\s*compress' /tmp/central.lr && grep -Eq '^\s*postrotate' /tmp/central.lr
+
+  - id: ntp-strate
+    title: Lire l'état de synchronisation
+    cours: |
+      `chronyc tracking` résume l'état de l'horloge locale :
+
+      - `Reference ID` : la source actuellement suivie (adresse entre parenthèses) ;
+      - `Stratum` : la strate de cette machine ;
+      - `System time` : l'écart actuel avec l'heure de référence ;
+      - `Leap status` : `Normal` quand tout va bien, `Not synchronised` sinon.
+
+      Une machine prend toujours la strate de sa source **plus un**. La strate n'est pas une mesure de
+      précision mais de distance à la référence.
+    description: |
+      Sur **srv-web**, affiche l'état détaillé de la synchronisation avec `chronyc tracking` et ajoute à
+      `/root/reponses.txt` (sur admin) :
+      - `strate_srv_web=` la **strate** (stratum) de srv-web ;
+      - `reference_srv_web=` l'adresse de sa source de référence (champ `Reference ID`, entre parenthèses).
+
+      Question à te poser : pourquoi la strate de srv-web vaut-elle un de plus que celle annoncée par
+      srv-log ?
+    hint: "ssh srv-web chronyc tracking"
+    checks:
+      - desc: Strate de srv-web
+        run: |
+          s=$(ssh srv-web 'chronyc tracking' | awk -F: '/^Stratum/{gsub(/ /,"",$2); print $2}')
+          test -n "$s" && grep -Eqi "^strate_srv_web *= *$s *$" /root/reponses.txt
+      - desc: Source de référence de srv-web
+        run: grep -Eqi '^reference_srv_web *= *(10\.40\.0\.10|srv-log) *$' /root/reponses.txt
+
+  - id: log-fichier-local
+    title: Journal local d'une application
+    cours: |
+      La syntaxe classique de rsyslog, héritée de syslogd, s'écrit `<sélecteur>  <destination>` :
+
+      - le sélecteur est `facility.sévérité` ; `*` désigne toutes les valeurs ;
+      - `local3.*` : tous les messages de la facility local3, quelle que soit leur gravité ;
+      - `local3.err` : erreurs et plus grave ; `local3.=info` : seulement info ;
+      - la destination est un chemin de fichier (ou `@hôte` en UDP, `@@hôte` en TCP).
+
+      Les fichiers de `/etc/rsyslog.d/` sont lus par ordre alphabétique (d'où les préfixes numériques).
+    description: |
+      L'application intranet de **srv-web** écrit ses messages avec la facility `local3`. Configure rsyslog
+      sur srv-web (`/etc/rsyslog.d/30-intranet.conf`) pour que **tous** les messages `local3` soient aussi
+      écrits localement dans `/var/log/intranet.log`, puis redémarre rsyslog.
+
+      Teste : `ssh srv-web "logger -p local3.info -t intranet 'page consultee'"`.
+    hint: "local3.*  /var/log/intranet.log"
+    checks:
+      - desc: Un message local3 de srv-web est écrit dans /var/log/intranet.log
+        run: |
+          m="verif-local3-$$-$(date +%s)"
+          ssh srv-web "logger -p local3.notice -t intranet '$m'"
+          sleep 2
+          ssh srv-web "grep -q '$m' /var/log/intranet.log"
+      - desc: Les messages des autres facilities n'y sont pas
+        run: |
+          m="verif-user-$$-$(date +%s)"
+          ssh srv-web "logger -p user.notice -t autre '$m'"
+          sleep 2
+          ssh srv-web "test -f /var/log/intranet.log && ! grep -q '$m' /var/log/intranet.log"
+
+  - id: log-filtre-bruit
+    title: Écarter les messages inutiles
+    cours: |
+      Dans un ruleset, les règles s'exécutent **dans l'ordre**. L'action `stop` arrête le traitement du message
+      en cours : les règles suivantes ne le voient pas. Une règle de filtrage doit donc être placée **avant**
+      les actions d'écriture.
+
+      Opérateurs utiles dans une condition : `==`, `!=`, `contains`, `startswith`, `and`, `or`, `not`.
+      Les chaînes s'écrivent entre apostrophes.
+
+      Filtrer le bruit est indispensable pour que les alertes restent lisibles, mais documente chaque filtre :
+      un message écarté est invisible pendant une enquête.
+    description: |
+      Le message `checkpoint complete` de PostgreSQL arrive toutes les 15 secondes et noie les journaux
+      centraux. Sur **srv-log**, au début du `ruleset` des messages distants, **écarte** (`stop`) les messages
+      du programme `postgres` qui contiennent `checkpoint complete`. Les autres messages de postgres doivent
+      continuer d'arriver.
+    hint: "if $programname == 'postgres' and $msg contains 'checkpoint complete' then stop"
+    checks:
+      - desc: Un « checkpoint complete » n'est plus enregistré
+        run: |
+          m="verif-ckpt-$$-$(date +%s)"
+          ssh srv-bdd "logger -t postgres 'checkpoint complete $m'"
+          sleep 3
+          ! ssh srv-log "grep -rq '$m' /var/log/central/"
+      - desc: Un autre message de postgres est toujours enregistré
+        run: |
+          m="verif-pg-$$-$(date +%s)"
+          ssh srv-bdd "logger -t postgres 'connexion refusee $m'"
+          sleep 3
+          ssh srv-log "grep -q '$m' /var/log/central/srv-bdd/postgres.log"
