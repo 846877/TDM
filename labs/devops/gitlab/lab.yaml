@@ -102,6 +102,13 @@ cours: |
   Des pipelines rapides (cache, parallélisme), des jobs reproductibles dans des images épinglées, des
   branches protégées, des merge requests qui exigent un pipeline vert et une relecture, des déploiements
   déclenchés par tag ou par environnement, et des jetons au moindre privilège.
+
+  ### Pour réviser
+
+  - Pourquoi un pipeline reste-t-il en *pending* juste après sa création ?
+  - Quelle est la différence entre un artefact et un cache ?
+  - Que garantit l'option « Pipelines must succeed » d'une merge request ?
+  - Pourquoi le masquage d'une variable ne suffit-il pas à protéger totalement un secret ?
 docs:
   - title: Documentation GitLab CI/CD
     url: https://docs.gitlab.com/ee/ci/

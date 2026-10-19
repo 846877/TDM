@@ -11,11 +11,109 @@ description: |
   `/home/vagrant/pull-secret.json` de la VM, puis lance `scripts/start_crc.sh`. CRC demande la
   virtualisation imbriquée (KVM dans VirtualBox), qui échoue souvent sous Windows ; si `crc setup`
   refuse, ce lab ne pourra pas tourner sur ta machine.
+cours: |
+  ## OpenShift 4 avec CodeReady Containers
+
+  **CodeReady Containers** (CRC, aujourd'hui appelé *OpenShift Local*) fait tourner un cluster OpenShift 4
+  complet, réduit à un seul nœud, dans une machine virtuelle. C'est la version moderne d'OpenShift : basée
+  sur Kubernetes standard, gérée par des **opérateurs**, avec un système d'exploitation immuable (Red Hat
+  CoreOS).
+
+  ### OpenShift 4 en bref
+
+  ```
+   VM CRC (Red Hat CoreOS, nœud unique : plan de contrôle + travail)
+   ┌──────────────────────────────────────────────────────────────┐
+   │ opérateurs de cluster : API, réseau (OVN), routeur, registre,│
+   │ console web, authentification, mises à jour...               │
+   │                                                              │
+   │ projet demo : Deployment hello ─▶ pods ─▶ Service ─▶ Route   │
+   │               PVC donnees ─▶ StorageClass par défaut         │
+   └──────────────────────────────────────────────────────────────┘
+          *.apps-crc.testing ──▶ routeur ──▶ applications
+          https://console-openshift-console.apps-crc.testing ──▶ console
+  ```
+
+  Différences notables avec OpenShift 3 :
+  - les **Deployments** Kubernetes standard sont recommandés (les DeploymentConfigs sont dépréciées) ;
+  - tout le cluster est géré par des **opérateurs** : des contrôleurs qui installent, configurent et mettent
+    à jour chaque composant ;
+  - les mises à jour du cluster se font en un clic, système d'exploitation compris.
+
+  ### Concepts repris
+
+  | Objet | Rôle |
+  |---|---|
+  | Project | namespace avec droits et quotas |
+  | Route | exposition HTTP(S) par nom d'hôte via le routeur |
+  | ConfigMap / Secret | configuration injectée en variables ou fichiers |
+  | PVC / StorageClass | stockage persistant provisionné dynamiquement |
+  | SCC | conteneurs non root avec un UID aléatoire par défaut |
+
+  ### Comptes de CRC
+
+  - `developer` / `developer` : un utilisateur sans privilège, pour travailler comme un développeur ;
+  - `kubeadmin` (mot de passe affiché par `crc console --credentials`) : administrateur du cluster.
+
+  ### Mémo
+
+  ```bash
+  crc setup ; crc start ; crc status ; crc stop ; crc delete
+  eval $(crc oc-env) ; crc console --credentials
+  oc login -u developer -p developer https://api.crc.testing:6443
+  oc new-project demo
+  oc new-app --image=quay.io/openshift/origin-hello-openshift --name=hello
+  oc expose svc/hello ; oc get route hello
+  oc set env deploy/hello --from=configmap/hello-config
+  oc set probe deploy/hello --readiness --liveness --get-url=http://:8080/
+  oc scale deploy/hello --replicas=3
+  oc set volume deploy/hello --add --name=donnees --type=pvc --claim-name=donnees --mount-path=/data
+  oc get pvc ; oc get events
+  ```
+
+  ### Pièges courants
+
+  - Pas de virtualisation imbriquée : `crc setup` échoue (fréquent dans VirtualBox sous Windows).
+  - Trop peu de mémoire : le cluster démarre mais des opérateurs restent dégradés (`oc get co`).
+  - Pull secret absent ou expiré : les images Red Hat ne se téléchargent pas.
+  - Certificats internes expirés si la VM n'a pas été démarrée depuis longtemps : CRC les renouvelle au
+    démarrage, ce qui prend du temps.
+
+  ### Bonnes pratiques
+
+  Travailler en `developer` pour les exercices applicatifs, ne passer en `kubeadmin` que pour l'administration,
+  versionner les manifestes, utiliser des images compatibles non root, et arrêter proprement la VM
+  (`crc stop`) pour libérer les ressources.
+
+  ### Pour réviser
+
+  - Quelle est la différence entre une DeploymentConfig (OpenShift 3) et un Deployment ?
+  - Pourquoi beaucoup d'images Docker Hub échouent-elles sur OpenShift sans modification ?
+  - Quel objet expose une application HTTP à l'extérieur du cluster dans OpenShift ?
+  - Comment vérifier que tous les opérateurs du cluster sont en bonne santé ?
+docs:
+  - title: Documentation OpenShift Local (CRC)
+    url: https://crc.dev/docs/
+  - title: Documentation Red Hat OpenShift
+    url: https://docs.redhat.com/en/documentation/openshift_container_platform/
+  - title: Documentation OKD
+    url: https://docs.okd.io/
 exercises:
   - id: demarrage
     title: Démarrer le cluster
     description: |
       Démarre CRC et connecte-toi en `developer` avec `oc` (`eval $(crc oc-env)`).
+    cours: |
+      `crc setup` prépare la machine hôte (virtualisation, réseau, DNS local) ; `crc start` démarre la VM et le
+      cluster, ce qui prend plusieurs minutes. Le *pull secret* Red Hat est nécessaire pour télécharger les
+      images de la plateforme.
+
+      `crc oc-env` affiche les commandes qui ajoutent au `PATH` la version de `oc` fournie avec CRC ; `eval`
+      les exécute dans le shell courant. L'API du cluster est sur `https://api.crc.testing:6443`.
+
+      `oc login -u developer -p developer` ouvre une session sans privilège ; `oc whoami` et
+      `oc whoami --show-server` vérifient l'identité et le cluster. `crc status` résume l'état de la VM et
+      d'OpenShift.
     checks:
       - desc: CRC est démarré
         run: crc status 2>/dev/null | grep -q 'OpenShift:.*Running'
@@ -24,6 +122,17 @@ exercises:
     description: |
       Crée le projet `demo` et déploie `quay.io/openshift/origin-hello-openshift` sous le nom `hello`,
       exposé par une route.
+    cours: |
+      `oc new-project` crée un projet et le sélectionne. `oc new-app --image=...` (ou une image directement en
+      argument) crée un **Deployment** et un **Service** à partir des ports déclarés dans l'image ; `--name`
+      fixe leur nom.
+
+      Une **Route** expose le service via le routeur du cluster sous un nom de la forme
+      `hello-demo.apps-crc.testing`, résolu localement par CRC. `oc expose svc/hello` la crée, `oc get route`
+      affiche l'hôte, et `curl` sur cet hôte doit répondre.
+
+      `oc status` donne une vue d'ensemble du projet ; en cas de problème, `oc get pods` puis `oc logs` et
+      `oc describe`.
     checks:
       - desc: Un pod hello tourne
         run: eval $(crc oc-env) && oc -n demo get pods --no-headers | grep hello | grep -q Running
@@ -35,6 +144,17 @@ exercises:
       Crée dans `demo` la ConfigMap `hello-config` contenant `RESPONSE=Bonjour depuis OpenShift 4` et injecte-la
       dans le déploiement `hello` comme variables d'environnement. La route doit afficher ce message.
     hint: "oc create configmap hello-config --from-literal=RESPONSE='Bonjour depuis OpenShift 4' ; oc set env deployment/hello --from=configmap/hello-config"
+    cours: |
+      Une **ConfigMap** stocke des paires clé/valeur de configuration. Injectée en variables d'environnement
+      (`oc set env deploy/hello --from=configmap/hello-config`), chacune de ses clés devient une variable du
+      conteneur.
+
+      Le modèle de pod du Deployment change : Kubernetes lance une mise à jour progressive et remplace les pods.
+      Les variables ne sont lues qu'au démarrage d'un conteneur ; modifier plus tard la ConfigMap ne change rien
+      aux pods existants tant qu'ils ne sont pas recréés (`oc rollout restart deploy/hello`).
+
+      L'image `hello-openshift` affiche le contenu de la variable `RESPONSE` : la route permet de vérifier le
+      résultat.
     checks:
       - desc: hello utilise la ConfigMap
         run: eval $(crc oc-env) && oc -n demo get deployment hello -o yaml | grep -q 'hello-config'
@@ -47,6 +167,16 @@ exercises:
       Ajoute au déploiement `hello` des sondes *readiness* et *liveness* HTTP sur le port **8080**, puis
       passe-le à **3 réplicas**.
     hint: "oc set probe deployment/hello --readiness --liveness --get-url=http://:8080/ ; oc scale deployment/hello --replicas=3"
+    cours: |
+      Les sondes indiquent à OpenShift l'état réel de l'application : la **readiness** conditionne l'envoi de
+      trafic, la **liveness** déclenche le redémarrage d'un conteneur bloqué. `oc set probe deploy/hello` les
+      ajoute sans écrire de YAML, avec `--get-url=http://:8080/` pour une vérification HTTP.
+
+      `oc scale deploy/hello --replicas=3` ajuste le nombre de pods ; le Service et la Route répartissent la
+      charge entre les pods **prêts**.
+
+      Pour vérifier : `oc describe deploy/hello` (section des sondes), `oc get pods` (colonne `READY`), et la
+      route doit continuer à répondre pendant la mise à jour.
     checks:
       - desc: Sondes readiness et liveness définies
         run: |
@@ -59,6 +189,17 @@ exercises:
       Crée dans `demo` une PersistentVolumeClaim `donnees` de 1Gi (classe de stockage par défaut de CRC) et
       monte-la dans le déploiement `hello` sur `/data`. La claim doit passer à l'état `Bound`.
     hint: "oc set volume deployment/hello --add --name=donnees --type=pvc --claim-name=donnees --claim-size=1Gi --mount-path=/data"
+    cours: |
+      Une **PersistentVolumeClaim** demande un espace de stockage. CRC fournit une **StorageClass** par défaut
+      qui crée automatiquement le volume correspondant (provisionnement dynamique). `oc get storageclass`
+      montre la classe marquée `(default)`.
+
+      `oc set volume deploy/hello --add` ajoute un volume au modèle de pod : `--type=pvc` avec `--claim-name`
+      pour une claim existante (ou `--claim-size` pour la créer à la volée), et `--mount-path` pour le point de
+      montage. Le déploiement est alors recréé.
+
+      Selon la classe, la claim peut rester `Pending` jusqu'à ce qu'un pod l'utilise. Vérifie l'état avec
+      `oc get pvc` et les événements avec `oc describe pvc donnees`.
     checks:
       - desc: La claim donnees est liée
         run: eval $(crc oc-env) && test "$(oc -n demo get pvc donnees -o jsonpath='{.status.phase}')" = Bound

@@ -106,6 +106,13 @@ cours: |
   Des rôles petits et réutilisables, des noms de tâches explicites, les noms complets des modules
   (`ansible.builtin.copy`), `--check --diff` avant d'appliquer, `ansible-lint` dans la CI, et un deuxième
   lancement qui doit afficher `changed=0`.
+
+  ### Pour réviser
+
+  - Pourquoi le module `raw` est-il le seul utilisable sur une machine sans Python ?
+  - Que signifie `changed=0` au deuxième lancement d'un playbook, et pourquoi est-ce important ?
+  - Dans quel cas un handler notifié ne s'exécute-t-il pas ?
+  - Où ranger une variable propre à tous les hôtes du groupe `clients` ?
 docs:
   - title: Documentation Ansible
     url: https://docs.ansible.com/

@@ -116,6 +116,13 @@ cours: |
   Un utilisateur dédié, `Restart=on-failure`, des limites de ressources, les options de sandbox
   (`ProtectSystem=strict`, `PrivateTmp=yes`, `NoNewPrivileges=yes`), des drop-ins plutôt que modifier les
   fichiers des paquets, et des journaux sur la sortie standard.
+
+  ### Pour réviser
+
+  - Quelle est la différence entre `systemctl start` et `systemctl enable` ?
+  - Pourquoi faut-il lancer `systemctl daemon-reload` après avoir modifié une unité ?
+  - Où sont stockés les journaux quand le journal n'est pas persistant ?
+  - Pourquoi préférer un drop-in à la modification du fichier d'unité d'un paquet ?
 docs:
   - title: Documentation systemd
     url: https://systemd.io/

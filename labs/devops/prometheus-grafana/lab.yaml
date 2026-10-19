@@ -113,6 +113,13 @@ cours: |
   Alerter sur les **symptômes** vus par l'utilisateur (méthodes RED : taux, erreurs, durée ; USE pour les
   ressources), des alertes actionnables avec un lien vers une procédure, la configuration et les tableaux de
   bord versionnés (provisioning Grafana), et une rétention adaptée.
+
+  ### Pour réviser
+
+  - Pourquoi applique-t-on `rate()` à un compteur et jamais à une jauge ?
+  - À quoi sert la clause `for` d'une règle d'alerte ?
+  - Quel est le rôle d'Alertmanager par rapport à Prometheus ?
+  - Pourquoi l'URL de la source de données dans Grafana n'est-elle pas `localhost:9090` ?
 docs:
   - title: Documentation Prometheus
     url: https://prometheus.io/docs/introduction/overview/

@@ -110,6 +110,13 @@ cours: |
 
   Des fonctions petites et testables, la bibliothèque standard d'abord, des dépendances épinglées, un
   formateur et un linter (`ruff`, `black`) dans la CI.
+
+  ### Pour réviser
+
+  - Pourquoi ne jamais installer de paquets avec `pip` dans le Python du système ?
+  - Que lit un outil de supervision dans le résultat d'une sonde ?
+  - Pourquoi le bloc `if __name__ == "__main__"` est-il utile pour les tests ?
+  - Qu'apporte `pip install -e .` par rapport à un `pip install .` classique ?
 docs:
   - title: Tutoriel officiel Python (français)
     url: https://docs.python.org/fr/3/tutorial/

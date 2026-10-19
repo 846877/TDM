@@ -92,6 +92,13 @@ cours: |
   Un dépôt (ou un dossier) de configuration séparé du code applicatif, la CI qui met à jour le tag d'image
   dans ce dépôt, des AppProjects par équipe, le modèle *app of apps* ou les ApplicationSets pour gérer de
   nombreuses applications, et des notifications sur les échecs de synchronisation.
+
+  ### Pour réviser
+
+  - Quelle est la différence entre le modèle *push* d'une CI classique et le modèle *pull* du GitOps ?
+  - Que se passe-t-il si quelqu'un fait `kubectl scale` sur une application avec `selfHeal` ?
+  - Pourquoi l'option `prune` n'est-elle pas activée par défaut ?
+  - À quoi sert un AppProject par rapport au projet `default` ?
 docs:
   - title: Documentation Argo CD
     url: https://argo-cd.readthedocs.io/en/stable/

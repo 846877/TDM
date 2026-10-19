@@ -97,6 +97,13 @@ cours: |
 
   Un fichier par site, `server_tokens off`, des en-têtes de sécurité, HTTPS partout avec redirection, des
   journaux exploitables (temps de réponse, upstream), et des tests automatiques (`nginx -t` en CI).
+
+  ### Pour réviser
+
+  - Quelle commande lancer systématiquement avant `nginx -s reload` ?
+  - Que change la présence d'un `/` à la fin de l'URL de `proxy_pass` ?
+  - Comment nginx choisit-il le bloc `server` qui traite une requête ?
+  - Que signifie une erreur 502, et où chercher la cause ?
 docs:
   - title: Documentation officielle nginx
     url: https://nginx.org/en/docs/

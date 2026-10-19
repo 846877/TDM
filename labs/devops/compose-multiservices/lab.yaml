@@ -116,6 +116,13 @@ cours: |
   Une image par service, des versions épinglées, des secrets hors du fichier, des healthchecks, des réseaux
   séparés pour isoler les couches, un seul point d'entrée exposé, et `docker compose config` en CI pour
   valider le fichier.
+
+  ### Pour réviser
+
+  - Pourquoi copier `requirements.txt` avant le reste du code dans le Dockerfile ?
+  - Que fait exactement `depends_on` sans condition ? Et avec `service_healthy` ?
+  - Quelle commande affiche le fichier Compose après remplacement des variables du `.env` ?
+  - Pourquoi un service répliqué ne peut-il pas publier un port fixe de l'hôte ?
 docs:
   - title: Documentation Docker Compose
     url: https://docs.docker.com/compose/

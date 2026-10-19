@@ -26,6 +26,98 @@ description: |
   `API_KEY`) et répond `Service TDM - uid <uid> - cle chargee|absente`.
 
   > Le premier scan trivy télécharge sa base de vulnérabilités : compte une minute.
+cours: |
+  ## Sécurité des conteneurs : de l'image à l'exécution
+
+  Un conteneur n'est pas une machine virtuelle : il partage le noyau de l'hôte. Une image mal construite ou
+  un conteneur trop privilégié peut exposer des secrets, embarquer des centaines de vulnérabilités, ou offrir
+  un accès root à l'hôte. Le **DevSecOps** intègre la sécurité à chaque étape de la chaîne, le plus tôt
+  possible (*shift left*).
+
+  ### Les couches de défense
+
+  ```
+   Code ──▶ Dockerfile ──▶ Image ──────────▶ Registre ──▶ Exécution ──────────▶ Hôte
+            hadolint       trivy (CVE)        signature     non-root, read-only   audit des
+            pas de secret  SBOM               (cosign)      cap-drop ALL          conteneurs
+            image épinglée image minimale                   no-new-privileges     privilégiés
+                                                            limites, réseau interne
+  ```
+
+  ### Construire des images sûres
+
+  | Mauvaise pratique | Risque | Correction |
+  |---|---|---|
+  | `FROM python:latest` | build non reproductible, image énorme | tag précis (voire digest `@sha256:`) |
+  | `ENV API_KEY=...` | secret lisible avec `docker history` | secret fourni à l'exécution (fichier monté) |
+  | `COPY . .` sans `.dockerignore` | `.env`, `.git` dans l'image | `.dockerignore` |
+  | `USER` absent | processus root | `USER 1000` |
+  | paquets inutiles (`curl`, compilateurs) | surface d'attaque, CVE | image minimale, multi-étapes |
+  | `ADD URL` | téléchargement non vérifié | `COPY`, ou `curl` + vérification d'empreinte |
+
+  Chaque couche d'une image est conservée : supprimer un fichier dans une couche suivante ne l'efface pas de
+  l'image. Un secret qui a été copié une fois reste récupérable.
+
+  ### Analyser
+
+  - **hadolint** vérifie un Dockerfile (règles `DLxxxx`, et shellcheck pour les `RUN`).
+  - **trivy** recherche les vulnérabilités connues (CVE) des paquets du système et des bibliothèques, les
+    erreurs de configuration et les secrets ; il produit aussi des **SBOM** (inventaire logiciel au format
+    CycloneDX ou SPDX).
+  - Dans une CI : `trivy image --severity CRITICAL,HIGH --exit-code 1 image` fait échouer le pipeline.
+
+  ### Exécuter avec le moins de privilèges
+
+  ```bash
+  docker run -d --name app \
+    --read-only --tmpfs /tmp \           # système de fichiers en lecture seule
+    --cap-drop ALL \                     # aucune capability Linux
+    --security-opt no-new-privileges \   # pas d'élévation via setuid
+    --pids-limit 100 --memory 128m \     # pas de fork bomb, pas d'épuisement mémoire
+    --user 1000:1000 \
+    -v /root/secrets/api_key:/run/secrets/api_key:ro \
+    app:1.0
+  ```
+
+  ### Ce qui donne root sur l'hôte
+
+  `--privileged`, le montage de `/var/run/docker.sock`, `--pid host`, `--network host`, `--cap-add
+  SYS_ADMIN`, le montage de `/` de l'hôte… Un conteneur avec l'un de ces réglages doit être justifié et
+  surveillé. `docker inspect` permet de les repérer (`HostConfig.Privileged`, `HostConfig.Binds`,
+  `HostConfig.PidMode`…).
+
+  ### Mémo
+
+  ```bash
+  hadolint Dockerfile ; hadolint -f json Dockerfile
+  docker history --no-trunc image ; docker image inspect image
+  trivy image --format json -o rapport.json image
+  trivy image --format cyclonedx -o sbom.cdx.json image
+  docker inspect -f '{{.HostConfig.Privileged}} {{.HostConfig.PidMode}}' conteneur
+  docker network create --internal backend
+  ```
+
+  ### Pièges courants
+
+  - Croire qu'un conteneur isole autant qu'une VM.
+  - Passer les secrets en variables d'environnement : visibles dans `docker inspect` et `/proc`.
+  - Corriger une CVE sans reconstruire régulièrement : les images vieillissent.
+  - `--read-only` qui casse l'application : prévoir des `tmpfs` pour les dossiers d'écriture.
+
+  ### Bonnes pratiques
+
+  Images minimales et non root reconstruites régulièrement, scan et SBOM dans la CI, signature des images,
+  secrets montés en fichiers, exécution durcie par défaut, réseaux internes, et en Kubernetes les *Pod
+  Security Standards* (profil `restricted`).
+docs:
+  - title: Sécurité du moteur Docker
+    url: https://docs.docker.com/engine/security/
+  - title: Documentation Trivy
+    url: https://trivy.dev/
+  - title: Hadolint (linter de Dockerfile)
+    url: https://github.com/hadolint/hadolint
+  - title: Aide-mémoire OWASP sur la sécurité Docker
+    url: https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html
 exercises:
   - id: audit-dockerfile
     title: Auditer le Dockerfile
@@ -33,6 +125,17 @@ exercises:
       Passe `/root/app/Dockerfile` au crible de **hadolint** et enregistre le rapport au format JSON dans
       `/root/rapports/hadolint.json`. Lis chaque règle signalée (DL3007, DL3008…) : que risque-t-on ?
     hint: "hadolint -f json Dockerfile > /root/rapports/hadolint.json (hadolint sort en erreur quand il trouve des problèmes, c'est normal)"
+    cours: |
+      **hadolint** analyse un Dockerfile et signale les écarts aux bonnes pratiques. Chaque règle a un code :
+      `DL3007` (utilisation du tag `latest`), `DL3008` (paquets apt non épinglés), `DL3020` (`ADD` au lieu de
+      `COPY`), `DL3025` (`CMD` non JSON)… Les codes `SCxxxx` viennent de shellcheck, appliqué aux commandes
+      `RUN`.
+
+      Chaque avertissement a un niveau (`error`, `warning`, `info`, `style`). `-f json` produit un rapport
+      exploitable par d'autres outils (tableau de bord, CI). Comme hadolint renvoie un code non nul quand il
+      trouve des problèmes, une redirection reste possible malgré l'échec : c'est le contenu du fichier qui compte.
+
+      Le wiki du projet explique chaque règle : prends le temps de comprendre le risque derrière chacune.
     checks:
       - desc: Le rapport JSON existe et liste au moins 4 problèmes
         run: jq -e 'length >= 4' /root/rapports/hadolint.json >/dev/null
@@ -49,6 +152,17 @@ exercises:
 
       Construis l'image sous le nom **`app:1.0`**.
     hint: "Une ligne CMD [\"python\", \"app.py\"] évite aussi un shell intermédiaire (signaux mal transmis) ; docker build -t app:1.0 ."
+    cours: |
+      Corriger un Dockerfile, c'est le rendre **reproductible** et **minimal** :
+      - une image de base épinglée sur un tag précis, pour que deux constructions donnent le même résultat ;
+      - `COPY` plutôt que `ADD`, qui sait aussi télécharger des URL et décompresser des archives, de façon
+        implicite ;
+      - `CMD ["python", "app.py"]` (forme *exec*) : le processus reçoit directement les signaux, sans shell
+        intermédiaire ;
+      - pas de paquet installé « au cas où » : chaque outil est une surface d'attaque.
+
+      `hadolint --failure-threshold warning` ne fait échouer que pour les niveaux `warning` et plus graves. Une
+      règle peut être ignorée explicitement (`# hadolint ignore=DLxxxx`), avec une justification.
     checks:
       - desc: hadolint ne signale aucun avertissement
         run: hadolint --failure-threshold warning /root/app/Dockerfile
@@ -67,6 +181,18 @@ exercises:
       puis reconstruis `app:1.0`. Range la clé dans `/root/secrets/api_key` (contenu `sk-tdm-4f9a7c21e8`) : elle
       sera fournie à l'exécution.
     hint: "docker history --no-trunc app:1.0 | grep sk- doit être vide ; docker run --rm app:1.0 ls -a /app"
+    cours: |
+      Une image est une archive de couches que n'importe qui ayant accès au registre peut télécharger et
+      inspecter. `docker history --no-trunc` montre chaque instruction, y compris les `ENV` et `ARG` ;
+      `docker image inspect` montre les variables d'environnement. Un secret écrit dans une couche y reste, même
+      si une couche suivante le supprime.
+
+      Le fichier **`.dockerignore`** exclut des fichiers du **contexte de construction** : ils ne sont même pas
+      envoyés au moteur Docker, et ne peuvent donc pas être copiés par un `COPY . .`. On y met `.env`, `.git`,
+      les dossiers de dépendances locales, les journaux.
+
+      Les secrets sont fournis à l'**exécution** (fichier monté, gestionnaire de secrets) ; pour la construction,
+      `RUN --mount=type=secret` existe.
     checks:
       - desc: La clé n'apparaît plus dans le Dockerfile ni dans l'image
         run: |
@@ -82,6 +208,17 @@ exercises:
       Par défaut, le processus du conteneur tourne en **root** : en cas d'évasion, c'est root sur l'hôte.
       Crée dans l'image un utilisateur dédié (UID ≥ 1000) et bascule dessus avec `USER`. Reconstruis `app:1.0`.
     hint: "Sur une base Debian slim, RUN useradd --uid 10001 --no-create-home appli puis USER appli (USER 10001 évite aussi une ambiguïté pour Kubernetes)"
+    cours: |
+      Sans instruction `USER`, le processus du conteneur tourne en root (UID 0). Les espaces de noms limitent ce
+      root, mais une faille du noyau ou une mauvaise configuration (volume, capability) peut le transformer en
+      root sur l'hôte.
+
+      On crée un utilisateur dédié dans l'image (`useradd` sous Debian, `adduser -D` sous Alpine, avec un UID
+      fixe ≥ 1000), puis on bascule avec `USER`. Les fichiers dont l'application a besoin en écriture doivent lui
+      appartenir (`COPY --chown`, `chown`). Utiliser un UID numérique dans `USER` permet aux orchestrateurs de
+      vérifier l'absence de root (`runAsNonRoot` en Kubernetes).
+
+      `docker run --rm app:1.0 id` ou la réponse de l'application montrent l'UID effectif.
     checks:
       - desc: L'image déclare un utilisateur non root
         run: |
@@ -96,6 +233,17 @@ exercises:
       (par exemple avec `python:3.12-alpine`), sans perdre les acquis précédents (non-root, pas de secret,
       hadolint propre). Compare avec `docker images`.
     hint: "Sur Alpine : RUN adduser -D -u 10001 appli (busybox) ; vérifie la taille avec docker image inspect -f '{{.Size}}' app:1.0"
+    cours: |
+      Chaque paquet présent dans l'image peut contenir des vulnérabilités, même si l'application ne l'utilise
+      jamais. Réduire l'image réduit la **surface d'attaque** et le temps de transfert.
+
+      Options, de la plus grande à la plus petite : image complète (`python:3.12`, ~1 Go), `slim` (Debian
+      minimale), `alpine` (musl libc, quelques Mo de base), `distroless` (ni shell ni gestionnaire de paquets),
+      `scratch` (vide, pour les binaires statiques). Une construction **multi-étapes** permet de compiler dans une
+      grosse image et de ne garder que le résultat.
+
+      Changer de base change aussi les commandes de création d'utilisateur : adapte le Dockerfile pour conserver
+      les acquis.
     checks:
       - desc: app:1.0 pèse moins de 80 Mo
         run: test "$(docker image inspect -f '{{.Size}}' app:1.0)" -lt 80000000
@@ -111,6 +259,17 @@ exercises:
       Bonus : scanne `python:latest` et compare. Découvre aussi `--severity` et `--exit-code`, qui
       permettent de bloquer un pipeline CI.
     hint: "trivy image --format json -o /root/rapports/trivy.json app:1.0 ; jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == \"CRITICAL\")] | length' /root/rapports/trivy.json"
+    cours: |
+      **trivy** compare les paquets installés dans l'image (système et bibliothèques Python, Node, Java…) à des
+      bases de vulnérabilités connues (CVE). Chaque vulnérabilité a une **sévérité** (`LOW` à `CRITICAL`), une
+      version corrigée éventuelle et un lien vers sa description.
+
+      `--format json -o fichier` produit un rapport structuré. Les vulnérabilités sont rangées par cible dans
+      `.Results[].Vulnerabilities[]` (le tableau peut être absent pour une cible sans vulnérabilité) : `jq` permet
+      de les filtrer par `.Severity` et de les compter.
+
+      En CI, `--severity CRITICAL,HIGH --exit-code 1` fait échouer le job dès qu'une vulnérabilité grave est
+      trouvée, et `--ignore-unfixed` ignore celles qui n'ont pas encore de correctif.
     checks:
       - desc: Le rapport trivy porte sur app:1.0
         run: test "$(jq -r .ArtifactName /root/rapports/trivy.json)" = app:1.0
@@ -132,6 +291,17 @@ exercises:
 
       `wget -qO- http://localhost:8080` doit répondre `cle chargee`.
     hint: "docker run -d --name app-durcie --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 100 --memory 128m -v /root/secrets/api_key:/run/secrets/api_key:ro -e API_KEY_FILE=/run/secrets/api_key -p 8080:8080 app:1.0"
+    cours: |
+      Les options de `docker run` qui réduisent les privilèges :
+      - `--read-only` : le système de fichiers racine est en lecture seule (un attaquant ne peut pas déposer
+        d'outil) ; ajoute un `--tmpfs` si l'application doit écrire quelque part ;
+      - `--cap-drop ALL` : retire toutes les **capabilities** Linux (morceaux des pouvoirs de root) ;
+      - `--security-opt no-new-privileges` : empêche l'élévation par des binaires setuid ;
+      - `--pids-limit` et `--memory` : protègent l'hôte contre l'épuisement des ressources ;
+      - `-v fichier:chemin:ro` : un montage en lecture seule.
+
+      Le secret est fourni sous forme de **fichier**, plus discret qu'une variable d'environnement (visible dans
+      `docker inspect`). `docker inspect` permet ensuite de vérifier chaque réglage dans `HostConfig`.
     checks:
       - desc: Racine en lecture seule, capabilities retirées, no-new-privileges
         run: |
@@ -153,6 +323,17 @@ exercises:
       2. Lance `cache` (`redis:7.2-alpine`) uniquement sur ce réseau, sans publier de port.
       3. Connecte `app-durcie` à `backend` : elle doit joindre `cache:6379`.
     hint: "docker network create --internal backend ; docker run -d --name cache --network backend redis:7.2-alpine ; docker network connect backend app-durcie"
+    cours: |
+      Un réseau Docker créé avec `--internal` n'a **aucune route vers l'extérieur** : les conteneurs qui y sont
+      branchés se parlent entre eux, mais ne peuvent ni sortir sur Internet ni recevoir de connexions publiées.
+      Publier un port sur un tel réseau n'a pas d'effet.
+
+      Un conteneur peut appartenir à plusieurs réseaux : `docker network connect backend app-durcie` ajoute une
+      interface à l'application, qui reste joignable par son réseau d'origine tout en accédant au cache par son
+      nom sur `backend`.
+
+      C'est le cloisonnement classique en couches : seul le frontal est exposé, les bases de données et caches
+      restent sur des réseaux internes.
     checks:
       - desc: backend est un réseau interne
         run: test "$(docker network inspect -f '{{.Internal}}' backend)" = true
@@ -171,6 +352,16 @@ exercises:
       Inspecte-les, écris le **nom** de chaque conteneur dangereux (un par ligne) dans
       `/root/rapports/dangereux.txt`, puis supprime-les. Ne touche pas aux conteneurs sains.
     hint: "docker inspect -f '{{.Name}} priv={{.HostConfig.Privileged}} pid={{.HostConfig.PidMode}} net={{.HostConfig.NetworkMode}} {{range .Mounts}}{{.Source}} {{end}}' $(docker ps -aq)"
+    cours: |
+      Certains réglages annulent pratiquement l'isolation :
+      - `--privileged` : tous les périphériques et toutes les capabilities ;
+      - le montage de `/var/run/docker.sock` : piloter Docker, donc lancer un conteneur privilégié ;
+      - `--pid host` ou `--network host` : partager les espaces de noms de l'hôte ;
+      - un montage de `/` ou de dossiers système de l'hôte, `--cap-add SYS_ADMIN`…
+
+      `docker inspect` expose tout cela dans `HostConfig` : `Privileged`, `Binds` et `Mounts`, `PidMode`,
+      `NetworkMode`, `CapAdd`. Un modèle `--format` ou `jq` sur la sortie JSON permet de passer en revue tous les
+      conteneurs d'un coup (`docker ps -aq`). Ne supprime que ceux qui présentent réellement un risque.
     checks:
       - desc: La liste des conteneurs dangereux est exacte
         run: test "$(grep -v '^[[:space:]]*$' /root/rapports/dangereux.txt | tr -d ' \t' | sort -u | tr '\n' ' ')" = 'metrics outil-debug sauvegarde '
@@ -184,6 +375,16 @@ exercises:
       Les clients exigent l'inventaire logiciel (**SBOM**) de chaque livraison. Génère celui de `app:1.0` au format
       **CycloneDX** dans `/root/rapports/sbom.cdx.json`, puis retrouve dedans la version de Python embarquée.
     hint: "trivy image --format cyclonedx -o /root/rapports/sbom.cdx.json app:1.0 ; jq '.components[] | select(.name == \"python\")' ..."
+    cours: |
+      Un **SBOM** (*Software Bill of Materials*) est la liste complète des composants d'un logiciel : paquets,
+      bibliothèques, versions, licences. Il permet de répondre en quelques minutes à « sommes-nous concernés par
+      cette nouvelle faille ? » et devient une exigence réglementaire (Cyber Resilience Act en Europe).
+
+      Deux formats standard : **CycloneDX** (OWASP) et **SPDX** (Linux Foundation). trivy les produit avec
+      `--format cyclonedx` ou `--format spdx-json`.
+
+      Un SBOM CycloneDX est un JSON avec une liste `components`, chacun ayant `name`, `version`, `type` et un
+      identifiant `purl`. `jq` permet d'y chercher un composant par son nom.
     checks:
       - desc: Le SBOM est au format CycloneDX et porte sur app:1.0
         run: jq -e '.bomFormat == "CycloneDX" and .metadata.component.name == "app:1.0"' /root/rapports/sbom.cdx.json >/dev/null
