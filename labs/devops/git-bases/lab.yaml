@@ -353,3 +353,118 @@ exercises:
       - desc: Il accepte un commit propre
         run: |
           cd /root/app && export GIT_INDEX_FILE=/tmp/tdm-index-ok && rm -f $GIT_INDEX_FILE && git read-tree HEAD && b=$(echo "tout va bien" | git hash-object -w --stdin) && git update-index --add --cacheinfo 100644,$b,verif-ok.txt && .git/hooks/pre-commit >/dev/null 2>&1; r=$?; rm -f $GIT_INDEX_FILE; exit $r
+  - id: git-stash
+    title: Mettre son travail de côté (stash)
+    description: |
+      Tu es en train de modifier `README.md` dans `/root/app` quand on te demande une correction urgente.
+      1. Ajoute une ligne `Travail en cours` à la fin de `README.md` (sans committer).
+      2. Mets cette modification de côté avec `git stash`, avec le message **`wip-readme`**.
+
+      Ton répertoire de travail doit redevenir propre (`git status` : rien à valider), et le stash doit contenir
+      ta modification. Bonus : `git stash show -p` pour la revoir.
+    hint: "echo 'Travail en cours' >> README.md ; git stash push -m wip-readme ; git stash list"
+    cours: |
+      `git stash` range les modifications non commitées (indexées ou non) dans une **pile** à part, et remet le
+      répertoire de travail dans l'état du dernier commit. Tu peux alors changer de branche, faire une
+      correction, puis revenir à ton travail.
+
+      - `git stash push -m "message"` : met de côté avec une description (indispensable quand la pile grossit) ;
+      - `git stash list` : affiche la pile (`stash@{0}` est le plus récent) ;
+      - `git stash show -p stash@{0}` : le détail d'une entrée ;
+      - `git stash pop` : réapplique la dernière entrée et la retire de la pile ; `apply` la garde ;
+      - `git stash drop` : supprime une entrée.
+
+      Les fichiers **non suivis** ne sont pas mis de côté par défaut : il faut `-u`. Un stash est local : il
+      n'est jamais poussé sur le dépôt distant, ne t'en sers pas comme d'une sauvegarde.
+    checks:
+      - desc: Un stash « wip-readme » existe
+        run: cd /root/app && git stash list | grep -q 'wip-readme'
+      - desc: Il contient l'ajout « Travail en cours » dans README.md
+        run: cd /root/app && git stash list --format='%gd %gs' | grep 'wip-readme' | head -1 | cut -d' ' -f1 | xargs -I{} git stash show -p {} | grep -q '^+Travail en cours'
+      - desc: Le répertoire de travail est propre
+        run: cd /root/app && git diff --quiet && git diff --cached --quiet
+  - id: git-cherry-pick
+    title: Récupérer un seul commit (cherry-pick)
+    description: |
+      1. Crée la branche `experimental` depuis `main` et fais-y **deux commits** :
+         - `Essai A` qui ajoute `essai.txt` ;
+         - `Correctif urgent` qui ajoute `urgent.txt`.
+      2. Reviens sur `main` : seul le correctif doit y arriver. Applique **uniquement** le commit
+         `Correctif urgent` avec `git cherry-pick`.
+
+      `experimental` ne doit pas être fusionnée dans `main`.
+    hint: "git log --oneline experimental pour trouver le hash, puis git switch main && git cherry-pick <hash>"
+    cours: |
+      `git cherry-pick <commit>` rejoue les modifications d'un commit précis sur la branche courante, en créant
+      un **nouveau** commit (même contenu, même message, mais hash différent puisque le parent change).
+
+      C'est l'outil des corrections à reporter : un correctif fait sur une branche de développement, à appliquer
+      aussi sur une branche de maintenance (`release/1.x`), sans embarquer tout le reste.
+
+      Pour trouver le commit : `git log --oneline nom-de-branche`. On peut aussi désigner un commit par une
+      expression : `experimental` (le dernier commit de la branche), `experimental~1` (son parent).
+
+      En cas de conflit, git s'arrête comme pour une fusion : corrige, `git add`, puis
+      `git cherry-pick --continue` (ou `--abort`). L'option `-x` ajoute au message une référence au commit
+      d'origine, utile pour la traçabilité.
+    checks:
+      - desc: experimental contient les deux commits
+        run: cd /root/app && git log --format=%s experimental | grep -qx 'Essai A' && git log --format=%s experimental | grep -qx 'Correctif urgent'
+      - desc: urgent.txt est sur main, pas essai.txt
+        run: cd /root/app && git ls-tree --name-only main | grep -qx urgent.txt && ! git ls-tree --name-only main | grep -qx essai.txt
+      - desc: Le correctif a été repris par cherry-pick (nouveau commit, branche non fusionnée)
+        run: cd /root/app && test "$(git log -1 --format=%H --grep='^Correctif urgent$' main)" != "$(git log -1 --format=%H --grep='^Correctif urgent$' experimental)" && ! git merge-base --is-ancestor experimental main
+  - id: git-alias
+    title: Alias et enquête dans l'historique
+    description: |
+      1. Crée l'alias **global** `git lg` qui lance `log --oneline --graph --all --decorate`.
+      2. Écris dans `/root/auteur.txt` l'**adresse e-mail** de l'auteur du **tout premier** commit de `/root/app`.
+      3. Écris dans `/root/commit-login.txt` le **hash abrégé** (7 caractères) du commit qui a **ajouté** le
+         fichier `login.py`.
+    hint: "git config --global alias.lg '...' ; git log --reverse --format=%ae | head -1 ; git log --diff-filter=A --format=%h -- login.py"
+    cours: |
+      Les **alias** évitent de retaper des commandes longues : `git config --global alias.NOM 'commande'`
+      (sans le mot `git`). Ils sont enregistrés dans `~/.gitconfig`, section `[alias]`.
+
+      `git log` est un véritable outil d'enquête :
+      - `--format` choisit les champs affichés : `%H` hash complet, `%h` abrégé, `%s` sujet, `%an`/`%ae` nom et
+        e-mail de l'auteur, `%ad` date ;
+      - `--reverse` inverse l'ordre (du plus ancien au plus récent) ;
+      - `-- chemin` limite aux commits qui touchent un fichier, et `--diff-filter=A` aux commits qui l'ont
+        **ajouté** (`M` modifié, `D` supprimé) ;
+      - `-S texte` trouve les commits qui ont ajouté ou retiré un texte, `--grep` cherche dans les messages,
+        `--author` filtre par auteur.
+
+      `git blame fichier` indique, pour chaque ligne, le dernier commit qui l'a modifiée. `--abbrev=7` fixe la
+      longueur des hash abrégés.
+    checks:
+      - desc: L'alias lg est configuré globalement
+        run: git config --global alias.lg | grep -q 'log --oneline --graph --all --decorate'
+      - desc: L'e-mail de l'auteur du premier commit est correct
+        run: test -s /root/auteur.txt && test "$(tr -d '[:space:]' < /root/auteur.txt)" = "$(cd /root/app && git log --reverse --format=%ae | head -1)"
+      - desc: Le commit qui a ajouté login.py est identifié
+        run: test -s /root/commit-login.txt && c=$(tr -d '[:space:]' < /root/commit-login.txt) && test ${#c} -ge 7 && cd /root/app && test "$(git rev-parse "$c^{commit}")" = "$(git log --diff-filter=A --format=%H -- login.py | tail -1)"
+  - id: git-reflog
+    title: Retrouver une branche supprimée (reflog)
+    description: |
+      Fausse manœuvre : supprime de force la branche `feature/api` (`git branch -D feature/api`).
+
+      Pas de panique, git n'oublie rien pendant un moment. Retrouve le commit sur lequel elle pointait grâce à
+      `git reflog`, puis recrée-la sous le nom **`feature/api-sauvee`**.
+    hint: "git reflog | grep feature/api ; git branch feature/api-sauvee <hash>"
+    cours: |
+      Le **reflog** est le journal local des déplacements de `HEAD` et des branches : chaque commit, changement
+      de branche, fusion, rebase ou reset y laisse une ligne. `git reflog` l'affiche, du plus récent au plus
+      ancien, avec des repères `HEAD@{n}`.
+
+      Supprimer une branche ne supprime pas ses commits : ils deviennent seulement inaccessibles par un nom.
+      Tant que le ramasse-miettes (`git gc`) ne les a pas effacés (90 jours par défaut pour ce qui est référencé
+      dans le reflog), on peut les retrouver et recréer une branche dessus avec `git branch nom <commit>`.
+
+      Le reflog sauve aussi d'un `git reset --hard` malheureux ou d'un rebase raté. Attention : il est **local**
+      à ton dépôt, il n'est ni poussé ni cloné. `git log -g` affiche le reflog avec les détails des commits.
+    checks:
+      - desc: feature/api a été supprimée
+        run: cd /root/app && ! git rev-parse --verify -q refs/heads/feature/api >/dev/null
+      - desc: feature/api-sauvee pointe sur l'ancien sommet de feature/api
+        run: cd /root/app && s=$(git rev-parse --verify -q feature/api-sauvee) && git reflog --format=%H | grep -qx "$s" && git ls-tree --name-only "$s" | grep -qx test_api.py && git merge-base --is-ancestor "$s" main && test "$s" != "$(git rev-parse main)"

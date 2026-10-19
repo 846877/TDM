@@ -341,3 +341,99 @@ exercises:
       - desc: Les comptes par niveau sont exacts
         run: |
           test "$(tail -n +2 /home/eleve/rapport.csv | tr -d ' \r')" = "$(awk '{print $3}' /home/eleve/donnees/app.log | sort | uniq -c | awk '{print $2","$1}')"
+  - id: lb-sed
+    title: Modifier une configuration avec sed
+    description: |
+      Le fichier `~/donnees/app.conf` doit passer en production. **Sans éditeur**, avec `sed -i` :
+      1. remplace `debug=true` par `debug=false` et `env=dev` par `env=prod` ;
+      2. remplace la valeur de `db_host` par `db.tdm.lab` (quelle que soit sa valeur actuelle) ;
+      3. ajoute la ligne `log_level=warn` à la fin du fichier.
+
+      Enfin, produis `~/app-propre.conf` : le même contenu **sans** les lignes de commentaire (`#`) ni les
+      lignes vides.
+    hint: "sed -i 's/^debug=.*/debug=false/' fichier ; sed -i '$a log_level=warn' fichier ; grep -v -e '^#' -e '^$'"
+    cours: |
+      `sed` (*stream editor*) transforme un texte ligne par ligne. Sa commande la plus utilisée est la
+      substitution `s/motif/remplacement/` : le motif est une **expression régulière**. Ajoute `g` à la fin
+      pour remplacer toutes les occurrences d'une ligne, pas seulement la première.
+
+      Par défaut, `sed` affiche le résultat sans toucher au fichier : c'est idéal pour tester. L'option `-i`
+      (*in place*) modifie le fichier ; `-i.bak` garde une copie de sauvegarde.
+
+      Repères utiles dans un motif : `^` début de ligne, `$` fin de ligne, `.*` n'importe quelle suite de
+      caractères. Ainsi `^db_host=.*` désigne toute la ligne, quelle que soit la valeur. D'autres commandes
+      existent : `d` supprime une ligne (`/^#/d`), `$a texte` ajoute après la dernière ligne.
+
+      Pour filtrer plusieurs motifs avec `grep`, répète `-e`, et `-v` inverse la sélection.
+    checks:
+      - desc: debug et env sont passés en production
+        run: grep -qx 'debug=false' /home/eleve/donnees/app.conf && grep -qx 'env=prod' /home/eleve/donnees/app.conf && ! grep -q 'debug=true' /home/eleve/donnees/app.conf
+      - desc: db_host vaut db.tdm.lab
+        run: grep -qx 'db_host=db.tdm.lab' /home/eleve/donnees/app.conf
+      - desc: log_level=warn est la dernière ligne
+        run: test "$(tail -n 1 /home/eleve/donnees/app.conf)" = "log_level=warn"
+      - desc: app-propre.conf ne contient ni commentaire ni ligne vide
+        run: test -s /home/eleve/app-propre.conf && ! grep -qE '^(#|$)' /home/eleve/app-propre.conf && test "$(cat /home/eleve/app-propre.conf)" = "$(grep -vE '^(#|$)' /home/eleve/donnees/app.conf)"
+  - id: lb-disque
+    title: Espace disque et systèmes de fichiers
+    description: |
+      Un disque plein est l'incident le plus fréquent en production. Prends tes repères :
+      1. écris dans `~/taille-archives.txt` la **taille totale** du dossier `~/donnees/archives`, en Kio
+         (juste le nombre, tel que l'affiche `du -sk`) ;
+      2. écris dans `~/plus-gros.txt` le **nom** (sans chemin) du plus gros fichier de `~/donnees/archives`
+         et de ses sous-dossiers ;
+      3. écris dans `~/type-racine.txt` le **type** du système de fichiers monté sur `/` (colonne `Type` de `df -T`).
+    hint: "du -sk dossier | cut -f1 ; find ... -type f -printf '%s %f\\n' | sort -n | tail -1 ; df -T / | awk 'NR==2 {print $2}'"
+    cours: |
+      Deux commandes répondent à deux questions différentes :
+      - `df` (*disk free*) montre l'occupation de chaque **système de fichiers** monté : taille, utilisé,
+        disponible, pourcentage, point de montage. `-h` affiche des unités lisibles, `-T` ajoute le type
+        (`ext4`, `xfs`, `overlay` dans un conteneur, `tmpfs` en mémoire) ;
+      - `du` (*disk usage*) calcule la place occupée par des **fichiers et dossiers**. `-s` résume un dossier
+        en une ligne, `-k` affiche en Kio, `-h` en unités lisibles ; `du -sh * | sort -h` classe le contenu
+        d'un dossier.
+
+      Pour trouver les plus gros fichiers, `find -printf '%s %f\n'` affiche la taille en octets suivie du nom ;
+      un tri numérique (`sort -n`) puis `tail -1` donne le plus gros. `ncdu`, quand il est installé, propose
+      la même analyse de façon interactive.
+
+      Attention : un fichier supprimé mais encore ouvert par un processus occupe toujours de la place
+      (`lsof +L1` les retrouve).
+    checks:
+      - desc: La taille des archives est exacte
+        run: test -s /home/eleve/taille-archives.txt && test "$(tr -d '[:space:]' < /home/eleve/taille-archives.txt)" = "$(du -sk /home/eleve/donnees/archives | cut -f1)"
+      - desc: Le plus gros fichier est identifié
+        run: test -s /home/eleve/plus-gros.txt && test "$(tr -d '[:space:]' < /home/eleve/plus-gros.txt)" = "$(find /home/eleve/donnees/archives -type f -printf '%s %f\n' | sort -n | tail -1 | cut -d' ' -f2)"
+      - desc: Le type du système de fichiers racine est correct
+        run: test -s /home/eleve/type-racine.txt && test "$(tr -d '[:space:]' < /home/eleve/type-racine.txt)" = "$(df -T / | awk 'NR==2 {print $2}')"
+  - id: lb-systeme
+    title: Interroger le système
+    description: |
+      Un administrateur sait retrouver l'information dans les fichiers du système :
+      1. `~/comptes-bash.txt` : le **nombre** de comptes dont le shell est `/bin/bash` (dernier champ de `/etc/passwd`) ;
+      2. `~/version-os.txt` : la version de la distribution, c'est-à-dire la valeur de `VERSION_ID` dans
+         `/etc/os-release`, **sans les guillemets** ;
+      3. `~/noyau.txt` : la version du **noyau** Linux (`uname -r`).
+    hint: "awk -F: '$7 == \"/bin/bash\"' /etc/passwd | wc -l ; grep VERSION_ID /etc/os-release | cut -d= -f2 | tr -d '\"'"
+    cours: |
+      Sous Linux, une grande partie de la configuration et de l'état du système est lisible sous forme de
+      fichiers texte :
+      - `/etc/passwd` : une ligne par compte, sept champs séparés par `:` (nom, `x`, UID, GID, description,
+        dossier personnel, **shell**) ;
+      - `/etc/os-release` : l'identité de la distribution sous forme `CLE=valeur` (`ID`, `VERSION_ID`,
+        `PRETTY_NAME`), conçue pour être lue par des scripts (`. /etc/os-release` la charge même en variables) ;
+      - `/proc` : une vue du noyau (`/proc/cpuinfo`, `/proc/meminfo`, `/proc/uptime`).
+
+      `awk -F:` change le séparateur de champs : `$7` désigne alors le shell. Une condition avant les
+      accolades filtre les lignes. `cut -d= -f2` découpe sur le signe égal, `tr -d '"'` supprime les guillemets.
+
+      `uname -r` donne la version du noyau. Dans un conteneur, c'est celui de l'**hôte** : un conteneur ne
+      possède pas son propre noyau.
+    checks:
+      - desc: Le nombre de comptes bash est exact
+        run: |
+          test -s /home/eleve/comptes-bash.txt && test "$(tr -d '[:space:]' < /home/eleve/comptes-bash.txt)" = "$(awk -F: '$7 == "/bin/bash"' /etc/passwd | wc -l)"
+      - desc: La version de la distribution est correcte
+        run: . /etc/os-release && test -s /home/eleve/version-os.txt && test "$(tr -d '[:space:]' < /home/eleve/version-os.txt)" = "$VERSION_ID"
+      - desc: La version du noyau est correcte
+        run: test -s /home/eleve/noyau.txt && test "$(tr -d '[:space:]' < /home/eleve/noyau.txt)" = "$(uname -r)"
