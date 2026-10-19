@@ -221,3 +221,55 @@ solution: |
           enveloppe.statistiques = {"succes": 0, "echecs": 0}
           return enveloppe
       return decorateur
+cours: |
+  ## Deux politiques combinées
+
+  - **TTL** : une entrée devient invalide après une durée fixe. Indispensable quand la source
+    change (résolution DNS — c'est exactement le TTL des enregistrements DNS —, jetons
+    d'authentification, réponses d'API).
+  - **LRU** : quand la place manque, on évince l'entrée la moins récemment utilisée.
+
+  ## Stocker l'instant d'expiration
+
+  Pour chaque entrée, on stocke la valeur et l'instant `expiration = maintenant + ttl`.
+  Tester l'expiration devient une simple comparaison (`horloge() >= expiration`), quelle que
+  soit la durée de vie propre à l'entrée.
+
+  ## Expiration paresseuse
+
+  Plutôt que de parcourir régulièrement tout le cache (coûteux), on vérifie une entrée
+  **quand on y accède** et on la supprime si elle a expiré. C'est la stratégie de Redis
+  (complétée par un échantillonnage aléatoire périodique).
+
+  Conséquence : le cache peut contenir des entrées expirées pas encore nettoyées. Les
+  opérations qui comptent (`len`) ou qui doivent faire de la place doivent d'abord **purger**
+  les expirées. Purger avant d'évincer une entrée valide est plus juste : inutile de sacrifier
+  une entrée vivante quand une morte occupe la place.
+
+  ## Ordre LRU et accès
+
+  Avec un `OrderedDict`, `move_to_end(cle)` marque une clé comme récemment utilisée et
+  `popitem(last=False)` retire la plus ancienne. Attention à distinguer les accès qui
+  **comptent** comme une utilisation (`get`) de ceux qui ne doivent pas modifier l'ordre (un
+  simple test d'appartenance).
+
+  ## Horloge injectée
+
+  Comme pour le limiteur de débit, l'horloge en paramètre rend les tests instantanés et
+  déterministes : on avance un faux temps au lieu d'attendre.
+
+  ## Décorateur
+
+  Un décorateur de cache construit la clé à partir des arguments (`args` et
+  `tuple(sorted(kwargs.items()))`) et utilise une instance du cache dans sa fermeture.
+  Les arguments doivent être hachables.
+
+  ## Complexité
+
+  `get` et `put` en O(1) amorti ; la purge complète est en O(n) mais n'est faite que
+  lorsqu'elle est nécessaire.
+docs:
+  - title: collections.OrderedDict
+    url: https://docs.python.org/fr/3/library/collections.html#collections.OrderedDict
+  - title: Module time (monotonic)
+    url: https://docs.python.org/fr/3/library/time.html#time.monotonic

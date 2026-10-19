@@ -54,3 +54,51 @@ solution: |
       resultat.extend(gauche[i:])
       resultat.extend(droite[j:])
       return resultat
+cours: |
+  ## Diviser pour régner
+
+  Le tri fusion applique le paradigme **diviser pour régner** :
+
+  1. **diviser** : couper la liste en deux moitiés (`liste[:milieu]`, `liste[milieu:]`) ;
+  2. **régner** : trier chaque moitié récursivement ;
+  3. **combiner** : fusionner deux listes triées en une seule liste triée.
+
+  Toute l'intelligence est dans la fusion.
+
+  ## Fusionner deux listes triées
+
+  On garde un indice dans chaque liste. À chaque étape, on compare les deux éléments
+  courants, on prend le plus petit et on avance dans la liste correspondante. Quand une
+  liste est épuisée, on ajoute **tout le reste** de l'autre (déjà trié).
+
+  ```python
+  # Exemple de déroulé : fusion de [1, 4, 9] et [2, 3, 10]
+  # 1 < 2 -> [1]       ; 4 > 2 -> [1, 2]   ; 4 > 3 -> [1, 2, 3]
+  # 4 < 10 -> [.., 4]  ; 9 < 10 -> [.., 9] ; gauche épuisée -> + [10]
+  ```
+
+  Utiliser `<=` (et non `<`) pour prendre l'élément de **gauche** en cas d'égalité rend le
+  tri **stable** : les éléments égaux gardent leur ordre d'origine.
+
+  ## Complexité
+
+  La liste est coupée en deux log₂(n) fois, et à chaque niveau la fusion parcourt n éléments
+  au total : **O(n log n)** dans tous les cas (meilleur, moyen, pire). C'est optimal pour un
+  tri par comparaisons. Par comparaison, un tri par insertion ou à bulles est en O(n²) :
+  pour un million d'éléments, 20 millions d'opérations contre mille milliards.
+
+  Coût mémoire : O(n), car on crée de nouvelles listes. La récursion a une profondeur de
+  log₂(n) seulement : aucun risque de `RecursionError`.
+
+  **Évite** `liste.pop(0)` dans la fusion : il coûte O(n) à chaque appel et ruine la
+  complexité. Les indices sont la bonne solution.
+
+  ## Dans la vraie vie
+
+  `sorted()` utilise **Timsort**, un hybride de tri fusion et de tri par insertion, qui
+  exploite les portions déjà triées des données réelles.
+docs:
+  - title: Wikipédia — Tri fusion
+    url: https://fr.wikipedia.org/wiki/Tri_fusion
+  - title: HOWTO — trier avec Python
+    url: https://docs.python.org/fr/3/howto/sorting.html

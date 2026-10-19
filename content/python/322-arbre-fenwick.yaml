@@ -166,3 +166,53 @@ solution: |
           inversions += vus - arbre.somme_prefixe(r + 1)    # déjà vus et strictement plus grands
           arbre.ajouter(r, 1)
       return inversions
+cours: |
+  ## Le dilemme des sommes de préfixes
+
+  - Avec une liste simple : modifier un élément est O(1), mais la somme d'un préfixe est O(n).
+  - Avec un tableau de sommes cumulées : la somme est O(1), mais une modification oblige à
+    recalculer tout ce qui suit, O(n).
+
+  Quand les deux opérations sont fréquentes (statistiques en temps réel, compteurs de
+  trafic par tranche, classement), il faut un compromis : **O(log n) pour les deux**.
+
+  ## L'astuce binaire
+
+  En indexation 1-based, la case `i` de l'arbre stocke la somme d'un bloc d'éléments qui se
+  termine en `i` et dont la longueur est le **bit de poids faible** de `i` :
+
+  ```python
+  i & -i     # isole le bit de poids faible
+  12 & -12   # 4   (12 = 0b1100)
+  7 & -7     # 1   (7 = 0b0111)
+  ```
+
+  (`-i` en complément à deux inverse tous les bits au-dessus du dernier 1.)
+
+  - **Somme du préfixe** jusqu'à `i` : on additionne `arbre[i]`, puis on retire le bit de
+    poids faible de `i` (`i -= i & -i`), jusqu'à 0. Au plus log₂(n) tours.
+  - **Mise à jour** de l'élément `i` : on ajoute `delta` à `arbre[i]`, puis on **ajoute** le
+    bit de poids faible (`i += i & -i`), tant que `i ≤ n`.
+
+  ## Construction en O(n)
+
+  Appeler `ajouter` n fois donne O(n log n). La construction linéaire : copier les valeurs,
+  puis pour chaque `i`, ajouter `arbre[i]` à son « parent » `i + (i & -i)` s'il existe.
+
+  ## Interface 0-based
+
+  L'utilisateur parle en indices 0-based ; l'implémentation interne est 1-based (la case 0
+  est inutilisée) : une conversion `i + 1` à l'entrée des méthodes suffit. Une somme
+  d'intervalle est une différence de deux préfixes. Pour **remplacer** une valeur, ajoute la
+  différence avec l'ancienne (qu'on peut garder dans une copie du tableau).
+
+  ## Pour aller plus loin
+
+  Les opérateurs bit à bit (`&`, `|`, `^`, `~`, `<<`, `>>`) sont aussi le quotidien du
+  réseau : masques de sous-réseau, calculs d'adresses, drapeaux TCP. Le **segment tree**
+  généralise Fenwick à d'autres opérations (minimum, maximum).
+docs:
+  - title: Wikipédia — Arbre de Fenwick
+    url: https://fr.wikipedia.org/wiki/Arbre_de_Fenwick
+  - title: Opérations bit à bit sur les entiers
+    url: https://docs.python.org/fr/3/library/stdtypes.html#bitwise-operations-on-integer-types

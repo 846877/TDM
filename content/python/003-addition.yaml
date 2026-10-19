@@ -28,3 +28,52 @@ tests: |
 solution: |
   def addition(a, b):
       return a + b
+cours: |
+  ## Définir une fonction
+
+  Une fonction est un bloc de code nommé, réutilisable, qui reçoit des **paramètres** et peut
+  **renvoyer** un résultat.
+
+  ```python
+  def carre(x):
+      return x * x
+
+  resultat = carre(4)   # 16
+  print(carre(3) + 1)   # 10
+  ```
+
+  - `def` introduit la fonction, suivi de son nom et de ses paramètres entre parenthèses.
+  - Les deux-points `:` ouvrent un **bloc** : tout ce qui est indenté (4 espaces par
+    convention) appartient à la fonction.
+  - Les paramètres sont des variables locales qui reçoivent les valeurs passées à l'appel
+    (les **arguments**).
+
+  ## `return` n'est pas `print`
+
+  C'est la confusion numéro un des débutants :
+
+  - `print(x)` **affiche** une valeur à l'écran, pour un humain ; la fonction renvoie alors
+    `None`.
+  - `return x` **renvoie** la valeur à celui qui a appelé la fonction ; on peut la stocker,
+    la combiner, la tester.
+
+  ```python
+  def mauvaise(x):
+      print(x * 2)
+
+  v = mauvaise(5)   # affiche 10
+  print(v)          # None : rien n'a été renvoyé !
+  ```
+
+  La moulinette appelle ta fonction et compare la valeur **renvoyée** : un `print` ne suffit
+  pas. Dès qu'un `return` est exécuté, la fonction s'arrête immédiatement.
+
+  ## Bonnes habitudes
+
+  - Choisis des noms explicites (`calculer_total` plutôt que `f`).
+  - Une fonction = une tâche.
+  - Les opérateurs arithmétiques : `+ - * /` (division réelle), `//` (division entière),
+    `%` (reste), `**` (puissance).
+docs:
+  - title: Tutoriel — définir des fonctions
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html#defining-functions

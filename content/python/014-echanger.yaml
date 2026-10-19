@@ -56,3 +56,57 @@ solution: |
       if a <= b:
           return a, b
       return b, a
+cours: |
+  ## Les tuples
+
+  Un tuple est une séquence **non modifiable**, écrite avec des virgules (les parenthèses
+  sont souvent facultatives) :
+
+  ```python
+  point = (3, 4)
+  point[0]          # 3
+  couleur = 255, 128, 0     # aussi un tuple
+  singleton = (5,)          # la virgule est obligatoire pour un seul élément
+  ```
+
+  `point[0] = 7` lève une `TypeError` : un tuple ne se modifie pas. On les utilise pour
+  regrouper des valeurs qui vont ensemble (coordonnées, résultat multiple…).
+
+  ## Déballage (unpacking)
+
+  On peut affecter les éléments d'un tuple à plusieurs variables d'un coup :
+
+  ```python
+  x, y = point          # x = 3, y = 4
+  nom, age = "Ada", 36
+  ```
+
+  Le nombre de variables doit correspondre au nombre d'éléments, sinon `ValueError`.
+
+  ## Renvoyer plusieurs valeurs
+
+  Une fonction qui écrit `return a, b` renvoie en réalité **un seul** objet : un tuple.
+  L'appelant peut le déballer :
+
+  ```python
+  def division(a, b):
+      return a // b, a % b
+
+  quotient, reste = division(17, 5)   # 3, 2
+  ```
+
+  La fonction intégrée `divmod` fait exactement cela.
+
+  ## L'échange de variables
+
+  Dans beaucoup de langages, échanger deux variables demande une variable temporaire.
+  En Python, le côté droit d'une affectation est entièrement évalué (sous forme de tuple)
+  **avant** d'être déballé à gauche, ce qui rend l'échange en une ligne possible et sûr.
+
+  ## Comparer des valeurs
+
+  Pour ordonner deux valeurs, une condition `if a <= b` suffit ; tu peux aussi utiliser
+  `min()` et `max()`. Pense au cas d'égalité : le résultat doit rester cohérent.
+docs:
+  - title: Tutoriel — tuples et séquences
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#tuples-and-sequences

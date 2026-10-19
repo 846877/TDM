@@ -135,3 +135,58 @@ solution: |
       for etape in etapes:
           flux = etape(flux)
       return flux
+cours: |
+  ## Le traitement en flux
+
+  Un pipeline Unix (`cat log | grep ERROR | cut -d' ' -f1 | sort`) fait passer les données
+  d'étape en étape, ligne par ligne, sans stocker l'intégralité. Les générateurs permettent
+  exactement la même chose en Python :
+
+  ```python
+  def lire(fichier):
+      for ligne in fichier:
+          yield ligne.rstrip("\n")
+
+  def erreurs(lignes):
+      for ligne in lignes:
+          if "ERROR" in ligne:
+              yield ligne
+
+  for l in erreurs(lire(open("app.log"))):
+      print(l)
+  ```
+
+  Chaque étape **consomme** un itérable et **produit** un générateur. Aucune liste
+  intermédiaire n'est construite : la mémoire utilisée est constante, même pour un fichier
+  de 50 Go, et la première ligne sort avant que le fichier soit entièrement lu.
+
+  ## `yield from`
+
+  `yield from iterable` produit tous les éléments d'un itérable, comme une boucle
+  `for x in iterable: yield x`, en plus court (et il transmet aussi `send()` et la valeur de
+  retour d'un sous-générateur).
+
+  ## Regrouper par paquets
+
+  Pour former des paquets de taille fixe, on accumule dans une liste temporaire et on la
+  produit quand elle est pleine, puis on repart d'une **nouvelle** liste (si on vidait la
+  même liste avec `clear()`, les paquets déjà produits seraient vidés aussi). Le dernier
+  paquet incomplet doit être produit après la boucle s'il n'est pas vide. Python 3.12 a
+  ajouté `itertools.batched` pour cela.
+
+  ## Validation paresseuse : attention
+
+  Le corps d'une fonction génératrice ne s'exécute qu'au premier `next()`. Un
+  `raise ValueError` placé au début ne se déclenche donc **pas** à l'appel, mais au premier
+  parcours. Pour valider immédiatement, on écrit une fonction normale qui vérifie les
+  paramètres puis renvoie un générateur interne.
+
+  ## Composer des étapes
+
+  Appliquer une suite de fonctions successivement est une **composition** : une boucle qui
+  remplace l'itérable courant par `etape(iterable)` suffit.
+docs:
+  - title: HOWTO — programmation fonctionnelle (générateurs)
+    url: https://docs.python.org/fr/3/howto/functional.html
+  - title: Référence — expressions yield (yield from)
+    url: https://docs.python.org/fr/3/reference/expressions.html#yield-expressions

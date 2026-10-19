@@ -165,3 +165,62 @@ solution: |
       @property
       def total(self):
           return round(sum(a.total for a in self.articles) * (1 - self.remise), 2)
+cours: |
+  ## Les options de `@dataclass`
+
+  ```python
+  @dataclass(frozen=True, order=True)
+  class Adresse:
+      ip: str
+      port: int = 80
+  ```
+
+  - `frozen=True` : les attributs ne peuvent plus être modifiés après création
+    (`FrozenInstanceError`), et la classe devient **hachable** ;
+  - `order=True` : génère `<`, `<=`, `>`, `>=`, en comparant les champs **dans l'ordre de
+    déclaration** comme des tuples ;
+  - `eq=True` (défaut) : `==` compare tous les champs.
+
+  ## `field()` : régler chaque champ
+
+  ```python
+  from dataclasses import dataclass, field
+
+  @dataclass
+  class Ticket:
+      titre: str
+      tags: list = field(default_factory=list)   # une liste neuve par instance
+      secret: str = field(default="", repr=False) # absent du repr
+      id: int = field(init=False)                  # pas dans le constructeur
+  ```
+
+  Une valeur par défaut mutable écrite directement (`tags: list = []`) est refusée par les
+  dataclasses, justement pour éviter le partage entre instances.
+
+  ## `__post_init__`
+
+  Appelée automatiquement à la fin du `__init__` généré, elle sert à **valider** ou à
+  calculer des champs `init=False`. Dans une classe `frozen`, on ne peut pas faire
+  `self.x = ...` : il faut `object.__setattr__(self, "x", valeur)`.
+
+  ## Compteur partagé
+
+  Pour numéroter les instances (1, 2, 3…), on garde un compteur **au niveau de la classe**
+  (attribut de classe, ou `itertools.count()`), incrémenté dans `__post_init__`. Avec une
+  annotation, ce compteur deviendrait un champ : utilise `typing.ClassVar` ou ne
+  l'annote pas.
+
+  ## Immuabilité et modifications
+
+  Pour « modifier » un objet gelé, on en crée un nouveau : `dataclasses.replace(obj,
+  quantite=3)`. C'est le style immuable, qui évite les effets de bord.
+
+  ## Utilitaires
+
+  `dataclasses.asdict(obj)` convertit récursivement en dictionnaire (pratique pour JSON),
+  `fields(obj)` liste les champs.
+docs:
+  - title: Module dataclasses
+    url: https://docs.python.org/fr/3/library/dataclasses.html
+  - title: dataclasses.field
+    url: https://docs.python.org/fr/3/library/dataclasses.html#dataclasses.field

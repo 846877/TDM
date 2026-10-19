@@ -151,3 +151,67 @@ solution: |
 
 
   prix_ttc_france = functools.partial(prix_ttc, taux=0.2)
+cours: |
+  ## `singledispatch` : une fonction, plusieurs implémentations
+
+  Au lieu d'une longue cascade de `isinstance`, on enregistre une implémentation par type :
+
+  ```python
+  from functools import singledispatch
+
+  @singledispatch
+  def taille(obj):
+      raise TypeError(f"type non géré : {type(obj).__name__}")
+
+  @taille.register
+  def _(obj: str):
+      return len(obj)
+
+  @taille.register(list)
+  def _(obj):
+      return sum(taille(x) for x in obj)
+  ```
+
+  La version choisie dépend du type du **premier** argument, en suivant l'héritage (la
+  classe la plus spécifique gagne). Avantage décisif : n'importe qui peut ajouter un type
+  plus tard avec `.register`, sans modifier la fonction d'origine (principe ouvert/fermé).
+
+  **Piège** : `bool` est une sous-classe de `int`. Une implémentation enregistrée pour
+  `bool` est plus spécifique et gagne pour `True`/`False` ; sans elle, ils seraient traités
+  comme des entiers. `None` a pour type `type(None)`.
+
+  ## `partial` : figer des arguments
+
+  ```python
+  from functools import partial
+  int_hexa = partial(int, base=16)
+  int_hexa("ff")     # 255
+  ```
+
+  `partial` crée une nouvelle fonction avec certains arguments déjà fournis : très utile
+  pour les callbacks ou `map`.
+
+  ## `reduce` : replier une séquence
+
+  `reduce(f, [a, b, c], init)` calcule `f(f(f(init, a), b), c)`.
+
+  ```python
+  from functools import reduce
+  import operator
+  reduce(operator.mul, [1, 2, 3, 4], 1)   # 24
+  ```
+
+  La valeur initiale évite une erreur sur une séquence vide et définit le résultat dans ce
+  cas.
+
+  ## Composition de fonctions
+
+  Composer `f, g, h` donne `x ↦ f(g(h(x)))` : la **dernière** fonction est appliquée en
+  premier. Avec `reduce`, on combine les fonctions deux à deux en une nouvelle fonction
+  (une `lambda` qui appelle l'une sur le résultat de l'autre). La composée de zéro fonction
+  est l'identité (`lambda x: x`), l'élément neutre de la composition.
+docs:
+  - title: Module functools
+    url: https://docs.python.org/fr/3/library/functools.html
+  - title: Module operator
+    url: https://docs.python.org/fr/3/library/operator.html

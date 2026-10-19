@@ -30,3 +30,57 @@ tests: |
 solution: |
   def est_bissextile(annee):
       return annee % 4 == 0 and (annee % 100 != 0 or annee % 400 == 0)
+cours: |
+  ## Le type booléen
+
+  `bool` n'a que deux valeurs : `True` et `False` (avec une majuscule). Toute comparaison
+  produit un booléen :
+
+  ```python
+  est_majeur = age >= 18     # True ou False
+  print(type(est_majeur))    # <class 'bool'>
+  ```
+
+  Une fonction qui renvoie un booléen s'appelle un **prédicat** ; on lui donne souvent un nom
+  en `est_...` ou `a_...`.
+
+  ## Renvoyer directement la condition
+
+  Ce code fonctionne mais est verbeux :
+
+  ```python
+  def est_positif(n):
+      if n > 0:
+          return True
+      else:
+          return False
+  ```
+
+  Comme `n > 0` **est déjà** un booléen, on peut écrire `return n > 0`.
+
+  ## Combiner : `and`, `or`, `not`
+
+  Les règles « sauf si… sauf si… » se traduisent en combinant les opérateurs. Priorités :
+  `not` > `and` > `or`. En cas de doute, mets des **parenthèses** : elles rendent
+  l'intention explicite.
+
+  ```python
+  acces = (role == "admin") or (role == "user" and not bloque)
+  ```
+
+  Les opérateurs sont **paresseux** (évaluation en court-circuit) : dans `a and b`, si `a`
+  est faux, `b` n'est même pas évalué.
+
+  ## Méthode : construire une table de cas
+
+  Avant de coder, écris quelques exemples et le résultat attendu, en choisissant des valeurs
+  qui touchent chaque règle : une année quelconque, une divisible par 4, une divisible par
+  100, une divisible par 400. Ce sont exactement les cas que la moulinette testera
+  (pense à 1900 et à 2000).
+
+  En vrai projet, on utiliserait `calendar.isleap(annee)` de la bibliothèque standard.
+docs:
+  - title: Référence — opérations booléennes
+    url: https://docs.python.org/fr/3/reference/expressions.html#boolean-operations
+  - title: Module calendar (calendar.isleap)
+    url: https://docs.python.org/fr/3/library/calendar.html

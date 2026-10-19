@@ -156,3 +156,58 @@ solution: |
               with self:
                   return fonction(*args, **kwargs)
           return enveloppe
+cours: |
+  ## Le *monkey patching* contrôlé
+
+  Remplacer un attribut d'un module ou d'un objet à l'exécution s'appelle du *monkey
+  patching*. En test, on s'en sert pour simuler l'heure, le réseau ou le disque. Le danger :
+  oublier de remettre l'original, et polluer les tests suivants. Le gestionnaire de contexte
+  garantit la restauration.
+
+  ## `getattr`, `setattr`, `delattr`, `hasattr`
+
+  ```python
+  import math
+  ancien = getattr(math, "pi")
+  setattr(math, "pi", 3)
+  hasattr(math, "tau")         # True
+  delattr(objet, "nom")        # supprime l'attribut
+  getattr(objet, "x", None)    # valeur par défaut si absent
+  ```
+
+  Pour distinguer « absent » de « vaut None », on utilise une **sentinelle** (`_ABSENT =
+  object()`) comme valeur par défaut de `getattr`.
+
+  ## Restaurer quoi qu'il arrive
+
+  `__exit__` est appelé même si le bloc lève une exception ; il doit restaurer puis renvoyer
+  une valeur fausse pour laisser l'exception se propager.
+
+  ## Imbrication et réutilisation : une pile
+
+  Si le même objet `remplacer` est utilisé dans deux `with` imbriqués, ou réutilisé ensuite,
+  une seule variable « ancienne valeur » ne suffit pas : la seconde entrée écraserait la
+  première. Une **pile** des anciennes valeurs (empilée à l'entrée, dépilée à la sortie)
+  gère tous les cas.
+
+  ## Décorateur et gestionnaire à la fois
+
+  En définissant `__call__(self, fonction)`, l'objet peut aussi décorer une fonction :
+  l'enveloppe exécute l'appel dans un `with self:`. `contextlib.ContextDecorator` fournit ce
+  comportement tout fait.
+
+  ## Dictionnaires
+
+  Pour un dictionnaire (comme `os.environ`), on ne manipule pas des attributs mais des clés :
+  `d[cle]`, `cle in d`, `del d[cle]`. Le principe (mémoriser, remplacer, restaurer ou
+  supprimer) est identique.
+
+  ## L'outil standard
+
+  `unittest.mock.patch` et `patch.dict` font tout cela (avec des objets simulés en prime).
+  Les réécrire une fois permet de comprendre ce qu'ils font réellement.
+docs:
+  - title: unittest.mock.patch (l'outil réel)
+    url: https://docs.python.org/fr/3/library/unittest.mock.html
+  - title: contextlib.ContextDecorator
+    url: https://docs.python.org/fr/3/library/contextlib.html#contextlib.ContextDecorator

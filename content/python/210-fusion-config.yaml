@@ -55,3 +55,55 @@ solution: |
           else:
               resultat[cle] = copy.deepcopy(valeur)
       return resultat
+cours: |
+  ## Le besoin
+
+  Les applications chargent souvent une configuration **par défaut**, puis la surchargent
+  avec un fichier spécifique à l'environnement (dev, prod), puis avec des variables
+  d'environnement. Docker Compose, Ansible ou Helm fusionnent ainsi des fichiers YAML.
+
+  ## Fusion superficielle
+
+  ```python
+  base = {"a": 1, "b": {"x": 1}}
+  surcharge = {"b": {"y": 2}}
+  {**base, **surcharge}        # {"a": 1, "b": {"y": 2}}  : "x" a disparu
+  base | surcharge             # même résultat (Python 3.9+)
+  ```
+
+  Le déballage `**` et l'opérateur `|` remplacent la valeur de `"b"` entière : ils ne
+  descendent pas dans les sous-dictionnaires. Pour une fusion **profonde**, il faut de la
+  récursion.
+
+  ## La récursion sur des dictionnaires
+
+  Pour chaque clé de la surcharge :
+
+  - si la clé existe des deux côtés **et** que les deux valeurs sont des dictionnaires, on
+    fusionne récursivement ces deux sous-dictionnaires ;
+  - sinon, la valeur de la surcharge gagne.
+
+  Le cas de base est implicite : quand les valeurs ne sont pas des dictionnaires, on ne
+  descend plus.
+
+  ## Ne pas modifier les entrées : copies et aliasing
+
+  `dict(base)` ou `base.copy()` font une copie **superficielle** : les sous-dictionnaires
+  sont partagés entre l'original et la copie. Modifier `copie["b"]["x"]` modifie aussi
+  `base["b"]["x"]`. Pour garantir l'indépendance, soit on reconstruit chaque niveau, soit on
+  utilise `copy.deepcopy`, qui copie récursivement toute la structure.
+
+  Un test classique : fusionner, puis modifier le résultat, et vérifier que `base` et
+  `surcharge` n'ont pas bougé. Le résultat ne doit partager **aucun** sous-dictionnaire
+  mutable avec les entrées.
+
+  ## Alternative : `ChainMap`
+
+  `collections.ChainMap(surcharge, base)` cherche une clé dans plusieurs dictionnaires
+  successivement sans rien copier. Pratique pour des couches de configuration, mais elle
+  aussi reste superficielle.
+docs:
+  - title: Module copy (deepcopy)
+    url: https://docs.python.org/fr/3/library/copy.html
+  - title: collections.ChainMap
+    url: https://docs.python.org/fr/3/library/collections.html#collections.ChainMap

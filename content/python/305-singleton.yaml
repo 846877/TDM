@@ -83,3 +83,63 @@ solution: |
 
   class Plugin(metaclass=RegistrePlugins):
       pass
+cours: |
+  ## Les classes sont des objets
+
+  En Python, une classe est elle-même un objet, instance de sa **métaclasse**. Par défaut,
+  la métaclasse est `type` :
+
+  ```python
+  class A: pass
+  type(A)              # <class 'type'>
+  B = type("B", (A,), {"x": 1})   # crée une classe dynamiquement
+  ```
+
+  Quand Python exécute une instruction `class`, il collecte le corps dans un dictionnaire
+  puis appelle `metaclasse(nom, bases, dictionnaire)`.
+
+  ## Écrire une métaclasse
+
+  On hérite de `type` et on redéfinit `__new__` (création) ou `__init__` (initialisation) :
+
+  ```python
+  class Tracee(type):
+      classes = []
+
+      def __new__(mcs, nom, bases, ns):
+          cls = super().__new__(mcs, nom, bases, ns)
+          mcs.classes.append(nom)
+          return cls
+
+  class Base(metaclass=Tracee): pass
+  class Fille(Base): pass          # hérite aussi de la métaclasse
+  Tracee.classes                    # ['Base', 'Fille']
+  ```
+
+  Le code s'exécute **à la définition de la classe**, pas à l'instanciation : c'est le bon
+  moment pour enregistrer une classe dans un registre ou vérifier qu'elle respecte un
+  contrat. Une erreur levée là empêche la classe d'exister.
+
+  ## Vérifier un contrat
+
+  - `ns` (le dictionnaire du corps) contient ce qui est défini **directement** dans la
+    classe ; `hasattr(cls, "x")` / `getattr` voient aussi ce qui est **hérité**. Choisis selon
+    ce que tu veux vérifier.
+  - `callable(getattr(cls, "executer", None))` teste la présence d'une méthode.
+
+  ## Le registre de plugins
+
+  C'est un patron très courant : chaque sous-classe s'inscrit automatiquement, et le
+  programme principal découvre les plugins disponibles sans les lister à la main (pytest,
+  Django, outils CLI).
+
+  ## Plus simple : `__init_subclass__`
+
+  Depuis Python 3.6, `__init_subclass__` (défini dans la classe de base) est appelé à chaque
+  création de sous-classe et suffit pour la plupart des registres. Règle d'or : n'utiliser
+  une métaclasse que si rien de plus simple ne convient.
+docs:
+  - title: Référence — métaclasses
+    url: https://docs.python.org/fr/3/reference/datamodel.html#metaclasses
+  - title: Référence — __init_subclass__
+    url: https://docs.python.org/fr/3/reference/datamodel.html#object.__init_subclass__

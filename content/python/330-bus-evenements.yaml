@@ -240,3 +240,59 @@ solution: |
           if erreurs:
               raise ErreursAbonnes(erreurs)
           return resultats
+cours: |
+  ## Le patron Observateur
+
+  Un **sujet** publie des événements ; des **observateurs** s'y abonnent et réagissent. Le
+  publieur ne connaît pas ses abonnés : on peut ajouter des comportements (journalisation,
+  notifications, métriques) sans toucher au code qui publie. C'est la base des interfaces
+  graphiques, des systèmes de plugins, des webhooks et des bus de messages.
+
+  ## Motifs à jokers
+
+  Les noms hiérarchiques (`commande.payee`) se filtrent avec des jokers, comme les
+  *routing keys* d'un *topic exchange* RabbitMQ ou les topics MQTT (`+` et `#`). On découpe
+  nom et motif en segments, puis on compare récursivement :
+
+  - `*` consomme exactement un segment ;
+  - `#` peut consommer **zéro ou plusieurs** segments : on essaie toutes les possibilités
+    (récursion avec retour arrière), éventuellement mémoïsée.
+
+  ## Ordre et robustesse de la publication
+
+  Trier les abonnés par priorité (avec l'ordre d'abonnement pour départager : un compteur
+  croissant). Pendant la publication, travaille sur une **copie** de la liste des abonnés :
+  un rappel qui se désabonne (ou en abonne un autre) ne doit pas perturber l'itération en
+  cours.
+
+  ## Désabonnement par fermeture
+
+  Renvoyer une fonction qui désabonne évite d'exposer des identifiants internes. Elle doit
+  être **idempotente** : l'appeler deux fois ne fait rien de plus.
+
+  ## Références faibles
+
+  Un bus qui garde une référence forte vers la méthode d'un objet **empêche** cet objet
+  d'être libéré : fuite mémoire classique des systèmes d'événements. Une référence faible ne
+  maintient pas l'objet en vie :
+
+  ```python
+  import weakref
+  ref = weakref.ref(objet)
+  ref()             # l'objet, ou None s'il a été détruit
+  wm = weakref.WeakMethod(objet.methode)   # pour les méthodes liées
+  ```
+
+  Une méthode liée (`obj.m`) est un objet temporaire recréé à chaque accès : `weakref.ref`
+  sur elle mourrait immédiatement, d'où `WeakMethod`. À la publication, un abonné dont la
+  référence est morte est simplement retiré.
+
+  ## Décorateur d'abonnement
+
+  `@bus.sur("x")` doit renvoyer la fonction **intacte** : le décorateur enregistre puis rend
+  la fonction, sans l'envelopper.
+docs:
+  - title: Module weakref (WeakMethod)
+    url: https://docs.python.org/fr/3/library/weakref.html
+  - title: Wikipédia — Observateur (patron de conception)
+    url: https://fr.wikipedia.org/wiki/Observateur_(patron_de_conception)

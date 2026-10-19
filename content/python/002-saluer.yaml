@@ -23,3 +23,47 @@ cases:
 solution: |
   prenom = input()
   print(f"Salut {prenom} !")
+cours: |
+  ## Lire au clavier avec `input()`
+
+  `input()` met le programme en pause, attend que l'utilisateur tape une ligne puis appuie
+  sur Entrée, et **renvoie le texte saisi** (sans le retour à la ligne final). Le résultat est
+  toujours une chaîne (`str`), même si on tape un nombre.
+
+  ```python
+  ville = input()            # l'utilisateur tape : Lyon
+  print(ville)               # Lyon
+  question = input("Ton âge ? ")   # affiche d'abord la question
+  ```
+
+  Attention : le texte passé à `input("...")` est **affiché** sur la sortie. Pour une
+  moulinette qui compare exactement la sortie, on appelle donc `input()` sans argument.
+
+  ## Les variables
+
+  Une variable est un nom qui désigne une valeur : `ville = "Lyon"`. Le signe `=` est une
+  **affectation** (on range la valeur à droite dans le nom à gauche), pas une égalité
+  mathématique. Les noms sont sensibles à la casse (`Ville` ≠ `ville`).
+
+  ## Assembler du texte : les f-strings
+
+  Préfixer une chaîne par `f` permet d'y insérer des expressions entre accolades :
+
+  ```python
+  langage = "Python"
+  print(f"J'apprends {langage} !")        # J'apprends Python !
+  print(f"2 + 3 = {2 + 3}")                # 2 + 3 = 5
+  ```
+
+  Autres façons de faire (à connaître pour lire du code existant) :
+
+  - la concaténation avec `+` : `"J'apprends " + langage + " !"` (ne marche qu'entre chaînes) ;
+  - `print` avec plusieurs arguments, séparés par une espace : `print("J'apprends", langage)`.
+
+  **Piège classique** : avec `print("Salut", nom, "!")`, Python ajoute une espace avant le
+  `!`. Avec une f-string, tu contrôles chaque caractère.
+docs:
+  - title: Documentation Python — input()
+    url: https://docs.python.org/fr/3/library/functions.html#input
+  - title: Tutoriel — les f-strings (formatage de chaînes)
+    url: https://docs.python.org/fr/3/tutorial/inputoutput.html

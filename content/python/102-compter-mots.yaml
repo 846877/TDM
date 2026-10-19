@@ -37,3 +37,53 @@ solution: |
           if mot:
               compteur[mot] = compteur.get(mot, 0) + 1
       return compteur
+cours: |
+  ## Le dictionnaire comme compteur
+
+  Compter des occurrences est l'usage le plus courant d'un dictionnaire : la clé est
+  l'élément, la valeur son nombre d'apparitions.
+
+  ```python
+  codes = ["200", "404", "200", "500", "200"]
+  compte = {}
+  for code in codes:
+      compte[code] = compte.get(code, 0) + 1
+  # {"200": 3, "404": 1, "500": 1}
+  ```
+
+  `get(cle, 0)` évite la `KeyError` la première fois qu'on voit une clé. Variante :
+  `if code in compte: ... else: ...`. La bibliothèque standard propose aussi
+  `collections.Counter`, que tu verras dans un prochain exercice ; ici, l'objectif est de
+  comprendre le mécanisme.
+
+  ## Nettoyer les mots
+
+  `strip()` sans argument retire les espaces aux extrémités ; **avec** un argument, il retire
+  tous les caractères listés, dans n'importe quel ordre, aux deux bouts :
+
+  ```python
+  "...Bonjour !?".strip(".!? ")   # "Bonjour"
+  "l'école,".strip(",")           # "l'école"
+  ```
+
+  Il ne touche pas l'intérieur du mot. `lstrip` et `rstrip` n'agissent que d'un côté.
+
+  ## Mots vides
+
+  Après nettoyage, un « mot » composé uniquement de ponctuation (par exemple un `!` isolé
+  entre deux espaces) devient une chaîne vide. Il ne doit pas être compté : pense à le
+  filtrer.
+
+  ## Ordre de traitement
+
+  Le pipeline est : découper (`split`) → normaliser chaque morceau (`lower`, `strip`) →
+  filtrer → compter. Chaque étape est simple ; c'est leur enchaînement qui fait le travail.
+  Cette approche par étapes est celle des outils Unix
+  (`tr | sort | uniq -c`), et tu la retrouveras dans le traitement de logs.
+
+  **Complexité** : O(n) pour n mots, grâce à l'accès en temps constant du dictionnaire.
+docs:
+  - title: Méthode str.strip (avec caractères)
+    url: https://docs.python.org/fr/3/library/stdtypes.html#str.strip
+  - title: Tutoriel — les dictionnaires
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#dictionaries

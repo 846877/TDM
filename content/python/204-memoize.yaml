@@ -61,3 +61,62 @@ solution: |
       if n < 2:
           return n
       return fib(n - 1) + fib(n - 2)
+cours: |
+  ## Le principe
+
+  Une fonction **pure** (même entrée → même sortie, sans effet de bord) peut mémoriser ses
+  résultats : au deuxième appel avec les mêmes arguments, on renvoie la valeur stockée au
+  lieu de recalculer. C'est la **mémoïsation**.
+
+  ## Pourquoi Fibonacci explose
+
+  `fib(n)` appelle `fib(n-1)` et `fib(n-2)`, qui rappellent chacun les mêmes valeurs…
+  L'arbre des appels a environ 1,6ⁿ nœuds : `fib(80)` en demanderait plus de 10¹⁶. Or il
+  n'y a que 81 valeurs **distinctes** à calculer. Avec un cache, chaque valeur est calculée
+  une fois : O(n).
+
+  ## Le cache
+
+  Un dictionnaire dont la clé est le **tuple des arguments** :
+
+  ```python
+  cache = {}
+  cle = (3, "a")
+  if cle in cache:
+      ...
+  cache[cle] = resultat
+  ```
+
+  Les clés doivent être hachables : des arguments de type liste ne peuvent pas servir de
+  clé (les vrais `lru_cache` ont la même limite).
+
+  ## Où vit le cache ?
+
+  Dans la **fermeture** du décorateur : chaque fonction décorée a son propre dictionnaire,
+  créé une fois au moment de la décoration.
+
+  ## Point crucial : la récursion passe par le cache
+
+  Quand on écrit
+
+  ```python
+  @memoiser
+  def fib(n): ...
+  ```
+
+  le nom `fib` désigne l'**enveloppe**. Les appels récursifs `fib(n - 1)` à l'intérieur
+  passent donc aussi par le cache. C'est ce qui rend la mémoïsation efficace ici ; décorer
+  après coup sous un autre nom (`fib_rapide = memoiser(fib)`) ne mettrait en cache que
+  l'appel extérieur.
+
+  ## Limites
+
+  Un cache sans limite peut grossir indéfiniment (fuite de mémoire). `functools.lru_cache`
+  propose une taille maximale avec éviction des moins récemment utilisés, et
+  `cache_info()` pour les statistiques. La récursion profonde (fib(5000)) reste limitée par
+  la pile : on peut « chauffer » le cache progressivement ou passer en itératif.
+docs:
+  - title: functools.cache et lru_cache
+    url: https://docs.python.org/fr/3/library/functools.html#functools.lru_cache
+  - title: Wikipédia — Mémoïsation
+    url: https://fr.wikipedia.org/wiki/M%C3%A9mo%C3%AFsation

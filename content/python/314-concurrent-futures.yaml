@@ -144,3 +144,55 @@ solution: |
           for partiel in executeur.map(compter, textes):
               total.update(partiel)
       return total
+cours: |
+  ## Threads et GIL
+
+  Un **thread** est un fil d'exécution partageant la mémoire du programme. En CPython, le
+  **GIL** (verrou global de l'interpréteur) empêche deux threads d'exécuter du bytecode
+  Python en même temps. Mais il est **relâché pendant les entrées/sorties** (réseau, disque,
+  `time.sleep`) : les threads accélèrent donc très bien les tâches d'E/S (pinger 200 hôtes,
+  télécharger des fichiers), pas le calcul pur (pour lui : `ProcessPoolExecutor`).
+
+  ## `ThreadPoolExecutor`
+
+  ```python
+  from concurrent.futures import ThreadPoolExecutor, as_completed
+
+  with ThreadPoolExecutor(max_workers=8) as ex:
+      futures = [ex.submit(verifier, hote) for hote in hotes]
+      for f in as_completed(futures):      # dans l'ordre de FIN
+          print(f.result())
+  ```
+
+  - `submit(f, *args)` renvoie un **Future** : une promesse de résultat.
+  - `future.result()` attend et renvoie la valeur, ou **relève** l'exception survenue dans
+    le thread. `future.exception()` la renvoie sans la lever.
+  - `ex.map(f, elements)` renvoie les résultats **dans l'ordre des éléments**, mais lève à la
+    première exception rencontrée lors de l'itération.
+  - Le `with` attend la fin de tous les travaux à la sortie.
+
+  Pour garder l'ordre tout en traitant les erreurs une par une, on garde la liste des
+  futures dans l'ordre de soumission et on interroge chacune.
+
+  ## Le premier qui réussit
+
+  `as_completed` produit les futures au fur et à mesure qu'elles se terminent : on peut
+  renvoyer le premier succès. Pour ne pas attendre les retardataires, ne pas utiliser le
+  `with` (qui attendrait) mais `shutdown(wait=False, cancel_futures=True)` : les tâches non
+  démarrées sont annulées (celles déjà en cours ne peuvent pas être interrompues).
+
+  ## Données partagées
+
+  Plusieurs threads qui modifient le même objet peuvent créer des **conditions de course**
+  (`compteur += 1` n'est pas atomique). Solutions : un `threading.Lock`, ou mieux, faire
+  produire à chaque tâche un résultat **local** et fusionner à la fin (par exemple
+  additionner des `Counter`), sans état partagé.
+
+  ## Format d'erreur
+
+  `type(e).__name__` donne le nom de la classe de l'exception, `str(e)` son message.
+docs:
+  - title: Module concurrent.futures
+    url: https://docs.python.org/fr/3/library/concurrent.futures.html
+  - title: Module threading
+    url: https://docs.python.org/fr/3/library/threading.html

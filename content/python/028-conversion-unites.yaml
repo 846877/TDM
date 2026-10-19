@@ -64,3 +64,56 @@ solution: |
       nombre = float(valeur)
       resultat = round(nombre * EN_METRES[source] / EN_METRES[cible], 6)
       print(f"{nombre:g} {source} = {resultat:g} {cible}")
+cours: |
+  ## Les données plutôt que les `if`
+
+  Pour convertir entre de nombreuses unités, écrire un `if` par couple d'unités serait
+  interminable (4 unités = 12 couples). L'astuce : passer par une **unité pivot**. On
+  convertit l'unité de départ vers le pivot, puis le pivot vers l'unité d'arrivée.
+
+  ```python
+  en_octets = {"o": 1, "Ko": 1024, "Mo": 1024 ** 2, "Go": 1024 ** 3}
+  valeur = 3 * en_octets["Go"] / en_octets["Mo"]   # 3 Go en Mo = 3072.0
+  ```
+
+  Ajouter une unité revient à ajouter **une ligne** dans le dictionnaire. C'est le principe de
+  la programmation **pilotée par les données** (*data-driven*).
+
+  ## Vérifier qu'une clé existe
+
+  Avant d'accéder au dictionnaire, teste la présence des deux unités avec `in` ; sinon,
+  `d[cle]` lève une `KeyError` qui interromprait tout le programme.
+
+  ## Lire N lignes
+
+  Quand la première ligne annonce le nombre de lignes à lire :
+
+  ```python
+  n = int(input())
+  for _ in range(n):
+      ligne = input()
+      ...
+  ```
+
+  Le nom `_` signale une variable dont on ne se sert pas. Pour découper une ligne en trois
+  morceaux : `valeur, depart, arrivee = ligne.split()` (déballage).
+
+  ## Le format `g`
+
+  `f"{x:g}"` choisit automatiquement la représentation la plus courte et retire les zéros
+  inutiles :
+
+  ```python
+  f"{1500.0:g}"   # "1500"
+  f"{0.25:g}"     # "0.25"
+  f"{2.50:g}"     # "2.5"
+  ```
+
+  Il bascule en notation scientifique pour les très grands ou très petits nombres (plus de
+  6 chiffres significatifs par défaut), ce qui n'arrive pas dans les tests de cet exercice.
+  Affiche la valeur d'entrée **et** le résultat avec ce format.
+docs:
+  - title: Mini-langage de format (type g)
+    url: https://docs.python.org/fr/3/library/string.html#format-specification-mini-language
+  - title: Tutoriel — les dictionnaires
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#dictionaries

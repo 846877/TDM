@@ -81,3 +81,60 @@ solution: |
       def __iter__(self):
           yield self.x
           yield self.y
+cours: |
+  ## Surcharger les opérateurs
+
+  Quand Python évalue `a + b`, il appelle `a.__add__(b)`. Définir ces **méthodes
+  spéciales** (ou *dunder methods*, pour *double underscore*) permet à tes objets de
+  fonctionner avec les opérateurs.
+
+  | Expression | Méthode |
+  |------------|---------|
+  | `a + b`, `a - b`, `a * b` | `__add__`, `__sub__`, `__mul__` |
+  | `a == b` | `__eq__` |
+  | `abs(a)`, `-a` | `__abs__`, `__neg__` |
+  | `repr(a)` | `__repr__` |
+  | `for x in a`, `x, y = a` | `__iter__` |
+
+  ## Les opérations « à droite »
+
+  Pour `3 * v`, Python essaie d'abord `int.__mul__(3, v)`, qui renvoie `NotImplemented`
+  (un `int` ne sait pas multiplier un Vecteur). Python essaie alors **`v.__rmul__(3)`**.
+  Pour une opération commutative, `__rmul__` peut simplement réutiliser `__mul__`.
+
+  ```python
+  class Argent:
+      def __init__(self, montant):
+          self.montant = montant
+      def __mul__(self, k):
+          if not isinstance(k, (int, float)):
+              return NotImplemented
+          return Argent(self.montant * k)
+      __rmul__ = __mul__
+  ```
+
+  Renvoyer `NotImplemented` (et non lever une erreur) laisse Python essayer d'autres
+  options puis lever lui-même une `TypeError` claire.
+
+  ## Objets immuables en pratique
+
+  Les opérateurs arithmétiques renvoient un **nouvel** objet, sans modifier les opérandes :
+  `v1 + v2` ne doit pas changer `v1`.
+
+  ## Déballage via `__iter__`
+
+  `__iter__` peut être un générateur (`yield self.x` puis `yield self.y`) : l'objet devient
+  itérable, donc déballable et convertible en liste ou tuple.
+
+  ## Norme
+
+  La norme d'un vecteur 2D est √(x² + y²). `math.hypot(x, y)` la calcule de façon précise
+  (sans débordement intermédiaire).
+
+  Un bon `__repr__` ressemble au code qui recrée l'objet ; le format exact attendu est
+  dans l'énoncé.
+docs:
+  - title: Référence — émulation des types numériques
+    url: https://docs.python.org/fr/3/reference/datamodel.html#emulating-numeric-types
+  - title: Module math (hypot)
+    url: https://docs.python.org/fr/3/library/math.html#math.hypot

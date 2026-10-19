@@ -91,3 +91,60 @@ solution: |
 
       def __len__(self):
           return self.taille
+cours: |
+  ## Un arbre de préfixes
+
+  Un **trie** stocke des mots caractère par caractère : chaque nœud correspond à un préfixe,
+  et ses enfants sont indexés par le caractère suivant. Les mots qui partagent un préfixe
+  partagent le chemin correspondant.
+
+  ```
+  (racine)
+   └─ c ─ h ─ a ─ t*
+            └─ i ─ e ─ n*   (mots : chat, chien)
+  ```
+
+  Un marqueur `*` (« fin de mot ») est indispensable : `"cha"` est un préfixe mais n'est pas
+  forcément un mot ajouté.
+
+  ## Représentation en Python
+
+  Chaque nœud peut être un petit objet avec un dictionnaire d'enfants et un booléen :
+
+  ```python
+  class Noeud:
+      __slots__ = ("enfants", "fin")
+      def __init__(self):
+          self.enfants = {}
+          self.fin = False
+  ```
+
+  Ou plus compact : des dictionnaires imbriqués avec une clé spéciale pour la fin de mot.
+
+  ## Les opérations
+
+  - **ajouter** : descendre caractère par caractère en créant les nœuds manquants
+    (`setdefault`), puis marquer la fin. Si le mot existait déjà, ne pas le compter deux
+    fois pour `len`.
+  - **contient** : descendre ; échec si un caractère manque ; succès seulement si le dernier
+    nœud est marqué fin de mot.
+  - **compléter** : descendre jusqu'au nœud du préfixe, puis **parcourir en profondeur** son
+    sous-arbre en collectant les mots.
+
+  ## Ordre alphabétique et limite
+
+  Si on visite les enfants **dans l'ordre trié** des caractères (DFS préfixe, en traitant le
+  nœud avant ses enfants), les mots sortent naturellement en ordre alphabétique, et on peut
+  s'arrêter dès qu'on en a `limite` : inutile d'explorer tout le sous-arbre.
+
+  ## Complexité
+
+  Ajouter ou chercher un mot de longueur m coûte **O(m)**, indépendamment du nombre de mots
+  stockés. Les tries servent à l'autocomplétion, aux correcteurs orthographiques et, en
+  réseau, à la recherche du **plus long préfixe** dans les tables de routage (tries binaires
+  sur les bits des adresses IP).
+docs:
+  - title: Wikipédia — Trie (informatique)
+    url: https://fr.wikipedia.org/wiki/Trie_(informatique)
+  - title: Tutoriel — les dictionnaires
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#dictionaries

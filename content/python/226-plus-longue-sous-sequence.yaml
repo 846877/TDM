@@ -136,3 +136,56 @@ solution: |
               courante[j] = min(precedente[j] + 1, courante[j - 1] + 1, precedente[j - 1] + cout)
           precedente = courante
       return precedente[len(b)]
+cours: |
+  ## Programmation dynamique sur deux séquences
+
+  Pour comparer `a` et `b`, on remplit un tableau `dp` de taille `(len(a)+1) × (len(b)+1)`
+  où `dp[i][j]` est la réponse pour les **préfixes** `a[:i]` et `b[:j]`. La ligne et la
+  colonne 0 correspondent à un préfixe vide (cas de base).
+
+  ```python
+  n, m = len(a), len(b)
+  dp = [[0] * (m + 1) for _ in range(n + 1)]
+  for i in range(1, n + 1):
+      for j in range(1, m + 1):
+          ...   # dépend de dp[i-1][j-1], dp[i-1][j], dp[i][j-1]
+  ```
+
+  ## LCS : la récurrence
+
+  En regardant les derniers éléments des préfixes, `a[i-1]` et `b[j-1]` :
+
+  - s'ils sont **égaux**, ils prolongent une sous-séquence commune des préfixes plus courts
+    des deux côtés ;
+  - sinon, on laisse tomber l'un ou l'autre et on garde le **meilleur** des deux choix.
+
+  ## Reconstruire la solution
+
+  Le tableau ne donne que des longueurs. Pour obtenir la sous-séquence, on **remonte**
+  depuis `dp[n][m]` : à chaque case, on regarde de quelle case voisine vient la valeur, et
+  on collecte les éléments égaux rencontrés. On les obtient à l'envers : il faut inverser.
+
+  ## Distance d'édition
+
+  Même structure, mais on minimise un coût. Cas de base : transformer un préfixe de
+  longueur `i` en chaîne vide coûte `i` suppressions. Pour chaque case, trois opérations
+  possibles (insertion, suppression, remplacement — gratuit si les caractères sont égaux) :
+  on prend la moins chère.
+
+  ## Complexité
+
+  O(n × m) en temps et en mémoire. Pour la seule longueur, deux lignes du tableau suffisent
+  (O(m) mémoire).
+
+  ## Applications
+
+  `diff` et `git diff` (basés sur la LCS), correcteurs orthographiques (« vouliez-vous
+  dire… »), bio-informatique (alignement d'ADN), détection de plagiat. En Python,
+  `difflib` fournit `SequenceMatcher` et `get_close_matches`.
+docs:
+  - title: Wikipédia — Plus longue sous-séquence commune
+    url: https://fr.wikipedia.org/wiki/Plus_longue_sous-s%C3%A9quence_commune
+  - title: Wikipédia — Distance de Levenshtein
+    url: https://fr.wikipedia.org/wiki/Distance_de_Levenshtein
+  - title: Module difflib
+    url: https://docs.python.org/fr/3/library/difflib.html

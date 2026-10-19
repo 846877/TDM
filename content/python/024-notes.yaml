@@ -78,3 +78,51 @@ solution: |
           if note > haut:
               haut = note
       return (bas, haut)
+cours: |
+  ## Nouvelle liste ou modification sur place ?
+
+  Deux familles d'opérations existent sur les listes :
+
+  - celles qui **modifient** la liste existante : `append`, `remove`, `sort`, `del l[i]`… ;
+  - celles qui **créent** une nouvelle liste : `sorted(l)`, `l + autre`, une tranche
+    `l[:]`, une compréhension.
+
+  ```python
+  a = [3, 1, 2]
+  b = a          # b et a désignent LA MÊME liste
+  b.append(4)
+  print(a)       # [3, 1, 2, 4]  surprise !
+  c = a[:]       # copie
+  ```
+
+  Une affectation ne copie jamais : elle donne un deuxième nom au même objet. Quand une
+  fonction reçoit une liste et la modifie, l'appelant voit la modification. Si l'énoncé
+  demande de ne pas toucher l'original, construis une **nouvelle** liste.
+
+  ## Filtrer
+
+  Le motif est : liste vide, boucle, condition, `append`.
+
+  ```python
+  mots = ["ok", "erreur", "ok", "timeout"]
+  problemes = []
+  for m in mots:
+      if m != "ok":
+          problemes.append(m)
+  ```
+
+  ## Trouver le minimum et le maximum en un seul passage
+
+  Initialise les deux « champions » avec le **premier élément** (et non avec 0 ou 100 : si
+  toutes les valeurs sont négatives, ou toutes supérieures à 100, le résultat serait faux),
+  puis parcours le reste en mettant à jour chacun. On fait ainsi un seul parcours : la
+  complexité est **O(n)**, comme `min` et `max` réunis.
+
+  ## Renvoyer `None`
+
+  `None` représente l'absence de valeur. Une fonction sans `return` renvoie `None`, mais il
+  vaut mieux l'écrire explicitement (`return None`) quand c'est un résultat prévu. Pour le
+  tester : `if resultat is None:` (on compare `None` avec `is`, pas `==`).
+docs:
+  - title: Tutoriel — compléments sur les listes
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#more-on-lists
