@@ -1,0 +1,119 @@
+title: "Ticket : les postes reçoivent une mauvaise configuration"
+level: intermediaire
+order: 29
+device: router
+hostname: R-AGENCE2
+tags: [dépannage, dhcp, relais]
+summary: Corriger un pool DHCP mal saisi et un relais oublié.
+description: |
+  **Ticket n° 4402** — « Au rez-de-chaussée (`192.168.10.0/24`, `G0/0`), les PC ont une adresse
+  mais pas d'Internet, et l'imprimante `192.168.10.5` est en conflit d'adresse. À l'étage
+  (`192.168.20.0/24`, `G0/1`), les PC n'obtiennent **aucune** adresse. »
+
+  Le serveur DHCP central de l'étage est `10.0.0.50`. Examine `show running-config | section dhcp`,
+  `show ip dhcp pool` et `show ip dhcp binding`, puis corrige :
+
+  - pool `RDC` : masque `/24` et passerelle `192.168.10.1` ;
+  - adresses `192.168.10.1` à `192.168.10.10` exclues (passerelle, imprimante, bornes) ;
+  - étage : relais vers `10.0.0.50` sur `G0/1`.
+initial: |
+  interface g0/0
+  ip address 192.168.10.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 192.168.20.1 255.255.255.0
+  no shutdown
+  interface g0/2
+  ip address 10.0.0.2 255.255.255.0
+  no shutdown
+  ip dhcp pool RDC
+  network 192.168.10.0 255.255.255.128
+  default-router 192.168.1.1
+  dns-server 10.0.0.53
+checks:
+  - desc: Pool RDC en 192.168.10.0/24
+    expr: d.dhcp_pools["RDC"].network == "192.168.10.0" and prefix(d.dhcp_pools["RDC"].mask) == 24
+  - desc: Passerelle distribuée 192.168.10.1
+    expr: d.dhcp_pools["RDC"].default_router == "192.168.10.1"
+  - desc: 192.168.10.1 à 192.168.10.10 exclues
+    expr: ("192.168.10.1", "192.168.10.10") in d.dhcp_excluded
+  - desc: Relais DHCP vers 10.0.0.50 sur G0/1
+    expr: '"10.0.0.50" in intf("g0/1").helper_addresses'
+solution: |
+  configure terminal
+  ip dhcp excluded-address 192.168.10.1 192.168.10.10
+  ip dhcp pool RDC
+  network 192.168.10.0 255.255.255.0
+  default-router 192.168.10.1
+  exit
+  interface g0/1
+  ip helper-address 10.0.0.50
+  end
+cours: |
+  ## Le processus DHCP en quatre messages (DORA)
+
+  1. **Discover** : le client, sans adresse, diffuse en broadcast (`0.0.0.0` → `255.255.255.255`,
+     UDP 68 → 67) ;
+  2. **Offer** : le serveur propose une adresse et des options ;
+  3. **Request** : le client accepte (toujours en broadcast, pour prévenir les autres serveurs) ;
+  4. **Ack** : le serveur confirme ; le bail commence.
+
+  Un **broadcast ne traverse pas un routeur**. Si le serveur est sur un autre réseau, l'interface
+  du routeur côté clients doit **relayer** les requêtes : `ip helper-address <serveur>`. Le relais
+  renseigne le champ `giaddr` avec son adresse, ce qui permet au serveur de choisir le bon pool.
+
+  ### Lire un pool
+
+  ```
+  R1# show ip dhcp pool
+  Pool BUREAUX :
+   Total addresses                : 126
+   Leased addresses               : 41
+   1 subnet is currently in the pool :
+   Current index        IP address range                    Leased addresses
+   172.16.4.42          172.16.4.1       - 172.16.4.126      41
+  R1# show ip dhcp binding
+  R1# show ip dhcp conflict
+  ```
+
+  Un **masque erroné** dans `network` réduit (ou agrandit) la plage distribuée, et les clients
+  reçoivent ce masque : ils croient alors que des voisins sont sur un autre réseau.
+
+  ### Les erreurs les plus fréquentes
+
+  | Symptôme                               | Cause                                      |
+  |----------------------------------------|--------------------------------------------|
+  | adresse en 169.254.x.x (APIPA)         | aucun serveur joignable : relais manquant, VLAN, port bloqué |
+  | adresse OK mais pas de sortie          | `default-router` faux                      |
+  | noms non résolus                       | `dns-server` absent ou faux                |
+  | conflit d'adresse                      | adresses fixes non exclues (`excluded-address`) |
+  | `show ip dhcp conflict` non vide       | idem ; vider avec `clear ip dhcp conflict *` |
+
+  ### Correction type (autres valeurs)
+
+  ```
+  R1(config)# ip dhcp excluded-address 172.16.4.1 172.16.4.20
+  R1(config)# ip dhcp pool BUREAUX
+  R1(dhcp-config)# network 172.16.4.0 255.255.255.0
+  R1(dhcp-config)# default-router 172.16.4.1
+  R1(config)# interface g0/2
+  R1(config-if)# ip helper-address 172.16.100.10
+  ```
+
+  Les exclusions se configurent **en mode global**, pas dans le pool.
+
+  ### Pièges fréquents
+
+  - Mettre `ip helper-address` sur l'interface **côté serveur** au lieu du côté clients.
+  - Oublier que le serveur distant doit avoir une **route retour** vers le réseau des clients.
+  - Laisser des baux erronés : après correction, les clients gardent l'ancienne configuration
+    jusqu'au renouvellement (`ipconfig /renew`).
+
+  ### Pour le CCNA
+
+  DORA, le relais DHCP et le dépannage d'un pool sont au programme (services IP).
+docs:
+  - title: Wikipédia — Dynamic Host Configuration Protocol
+    url: https://fr.wikipedia.org/wiki/Dynamic_Host_Configuration_Protocol
+  - title: RFC 2131 — Dynamic Host Configuration Protocol
+    url: https://www.rfc-editor.org/rfc/rfc2131
