@@ -6,7 +6,7 @@ Une plateforme web pour s'entraîner **en pratiquant**, organisée en catégorie
 |-----------|-----------------|------------|
 | 🐍 **Python** | 44 exercices du « Bonjour le monde » jusqu'aux métaclasses, asyncio et Dijkstra, avec un éditeur, une console et un vrai terminal | Une **moulinette** lance des tests sur ton code dans un bac à sable |
 | 🌐 **Réseaux** | 19 exercices Cisco IOS (VLAN, trunks, SVI, routage statique, router-on-a-stick, SSH, DHCP, OSPF, port-security, STP, ACL, NAT, projet complet) dans un terminal IOS simulé | La moulinette inspecte la configuration obtenue |
-| 🚀 **DevOps** | 18 labs lancés **en un clic** : conteneurs Docker (Linux, Git, Docker, Swarm, Ansible, Jenkins, HAProxy, PKI, Terraform, GitLab…) ou machines virtuelles Vagrant (Kubernetes, Minikube, Argo CD, Jenkins multi-nœuds, OpenShift), avec un terminal dans le navigateur | Des scripts de vérification s'exécutent dans le lab |
+| 🚀 **DevOps** | 27 labs lancés **en un clic**, du débutant à l'expert : conteneurs Docker (Linux, Bash, réseau, Git, Docker, Compose, systemd, Swarm, Ansible, Jenkins, HAProxy, PKI, Terraform, GitLab, Prometheus/Grafana, k3s, Helm/Kustomize, sécurité des conteneurs, Vault…) ou machines virtuelles Vagrant (Kubernetes, Minikube, Argo CD, Jenkins multi-nœuds, OpenShift), avec un terminal dans le navigateur | Des scripts de vérification s'exécutent dans le lab |
 
 Chaque catégorie a quatre niveaux : **Débutant, Intermédiaire, Avancé, Expert**. La progression est mémorisée dans le navigateur.
 
