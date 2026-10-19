@@ -1,0 +1,406 @@
+title: Rôles, fonctionnalités et préparation d'un serveur
+level: debutant
+order: 7
+tags: [windows server, server manager, rôles, fonctionnalités, iis, windows update, ntp, sconfig]
+summary: Préparer un Windows Server neuf - fiche d'identité, rôles et fonctionnalités, IIS, mises à jour, heure, Gestionnaire de serveur.
+vagrant: bundled
+description: |
+  **Contexte.** Un nouveau Windows Server 2022, `SRV01`, doit devenir le serveur d'applications
+  d'*Ateliers Durand* (intranet IIS). Avant la mise en production, tu suis la checklist de préparation :
+  documenter, nettoyer, installer ce qu'il faut (et seulement ça), régler mises à jour et heure.
+
+  **Machine.** Une VM Windows Server 2022 Standard *Desktop Experience* (2 Go de RAM). Terminal
+  PowerShell en administrateur. Interface graphique (Bureau à distance ou console VirtualBox) : le
+  **Gestionnaire de serveur** s'ouvre à la connexion.
+
+  Cmdlets utiles : `Get-WindowsFeature`, `Install-WindowsFeature`, `Uninstall-WindowsFeature`,
+  `Get-ComputerInfo`, `Get-HotFix`, `w32tm`, `sconfig`.
+cours: |
+  ## Rôles, services de rôle et fonctionnalités
+
+  Windows Server n'installe presque rien par défaut : on ajoute ce dont le serveur a besoin.
+
+  - Un **rôle** est une fonction principale du serveur : *Active Directory Domain Services*, *DNS
+    Server*, *DHCP Server*, *File and Storage Services*, *Web Server (IIS)*, *Print and Document Services*,
+    *Hyper-V*, *Remote Desktop Services*...
+  - Un **service de rôle** est une brique d'un rôle (pour IIS : *Static Content*, *ASP.NET 4.8*,
+    *Windows Authentication*...).
+  - Une **fonctionnalité** est un outil d'appoint : *Windows Server Backup*, *Telnet Client*, *.NET
+    Framework*, *Failover Clustering*, les outils d'administration **RSAT**...
+
+  Les deux se gèrent de la même façon :
+
+  ```powershell
+  Get-WindowsFeature | Where-Object Installed                 # [X] dans la sortie
+  Get-WindowsFeature *web*                                     # recherche par nom
+  Install-WindowsFeature Web-Server -IncludeManagementTools    # + console IIS
+  Uninstall-WindowsFeature TFTP-Client
+  ```
+
+  `-IncludeManagementTools` ajoute les consoles et modules PowerShell ; `-Restart` redémarre si
+  nécessaire (`RestartNeeded` dans le résultat). Graphique : Gestionnaire de serveur › *Gérer* › *Ajouter
+  des rôles et fonctionnalités*. En ligne de commande historique : `dism /online /enable-feature`.
+  Sur Windows 10/11, l'équivalent est `Enable-WindowsOptionalFeature` et les **capacités** (`Get-WindowsCapability`,
+  par exemple OpenSSH ou RSAT).
+
+  ## Principe : surface d'attaque minimale
+
+  Chaque rôle installé ajoute des services, des ports et des mises à jour à suivre. On n'installe que ce
+  qui est utile, on retire ce qui traîne, et on documente. Pour les serveurs d'infrastructure, **Server
+  Core** (sans interface graphique, administré à distance) est recommandé : moins de mises à jour, moins
+  de redémarrages, moins de failles.
+
+  ## Outils d'administration
+
+  - **Gestionnaire de serveur** : tableau de bord, ajout de rôles, gestion de plusieurs serveurs.
+  - **sconfig** : menu texte de Server Core (nom, domaine, réseau, Bureau à distance, mises à jour).
+  - **Windows Admin Center** (WAC) : console web gratuite pour administrer serveurs et postes à distance,
+    à installer sur une machine de gestion (pas sur un contrôleur de domaine).
+  - **RSAT** sur le poste du technicien : les consoles (Utilisateurs et ordinateurs AD, DNS, DHCP, GPMC)
+    sans ouvrir de session sur les serveurs.
+
+  ## Checklist de préparation d'un serveur
+
+  1. **Fiche d'identité** : nom, version et build, matériel, adresse IP, rôle prévu.
+  2. Nom définitif et adressage fixe (avant l'installation des rôles : renommer un contrôleur de domaine
+     ou un serveur de certificats est pénible).
+  3. **Mises à jour** : appliquer le dernier cumulatif, choisir la politique (téléchargement automatique,
+     installation manuelle pendant les fenêtres de maintenance, ou WSUS/Intune).
+  4. **Heure** : les membres d'un domaine se synchronisent sur la hiérarchie AD ; un serveur autonome
+     sur des serveurs NTP (`w32tm`). Kerberos tolère 5 minutes d'écart.
+  5. Rôles nécessaires uniquement, puis sécurisation (pare-feu, comptes, antivirus) et sauvegarde.
+
+  ## Windows Update côté serveur
+
+  Les réglages se font par **stratégie** (GPO ou registre local) dans
+  `HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU` : `AUOptions` (2 = notifier, 3 =
+  télécharger et notifier, 4 = installer automatiquement), `NoAutoRebootWithLoggedOnUsers`... Sur un
+  serveur, on évite les redémarrages surprises : téléchargement automatique, installation décidée.
+  `Get-HotFix` liste les mises à jour installées.
+
+  ## Pièges courants
+
+  - Installer un rôle « pour voir » et l'oublier (services exposés non suivis).
+  - Ne pas lire `RestartNeeded` : le rôle n'est pas fonctionnel avant le redémarrage.
+  - Utiliser `Add-WindowsFeature` (ancien alias) ou des noms d'affichage : les cmdlets attendent le **nom
+    court** (`Web-Server`, pas « Serveur Web (IIS) »).
+docs:
+  - title: Install-WindowsFeature
+    url: https://learn.microsoft.com/fr-fr/powershell/module/servermanager/install-windowsfeature
+  - title: Windows Admin Center - vue d'ensemble
+    url: https://learn.microsoft.com/fr-fr/windows-server/manage/windows-admin-center/overview
+  - title: Service de temps Windows (W32Time)
+    url: https://learn.microsoft.com/fr-fr/windows-server/networking/windows-time-service/windows-time-service-top
+exercises:
+  - id: win-role-fiche
+    title: Fiche d'identité du serveur
+    description: |
+      Crée `C:\Admin\fiche-srv01.txt` avec, une information par ligne au format `clé=valeur` :
+
+      - `nom=` le nom de l'ordinateur ;
+      - `systeme=` le nom complet du système (Caption, ex. *Microsoft Windows Server 2022 Standard...*) ;
+      - `build=` le numéro de build ;
+      - `ramgo=` la mémoire vive totale en Go (arrondie à l'entier) ;
+      - `processeurs=` le nombre de processeurs logiques.
+    hint: Get-CimInstance Win32_OperatingSystem (Caption, BuildNumber) et Win32_ComputerSystem (TotalPhysicalMemory, NumberOfLogicalProcessors)
+    cours: |
+      Les informations système s'obtiennent par **CIM/WMI**, la base d'inventaire de Windows :
+
+      ```powershell
+      $os = Get-CimInstance Win32_OperatingSystem       # Caption, Version, BuildNumber, LastBootUpTime
+      $cs = Get-CimInstance Win32_ComputerSystem        # Name, Domain, TotalPhysicalMemory, NumberOfLogicalProcessors
+      Get-CimInstance Win32_BIOS                        # numéro de série (SerialNumber)
+      Get-ComputerInfo                                   # tout d'un coup (lent)
+      ```
+
+      Équivalents graphiques : `winver`, `msinfo32`, *Paramètres* › *Système* › *Informations*. En ligne de
+      commande historique : `systeminfo`. Le numéro de **build** (20348 pour Server 2022) est plus précis
+      que le nom commercial ; avec le numéro de révision (UBR), il indique le niveau de mise à jour.
+
+      Ces fiches alimentent l'inventaire (GLPI, tableur, CMDB) : quand un serveur tombe, c'est la première
+      chose qu'on cherche.
+    ci: true
+    checks:
+      - desc: nom, systeme et build sont justes
+        run: |
+          $l = Get-Content C:\Admin\fiche-srv01.txt | ForEach-Object { $_.Trim() }
+          $os = Get-CimInstance Win32_OperatingSystem
+          $l -contains "nom=$env:COMPUTERNAME" -and $l -contains "systeme=$($os.Caption.Trim())" -and $l -contains "build=$($os.BuildNumber)"
+      - desc: ramgo et processeurs sont justes
+        run: |
+          $l = Get-Content C:\Admin\fiche-srv01.txt | ForEach-Object { $_.Trim() }
+          $cs = Get-CimInstance Win32_ComputerSystem
+          $ram = [math]::Round($cs.TotalPhysicalMemory / 1GB)
+          ($l -contains "ramgo=$ram" -or $l -contains "ramgo=$($ram - 1)" -or $l -contains "ramgo=$($ram + 1)") -and
+            $l -contains "processeurs=$($cs.NumberOfLogicalProcessors)"
+    solution: |
+      $os = Get-CimInstance Win32_OperatingSystem
+      $cs = Get-CimInstance Win32_ComputerSystem
+      Set-Content C:\Admin\fiche-srv01.txt "nom=$env:COMPUTERNAME", "systeme=$($os.Caption.Trim())", "build=$($os.BuildNumber)",
+        "ramgo=$([math]::Round($cs.TotalPhysicalMemory / 1GB))", "processeurs=$($cs.NumberOfLogicalProcessors)"
+
+  - id: win-role-inventaire
+    title: Qu'est-ce qui est installé ?
+    description: |
+      Enregistre dans `C:\Admin\fonctionnalites.txt` le **nom court** (colonne `Name`) de chaque rôle,
+      service de rôle et fonctionnalité **installé**, un par ligne.
+    hint: (Get-WindowsFeature | Where-Object Installed).Name | Set-Content C:\Admin\fonctionnalites.txt
+    cours: |
+      `Get-WindowsFeature` liste tout le catalogue (plusieurs centaines d'entrées) avec une case `[X]` pour ce
+      qui est installé. Chaque objet a :
+
+      - `Name` : le nom court, à utiliser dans les scripts (`Web-Server`) ;
+      - `DisplayName` : le nom affiché, traduit (`Web Server (IIS)`) ;
+      - `Installed` / `InstallState` (`Installed`, `Available`, `Removed`) ;
+      - `FeatureType` : `Role`, `Role Service` ou `Feature`.
+
+      ```powershell
+      Get-WindowsFeature | Where-Object Installed | Format-Table Name, DisplayName, FeatureType
+      Get-WindowsFeature -ComputerName SRV02            # sur un autre serveur
+      ```
+
+      L'état `Removed` signifie que les fichiers ont été supprimés du disque (fonctionnalité à la demande,
+      `Uninstall-WindowsFeature -Remove`) : sa réinstallation demandera une source (ISO, Windows Update).
+    ci: true
+    checks:
+      - desc: Le fichier liste exactement les fonctionnalités installées
+        run: |
+          $f = @(Get-Content C:\Admin\fonctionnalites.txt | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+          $attendu = @((Get-WindowsFeature | Where-Object Installed).Name)
+          $f.Count -gt 5 -and -not (Compare-Object $f $attendu)
+    solution: |
+      (Get-WindowsFeature | Where-Object Installed).Name | Set-Content C:\Admin\fonctionnalites.txt
+
+  - id: win-role-nettoyer
+    title: Retirer ce qui n'a rien à faire là
+    description: |
+      L'inventaire montre un **client TFTP** installé par le prestataire pour un test (TFTP : transfert de
+      fichiers sans authentification ni chiffrement). Désinstalle cette fonctionnalité.
+    hint: Uninstall-WindowsFeature TFTP-Client
+    cours: |
+      `Uninstall-WindowsFeature <nom>` retire un rôle ou une fonctionnalité (alias historique
+      `Remove-WindowsFeature`). L'objet renvoyé indique `Success` et `RestartNeeded`.
+
+      Pourquoi s'embêter pour un petit client TFTP ? Parce que chaque outil réseau oublié est un outil
+      offert à un attaquant qui aurait pris la main sur le serveur (ici, pour exfiltrer des fichiers sans
+      laisser de trace d'authentification). Même logique pour SMB 1 (à désactiver partout), PowerShell 2.0
+      (`MicrosoftWindowsPowerShellV2`, qui contourne la journalisation), Telnet...
+
+      L'audit régulier des fonctionnalités installées (et la comparaison avec la fiche du serveur) fait
+      partie de l'hygiène de base recommandée par l'ANSSI.
+    ci: true
+    checks:
+      - desc: Le client TFTP n'est plus installé
+        run: |
+          -not (Get-WindowsFeature TFTP-Client).Installed -and (Get-WindowsFeature TFTP-Client).InstallState -ne 'UninstallPending'
+    solution: |
+      Uninstall-WindowsFeature TFTP-Client | Out-Null
+
+  - id: win-role-iis
+    title: Installer le serveur web IIS
+    description: |
+      Installe le rôle **Serveur Web (IIS)** (`Web-Server`) avec sa console d'administration
+      (`Web-Mgmt-Console`), puis vérifie que le site par défaut répond sur `http://localhost`.
+    hint: Install-WindowsFeature Web-Server -IncludeManagementTools
+    cours: |
+      IIS (*Internet Information Services*) est le serveur web de Windows : intranets, applications .NET,
+      services web des logiciels métier.
+
+      ```powershell
+      Install-WindowsFeature Web-Server -IncludeManagementTools
+      Get-Service W3SVC                         # service « World Wide Web Publishing »
+      Invoke-WebRequest http://localhost -UseBasicParsing | Select-Object StatusCode
+      ```
+
+      Le rôle installe le service `W3SVC`, le site *Default Web Site* (port 80, dossier
+      `C:\inetpub\wwwroot`), les journaux (`C:\inetpub\logs\LogFiles`) et une règle de pare-feu HTTP. La
+      console : `inetmgr`. Les services de rôle (ASP.NET, authentification Windows, compression...)
+      s'ajoutent à la demande : `Get-WindowsFeature Web-*`.
+    ci: true
+    checks:
+      - desc: Web-Server et Web-Mgmt-Console sont installés
+        run: |
+          (Get-WindowsFeature Web-Server).Installed -and (Get-WindowsFeature Web-Mgmt-Console).Installed
+      - desc: Le service W3SVC tourne et http://localhost répond 200
+        run: |
+          (Get-Service W3SVC).Status -eq 'Running' -and (Invoke-WebRequest http://localhost -UseBasicParsing).StatusCode -eq 200
+    solution: |
+      Install-WindowsFeature Web-Server -IncludeManagementTools | Out-Null
+
+  - id: win-role-site
+    title: Publier l'intranet sur le port 8080
+    description: |
+      Crée le dossier `C:\inetpub\intranet` avec une page `index.html` contenant le texte
+      `Intranet Ateliers Durand`, puis un site IIS nommé **`Intranet`** qui le publie sur le **port 8080**
+      (toutes les adresses). Ouvre le pare-feu pour TCP 8080 (règle nommée `TDM-Intranet-8080`).
+    hint: appcmd.exe add site /name:Intranet /bindings:http/*:8080: /physicalPath:C:\inetpub\intranet ; New-NetFirewallRule -Name TDM-Intranet-8080 ... -LocalPort 8080
+    cours: |
+      Un **site** IIS associe une ou plusieurs **liaisons** (*bindings* : protocole, adresse, port, nom
+      d'hôte) à un dossier physique. Plusieurs sites peuvent partager le port 80 grâce au nom d'hôte
+      (`http/*:80:intranet.durand.lan`).
+
+      ```
+      C:\Windows\System32\inetsrv\appcmd.exe add site /name:Intranet /bindings:http/*:8080: /physicalPath:C:\inetpub\intranet
+      C:\Windows\System32\inetsrv\appcmd.exe list site
+      ```
+
+      Les modules PowerShell `WebAdministration` (`New-Website`) et `IISAdministration` (`New-IISSite`) font
+      la même chose quand ils sont installés ; `appcmd` est toujours présent avec IIS. Graphique : `inetmgr`
+      › *Sites* › *Ajouter un site Web*.
+
+      N'oublie pas le **pare-feu** : la règle installée par IIS ne couvre que le port 80. Teste en local
+      (`Invoke-WebRequest http://localhost:8080`) puis depuis un autre poste.
+    ci: true
+    checks:
+      - desc: Le site Intranet existe, lié au port 8080, sur C:\inetpub\intranet
+        run: |
+          $s = (& "$env:SystemRoot\System32\inetsrv\appcmd.exe" list site Intranet /text:*) -join "`n"
+          $LASTEXITCODE -eq 0 -and $s -match ':8080:' -and (& "$env:SystemRoot\System32\inetsrv\appcmd.exe" list vdir 'Intranet/' /text:physicalPath) -eq 'C:\inetpub\intranet'
+      - desc: http://localhost:8080 affiche la page de l'intranet
+        run: |
+          (Invoke-WebRequest http://localhost:8080 -UseBasicParsing).Content -match 'Intranet Ateliers Durand'
+      - desc: Le pare-feu autorise TCP 8080 en entrée
+        run: |
+          $r = Get-NetFirewallRule -Name TDM-Intranet-8080
+          $p = $r | Get-NetFirewallPortFilter
+          $r.Enabled -eq 'True' -and $r.Action -eq 'Allow' -and $r.Direction -eq 'Inbound' -and $p.LocalPort -contains '8080'
+    solution: |
+      New-Item C:\inetpub\intranet -ItemType Directory -Force | Out-Null
+      Set-Content C:\inetpub\intranet\index.html '<h1>Intranet Ateliers Durand</h1>' -Encoding UTF8
+      & "$env:SystemRoot\System32\inetsrv\appcmd.exe" add site /name:Intranet /bindings:http/*:8080: /physicalPath:C:\inetpub\intranet | Out-Null
+      New-NetFirewallRule -Name TDM-Intranet-8080 -DisplayName 'Intranet (TCP 8080)' -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow | Out-Null
+      Start-Sleep -Seconds 2
+
+  - id: win-role-telnet
+    title: Un outil de diagnostic utile
+    description: |
+      Pour tester les ports des applications, les techniciens utilisent le **client Telnet**. Installe la
+      fonctionnalité `Telnet-Client` (et constate qu'elle ne demande pas de redémarrage).
+    hint: Install-WindowsFeature Telnet-Client
+    cours: |
+      Le client Telnet n'est plus utilisé pour se connecter à des serveurs (protocole en clair), mais reste
+      un outil de diagnostic pratique : `telnet srv01 25` montre la bannière d'un serveur de messagerie,
+      `telnet imprimante 9100` teste le port d'impression brute.
+
+      ```powershell
+      $r = Install-WindowsFeature Telnet-Client
+      $r.Success ; $r.RestartNeeded ; $r.FeatureResult
+      ```
+
+      En PowerShell, `Test-NetConnection -Port` remplace avantageusement Telnet pour un simple test
+      d'ouverture de port ; Telnet garde l'avantage de l'interaction (taper des commandes SMTP ou HTTP à la
+      main). Contraste avec l'exercice précédent : on installe ce qui a une utilité **documentée**.
+    ci: true
+    checks:
+      - desc: Le client Telnet est installé
+        run: |
+          (Get-WindowsFeature Telnet-Client).Installed
+    solution: |
+      Install-WindowsFeature Telnet-Client | Out-Null
+
+  - id: win-role-maj
+    title: Politique de mises à jour du serveur
+    description: |
+      Règle Windows Update par stratégie locale (clé `HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU`) :
+
+      - `NoAutoUpdate` = 0 (mises à jour activées) ;
+      - `AUOptions` = **3** (télécharger automatiquement, l'installation est décidée par l'administrateur) ;
+      - `NoAutoRebootWithLoggedOnUsers` = 1.
+
+      Puis enregistre dans `C:\Admin\maj.csv` (séparateur `;`) la liste des mises à jour installées
+      (`HotFixID`, `Description`, `InstalledOn`).
+    hint: New-Item 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Force ; Set-ItemProperty ... -Name AUOptions -Value 3 -Type DWord ; Get-HotFix | Select-Object HotFixID, Description, InstalledOn | Export-Csv ...
+    cours: |
+      Les paramètres de Windows Update se pilotent par **stratégie de groupe** (*Configuration ordinateur* ›
+      *Modèles d'administration* › *Composants Windows* › *Windows Update*), qui écrit dans
+      `HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU`. Sur un serveur hors domaine, on peut
+      écrire ces valeurs directement (ou via `gpedit.msc`) :
+
+      | AUOptions | Comportement |
+      |-----------|--------------|
+      | 2 | notifier avant téléchargement |
+      | 3 | télécharger automatiquement et notifier pour l'installation |
+      | 4 | télécharger et installer automatiquement selon une planification |
+
+      Sur des serveurs, l'option 3 laisse l'administrateur choisir la fenêtre de maintenance (et le
+      redémarrage). À plus grande échelle : **WSUS** (serveur de mises à jour interne), Azure Update
+      Manager ou Intune. `Get-HotFix` liste les correctifs installés (les cumulatifs mensuels portent un
+      numéro KB).
+    ci: true
+    checks:
+      - desc: Stratégie Windows Update - télécharger et notifier, sans redémarrage automatique
+        run: |
+          $p = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
+          $p.NoAutoUpdate -eq 0 -and $p.AUOptions -eq 3 -and $p.NoAutoRebootWithLoggedOnUsers -eq 1
+      - desc: C:\Admin\maj.csv liste les correctifs installés
+        run: |
+          $c = @(Import-Csv C:\Admin\maj.csv -Delimiter ';')
+          ($c[0].PSObject.Properties.Name -join ',') -eq 'HotFixID,Description,InstalledOn' -and $c.Count -eq @(Get-HotFix).Count
+    solution: |
+      $k = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
+      New-Item $k -Force | Out-Null
+      Set-ItemProperty $k -Name NoAutoUpdate -Value 0 -Type DWord
+      Set-ItemProperty $k -Name AUOptions -Value 3 -Type DWord
+      Set-ItemProperty $k -Name NoAutoRebootWithLoggedOnUsers -Value 1 -Type DWord
+      Get-HotFix | Select-Object HotFixID, Description, InstalledOn | Export-Csv C:\Admin\maj.csv -Delimiter ';' -NoTypeInformation
+
+  - id: win-role-heure
+    title: Synchroniser l'heure sur des serveurs NTP
+    description: |
+      SRV01 est hors domaine : il doit se synchroniser sur `0.fr.pool.ntp.org` et `1.fr.pool.ntp.org`.
+      Configure le service de temps (type **NTP**, liste manuelle de serveurs) et applique la configuration.
+    hint: w32tm /config /manualpeerlist:"0.fr.pool.ntp.org,0x8 1.fr.pool.ntp.org,0x8" /syncfromflags:manual /update
+    cours: |
+      Le service **W32Time** maintient l'heure. Dans un domaine, la hiérarchie est automatique (postes et
+      serveurs → contrôleurs de domaine → émulateur PDC → source externe). Un serveur autonome (ou le PDC)
+      se règle sur des serveurs NTP :
+
+      ```
+      w32tm /config /manualpeerlist:"0.fr.pool.ntp.org,0x8 1.fr.pool.ntp.org,0x8" /syncfromflags:manual /update
+      w32tm /resync
+      w32tm /query /status       # source, dernière synchronisation
+      w32tm /query /peers
+      ```
+
+      Les serveurs sont séparés par des **espaces** ; `,0x8` demande le mode client. La configuration est
+      stockée dans `HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Parameters` (`NtpServer`, `Type` = `NTP`).
+      Une heure fausse casse Kerberos (5 minutes de tolérance), les certificats, les journaux et les
+      sauvegardes planifiées.
+    ci: true
+    checks:
+      - desc: W32Time utilise NTP avec les deux serveurs fr.pool.ntp.org
+        run: |
+          $p = Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Parameters
+          $p.Type -eq 'NTP' -and $p.NtpServer -match '0\.fr\.pool\.ntp\.org' -and $p.NtpServer -match '1\.fr\.pool\.ntp\.org'
+    solution: |
+      Start-Service W32Time -ErrorAction SilentlyContinue
+      w32tm.exe /config /manualpeerlist:"0.fr.pool.ntp.org,0x8 1.fr.pool.ntp.org,0x8" /syncfromflags:manual /update | Out-Null
+
+  - id: win-role-servermanager
+    title: Ne plus ouvrir le Gestionnaire de serveur à chaque connexion
+    description: |
+      Sur ce serveur administré à distance, le Gestionnaire de serveur qui s'ouvre à chaque connexion RDP
+      ralentit tout le monde. Désactive son ouverture automatique **pour tous les utilisateurs** (valeur
+      `DoNotOpenServerManagerAtLogon` = 1 de la stratégie `HKLM:\SOFTWARE\Policies\Microsoft\Windows\Server\ServerManager`).
+    hint: New-Item 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Server\ServerManager' -Force ; Set-ItemProperty ... -Name DoNotOpenServerManagerAtLogon -Value 1 -Type DWord
+    cours: |
+      Le Gestionnaire de serveur se lance à l'ouverture de session par une tâche planifiée
+      (`\Microsoft\Windows\Server Manager\ServerManager`). Plusieurs façons de l'en empêcher :
+
+      - dans l'outil : *Gérer* › *Propriétés du Gestionnaire de serveur* › case à cocher (pour soi seul) ;
+      - par stratégie, pour tous : *Configuration ordinateur* › *Modèles d'administration* › *Système* ›
+        *Gestionnaire de serveur* › « Ne pas afficher automatiquement le Gestionnaire de serveur à
+        l'ouverture de session », qui écrit `DoNotOpenServerManagerAtLogon` = 1 ;
+      - en désactivant la tâche planifiée.
+
+      Le passage par la stratégie est le plus propre : c'est documenté, réversible, et applicable par GPO à
+      tous les serveurs d'un domaine. Le même raisonnement vaut pour l'invite « Essayez Windows Admin Center ».
+    ci: true
+    checks:
+      - desc: La stratégie DoNotOpenServerManagerAtLogon vaut 1
+        run: |
+          (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Server\ServerManager').DoNotOpenServerManagerAtLogon -eq 1
+    solution: |
+      $k = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Server\ServerManager'
+      New-Item $k -Force | Out-Null
+      Set-ItemProperty $k -Name DoNotOpenServerManagerAtLogon -Value 1 -Type DWord
