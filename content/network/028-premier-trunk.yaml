@@ -1,0 +1,97 @@
+title: Relier deux switchs en trunk
+level: debutant
+order: 28
+device: switch
+hostname: SW-ETAGE1
+tags: [trunk, vlan, 802.1q]
+summary: Faire passer tous les VLAN entre deux switchs sur un seul câble.
+description: |
+  Les VLAN `10` et `20` existent sur les deux switchs de l'étage. Pour qu'un PC du VLAN 10 de
+  `SW-ETAGE1` parle à un PC du VLAN 10 de l'autre switch, le câble qui les relie doit transporter
+  **plusieurs VLAN** : c'est un **trunk**.
+
+  1. `Gi0/1` vers `SW-ETAGE2` : description `TRUNK-SW-ETAGE2`, mode trunk ;
+  2. `Gi0/2` vers le switch de distribution : description `TRUNK-SW-DIST`, mode trunk.
+
+  ```
+  interface g0/1
+   switchport mode trunk
+  ```
+
+  Vérifie avec `show interfaces trunk`.
+initial: |
+  vlan 10
+  name ADMIN
+  vlan 20
+  name COMPTA
+checks:
+  - desc: Gi0/1 en trunk avec la description TRUNK-SW-ETAGE2
+    expr: intf("g0/1").mode == "trunk" and intf("g0/1").description == "TRUNK-SW-ETAGE2"
+  - desc: Gi0/2 en trunk avec la description TRUNK-SW-DIST
+    expr: intf("g0/2").mode == "trunk" and intf("g0/2").description == "TRUNK-SW-DIST"
+solution: |
+  configure terminal
+  interface g0/1
+  description TRUNK-SW-ETAGE2
+  switchport mode trunk
+  interface g0/2
+  description TRUNK-SW-DIST
+  switchport mode trunk
+  end
+cours: |
+  ## Port d'accès et port trunk
+
+  | Port     | VLAN transportés | Étiquette 802.1Q | Branché vers           |
+  |----------|------------------|------------------|------------------------|
+  | access   | un seul          | non              | PC, imprimante, serveur |
+  | trunk    | plusieurs        | oui (sauf natif) | switch, routeur, hyperviseur, borne Wi-Fi |
+
+  ### Comment le trunk distingue les VLAN : 802.1Q
+
+  Sur un trunk, chaque trame reçoit une **étiquette 802.1Q** de 4 octets insérée après les
+  adresses MAC. Elle contient notamment le **VLAN ID** sur 12 bits (1 à 4094) et la priorité
+  (CoS, 3 bits). Le switch d'en face lit l'étiquette, la retire et remet la trame dans le bon VLAN.
+
+  Seul le **VLAN natif** (le VLAN 1 par défaut) circule **sans** étiquette. Les deux extrémités
+  doivent avoir le même VLAN natif, sinon CDP signale `Native VLAN mismatch` et les trames
+  changent de VLAN.
+
+  ### Syntaxe
+
+  ```
+  SW1(config)# interface g0/2
+  SW1(config-if)# description VERS-SW3
+  SW1(config-if)# switchport mode trunk
+  SW1# show interfaces trunk
+  Port        Mode         Encapsulation  Status        Native vlan
+  Gi0/2       on           802.1q         trunking      1
+  Port        Vlans allowed on trunk
+  Gi0/2       1-4094
+  ```
+
+  Sur certains switchs multicouches (anciens Catalyst 3560), il faut d'abord choisir
+  l'encapsulation : `switchport trunk encapsulation dot1q`. L'ancien protocole ISL n'est plus
+  utilisé.
+
+  ### DTP : la négociation automatique
+
+  Par défaut, les ports Cisco parlent **DTP** et peuvent devenir trunk tout seuls (`dynamic auto`
+  ou `dynamic desirable` selon les modèles). Forcer `switchport mode trunk` d'un côté et de l'autre
+  est plus prévisible ; au niveau intermédiaire, tu désactiveras même DTP (`switchport
+  nonegotiate`) et restreindras les VLAN autorisés.
+
+  ### Pièges fréquents
+
+  - Le VLAN n'existe pas sur l'un des deux switchs : ses trames sont jetées.
+  - Un port en `access` d'un côté et `trunk` de l'autre : le lien ne transporte qu'un VLAN, mal.
+  - Brancher deux switchs par deux câbles sans EtherChannel : le spanning tree en bloque un.
+
+  ### Pour le CCNA
+
+  802.1Q (taille et contenu de l'étiquette), VLAN natif, modes DTP et `show interfaces trunk` sont
+  des incontournables.
+docs:
+  - title: Wikipédia — IEEE 802.1Q
+    url: https://fr.wikipedia.org/wiki/IEEE_802.1Q
+  - title: Wikipédia (EN) — Dynamic Trunking Protocol
+    url: https://en.wikipedia.org/wiki/Dynamic_Trunking_Protocol
