@@ -35,9 +35,135 @@ description: |
 
   Démarrage des services sans systemd : `winbindd`, `smbd` (après modification : `smbcontrol all reload-config`),
   `sssd -D` (après modification : `pkill sssd; sssd -D`).
+cours: |
+  ## Joindre Linux à Active Directory
+
+  Un serveur ou un poste Linux joint au domaine utilise les comptes AD : un seul mot de passe pour
+  l'utilisateur, une gestion centralisée pour le technicien. Deux outils dominent :
+
+  | Outil              | Pour quoi                                                  | Jonction        |
+  |--------------------|------------------------------------------------------------|-----------------|
+  | **winbind** (Samba)| serveurs de fichiers SMB (droits par groupes AD, ACL Windows) | `net ads join` |
+  | **SSSD**           | postes et serveurs sans partage SMB : connexion, sudo, cache hors ligne | `adcli join` / `realm join` |
+
+  ## Ce que fait une jonction
+
+  ```
+  1. DNS          srv-fichiers trouve les DC (SRV _ldap._tcp.durand.lan)
+  2. Kerberos     authentification de l'administrateur (kinit / -U)
+  3. Compte machine créé dans l'OU choisie (CN=SRV-FICHIERS,OU=Serveurs,...)
+  4. Secret       mot de passe machine stocké localement (secrets.tdb ou /etc/krb5.keytab)
+  5. NSS / PAM    Linux apprend à résoudre et authentifier les comptes du domaine
+  ```
+
+  ## Des SID aux UID : l'idmap
+
+  Windows identifie les comptes par des **SID** (`S-1-5-21-...-1105`), Linux par des **UID/GID**. Il faut
+  une correspondance **stable** et, idéalement, **identique sur tous les serveurs** :
+
+  | Backend idmap | Principe                                               | Usage                        |
+  |---------------|--------------------------------------------------------|------------------------------|
+  | `tdb`         | attribution au fil de l'eau, locale à la machine        | domaine `*` (comptes intégrés) |
+  | `rid`         | UID = début de plage + RID (fin du SID) : calculé, identique partout | cas le plus courant |
+  | `ad`          | lit `uidNumber`/`gidNumber` (RFC 2307) dans l'annuaire  | quand l'annuaire les gère    |
+
+  ```ini
+  [global]
+     workgroup = DURAND
+     realm = DURAND.LAN
+     security = ADS
+     idmap config * : backend = tdb
+     idmap config * : range = 3000-7999
+     idmap config DURAND : backend = rid
+     idmap config DURAND : range = 10000-999999
+  ```
+
+  Les plages ne doivent **jamais** se chevaucher, ni avec les comptes locaux.
+
+  ## NSS et PAM
+
+  - **NSS** (`/etc/nsswitch.conf`) : *qui* existe. La ligne `passwd: files winbind` (ou `sss`) fait
+    apparaître les comptes du domaine dans `getent passwd`, `id`, `ls -l`.
+  - **PAM** (`/etc/pam.d/`, géré par `pam-auth-update` sur Ubuntu) : *comment* on s'authentifie et ce qu'on
+    fait à l'ouverture de session (création du dossier personnel avec `mkhomedir`).
+
+  ## SSSD
+
+  ```ini
+  # /etc/sssd/sssd.conf  (propriétaire root, droits 600, sinon sssd refuse de démarrer)
+  [sssd]
+  domains = durand.lan
+  services = nss, pam
+  [domain/durand.lan]
+  id_provider = ad
+  access_provider = simple
+  simple_allow_groups = gg_informatique
+  use_fully_qualified_names = False
+  fallback_homedir = /home/%u
+  default_shell = /bin/bash
+  ```
+
+  SSSD garde un **cache** : un portable peut ouvrir une session hors du réseau de l'entreprise. Après une
+  modification dans l'annuaire, `sss_cache -E` vide ce cache.
+
+  ## Mémo des commandes
+
+  | Besoin                         | Commande                                       |
+  |--------------------------------|------------------------------------------------|
+  | Tester le DNS du domaine       | `host -t SRV _ldap._tcp.durand.lan`            |
+  | Ticket Kerberos                | `kinit administrator`, `klist`                 |
+  | Joindre (winbind)              | `net ads join -U administrator createcomputer=Durand/Serveurs` |
+  | Tester la jonction             | `net ads testjoin`, `wbinfo -t`                |
+  | Lister comptes / groupes AD    | `wbinfo -u`, `wbinfo -g`                       |
+  | Joindre (SSSD)                 | `adcli join --domain=durand.lan --domain-ou=...` |
+  | Clés de la machine             | `klist -k /etc/krb5.keytab`                    |
+  | Identité d'un compte           | `id tbernard`, `getent passwd mdupont`         |
+
+  ## Droits sur un partage : deux niveaux
+
+  ```
+  accès SMB  ──▶ niveau partage : valid users = @gg_compta, read only = no
+             ──▶ niveau fichiers : dossier root:gg_compta 2770 (ou ACL)
+  ```
+
+  Les deux doivent autoriser l'utilisateur ; le plus restrictif l'emporte, comme les autorisations de
+  partage et NTFS sous Windows.
+
+  ## Pièges courants
+
+  - DNS du serveur qui ne pointe pas vers les DC : la jonction échoue avec des erreurs obscures.
+  - Horloge décalée de plus de 5 minutes : Kerberos refuse (« Clock skew too great »).
+  - Nom d'hôte trop long (plus de 15 caractères pour NetBIOS) ou non résolu.
+  - Changer de backend idmap après coup : tous les fichiers changent de propriétaire apparent.
+
+  ## Bonnes pratiques en entreprise
+
+  - Comptes ordinateurs créés dans les bonnes OU (serveurs, postes) pour les GPO et la délégation.
+  - Accès aux serveurs limité par groupe AD (`simple_allow_groups`, `AllowGroups` dans sshd).
+  - Droits sudo donnés à des groupes AD (`%gg_informatique ALL=(ALL) ALL`).
+  - Supervision du canal sécurisé (`net ads testjoin`) et de la synchronisation horaire.
+docs:
+  - title: Samba Wiki - Samba comme membre de domaine
+    url: https://wiki.samba.org/index.php/Setting_up_Samba_as_a_Domain_Member
+  - title: sssd-ad(5) - fournisseur Active Directory de SSSD (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/sssd-ad.5.html
+  - title: smb.conf(5) - configuration de Samba (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/smb.conf.5.html
+  - title: Ubuntu Server - documentation officielle
+    url: https://ubuntu.com/server/docs
 exercises:
   - id: kerberos-membre
     title: Préparer srv-fichiers - DNS et Kerberos
+    cours: |
+      Avant toute jonction, deux prérequis : le **DNS** du domaine (le serveur doit trouver les contrôleurs par
+      leurs enregistrements SRV) et **Kerberos** (qui authentifiera l'administrateur et la machine).
+
+      - `host -t SRV _ldap._tcp.<domaine>` ou `dig SRV ...` teste le DNS ;
+      - `/etc/krb5.conf` contient une section `[libdefaults]` avec `default_realm` (en majuscules) et
+        `dns_lookup_kdc = true` pour trouver les KDC par le DNS ;
+      - `kinit <compte>` obtient un ticket, `klist` l'affiche.
+
+      Si `kinit` échoue, vérifie dans l'ordre : résolution DNS, heure, nom du royaume.
     description: |
       Sur **srv-fichiers** :
       1. vérifie que le DNS du domaine répond (`host -t SRV _ldap._tcp.durand.lan`) ;
@@ -52,6 +178,14 @@ exercises:
 
   - id: jonction-winbind
     title: Joindre srv-fichiers au domaine (winbind)
+    cours: |
+      Dans `smb.conf`, `security = ADS` fait de Samba un **membre** de domaine Active Directory ; `workgroup`
+      est le nom NetBIOS et `realm` le royaume Kerberos. Les lignes `idmap config` décident comment les SID
+      deviennent des UID/GID (ici calculés à partir du RID pour le domaine DURAND).
+
+      `net ads join` crée le compte ordinateur ; le paramètre `createcomputer=` choisit l'OU, écrite comme un
+      chemin (`Parent/Enfant`). `net ads testjoin` vérifie que le secret machine est valide. Le démon
+      `winbindd` fait ensuite le lien permanent avec les contrôleurs.
     description: |
       Écris `/etc/samba/smb.conf` pour un **serveur membre** :
 
@@ -83,6 +217,15 @@ exercises:
 
   - id: nss-winbind
     title: Les comptes du domaine vus par Linux
+    cours: |
+      `/etc/nsswitch.conf` liste, pour chaque base (`passwd`, `group`, `hosts`...), les sources à interroger
+      dans l'ordre. Ajouter `winbind` après `files` permet à Linux de « voir » les comptes du domaine.
+
+      - `wbinfo -u` / `wbinfo -g` interrogent winbind directement (prouve que la jonction marche) ;
+      - `getent passwd <login>` passe par NSS (prouve que le système voit le compte) ;
+      - avec `winbind use default domain = yes`, on écrit `mdupont` au lieu de `DURAND\mdupont`.
+
+      Les noms de groupes AD apparaissent en minuscules côté Linux.
     description: |
       Configure `/etc/nsswitch.conf` pour que `passwd` et `group` interrogent aussi **winbind**. Les comptes
       et groupes du domaine doivent alors apparaître comme des comptes Linux, avec des UID/GID calculés à
@@ -100,6 +243,16 @@ exercises:
 
   - id: partages
     title: Partages SMB par groupe AD
+    cours: |
+      Un partage Samba est une section `[nom]` de `smb.conf` :
+
+      - `path` : dossier partagé ; `read only = no` : écriture autorisée ;
+      - `valid users = @<groupe>` : seuls les membres du groupe se connectent (le `@` désigne un groupe) ;
+      - `create mask` / `directory mask` : droits des fichiers et dossiers créés par SMB.
+
+      Côté système de fichiers, le dossier doit aussi être accessible au groupe (propriétaire, setgid,
+      droits). `testparm -s` vérifie la configuration ; `smbd` démarre le service et
+      `smbcontrol all reload-config` recharge sans couper les sessions.
     description: |
       Sur srv-fichiers, crée deux partages :
 
@@ -124,6 +277,16 @@ exercises:
 
   - id: abe
     title: Masquer les partages inaccessibles
+    cours: |
+      Sans réglage, la liste des partages (`smbclient -L`, l'explorateur Windows) montre **tous** les
+      partages à tout le monde. L'**énumération basée sur l'accès** (Access-Based Enumeration, ABE) masque
+      ceux auxquels l'utilisateur n'a pas accès.
+
+      Dans Samba, l'option `access based share enum = yes` se place dans la section de chaque partage
+      concerné. Elle s'appuie sur les droits du partage (`valid users`...).
+
+      Windows Server propose la même option dans les propriétés du partage (et `hide unreadable` côté Samba
+      masque les fichiers illisibles à l'intérieur d'un partage).
     description: |
       Les utilisateurs voient tous les partages dans l'explorateur, même ceux qui leur sont interdits, et
       appellent le support. Active l'**énumération basée sur l'accès** (`access based share enum = yes`)
@@ -137,6 +300,16 @@ exercises:
 
   - id: jonction-sssd
     title: Joindre le poste Linux (adcli et SSSD)
+    cours: |
+      `adcli` joint une machine sans Samba : il crée le compte ordinateur dans l'OU indiquée (`--domain-ou`,
+      DN complet) et écrit les clés de la machine dans `/etc/krb5.keytab` (`klist -k` les affiche).
+
+      SSSD lit `/etc/sssd/sssd.conf` : une section `[sssd]` (domaines servis) et une section
+      `[domain/<nom>]` avec `id_provider = ad`. Le fichier doit appartenir à root avec les droits `600`,
+      sinon SSSD refuse de démarrer.
+
+      `use_fully_qualified_names = False` permet `tbernard` au lieu de `tbernard@durand.lan`. Le
+      `/etc/nsswitch.conf` d'Ubuntu contient déjà `sss` pour `passwd` et `group`.
     description: |
       Sur **poste01** :
       1. écris `/etc/krb5.conf` (comme sur srv-fichiers) ;
@@ -159,6 +332,16 @@ exercises:
 
   - id: acces-poste
     title: Ouverture de session et contrôle d'accès
+    cours: |
+      Par défaut, tout compte du domaine peut ouvrir une session sur une machine jointe. SSSD propose des
+      **fournisseurs d'accès** :
+
+      - `access_provider = simple` avec `simple_allow_groups` / `simple_allow_users` : liste blanche ;
+      - `access_provider = ad` : applique aussi les GPO de droits de connexion.
+
+      Le dossier personnel n'existe pas à la première connexion d'un compte du domaine : le module PAM
+      `pam_mkhomedir`, activé par `pam-auth-update --enable mkhomedir`, le crée depuis `/etc/skel`.
+      Après modification de `sssd.conf`, redémarre SSSD.
     description: |
       Sur poste01 :
       1. seuls les membres de `GG_Informatique` peuvent ouvrir une session : `access_provider = simple` et
@@ -181,6 +364,16 @@ exercises:
 
   - id: sso-kerberos
     title: Authentification unique (SSO) Kerberos
+    cours: |
+      Avec **GSSAPI**, SSH présente un ticket Kerberos au lieu d'un mot de passe : c'est l'authentification
+      unique (SSO) qu'on connaît sous Windows.
+
+      - côté serveur : `GSSAPIAuthentication yes` dans la configuration de sshd ; le serveur vérifie le ticket
+        avec les clés de `/etc/krb5.keytab` (créé par la jonction) ;
+      - côté client : un TGT (`kinit`), l'option `GSSAPIAuthentication=yes`, et le **nom DNS complet** du
+        serveur (le ticket est demandé pour `host/<fqdn>`).
+
+      `klist` montre ensuite le ticket de service obtenu. Toujours `sshd -t` avant de recharger.
     description: |
       Dernière étape : depuis admin, un technicien qui a un ticket Kerberos doit se connecter à poste01
       **sans retaper son mot de passe** (GSSAPI).

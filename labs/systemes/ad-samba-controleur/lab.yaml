@@ -31,9 +31,114 @@ description: |
   Les commandes `samba-tool` se lancent sur **dc1** (en root, elles accèdent directement à l'annuaire ;
   pour les commandes réseau comme `samba-tool dns`, ajoute `-U administrator%'Durand@dmin2024'`).
   Démarrer le contrôleur : `samba` ; l'arrêter : `pkill samba`. Journaux : `samba -i -d 2` au premier plan.
+cours: |
+  ## Du groupe de travail au domaine
+
+  En **groupe de travail**, chaque poste a ses propres comptes : changer un mot de passe ou retirer un
+  accès oblige à passer sur chaque machine. Un **domaine Active Directory** centralise l'identité : un
+  compte, un mot de passe, valables sur tous les postes et serveurs, avec des stratégies (GPO) appliquées
+  à tout le parc.
+
+  ## Les briques d'Active Directory
+
+  ```
+                    ┌───────────── contrôleur de domaine (DC) ─────────────┐
+   poste Windows ──▶│ DNS        : trouve les DC (enregistrements SRV)       │
+                    │ Kerberos   : authentification, tickets (port 88)       │
+                    │ LDAP       : annuaire des objets (port 389 / 636)      │
+                    │ SMB        : partages SYSVOL/NETLOGON (GPO, scripts)   │
+                    └────────────────────────────────────────────────────────┘
+  ```
+
+  | Notion                 | Rôle                                                             |
+  |------------------------|------------------------------------------------------------------|
+  | **Domaine**            | frontière d'administration : `durand.lan` (DNS), `DURAND` (NetBIOS) |
+  | **Royaume Kerberos**   | le domaine en majuscules : `DURAND.LAN`                          |
+  | **Forêt**              | ensemble de domaines qui se font confiance                       |
+  | **OU**                 | dossier d'objets pour organiser, **déléguer** et appliquer des GPO |
+  | **Groupe de sécurité** | porte les droits (partages, délégations)                         |
+  | **Compte ordinateur**  | chaque machine jointe a son compte et son mot de passe           |
+  | **SYSVOL**             | partage répliqué entre DC : GPO et scripts                        |
+
+  Un objet est désigné par son **DN** (*distinguished name*), lu de droite à gauche :
+  `CN=Marie Dupont,OU=Compta,OU=Utilisateurs,OU=Durand,DC=durand,DC=lan`.
+
+  ## Kerberos en une image
+
+  ```
+  1. kinit tbernard ──────────────▶ KDC (sur le DC) : « voici mon identité » (AS-REQ)
+     ◀── TGT (ticket pour obtenir des tickets), valable ~10 h
+  2. accès à //dc1/netlogon ──────▶ KDC : « un ticket pour cifs/dc1 » (TGS-REQ)
+     ◀── ticket de service
+  3. présentation du ticket au serveur : authentifié, sans mot de passe sur le réseau
+  ```
+
+  Kerberos impose des horloges synchronisées (**5 minutes** d'écart maximum) et un DNS correct : la
+  plupart des pannes AD sont en réalité des pannes de DNS ou d'heure.
+
+  ## Samba AD DC
+
+  Samba 4 implémente un contrôleur de domaine compatible : les postes Windows le rejoignent comme un DC
+  Microsoft, et les consoles RSAT (« Utilisateurs et ordinateurs Active Directory », « Gestion des
+  stratégies de groupe ») l'administrent.
+
+  | Besoin                      | Commande samba-tool                                         |
+  |-----------------------------|-------------------------------------------------------------|
+  | Créer le domaine            | `samba-tool domain provision ...`                           |
+  | Niveau et rôles FSMO        | `samba-tool domain level show`, `samba-tool fsmo show`      |
+  | OU                          | `samba-tool ou create 'OU=Compta,OU=Durand'`                |
+  | Utilisateurs                | `samba-tool user create/list/show/disable/setexpiry/setpassword` |
+  | Groupes                     | `samba-tool group add/addmembers/listmembers`               |
+  | DNS                         | `samba-tool dns add/query/zonecreate`                       |
+  | Stratégie de mots de passe  | `samba-tool domain passwordsettings show/set`               |
+  | Sauvegarde                  | `samba-tool domain backup offline/online`                   |
+  | Santé de la réplication     | `samba-tool drs showrepl`                                   |
+
+  Équivalents PowerShell (module ActiveDirectory) : `New-ADUser`, `New-ADGroup`, `Add-ADGroupMember`,
+  `New-ADOrganizationalUnit`, `Disable-ADAccount`, `Set-ADDefaultDomainPasswordPolicy`.
+
+  ## La méthode AGDLP
+
+  Recommandation Microsoft pour les droits : **A**ccounts dans des groupes **G**lobaux (par métier :
+  `GG_Compta`), placés dans des groupes **D**omaine **L**ocal (par ressource : `DL_Partage_Compta_RW`), qui
+  reçoivent les **P**ermissions. On ne donne jamais un droit directement à un utilisateur.
+
+  ## Pièges courants
+
+  - Le DC doit se résoudre **lui-même** correctement (son nom → son adresse) et les postes doivent utiliser
+    **uniquement** les DC comme DNS (pas la box, pas 8.8.8.8).
+  - Choisir un domaine en `.local` (conflit avec mDNS) ; préférer un sous-domaine d'un domaine possédé
+    (`ad.durand.fr`) ou `.lan` en interne.
+  - Un seul DC : sa panne arrête toutes les connexions. Toujours au moins **deux** DC.
+  - Restaurer un DC par une simple copie de VM ancienne : risque de réplication incohérente (USN rollback).
+
+  ## Bonnes pratiques en entreprise
+
+  - Arborescence d'OU pensée pour la délégation et les GPO, documentée.
+  - Comptes d'administration séparés des comptes de bureautique (`tbernard` / `adm-tbernard`).
+  - Stratégie de mots de passe et de verrouillage, désactivation (pas suppression immédiate) des partants.
+  - Sauvegarde de l'état système des DC et procédure de restauration testée.
+docs:
+  - title: Samba Wiki - Samba comme contrôleur de domaine Active Directory
+    url: https://wiki.samba.org/index.php/Setting_up_Samba_as_an_Active_Directory_Domain_Controller
+  - title: samba-tool(8) - administration du domaine (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man8/samba-tool.8.html
+  - title: Wikipédia - Active Directory
+    url: https://fr.wikipedia.org/wiki/Active_Directory
 exercises:
   - id: provision
     title: Provisionner le domaine
+    cours: |
+      Le **provisionnement** crée la base de l'annuaire, le schéma, les comptes intégrés (`Administrator`,
+      `Domain Admins`...), la zone DNS, les partages `sysvol`/`netlogon` et un `smb.conf` adapté. Il échoue
+      si un `smb.conf` existe déjà.
+
+      Options principales de `samba-tool domain provision` : `--realm` (royaume Kerberos, en majuscules),
+      `--domain` (nom NetBIOS), `--server-role=dc`, `--dns-backend` (`SAMBA_INTERNAL` : DNS intégré),
+      `--use-rfc2307` (attributs Unix `uidNumber`/`gidNumber` dans l'annuaire), `--host-ip`, `--adminpass`.
+
+      Le fichier `krb5.conf` généré dans `/var/lib/samba/private/` sert de configuration Kerberos au DC.
+      `samba` démarre tous les services (LDAP, Kerberos, DNS, SMB).
     description: |
       Sur dc1 :
       1. supprime la configuration d'exemple `/etc/samba/smb.conf` (le provisionnement en crée une) ;
@@ -55,6 +160,15 @@ exercises:
 
   - id: dns-ad
     title: DNS intégré à l'annuaire
+    cours: |
+      Les clients AD trouvent les services du domaine par des enregistrements **SRV** :
+      `_ldap._tcp.<domaine>`, `_kerberos._udp.<domaine>`, `_gc._tcp` (catalogue global)... Le provisionnement
+      les crée automatiquement dans la zone DNS intégrée.
+
+      `samba-tool dns` modifie cette zone à travers le réseau (RPC) : il attend un serveur (`127.0.0.1` sur le
+      DC), une zone, un nom, un type et une valeur, plus une authentification `-U`. Une zone inverse se crée
+      avec `zonecreate` ; les noms des PTR sont le dernier octet de l'adresse. Teste avec `dig` depuis
+      admin, dont le DNS est le DC.
     description: |
       Active Directory repose sur le DNS : les postes trouvent les contrôleurs grâce aux enregistrements
       **SRV** créés au provisionnement. Vérifie-les depuis admin (`dig -t SRV _ldap._tcp.durand.lan`,
@@ -74,6 +188,16 @@ exercises:
 
   - id: ou
     title: Arborescence d'unités d'organisation
+    cours: |
+      Une **unité d'organisation** (OU) est un conteneur de l'annuaire. Elle sert à deux choses :
+      **appliquer des GPO** (une stratégie liée à une OU s'applique à son contenu) et **déléguer**
+      (donner au support le droit de réinitialiser les mots de passe d'une seule OU).
+
+      Avec `samba-tool ou create`, le nom s'écrit en DN **relatif au domaine**, de l'objet vers la racine :
+      `OU=Fille,OU=Parent`. Il faut donc créer les OU parentes avant les filles.
+
+      `samba-tool ou list` affiche les OU existantes. Les conteneurs par défaut (`CN=Users`,
+      `CN=Computers`) ne sont pas des OU : on ne peut pas y lier de GPO.
     description: |
       Crée l'arborescence d'OU de l'entreprise (elle servira à déléguer et à appliquer des GPO) :
 
@@ -95,6 +219,16 @@ exercises:
 
   - id: ad-utilisateurs
     title: Comptes utilisateurs
+    cours: |
+      `samba-tool user create <login> <mot de passe>` crée un compte ; des options renseignent les attributs :
+      `--given-name`, `--surname`, `--mail-address`, `--userou` (OU de destination, relative au domaine),
+      `--must-change-at-next-login`.
+
+      Le login correspond à l'attribut `sAMAccountName` (connexion `DURAND\mdupont`), et le compte reçoit
+      aussi un UPN `mdupont@durand.lan`. Le mot de passe doit respecter la stratégie du domaine.
+
+      `samba-tool user show <login>` affiche tous les attributs : utile pour vérifier le DN et l'option de
+      changement obligatoire (`pwdLastSet: 0`).
     description: |
       Crée les comptes suivants dans leur OU, avec prénom, nom et adresse mail `<login>@durand.lan` :
 
@@ -121,6 +255,17 @@ exercises:
 
   - id: ad-groupes
     title: Groupes de sécurité
+    cours: |
+      AD distingue le **type** de groupe (sécurité : porte des droits ; distribution : listes de diffusion) et
+      sa **portée** (globale, domaine local, universelle). Par défaut, `samba-tool group add` crée un groupe
+      de sécurité global.
+
+      - `--groupou` place le groupe dans une OU ;
+      - `samba-tool group addmembers <groupe> <membres>` ajoute des membres (séparés par des virgules) ;
+      - `samba-tool group listmembers` vérifie.
+
+      `Domain Admins` donne tous les droits sur le domaine : en entreprise, on n'y place que des comptes
+      d'administration dédiés, jamais le compte de bureautique quotidien.
     description: |
       Dans `OU=Groupes,OU=Durand`, crée les groupes de sécurité globaux `GG_Compta`, `GG_RH` et
       `GG_Informatique`, avec respectivement `mdupont`, `jmartin` et `tbernard` comme membres. Les droits
@@ -140,6 +285,17 @@ exercises:
 
   - id: strategie-mdp
     title: Stratégie de mots de passe et de verrouillage
+    cours: |
+      La stratégie de mots de passe par défaut d'un domaine s'applique à tous les comptes. Elle se lit avec
+      `samba-tool domain passwordsettings show` et se modifie avec `set` (une option par paramètre :
+      longueur, complexité, historique, âges, verrouillage).
+
+      La **complexité** exige trois catégories parmi majuscules, minuscules, chiffres et caractères spéciaux.
+      Le **verrouillage** bloque un compte après N échecs pendant une durée donnée : il freine la force brute,
+      mais un seuil trop bas permet de bloquer des comptes volontairement.
+
+      Les recommandations actuelles (ANSSI, NIST) privilégient la **longueur** à la complexité et des
+      changements moins fréquents.
     description: |
       Applique la politique de sécurité de l'entreprise à tout le domaine :
 
@@ -168,6 +324,16 @@ exercises:
 
   - id: kerberos
     title: Authentification Kerberos depuis le poste
+    cours: |
+      Côté client, `/etc/krb5.conf` indique le royaume par défaut ; avec `dns_lookup_kdc` (activé par
+      défaut), les KDC sont trouvés par les enregistrements SRV.
+
+      - `kinit <utilisateur>` demande un **TGT** (mot de passe demandé une fois) ;
+      - `klist` affiche les tickets et leur validité ;
+      - `kdestroy` les supprime.
+
+      `smbclient --use-kerberos=required` utilise le ticket au lieu d'un mot de passe : il faut alors utiliser
+      le **nom DNS complet** du serveur, car le ticket de service est demandé pour `cifs/dc1.durand.lan`.
     description: |
       Sur **admin**, complète `/etc/krb5.conf` avec `default_realm = DURAND.LAN` (les KDC sont trouvés par
       les enregistrements SRV du DNS). Obtiens un ticket pour `tbernard` (`kinit tbernard`), affiche-le
@@ -191,6 +357,17 @@ exercises:
 
   - id: cycle-de-vie
     title: Cycle de vie des comptes
+    cours: |
+      Gérer le cycle de vie, c'est traiter arrivées, absences et départs sans perdre la traçabilité :
+
+      - `samba-tool user disable` / `enable` : un compte désactivé ne peut plus se connecter mais garde son
+        SID, ses groupes et ses droits (retour possible) ;
+      - `samba-tool user setexpiry <login> --days=N` (ou `--noexpiry`) : expiration automatique, idéale
+        pour stagiaires et prestataires ;
+      - `samba-tool user unlock` : déverrouille un compte bloqué par la stratégie.
+
+      Procédure courante au départ : désactiver, retirer des groupes, déplacer dans une OU « Désactivés »,
+      supprimer après le délai de conservation.
     description: |
       1. Julien Martin part en congé longue durée : **désactive** son compte (sans le supprimer).
       2. Crée le compte `stagiaire01` (mot de passe `Stagiaire!2024`, OU Informatique) qui **expire
@@ -210,6 +387,16 @@ exercises:
 
   - id: sauvegarde-ad
     title: Sauvegarder l'annuaire
+    cours: |
+      `samba-tool domain backup` produit une archive permettant de reconstruire un DC :
+
+      - `offline` : copie cohérente des bases locales, sans contacter d'autre DC (utilisable même si le
+        domaine n'a qu'un DC) ;
+      - `online` : sauvegarde réalisée à travers le réseau depuis un DC en fonctionnement ;
+      - `restore` : recrée un DC à partir de l'archive (en cas de perte totale du domaine).
+
+      `--targetdir` indique le dossier de destination. L'archive contient des secrets (empreintes de mots de
+      passe) : elle doit être protégée comme le DC lui-même, et copiée hors du serveur.
     description: |
       Un annuaire sans sauvegarde, c'est une entreprise à l'arrêt en cas de panne. Fais une sauvegarde
       **hors ligne** du contrôleur avec `samba-tool domain backup offline` dans `/root/sauvegarde-ad` sur dc1.
