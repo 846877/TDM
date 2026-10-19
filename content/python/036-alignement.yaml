@@ -1,0 +1,131 @@
+title: Aligner un tableau avec les f-strings
+level: debutant
+order: 36
+tags: [f-string, formatage, chaînes]
+summary: Largeur, alignement et décimales dans les f-strings.
+description: |
+  On veut afficher une facture bien alignée. Écris `ligne_facture(article, quantite, prix)`
+  qui renvoie une ligne de **30 caractères** :
+
+  - l'article aligné à **gauche** sur 14 caractères ;
+  - la quantité alignée à **droite** sur 4 caractères ;
+  - le prix unitaire aligné à **droite** sur 12 caractères, avec **2 décimales** et suivi de
+    ` €` (inclus dans les 12 caractères).
+
+  ```python
+  ligne_facture("Câble RJ45", 3, 4.5)
+  # "Câble RJ45       3      4.50 €"
+  ```
+
+  Écris aussi `ligne_total(total)` qui renvoie `"TOTAL"` aligné à gauche sur 18 caractères
+  puis le montant aligné à droite sur 12 caractères (2 décimales et ` €` compris) :
+
+  ```python
+  ligne_total(1234.5)
+  # "TOTAL                1234.50 €"
+  ```
+
+  Astuce : `f"{texte:<14}"`, `f"{n:>4}"` et `f"{x:.2f}"` ; tu peux formater d'abord le prix
+  avec son symbole, puis aligner le résultat.
+starter: |
+  def ligne_facture(article, quantite, prix):
+      pass
+
+
+  def ligne_total(total):
+      pass
+tests: |
+  def test_exemple():
+      "Ligne d'exemple"
+      r = solution.ligne_facture("Câble RJ45", 3, 4.5)
+      att = "Câble RJ45       3      4.50 €"
+      assert r == att, f"\nattendu {att!r}\nobtenu  {r!r}"
+
+  def test_longueur():
+      "Chaque ligne fait 30 caractères"
+      for args in [("Switch 24p", 1, 189.9), ("Vis", 250, 0.05), ("Baie 42U", 2, 1499)]:
+          r = solution.ligne_facture(*args)
+          assert len(r) == 30, f"{r!r} fait {len(r)} caractères"
+
+  def test_arrondi():
+      "Deux décimales"
+      r = solution.ligne_facture("Vis", 250, 0.054)
+      att = "Vis            250      0.05 €"
+      assert r == att, f"\nattendu {att!r}\nobtenu  {r!r}"
+
+  def test_total():
+      "Ligne de total"
+      r = solution.ligne_total(1234.5)
+      att = "TOTAL                1234.50 €"
+      assert r == att, f"\nattendu {att!r}\nobtenu  {r!r}"
+      assert len(solution.ligne_total(3)) == 30
+solution: |
+  def ligne_facture(article, quantite, prix):
+      montant = f"{prix:.2f} €"
+      return f"{article:<14}{quantite:>4}{montant:>12}"
+
+
+  def ligne_total(total):
+      montant = f"{total:.2f} €"
+      return f"{'TOTAL':<18}{montant:>12}"
+cours: |
+  ## Le mini-langage de formatage
+
+  Dans une f-string, ce qui suit `:` à l'intérieur des accolades décrit **comment** afficher
+  la valeur : `{valeur:[remplissage][alignement][largeur][.précision][type]}`.
+
+  ### Largeur et alignement
+
+  ```python
+  f"[{'ok':<6}]"    # '[ok    ]'  à gauche
+  f"[{'ok':>6}]"    # '[    ok]'  à droite
+  f"[{'ok':^6}]"    # '[  ok  ]'  centré
+  f"[{'ok':.<6}]"   # '[ok....]'  remplissage par des points
+  f"[{42:6}]"       # '[    42]'  les nombres sont alignés à droite par défaut
+  ```
+
+  La largeur est un **minimum** : une valeur plus longue n'est jamais tronquée, elle
+  déborde (et décale tout le tableau).
+
+  ### Précision et type
+
+  ```python
+  f"{3.14159:.2f}"     # '3.14'     2 décimales
+  f"{3.14159:8.2f}"    # '    3.14' largeur 8, 2 décimales
+  f"{0.256:.1%}"       # '25.6%'    pourcentage
+  f"{1234567:,}"       # '1,234,567' séparateur de milliers
+  f"{255:08b}"         # '11111111' binaire sur 8 chiffres
+  f"{255:x}"           # 'ff'       hexadécimal
+  ```
+
+  ## Construire en deux temps
+
+  Quand une colonne mélange un nombre et un symbole (`4.50 €`), on formate d'abord la valeur
+  et son unité dans une variable, puis on aligne cette chaîne :
+
+  ```python
+  taille = f"{12.5:.1f} Go"
+  print(f"{taille:>10}")   # '   12.5 Go'
+  ```
+
+  ## Littéraux dans les accolades
+
+  Une chaîne littérale peut apparaître dans les accolades, avec des guillemets **différents**
+  de ceux de la f-string : `f"{'TOTAL':<10}"`.
+
+  ## Pourquoi c'est utile
+
+  Les rapports texte (sortie de scripts d'inventaire, état des services, résumés de
+  sauvegarde) sont beaucoup plus lisibles en colonnes. Les commandes `df -h`, `ps` ou
+  `ip -br a` présentent ainsi leurs résultats. Pour des tableaux plus élaborés, il existe des
+  bibliothèques, mais le mini-langage de formatage suffit très souvent.
+
+  ## Attention aux caractères larges
+
+  `len()` compte les caractères, pas leur largeur à l'écran : les emojis ou certains
+  caractères asiatiques occupent deux colonnes dans un terminal et décalent l'alignement.
+docs:
+  - title: Mini-langage de spécification de format
+    url: https://docs.python.org/fr/3/library/string.html#format-specification-mini-language
+  - title: Tutoriel — les f-strings
+    url: https://docs.python.org/fr/3/tutorial/inputoutput.html#formatted-string-literals

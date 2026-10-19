@@ -1,0 +1,137 @@
+title: Les opérateurs arithmétiques
+level: debutant
+order: 33
+tags: [calculs, opérateurs, tuples]
+summary: Maîtriser + - * / // % ** et leurs priorités.
+description: |
+  1. Écris `calculs(a, b)` qui renvoie un **tuple** de six valeurs, dans cet ordre :
+     somme, différence (`a - b`), produit, quotient réel, quotient entier, reste.
+
+     ```python
+     calculs(17, 5)   # (22, 12, 85, 3.4, 3, 2)
+     ```
+
+     Si `b` vaut `0`, les trois dernières valeurs sont remplacées par `None`
+     (la division par zéro est impossible) :
+
+     ```python
+     calculs(4, 0)    # (4, 4, 0, None, None, None)
+     ```
+
+  2. Écris `prix_ttc(prix_ht, taux_tva)` qui renvoie le prix TTC arrondi à 2 décimales.
+     Le taux est donné en pourcentage : `prix_ttc(100, 20)` vaut `120.0`.
+
+  3. Écris `volume_sphere(rayon)` qui renvoie `4/3 × π × rayon³` arrondi à 2 décimales,
+     avec `π = 3.14159`.
+starter: |
+  def calculs(a, b):
+      pass
+
+
+  def prix_ttc(prix_ht, taux_tva):
+      pass
+
+
+  def volume_sphere(rayon):
+      pass
+tests: |
+  def test_calculs():
+      "calculs(17, 5)"
+      r = solution.calculs(17, 5)
+      assert r == (22, 12, 85, 3.4, 3, 2), f"obtenu {r!r}"
+
+  def test_calculs_negatif():
+      "calculs(-7, 2) : attention au // et au % avec un négatif"
+      r = solution.calculs(-7, 2)
+      assert r == (-5, -9, -14, -3.5, -4, 1), f"obtenu {r!r}"
+
+  def test_calculs_zero():
+      "Division par zéro -> None"
+      r = solution.calculs(4, 0)
+      assert r == (4, 4, 0, None, None, None), f"obtenu {r!r}"
+
+  def test_tuple():
+      "Le résultat est un tuple"
+      assert isinstance(solution.calculs(1, 1), tuple)
+
+  def test_ttc():
+      "prix_ttc"
+      assert solution.prix_ttc(100, 20) == 120.0
+      assert solution.prix_ttc(19.99, 5.5) == 21.09, solution.prix_ttc(19.99, 5.5)
+      assert solution.prix_ttc(0, 20) == 0
+
+  def test_sphere():
+      "volume_sphere"
+      assert solution.volume_sphere(1) == 4.19, solution.volume_sphere(1)
+      assert solution.volume_sphere(3) == 113.1, solution.volume_sphere(3)
+      assert solution.volume_sphere(0) == 0
+solution: |
+  def calculs(a, b):
+      if b == 0:
+          return (a + b, a - b, a * b, None, None, None)
+      return (a + b, a - b, a * b, a / b, a // b, a % b)
+
+
+  def prix_ttc(prix_ht, taux_tva):
+      return round(prix_ht * (1 + taux_tva / 100), 2)
+
+
+  def volume_sphere(rayon):
+      return round(4 / 3 * 3.14159 * rayon ** 3, 2)
+cours: |
+  ## Les sept opérateurs
+
+  | Opérateur | Sens | Exemple | Résultat |
+  |-----------|------|---------|----------|
+  | `+` | addition | `7 + 2` | `9` |
+  | `-` | soustraction | `7 - 2` | `5` |
+  | `*` | multiplication | `7 * 2` | `14` |
+  | `/` | division réelle | `7 / 2` | `3.5` |
+  | `//` | division entière | `7 // 2` | `3` |
+  | `%` | reste (modulo) | `7 % 2` | `1` |
+  | `**` | puissance | `7 ** 2` | `49` |
+
+  `/` renvoie **toujours** un `float`, même quand la division tombe juste (`8 / 2` vaut
+  `4.0`). `//` et `%` sur des entiers renvoient des entiers.
+
+  ## Priorités
+
+  Comme en mathématiques : `**` d'abord, puis `* / // %`, puis `+ -`. À priorité égale, on
+  calcule de gauche à droite (sauf `**`, de droite à gauche : `2 ** 3 ** 2` vaut `2 ** 9`).
+
+  ```python
+  2 + 3 * 4       # 14
+  (2 + 3) * 4     # 20
+  -2 ** 2         # -4 : la puissance passe avant le signe moins !
+  ```
+
+  Dans le doute, ajoute des parenthèses : elles ne coûtent rien et clarifient l'intention.
+
+  ## `//` et `%` avec des nombres négatifs
+
+  Python arrondit la division entière **vers le bas** (vers moins l'infini), et le reste a le
+  signe du diviseur. La relation `a == (a // b) * b + a % b` est toujours vraie.
+
+  ```python
+  -7 // 2    # -4  (et non -3)
+  -7 % 2     # 1
+  ```
+
+  ## Division par zéro
+
+  `x / 0`, `x // 0` et `x % 0` lèvent une `ZeroDivisionError`. Il faut tester le diviseur
+  **avant** de calculer (ou gérer l'exception, ce que tu verras plus tard).
+
+  ## Pourcentages
+
+  Ajouter `t %` à une valeur, c'est la multiplier par `1 + t / 100`. Retirer `t %` : la
+  multiplier par `1 - t / 100`. Attention, une hausse de 20 % suivie d'une baisse de 20 % ne
+  ramène pas à la valeur de départ (× 1,2 × 0,8 = × 0,96).
+
+  Le module `math` fournit une valeur précise de π (`math.pi`) ; ici, l'énoncé impose une
+  valeur approchée pour que les résultats soient prévisibles.
+docs:
+  - title: Tutoriel — les nombres
+    url: https://docs.python.org/fr/3/tutorial/introduction.html#numbers
+  - title: Référence — priorité des opérateurs
+    url: https://docs.python.org/fr/3/reference/expressions.html#operator-precedence
