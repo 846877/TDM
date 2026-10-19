@@ -1,0 +1,205 @@
+title: Énumérations avec enum
+level: intermediaire
+order: 41
+tags: [enum, classes, constantes]
+summary: Remplacer des chaînes magiques par des énumérations.
+description: |
+  Utilise le module `enum`.
+
+  1. Crée `Niveau(IntEnum)` avec, dans cet ordre, `DEBUG = 10`, `INFO = 20`,
+     `WARNING = 30`, `ERROR = 40`, `CRITICAL = 50` (les valeurs de `logging`).
+  2. `niveau_depuis_texte(texte)` renvoie le membre correspondant au nom (insensible à la
+     casse et aux espaces autour) : `" warning "` → `Niveau.WARNING`. Un nom inconnu lève
+     `ValueError`.
+  3. `filtrer(messages, minimum)` reçoit une liste de couples `(Niveau, texte)` et renvoie
+     les textes dont le niveau est **supérieur ou égal** à `minimum`, dans l'ordre.
+  4. Crée `EtatService(Enum)` avec `ARRETE`, `DEMARRAGE`, `ACTIF`, `ERREUR` (valeurs
+     `"arrêté"`, `"démarrage"`, `"actif"`, `"erreur"`).
+  5. `transition(etat, evenement)` renvoie le nouvel état selon ces règles (sinon
+     `ValueError`) :
+
+     | état | événement | nouvel état |
+     |------|-----------|-------------|
+     | ARRETE | `"start"` | DEMARRAGE |
+     | DEMARRAGE | `"ok"` | ACTIF |
+     | DEMARRAGE | `"echec"` | ERREUR |
+     | ACTIF | `"stop"` | ARRETE |
+     | ACTIF | `"echec"` | ERREUR |
+     | ERREUR | `"reset"` | ARRETE |
+
+  ```python
+  Niveau.ERROR > Niveau.INFO                              # True
+  transition(EtatService.ARRETE, "start")                 # EtatService.DEMARRAGE
+  EtatService.ACTIF.value                                 # "actif"
+  ```
+starter: |
+  from enum import Enum, IntEnum
+
+
+  def niveau_depuis_texte(texte):
+      pass
+
+
+  def filtrer(messages, minimum):
+      pass
+
+
+  def transition(etat, evenement):
+      pass
+tests: |
+  from enum import Enum, IntEnum
+
+  def test_niveau():
+      "Niveau est une IntEnum ordonnée"
+      N = solution.Niveau
+      assert issubclass(N, IntEnum)
+      assert [m.name for m in N] == ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+      assert N.ERROR == 40 and N.ERROR > N.INFO
+
+  def test_depuis_texte():
+      "niveau_depuis_texte"
+      N = solution.Niveau
+      assert solution.niveau_depuis_texte(" warning ") is N.WARNING
+      assert solution.niveau_depuis_texte("Critical") is N.CRITICAL
+      try:
+          solution.niveau_depuis_texte("fatal")
+      except ValueError:
+          return
+      raise AssertionError("un nom inconnu doit lever ValueError")
+
+  def test_filtrer():
+      "filtrer"
+      N = solution.Niveau
+      msgs = [(N.DEBUG, "d"), (N.ERROR, "e"), (N.INFO, "i"), (N.CRITICAL, "c")]
+      assert solution.filtrer(msgs, N.INFO) == ["e", "i", "c"]
+      assert solution.filtrer(msgs, N.CRITICAL) == ["c"]
+
+  def test_etat():
+      "EtatService"
+      E = solution.EtatService
+      assert issubclass(E, Enum)
+      assert E.ACTIF.value == "actif" and E("arrêté") is E.ARRETE
+
+  def test_transitions():
+      "transition"
+      E = solution.EtatService
+      e = E.ARRETE
+      for evt, att in [("start", E.DEMARRAGE), ("ok", E.ACTIF), ("echec", E.ERREUR), ("reset", E.ARRETE)]:
+          e = solution.transition(e, evt)
+          assert e is att, f"après {evt!r} : attendu {att}, obtenu {e}"
+      assert solution.transition(E.ACTIF, "stop") is E.ARRETE
+
+  def test_transition_interdite():
+      "Transition interdite -> ValueError"
+      E = solution.EtatService
+      for etat, evt in [(E.ARRETE, "stop"), (E.ACTIF, "start"), (E.ERREUR, "ok")]:
+          try:
+              solution.transition(etat, evt)
+          except ValueError:
+              continue
+          raise AssertionError(f"transition({etat}, {evt!r}) devrait lever ValueError")
+solution: |
+  from enum import Enum, IntEnum
+
+
+  class Niveau(IntEnum):
+      DEBUG = 10
+      INFO = 20
+      WARNING = 30
+      ERROR = 40
+      CRITICAL = 50
+
+
+  def niveau_depuis_texte(texte):
+      try:
+          return Niveau[texte.strip().upper()]
+      except KeyError:
+          raise ValueError(f"niveau inconnu : {texte!r}") from None
+
+
+  def filtrer(messages, minimum):
+      return [texte for niveau, texte in messages if niveau >= minimum]
+
+
+  class EtatService(Enum):
+      ARRETE = "arrêté"
+      DEMARRAGE = "démarrage"
+      ACTIF = "actif"
+      ERREUR = "erreur"
+
+
+  TRANSITIONS = {
+      (EtatService.ARRETE, "start"): EtatService.DEMARRAGE,
+      (EtatService.DEMARRAGE, "ok"): EtatService.ACTIF,
+      (EtatService.DEMARRAGE, "echec"): EtatService.ERREUR,
+      (EtatService.ACTIF, "stop"): EtatService.ARRETE,
+      (EtatService.ACTIF, "echec"): EtatService.ERREUR,
+      (EtatService.ERREUR, "reset"): EtatService.ARRETE,
+  }
+
+
+  def transition(etat, evenement):
+      try:
+          return TRANSITIONS[(etat, evenement)]
+      except KeyError:
+          raise ValueError(f"transition interdite : {etat.name} + {evenement}") from None
+cours: |
+  ## Le problème des « chaînes magiques »
+
+  ```python
+  if etat == "actif": ...
+  if etat == "Actif": ...     # faute de frappe : jamais vrai, aucune erreur
+  ```
+
+  Des valeurs écrites en dur un peu partout sont fragiles : une faute de frappe passe
+  inaperçue et on ne sait pas quelles valeurs sont possibles.
+
+  ## `Enum` : un ensemble fermé de valeurs nommées
+
+  ```python
+  from enum import Enum
+
+  class Couleur(Enum):
+      ROUGE = "rouge"
+      VERT = "vert"
+
+  Couleur.ROUGE           # <Couleur.ROUGE: 'rouge'>
+  Couleur.ROUGE.name      # "ROUGE"
+  Couleur.ROUGE.value     # "rouge"
+  Couleur("vert")         # Couleur.VERT  (par valeur)
+  Couleur["VERT"]         # Couleur.VERT  (par nom ; KeyError si inconnu)
+  list(Couleur)           # tous les membres, dans l'ordre de définition
+  ```
+
+  Une faute de frappe (`Couleur.ROUG`) lève une `AttributeError` immédiatement. Les membres
+  sont des **singletons** : on peut les comparer avec `is`.
+
+  ## `IntEnum` : des membres qui sont aussi des entiers
+
+  Un `Enum` simple ne se compare pas avec `<`. Une `IntEnum` hérite de `int` : ses membres
+  se comparent et se combinent comme des nombres. Idéal pour des niveaux de gravité, des
+  codes de retour, des priorités. (Il existe aussi `StrEnum` depuis Python 3.11, et `Flag`
+  pour des combinaisons de bits comme des permissions.)
+
+  ## Machine à états
+
+  Beaucoup de systèmes ont des **états** et des **transitions** autorisées : un service
+  systemd (inactive → activating → active → failed), une connexion TCP (LISTEN, SYN_SENT,
+  ESTABLISHED…), un ticket d'incident. Représenter les transitions par un dictionnaire
+  `(état, événement) → nouvel état` est plus clair et plus sûr qu'une forêt de `if` : la
+  table **est** la spécification, et tout ce qui n'y figure pas est interdit.
+
+  Les tuples de membres d'enum sont hachables : ils font d'excellentes clés.
+
+  ## Traduire une exception
+
+  Transformer une `KeyError` interne en `ValueError` plus parlante pour l'appelant se fait
+  avec `raise ValueError(...) from None` (qui masque la cause technique) ou `from erreur`
+  (qui la conserve).
+
+  `logging.DEBUG`, `logging.INFO`… valent exactement 10, 20, 30, 40, 50.
+docs:
+  - title: Module enum
+    url: https://docs.python.org/fr/3/library/enum.html
+  - title: HOWTO — enum
+    url: https://docs.python.org/fr/3/howto/enum.html

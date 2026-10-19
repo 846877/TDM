@@ -1,0 +1,168 @@
+title: Tailles lisibles par un humain
+level: intermediaire
+order: 44
+tags: [chaînes, conversions, formatage, sysadmin]
+summary: Convertir des octets en « 1.5 Gio » et inversement, comme df -h.
+description: |
+  1. `lisible(octets, binaire=True)` convertit un nombre d'octets en texte lisible :
+     - en mode binaire, on divise par 1024 et les unités sont `o`, `Kio`, `Mio`, `Gio`,
+       `Tio`, `Pio` ; en mode décimal (`binaire=False`), on divise par 1000 avec `o`, `Ko`,
+       `Mo`, `Go`, `To`, `Po` ;
+     - on choisit la plus grande unité pour laquelle la valeur est **≥ 1** (sans dépasser
+       `Pio`/`Po`) ;
+     - les octets s'affichent sans décimale (`"512 o"`), les autres unités avec **une**
+       décimale (`"1.5 Kio"`).
+  2. `analyser(texte)` fait l'inverse : il accepte un nombre (entier ou décimal, point ou
+     virgule) suivi éventuellement d'espaces et d'une unité parmi `o`, `K`, `M`, `G`, `T`,
+     `P` (ces lettres seules valent les puissances de **1024**), `Ko`/`Mo`/… (puissances de
+     1000) et `Kio`/`Mio`/… (puissances de 1024). La casse de l'unité est ignorée. Sans
+     unité : des octets. Renvoie un **entier** (arrondi avec `round`). Un texte invalide lève
+     `ValueError`.
+
+  ```python
+  lisible(1536)                    # "1.5 Kio"
+  lisible(1_500_000, binaire=False)  # "1.5 Mo"
+  lisible(512)                     # "512 o"
+  analyser("2G")                   # 2147483648
+  analyser("1,5 Mo")               # 1500000
+  analyser("10 kio")               # 10240
+  ```
+starter: |
+  def lisible(octets, binaire=True):
+      pass
+
+
+  def analyser(texte):
+      pass
+tests: |
+  def test_lisible_binaire():
+      "lisible en mode binaire"
+      cas = {0: "0 o", 512: "512 o", 1023: "1023 o", 1024: "1.0 Kio", 1536: "1.5 Kio",
+             5 * 1024 ** 3: "5.0 Gio", 1024 ** 5 * 3: "3.0 Pio", 1024 ** 6: "1024.0 Pio"}
+      for n, att in cas.items():
+          r = solution.lisible(n)
+          assert r == att, f"lisible({n}) : attendu {att!r}, obtenu {r!r}"
+
+  def test_lisible_decimal():
+      "lisible en mode décimal"
+      assert solution.lisible(1_500_000, binaire=False) == "1.5 Mo"
+      assert solution.lisible(999, binaire=False) == "999 o"
+      assert solution.lisible(2_000_000_000_000, False) == "2.0 To"
+
+  def test_analyser():
+      "analyser"
+      cas = {"2G": 2 * 1024 ** 3, "1,5 Mo": 1_500_000, "10 kio": 10240, "512": 512,
+             "3.5 K": 3584, "1 To": 10 ** 12, " 7 o ": 7, "0.5 GIO": 512 * 1024 ** 2}
+      for texte, att in cas.items():
+          r = solution.analyser(texte)
+          assert r == att and isinstance(r, int), f"analyser({texte!r}) : attendu {att}, obtenu {r!r}"
+
+  def test_analyser_invalide():
+      "analyser refuse les textes invalides"
+      for texte in ["", "abc", "12 Xo", "G", "1.2.3 M", "-5 Go"]:
+          try:
+              solution.analyser(texte)
+          except ValueError:
+              continue
+          raise AssertionError(f"analyser({texte!r}) devrait lever ValueError")
+
+  def test_aller_retour():
+      "Aller-retour"
+      assert solution.analyser(solution.lisible(1536)) == 1536
+solution: |
+  import re
+
+  BINAIRES = ["o", "Kio", "Mio", "Gio", "Tio", "Pio"]
+  DECIMALES = ["o", "Ko", "Mo", "Go", "To", "Po"]
+
+
+  def lisible(octets, binaire=True):
+      base = 1024 if binaire else 1000
+      unites = BINAIRES if binaire else DECIMALES
+      valeur = octets
+      rang = 0
+      while valeur >= base and rang < len(unites) - 1:
+          valeur /= base
+          rang += 1
+      if rang == 0:
+          return f"{octets} o"
+      return f"{valeur:.1f} {unites[rang]}"
+
+
+  PREFIXES = "KMGTP"
+
+
+  def analyser(texte):
+      m = re.fullmatch(r"\s*(\d+(?:[.,]\d+)?)\s*([a-zA-Z]*)\s*", texte)
+      if not m:
+          raise ValueError(f"taille invalide : {texte!r}")
+      nombre = float(m.group(1).replace(",", "."))
+      unite = m.group(2).lower()
+      if unite in ("", "o"):
+          facteur = 1
+      elif len(unite) == 1 and unite.upper() in PREFIXES:
+          facteur = 1024 ** (PREFIXES.index(unite.upper()) + 1)
+      elif len(unite) == 2 and unite[1] == "o" and unite[0].upper() in PREFIXES:
+          facteur = 1000 ** (PREFIXES.index(unite[0].upper()) + 1)
+      elif len(unite) == 3 and unite[1:] == "io" and unite[0].upper() in PREFIXES:
+          facteur = 1024 ** (PREFIXES.index(unite[0].upper()) + 1)
+      else:
+          raise ValueError(f"unité inconnue : {m.group(2)!r}")
+      return round(nombre * facteur)
+cours: |
+  ## Ko ou Kio ?
+
+  Deux systèmes coexistent, source de confusion permanente :
+
+  | Préfixe SI (décimal) | Valeur | Préfixe binaire (CEI) | Valeur |
+  |----------------------|--------|-----------------------|--------|
+  | Ko (kilo) | 1000 | Kio (kibi) | 1024 |
+  | Mo (méga) | 1000² | Mio (mébi) | 1024² |
+  | Go (giga) | 1000³ | Gio (gibi) | 1024³ |
+  | To (téra) | 1000⁴ | Tio (tébi) | 1024⁴ |
+
+  Les fabricants de disques utilisent les puissances de 1000, les systèmes d'exploitation
+  souvent celles de 1024 : un disque « 1 To » apparaît comme environ 931 Gio. Les outils Unix
+  (`df -h`, `ls -lh`, `free -h`) utilisent 1024 avec des lettres seules (`K`, `M`, `G`), et
+  `df -H` utilise 1000. En anglais, octet se dit *byte* (B, KiB, MiB…).
+
+  ## Choisir l'unité : diviser tant que c'est possible
+
+  On divise par la base tant que la valeur dépasse la base **et** qu'il reste une unité plus
+  grande. Le rang (nombre de divisions) sert d'indice dans la liste des unités. Ce motif « une
+  liste d'unités + une boucle » évite une cascade de `if`.
+
+  ## Analyser un texte libre : une regex de validation
+
+  Pour accepter `"2G"`, `"1,5 Mo"`, `" 10 kio "`, une expression régulière avec des groupes
+  sépare proprement les deux parties :
+
+  ```python
+  import re
+  m = re.fullmatch(r"\s*(\d+)\s*([a-z]*)\s*", "42 mo", re.IGNORECASE)
+  m.group(1), m.group(2)     # ('42', 'mo')
+  ```
+
+  `fullmatch` garantit que **tout** le texte respecte le format : un résidu inattendu
+  (`"1.2.3"`) fait échouer la correspondance. Ensuite, la logique des unités se traite en
+  Python, plus lisible qu'une regex géante.
+
+  ## Normaliser avant de comparer
+
+  Mettre l'unité en minuscules permet de comparer une seule forme. La virgule décimale
+  française se remplace par un point avant `float()`.
+
+  ## Renvoyer un entier
+
+  Un nombre d'octets est entier : `round(nombre * facteur)` renvoie un `int` (sans second
+  argument). `int()` tronquerait au lieu d'arrondir.
+
+  ## Usage
+
+  Ces deux fonctions servent dans tout script d'administration : afficher des tailles de
+  fichiers, lire un seuil de configuration (`max_size = 500M`), comparer des quotas.
+docs:
+  - title: Wikipédia — Préfixe binaire
+    url: https://fr.wikipedia.org/wiki/Pr%C3%A9fixe_binaire
+  - title: Module re (fullmatch)
+    url: https://docs.python.org/fr/3/library/re.html#re.fullmatch
