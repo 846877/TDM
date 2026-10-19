@@ -16,6 +16,90 @@ description: |
   On part du premier commit pour aller jusqu'aux situations du quotidien en équipe : conflit de fusion,
   dépôt distant, historique linéaire avec `rebase`, annulation d'un commit publié et hook de contrôle.
   Commandes utiles : `git status`, `git log --oneline --graph --all`, `git diff`.
+cours: |
+  ## Git, la mémoire du projet
+
+  Git est un **gestionnaire de versions distribué** : chaque clone contient tout l'historique. En DevOps, le
+  dépôt Git est la source de vérité : code, Dockerfile, pipelines, manifestes Kubernetes, code Terraform…
+  tout y est versionné, relu et tracé.
+
+  ### Les trois zones
+
+  ```
+   répertoire de travail ──git add──▶ index (staging) ──git commit──▶ dépôt (.git)
+            ▲                                                          │
+            └──────────────── git switch / git restore ◀───────────────┘
+  ```
+
+  - Le **répertoire de travail** : les fichiers que tu modifies.
+  - L'**index** : ce qui partira dans le prochain commit (on choisit précisément quoi committer).
+  - Le **dépôt** : l'historique, une suite de commits identifiés par un hash SHA.
+
+  Un commit est un instantané complet du projet, avec un auteur, une date, un message et un (ou plusieurs)
+  parent(s). Une **branche** n'est qu'une étiquette mobile qui pointe sur un commit ; `HEAD` désigne la
+  branche courante. Créer une branche ne coûte donc presque rien.
+
+  ### Fusionner : merge ou rebase
+
+  ```
+  merge :   A──B──C──────M  main          rebase :  A──B──C──D'──E'  main
+                 \      /                                    (historique linéaire)
+                  D────E    feature
+  ```
+
+  - `git merge` crée un **commit de fusion** à deux parents (ou avance simplement l'étiquette si c'est
+    possible : *fast-forward*).
+  - `git rebase` **rejoue** les commits de la branche au-dessus d'une autre : l'historique est linéaire, mais
+    les commits sont réécrits (nouveaux hash).
+
+  Règle d'or : **on ne rebase pas ce qui a déjà été partagé.**
+
+  ### Les dépôts distants
+
+  `origin` est le nom conventionnel du dépôt d'où l'on a cloné. `git fetch` récupère sans toucher à tes
+  branches, `git pull` = fetch + merge (ou rebase), `git push` publie. La branche **amont** (*upstream*,
+  `-u`) mémorise le lien entre ta branche locale et la branche distante. Un dépôt **nu** (`--bare`) n'a pas
+  de répertoire de travail : c'est ce qu'hébergent GitHub, GitLab ou Gitea.
+
+  ### Annuler
+
+  | Situation | Commande |
+  |---|---|
+  | Retirer un fichier de l'index | `git restore --staged f` |
+  | Jeter les modifications d'un fichier | `git restore f` |
+  | Corriger le dernier commit (non publié) | `git commit --amend` |
+  | Défaire un commit **publié** | `git revert <hash>` |
+  | Revenir en arrière localement | `git reset --soft/--mixed/--hard` |
+
+  ### Mémo
+
+  ```bash
+  git status ; git diff ; git diff --cached
+  git log --oneline --graph --all --decorate
+  git switch -c feature/x ; git switch main
+  git tag -a v1.0 -m "Version 1.0" ; git push --tags
+  git stash ; git stash pop
+  ```
+
+  ### Pièges courants
+
+  - Committer des secrets ou des fichiers générés : prévois un `.gitignore` dès le début.
+  - `git push --force` sur une branche partagée : préfère `--force-with-lease`, et jamais sur `main`.
+  - Messages de commit vagues (« fix ») : écris ce que fait le commit et pourquoi.
+  - Résoudre un conflit en laissant les marqueurs `<<<<<<<` dans le fichier.
+
+  ### Bonnes pratiques
+
+  Des commits petits et cohérents, une branche par fonctionnalité, des fusions via *merge request* relues,
+  des tags pour les versions (versionnage sémantique `MAJEUR.MINEUR.CORRECTIF`) et des hooks ou une CI pour
+  contrôler automatiquement la qualité.
+docs:
+  - title: Pro Git, le livre (en français)
+    url: https://git-scm.com/book/fr/v2
+  - title: Documentation de référence Git
+    url: https://git-scm.com/docs
+  - title: Apprendre les branches de manière interactive
+    url: https://learngitbranching.js.org/?locale=fr_FR
 exercises:
   - id: init
     title: Premier dépôt
@@ -23,6 +107,17 @@ exercises:
       Crée le dossier `/root/app`, initialise un dépôt git, ajoute un fichier `README.md`
       et fais un premier commit avec le message `Premier commit`.
     hint: "git init, git add README.md, git commit -m 'Premier commit'"
+    cours: |
+      `git init` transforme un dossier en dépôt en y créant le sous-dossier caché `.git`, qui contient tout
+      l'historique. Rien n'est suivi automatiquement : il faut d'abord **indexer** les fichiers avec `git add`,
+      puis enregistrer un instantané avec `git commit -m "message"`.
+
+      `git status` est ton meilleur ami : il indique la branche courante, les fichiers modifiés, indexés ou non
+      suivis, et suggère souvent la commande suivante. `git log` affiche l'historique, `git ls-files` la liste
+      des fichiers suivis.
+
+      L'identité de l'auteur (`user.name`, `user.email`) est déjà configurée dans ce lab ; sur ta machine, ce
+      serait la première chose à faire avec `git config --global`.
     checks:
       - desc: Dépôt git initialisé
         run: test -d /root/app/.git
@@ -34,6 +129,15 @@ exercises:
       Crée une branche `feature/login`, ajoute-y un fichier `login.py` dans un commit, puis reviens
       sur `main` et **fusionne** la branche.
     hint: "git switch -c feature/login … git switch main && git merge feature/login"
+    cours: |
+      Une branche est une ligne de développement parallèle : on y travaille sans perturber `main`.
+      `git switch -c nom` crée la branche et s'y place (`git checkout -b` est l'ancienne syntaxe). Les noms avec
+      un préfixe (`feature/`, `fix/`) aident à s'y retrouver.
+
+      Pour intégrer le travail, on se place sur la branche **cible** puis on lance `git merge branche-source`.
+      Si `main` n'a pas bougé entre-temps, git fait un *fast-forward* : il avance simplement l'étiquette `main`.
+
+      Visualise le résultat avec `git log --oneline --graph --all` : tu verras où pointent les étiquettes.
     checks:
       - desc: La branche feature/login existe
         run: cd /root/app && git rev-parse --verify feature/login
@@ -46,6 +150,17 @@ exercises:
     description: |
       Ajoute un `.gitignore` (commité) qui ignore les fichiers `*.log` et le dossier `__pycache__/`.
       Crée un fichier `debug.log` : il ne doit pas apparaître dans `git status`.
+    cours: |
+      Le fichier `.gitignore`, à la racine du dépôt, liste des motifs de fichiers que git doit ignorer : journaux,
+      caches, dépendances téléchargées, fichiers de build, secrets locaux (`.env`). Il se commite comme les
+      autres, pour que toute l'équipe partage les mêmes règles.
+
+      Syntaxe : `*.log` (tous les fichiers en .log, à tout niveau), `dossier/` (un dossier entier), `/build`
+      (seulement à la racine), `!exception.log` (ré-inclure un fichier).
+
+      Attention : `.gitignore` n'agit que sur les fichiers **non suivis**. Un fichier déjà commité reste suivi ;
+      il faut le retirer de l'index avec `git rm --cached`. `git check-ignore -v fichier` explique quelle règle
+      s'applique.
     checks:
       - desc: .gitignore commité
         run: cd /root/app && git ls-files | grep -qx .gitignore
@@ -61,6 +176,15 @@ exercises:
 
       Explore ensuite l'historique avec `git log --oneline --graph --decorate` et `git show v1.0`.
     hint: "git tag -a v1.0 -m 'Version 1.0'"
+    cours: |
+      Un **tag** marque un commit précis, typiquement une version livrée. Il en existe deux sortes :
+      - le tag **léger**, simple étiquette (`git tag v1.0`) ;
+      - le tag **annoté** (`-a`), un véritable objet git avec auteur, date et message (`-m`). C'est celui à
+        utiliser pour les versions.
+
+      `git show v1.0` affiche le tag et le commit pointé, `git tag -l` liste les tags. Contrairement aux
+      branches, un tag ne bouge pas quand on ajoute des commits. Les pipelines de CI s'en servent souvent pour
+      déclencher une livraison : pousser `v1.2.0` construit et publie l'image `app:1.2.0`.
     checks:
       - desc: Un commit « Ajout description » existe
         run: cd /root/app && git log --format=%s main | grep -qx "Ajout description"
@@ -80,6 +204,21 @@ exercises:
       3. Fusionne `feature/titre` dans `main` : git signale un conflit. Résous-le pour que la première ligne
          soit **`# Application TDM`**, puis termine la fusion par un commit.
     hint: "Après git merge, édite README.md pour retirer les marqueurs <<<<<<< ======= >>>>>>>, puis git add README.md && git commit"
+    cours: |
+      Un **conflit** survient quand deux branches modifient les mêmes lignes d'un fichier : git ne peut pas
+      décider seul. La fusion s'interrompt et le fichier contient les deux versions entre des marqueurs :
+
+      ```
+      <<<<<<< HEAD
+      version de la branche courante
+      =======
+      version de la branche fusionnée
+      >>>>>>> feature
+      ```
+
+      Pour résoudre : édite le fichier pour obtenir le contenu final voulu (souvent un mélange des deux),
+      **supprime les marqueurs**, indexe le fichier avec `git add`, puis termine avec `git commit`.
+      `git status` liste les fichiers en conflit ; `git merge --abort` annule tout et revient avant la fusion.
     checks:
       - desc: feature/titre est fusionnée dans main
         run: cd /root/app && git rev-parse --verify -q feature/titre >/dev/null && git merge-base --is-ancestor feature/titre main
@@ -98,6 +237,16 @@ exercises:
       3. Pousse `main` en définissant la branche amont (`-u`), puis pousse aussi tes **tags**.
       4. Vérifie que tout fonctionne en clonant `/root/remote.git` dans `/root/clone`.
     hint: "git remote add origin /root/remote.git ; git push -u origin main ; git push --tags ; git clone /root/remote.git /root/clone"
+    cours: |
+      Un **dépôt distant** est une autre copie du dépôt, généralement sur un serveur. Un dépôt **nu**
+      (`git init --bare`) ne contient que l'historique, sans fichiers de travail : c'est le format côté serveur.
+      Un simple chemin de fichier peut servir d'URL, comme `https://` ou `ssh://`.
+
+      `git remote add nom url` enregistre un distant, `git remote -v` les liste. Au premier `git push`, l'option
+      `-u` mémorise la branche **amont** : ensuite, `git push` et `git pull` sans argument savent où aller.
+
+      Les tags ne sont **pas** poussés par défaut : il faut `git push --tags` (ou `git push origin v1.0`).
+      `git clone` crée une copie locale complète et configure automatiquement `origin`.
     checks:
       - desc: /root/remote.git est un dépôt nu
         run: test "$(git --git-dir=/root/remote.git rev-parse --is-bare-repository)" = true
@@ -119,6 +268,17 @@ exercises:
          repartir du dernier commit de `main`, sans commit de fusion.
       4. Enfin, intègre-la dans `main` en **fast-forward** (`git merge --ff-only feature/api`).
     hint: "git switch feature/api && git rebase main ; git switch main && git merge --ff-only feature/api"
+    cours: |
+      `git rebase main`, lancé depuis une branche, prend les commits propres à cette branche et les **rejoue**
+      un par un au-dessus du dernier commit de `main`. Le résultat : un historique linéaire, comme si tu avais
+      commencé ton travail après les dernières modifications de `main`.
+
+      Les commits rejoués sont de **nouveaux** commits (nouveaux hash). C'est sans danger sur une branche
+      locale, mais réécrire une branche déjà partagée oblige les autres à jongler.
+
+      Une fois la branche rebasée, `main` est un ancêtre direct : la fusion peut se faire en *fast-forward*.
+      `--ff-only` garantit qu'aucun commit de fusion ne sera créé (git refuse sinon). En cas de conflit pendant
+      le rebase : corrige, `git add`, puis `git rebase --continue`.
     checks:
       - desc: CHANGELOG.md et api.py sont sur main
         run: cd /root/app && git ls-tree --name-only main | grep -qx CHANGELOG.md && git ls-tree --name-only main | grep -qx api.py
@@ -141,6 +301,17 @@ exercises:
       Pourquoi pas `git reset` ? Parce que le commit est déjà partagé : réécrire `main` obligerait tout le
       monde à forcer leur dépôt.
     hint: "git revert <hash du commit Bug> (ou git revert HEAD juste après), puis git push"
+    cours: |
+      Deux philosophies pour annuler :
+
+      - `git reset` déplace l'étiquette de la branche en arrière : les commits suivants disparaissent de
+        l'historique. Parfait en local, dangereux une fois poussé, car les autres ont déjà ces commits.
+      - `git revert <commit>` crée un **nouveau commit** qui applique l'inverse des modifications. L'historique
+        est conservé et la correction se publie avec un simple `git push`.
+
+      Sur une branche partagée comme `main`, on utilise donc `revert`. `HEAD` désigne le dernier commit,
+      `HEAD~1` son parent ; `git log --oneline` donne les hash. Le message par défaut d'un revert est
+      `Revert "<message d'origine>"`.
     checks:
       - desc: Le commit « Bug » est toujours dans l'historique
         run: cd /root/app && git log --format=%s main | grep -qx "Bug"
@@ -162,6 +333,17 @@ exercises:
     hint: |
       #!/bin/sh
       if git diff --cached | grep -q '^+.*TODO'; then echo "Commit refusé : TODO trouvé" >&2; exit 1; fi
+    cours: |
+      Les **hooks** sont des scripts que git exécute à certains moments : `pre-commit` (avant de créer un
+      commit), `commit-msg`, `pre-push`… Ils vivent dans `.git/hooks/` et doivent être **exécutables**. Si un
+      hook `pre-commit` se termine avec un code non nul, le commit est annulé.
+
+      Pour inspecter ce qui va être commité, on regarde l'**index** et non le répertoire de travail :
+      `git diff --cached` affiche les modifications indexées. Les lignes ajoutées y commencent par `+`.
+
+      Les hooks de `.git/hooks` ne sont pas versionnés : en équipe, on les partage via `core.hooksPath` ou un
+      outil comme *pre-commit*, et on refait les mêmes contrôles dans la CI, qui, elle, ne peut pas être
+      contournée avec `--no-verify`.
     checks:
       - desc: Le hook existe et est exécutable
         run: test -x /root/app/.git/hooks/pre-commit

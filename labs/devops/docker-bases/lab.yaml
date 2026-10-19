@@ -23,6 +23,95 @@ description: |
 
   Le parcours va du premier `docker run` jusqu'aux réflexes de production : limites de ressources,
   dépannage d'un conteneur qui s'arrête, image multi-étapes minimale, registre privé et docker compose.
+cours: |
+  ## Docker : empaqueter et lancer des applications
+
+  Un **conteneur** est un processus isolé du reste du système grâce à des fonctionnalités du noyau Linux :
+  les **namespaces** (il a sa propre vue des processus, du réseau, des fichiers, du nom d'hôte) et les
+  **cgroups** (on limite son CPU et sa mémoire). Contrairement à une machine virtuelle, il partage le noyau
+  de l'hôte : il démarre en une fraction de seconde et ne pèse que le poids de son application.
+
+  ```
+  Machines virtuelles               Conteneurs
+  ┌─────┐┌─────┐┌─────┐            ┌─────┐┌─────┐┌─────┐
+  │ App ││ App ││ App │            │ App ││ App ││ App │
+  │ OS  ││ OS  ││ OS  │            └─────┘└─────┘└─────┘
+  └─────┘└─────┘└─────┘            ┌───────────────────┐
+  ┌───────────────────┐            │  Moteur Docker    │
+  │    Hyperviseur    │            ├───────────────────┤
+  ├───────────────────┤            │ Noyau Linux hôte  │
+  │       Hôte        │            └───────────────────┘
+  └───────────────────┘
+  ```
+
+  ### Image et conteneur
+
+  Une **image** est un modèle en lecture seule, composé de **couches** empilées ; un **conteneur** est une
+  instance en cours d'exécution d'une image, avec une couche inscriptible par-dessus. Une image se décrit
+  avec un `Dockerfile` :
+
+  ```dockerfile
+  FROM python:3.12-slim          # image de base
+  WORKDIR /app                   # dossier de travail
+  COPY requirements.txt .
+  RUN pip install -r requirements.txt   # chaque RUN crée une couche
+  COPY . .
+  EXPOSE 8000                    # documentation du port
+  USER 1000                      # ne pas tourner en root
+  CMD ["python", "app.py"]       # commande par défaut
+  ```
+
+  Les couches sont **mises en cache** : place les instructions qui changent rarement (dépendances) avant
+  celles qui changent souvent (code), pour des constructions rapides.
+
+  Une image est désignée par `registre/dépôt:tag` (`docker.io/library/nginx:1.27-alpine`). Sans tag, c'est
+  `latest`, qui ne garantit rien : en production, on **épingle** une version.
+
+  ### Données, réseau, ports
+
+  - La couche inscriptible disparaît avec le conteneur. Les données à garder vont dans un **volume** nommé
+    (géré par Docker) ou un *bind mount* (dossier de l'hôte).
+  - Un **réseau** utilisateur (`docker network create`) offre un DNS interne : les conteneurs se joignent par
+    leur nom. Le réseau `bridge` par défaut n'a pas ce DNS.
+  - `-p 8080:80` publie le port 80 du conteneur sur le port 8080 de l'hôte (`hôte:conteneur`).
+
+  ### Mémo
+
+  ```bash
+  docker run -d --name web -p 8080:80 nginx:1.27-alpine
+  docker ps -a ; docker logs -f web ; docker exec -it web sh
+  docker inspect web ; docker stats
+  docker build -t monapp:1.0 . ; docker images ; docker rmi
+  docker volume ls ; docker network ls
+  docker tag monapp:1.0 registre:5000/monapp:1.0 ; docker push ...
+  docker system prune        # ménage
+  ```
+
+  ### Le cycle de vie
+
+  Un conteneur vit tant que son **processus principal** (PID 1) vit. Si la commande se termine (ou qu'un
+  serveur passe en arrière-plan), le conteneur s'arrête. `docker logs` et `docker ps -a` (colonne STATUS,
+  code de sortie) sont les premiers outils de diagnostic.
+
+  ### Pièges courants
+
+  - `latest` partout : impossible de savoir ce qui tourne réellement.
+  - Lancer en root, avec des secrets dans l'image (`ENV PASSWORD=...` reste visible dans l'historique).
+  - Des images énormes : utilise des bases `slim`/`alpine` et les constructions **multi-étapes**.
+  - Écrire des données importantes dans le conteneur sans volume.
+  - Oublier qu'un `RUN apt-get update` seul est mis en cache : combine-le avec `install` dans le même `RUN`.
+
+  ### Bonnes pratiques
+
+  Une application par conteneur, configuration par variables d'environnement, journaux sur la sortie
+  standard, image minimale et non root, healthcheck, limites de ressources, version épinglée.
+docs:
+  - title: Documentation Docker
+    url: https://docs.docker.com/
+  - title: Référence du Dockerfile
+    url: https://docs.docker.com/reference/dockerfile/
+  - title: Bonnes pratiques de construction d'images
+    url: https://docs.docker.com/build/building/best-practices/
 exercises:
   - id: premier-conteneur
     title: Premier conteneur
@@ -30,6 +119,16 @@ exercises:
       Lance un conteneur **nginx** en arrière-plan nommé `web`, qui publie son port 80 sur le port **8080**
       de l'hôte. Vérifie avec `curl localhost:8080` (installe curl avec `apk add curl` si besoin).
     hint: "docker run -d --name web -p 8080:80 nginx"
+    cours: |
+      `docker run` télécharge l'image si besoin, crée un conteneur et le démarre. Les options essentielles :
+      - `-d` (*detached*) : en arrière-plan, le terminal te rend la main ;
+      - `--name` : un nom lisible, sinon Docker en invente un ;
+      - `-p HOTE:CONTENEUR` : publie un port du conteneur sur l'hôte. L'ordre compte : le port de **gauche** est
+        celui de la machine hôte.
+
+      `docker ps` liste les conteneurs en marche (`-a` montre aussi ceux qui sont arrêtés). Ici, l'hôte Docker
+      est lui-même un conteneur Alpine : `localhost:8080` désigne donc ce conteneur, et `apk` est son
+      gestionnaire de paquets.
     checks:
       - desc: Le conteneur web tourne
         run: test "$(docker inspect -f '{{.State.Running}}' web)" = true
@@ -44,6 +143,16 @@ exercises:
       (il affiche `Bonjour depuis mon image`) et l'exécute au lancement. Construis l'image
       `monapp:1.0`, puis vérifie que `docker run --rm monapp:1.0` affiche bien le message.
     hint: "FROM alpine / COPY app.sh /app.sh / RUN chmod +x /app.sh / CMD [\"/app.sh\"]"
+    cours: |
+      Un `Dockerfile` décrit, instruction par instruction, comment construire une image :
+      - `FROM` choisit l'image de base ;
+      - `COPY` copie des fichiers du **contexte de construction** (le dossier passé à `docker build`) ;
+      - `RUN` exécute une commande pendant la construction (par exemple rendre un script exécutable) ;
+      - `CMD` fixe la commande lancée au **démarrage** du conteneur.
+
+      `docker build -t nom:tag dossier` construit l'image ; le `.` final désigne le dossier courant comme
+      contexte. Préfère la forme JSON de `CMD` (`["sh", "/app.sh"]`). Note la différence : `RUN` agit une fois,
+      à la construction ; `CMD` agit à chaque `docker run`. L'option `--rm` supprime le conteneur à sa sortie.
     checks:
       - desc: Le Dockerfile existe
         run: test -f /root/monapp/Dockerfile
@@ -57,6 +166,16 @@ exercises:
       Crée un volume nommé `donnees`. Lance un conteneur `alpine` jetable qui écrit `persistant` dans
       `/data/test.txt` sur ce volume. Le fichier doit survivre à la suppression du conteneur.
     hint: "docker volume create donnees ; docker run --rm -v donnees:/data alpine sh -c 'echo persistant > /data/test.txt'"
+    cours: |
+      Le système de fichiers d'un conteneur est éphémère : tout ce qui est écrit disparaît avec lui. Un
+      **volume** est un espace de stockage géré par Docker, indépendant du cycle de vie des conteneurs.
+
+      `docker volume create nom` le crée (il est aussi créé à la volée par `docker run -v`).
+      L'option `-v nom:/chemin` le monte dans le conteneur. Si le nom ne contient pas de `/`, Docker comprend
+      « volume nommé » ; avec un chemin absolu, c'est un *bind mount* d'un dossier de l'hôte.
+
+      Pour vérifier la persistance, lance un **second** conteneur qui monte le même volume et lit le fichier.
+      `docker volume inspect` indique où les données sont rangées sur l'hôte.
     checks:
       - desc: Le volume donnees existe
         run: docker volume inspect donnees >/dev/null
@@ -68,6 +187,16 @@ exercises:
       Crée un réseau `backend`. Lance un conteneur `redis` nommé `cache` sur ce réseau, puis vérifie
       qu'un autre conteneur du même réseau le joint **par son nom** :
       `docker run --rm --network backend redis redis-cli -h cache ping` doit répondre `PONG`.
+    cours: |
+      Docker crée par défaut un réseau `bridge`, mais les conteneurs n'y ont **pas** de résolution de noms
+      entre eux. Un réseau créé avec `docker network create` fournit un **DNS intégré** : chaque conteneur est
+      joignable par son nom (et ses alias).
+
+      L'option `--network nom` attache un conteneur au réseau à son lancement ; `docker network connect`
+      branche un conteneur existant. `docker network inspect` montre les conteneurs attachés et leurs adresses.
+
+      C'est la base de toute architecture multi-conteneurs : l'application parle à `cache:6379` ou à `db:5432`
+      sans connaître d'adresse IP, et sans publier ces ports sur l'hôte.
     checks:
       - desc: Le réseau backend existe
         run: docker network inspect backend >/dev/null
@@ -84,6 +213,16 @@ exercises:
       2. Sans reconstruire d'image, crée **dans** le conteneur la page `/usr/share/nginx/html/tdm.html`
          qui contient `TDM` : `curl localhost:8080/tdm.html` doit l'afficher.
     hint: "docker inspect -f '{{.NetworkSettings.IPAddress}}' web ; docker exec web sh -c 'echo TDM > /usr/share/nginx/html/tdm.html'"
+    cours: |
+      `docker inspect` renvoie, au format JSON, tout ce que Docker sait d'un conteneur : image, montages,
+      variables, état, réseau… L'option `-f` (ou `--format`) extrait un champ avec un modèle Go, par exemple
+      `{{.State.Status}}`. Les adresses sont rangées par réseau sous `.NetworkSettings.Networks`.
+
+      `docker exec` lance une commande **dans** un conteneur en marche : `docker exec -it web sh` ouvre un shell
+      interactif, `docker exec web ls /` exécute une commande isolée.
+
+      Modifier un conteneur à chaud est pratique pour diagnostiquer, mais ces changements sont perdus à sa
+      recréation : la vraie correction se fait dans l'image ou par un volume.
     checks:
       - desc: L'IP notée est celle de web
         run: test -s /root/ip-web.txt && test "$(tr -d '[:space:]' < /root/ip-web.txt)" = "$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' web)"
@@ -100,6 +239,16 @@ exercises:
 
       Attends quelques secondes : `docker ps` doit afficher `(healthy)`.
     hint: "docker run -d --name api --restart unless-stopped --memory 128m --cpus 0.5 --health-cmd 'wget -qO- http://localhost/ || exit 1' --health-interval 5s nginx:1.27-alpine"
+    cours: |
+      En production, un conteneur doit survivre aux pannes et ne pas affamer ses voisins :
+      - `--restart` fixe la politique de redémarrage : `no`, `on-failure`, `always`, `unless-stopped` (redémarre
+        sauf si on l'a arrêté volontairement) ;
+      - `--memory` (`-m`) et `--cpus` posent des limites via les cgroups ; au-delà de la mémoire autorisée, le
+        noyau tue le processus (*OOM kill*) ;
+      - un **healthcheck** (`--health-cmd`, `--health-interval`…) fait tourner régulièrement une commande dans
+        le conteneur : code 0 = sain. L'état apparaît dans `docker ps` et `docker inspect`.
+
+      Un conteneur « Up » n'est pas forcément fonctionnel : le healthcheck permet aux orchestrateurs de le savoir.
     checks:
       - desc: Politique de redémarrage unless-stopped
         run: test "$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' api)" = unless-stopped
@@ -117,6 +266,18 @@ exercises:
       2. Corrige le `Dockerfile`, reconstruis l'image en **`buggy:2.0`** et lance le conteneur **`buggy`**
          qui publie son port 80 sur le port **8081** et reste démarré.
     hint: "docker logs <conteneur> montre l'erreur de nginx : regarde bien la directive passée avec -g (il manque un caractère)"
+    cours: |
+      Un conteneur s'arrête dès que son **processus principal** se termine. Causes classiques : la commande
+      n'existe pas, un fichier manque, un droit est absent, ou le serveur passe en arrière-plan (*daemon*) et
+      rend la main. nginx, par exemple, doit être lancé avec `daemon off;` pour rester au premier plan.
+
+      La démarche :
+      1. `docker ps -a` : le statut `Exited (code)` donne un premier indice ;
+      2. `docker logs conteneur` : le message d'erreur ;
+      3. `docker run -it --entrypoint sh image` : entrer dans l'image pour explorer.
+
+      Une image ne se modifie pas : on corrige le Dockerfile et on reconstruit avec un **nouveau tag**, ce qui
+      permet de revenir en arrière.
     checks:
       - desc: Le conteneur buggy tourne depuis buggy:2.0
         run: test "$(docker inspect -f '{{.State.Running}} {{.Config.Image}}' buggy)" = "true buggy:2.0"
@@ -134,6 +295,17 @@ exercises:
 
       Construis l'image `hello-go:1.0` : elle doit faire **moins de 20 Mo** et afficher `Hello TDM`.
     hint: "FROM golang:1.22-alpine AS build … FROM alpine:3.20 / COPY --from=build /src/hello /hello / USER 65534 / ENTRYPOINT [\"/hello\"]"
+    cours: |
+      Compiler une application demande des outils (compilateur, en-têtes) inutiles à l'exécution. Une
+      construction **multi-étapes** utilise plusieurs `FROM` dans un même Dockerfile : la première étape, nommée
+      avec `AS build`, compile ; l'étape finale repart d'une image minimale et ne récupère que le binaire avec
+      `COPY --from=build`.
+
+      Avantages : une image plus petite, plus rapide à transférer, et une **surface d'attaque** réduite.
+      `scratch` est une image vide ; `alpine` apporte un shell minimal pour le débogage.
+
+      L'instruction `USER` change l'utilisateur d'exécution. Sur Alpine, `adduser -D` crée un compte ; sur
+      `scratch`, on peut indiquer directement un UID numérique. `docker images` affiche la taille finale.
     checks:
       - desc: L'image affiche Hello TDM
         run: docker run --rm hello-go:1.0 | grep -qx "Hello TDM"
@@ -150,6 +322,16 @@ exercises:
       Tague ton image `monapp:1.0` en `localhost:5000/monapp:1.0` et **pousse**-la dans ce registre.
       Pour vérifier, supprime l'image locale puis récupère-la avec `docker pull`.
     hint: "docker run -d --name registry -p 5000:5000 registry:2.8.3 ; docker tag monapp:1.0 localhost:5000/monapp:1.0 ; docker push localhost:5000/monapp:1.0"
+    cours: |
+      Un **registre** stocke et distribue des images (Docker Hub, GitLab, Harbor, ou le registre open source
+      `registry`). Le nom d'une image contient l'adresse du registre : `localhost:5000/monapp:1.0` signifie
+      « dépôt `monapp`, tag `1.0`, sur le registre `localhost:5000` ».
+
+      Le flux : `docker tag` ajoute un nouveau nom à une image existante (sans copie), `docker push` envoie les
+      couches, `docker pull` les récupère. Un registre sur `localhost` est accepté en HTTP ; ailleurs, Docker
+      exige du HTTPS (ou une configuration `insecure-registries`).
+
+      L'API du registre se consulte avec curl : `/v2/_catalog` liste les dépôts, `/v2/<dépôt>/tags/list` les tags.
     checks:
       - desc: Le registre tourne
         run: test "$(docker inspect -f '{{.State.Running}}' registry)" = true
@@ -165,6 +347,18 @@ exercises:
       Démarre la stack depuis `/root/stack` avec `docker compose up -d`, puis observe `docker compose ps`
       et `docker compose logs`. Remarque que les deux services se joignent par leur nom.
     hint: "services: / web: image, ports: [\"8082:80\"] / cache: image, volumes: [cache-data:/data] / volumes: cache-data:"
+    cours: |
+      Docker Compose décrit une application multi-conteneurs dans un fichier YAML (`compose.yaml`) : les
+      **services**, leurs images, ports, volumes, variables et dépendances. Une seule commande crée le réseau,
+      les volumes et tous les conteneurs.
+
+      Structure : une clé `services:` avec un bloc par service, et une clé `volumes:` de premier niveau qui
+      **déclare** les volumes nommés utilisés. Compose crée un réseau par projet : les services s'y joignent
+      par leur nom.
+
+      Commandes : `docker compose up -d`, `ps`, `logs -f service`, `exec service sh`, `down` (ajoute `-v` pour
+      supprimer aussi les volumes). Le nom du projet vient du dossier : les conteneurs s'appellent
+      `stack-web-1`, etc.
     checks:
       - desc: Les services web et cache tournent
         run: test "$(docker compose -f /root/stack/compose.yaml ps --status running --services | sort | tr '\n' ' ')" = "cache web "

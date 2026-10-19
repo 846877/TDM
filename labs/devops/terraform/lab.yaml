@@ -19,6 +19,112 @@ description: |
 
   Le parcours : premier déploiement, variables et outputs, `count`, réseau et volume, modules, import d'une
   ressource créée à la main, qualité du code (`fmt`, `validate`), puis destruction propre.
+cours: |
+  ## Terraform : l'infrastructure décrite en code
+
+  L'**Infrastructure as Code** (IaC) consiste à décrire serveurs, réseaux, bases de données ou DNS dans des
+  fichiers texte versionnés, plutôt que de cliquer dans une console. Avantages : reproductibilité, revue de
+  code, historique, environnements identiques (dev, recette, prod) et destruction propre.
+
+  Terraform (et son fork open source OpenTofu) est **déclaratif** : tu décris l'état souhaité, il calcule les
+  actions nécessaires pour y parvenir.
+
+  ### Le cycle de travail
+
+  ```
+     main.tf ──▶ terraform init ──▶ terraform plan ──▶ terraform apply ──▶ infrastructure réelle
+                (providers,         (diff entre le     (exécute le plan,      │
+                 modules)            code et l'état)    met à jour l'état)    │
+                                         ▲                                    │
+                                         └──────── terraform.tfstate ◀────────┘
+  ```
+
+  ### Les briques du langage HCL
+
+  ```hcl
+  terraform {
+    required_providers {
+      docker = { source = "kreuzwerker/docker", version = "~> 3.0" }
+    }
+  }
+  provider "docker" {}
+
+  variable "port_externe" {
+    type        = number
+    default     = 8080
+    description = "Port publié sur l'hôte"
+  }
+
+  resource "docker_image" "nginx" { name = "nginx:alpine" }
+
+  resource "docker_container" "web" {
+    count = 2
+    name  = "web-${count.index}"
+    image = docker_image.nginx.image_id        # référence → dépendance implicite
+    ports {
+      internal = 80
+      external = var.port_externe + count.index
+    }
+  }
+
+  output "noms" { value = docker_container.web[*].name }
+  ```
+
+  | Élément | Rôle |
+  |---|---|
+  | `provider` | plugin qui parle à une API (AWS, Azure, Docker, Kubernetes…) |
+  | `resource` | un objet géré : `type.nom` |
+  | `data` | lire un objet existant sans le gérer |
+  | `variable` / `output` | entrées et sorties de la configuration |
+  | `locals` | valeurs calculées réutilisables |
+  | `module` | groupe de ressources réutilisable avec ses variables et outputs |
+
+  ### Le state
+
+  `terraform.tfstate` associe chaque ressource du code à l'objet réel (son identifiant). C'est grâce à lui
+  que Terraform sait quoi modifier ou supprimer. En équipe, il est stocké dans un **backend distant**
+  (S3, GitLab, Terraform Cloud…) avec un **verrou**, pour éviter deux `apply` simultanés. Il peut contenir
+  des secrets : on ne le commite jamais.
+
+  ### Mémo
+
+  ```bash
+  terraform init ; terraform fmt -recursive ; terraform validate
+  terraform plan -out plan.tfplan ; terraform apply plan.tfplan
+  terraform apply -var port_externe=9090 ; terraform output -raw url
+  terraform state list ; terraform state show docker_container.web[0]
+  terraform import docker_container.manuel <id>
+  terraform destroy
+  ```
+
+  ### Lire un plan
+
+  `+` création, `-` destruction, `~` modification sur place, `-/+` **remplacement** (destruction puis
+  recréation, souvent à cause d'un attribut marqué `forces replacement`). Un remplacement inattendu sur une
+  base de données est une alerte rouge.
+
+  ### Pièges courants
+
+  - Modifier à la main ce que Terraform gère : le prochain `plan` voudra corriger cette **dérive**.
+  - Commiter `terraform.tfstate` ou des secrets dans `terraform.tfvars`.
+  - Ne pas épingler les versions des providers : un `init` futur peut tout changer.
+  - Changer le nom logique d'une ressource : Terraform détruit et recrée (utilise un bloc `moved`).
+  - `count` sur une liste : retirer un élément au milieu décale les index ; `for_each` est plus stable.
+
+  ### Bonnes pratiques
+
+  `fmt` et `validate` en CI, `plan` relu dans la merge request, state distant verrouillé, modules versionnés,
+  variables typées et documentées, et Terraform pour l'infrastructure, Ansible pour la configuration
+  logicielle des machines.
+docs:
+  - title: Documentation Terraform
+    url: https://developer.hashicorp.com/terraform/docs
+  - title: Tutoriels Terraform (Docker et cloud)
+    url: https://developer.hashicorp.com/terraform/tutorials
+  - title: Langage de configuration Terraform
+    url: https://developer.hashicorp.com/terraform/language
+  - title: Provider kreuzwerker/docker
+    url: https://registry.terraform.io/providers/kreuzwerker/docker/latest/docs
 exercises:
   - id: init
     title: Premier déploiement
@@ -30,6 +136,17 @@ exercises:
       terraform { required_providers { docker = { source = "kreuzwerker/docker" } } }
       resource "docker_image" "nginx" { name = "nginx:alpine" }
       resource "docker_container" "web" { name = "web"  image = docker_image.nginx.image_id  ports { internal = 80  external = 8080 } }
+    cours: |
+      Une configuration Terraform commence par le bloc `terraform { required_providers { ... } }` qui indique la
+      **source** du provider (`kreuzwerker/docker` sur le registre public). `terraform init` télécharge ce
+      provider dans `.terraform/` et crée le fichier de verrouillage `.terraform.lock.hcl`.
+
+      Une ressource s'écrit `resource "TYPE" "NOM" { ... }`. Le conteneur référence l'image par une
+      **expression** (`docker_image.nginx.image_id`) : Terraform en déduit qu'il doit créer l'image d'abord. Le
+      bloc imbriqué `ports { internal = ... external = ... }` publie un port.
+
+      `terraform apply` affiche le plan et demande confirmation (`yes`). Ensuite, `terraform state list` et
+      `docker ps` montrent le résultat.
     checks:
       - desc: Terraform est initialisé
         run: test -d /root/infra/.terraform
@@ -42,6 +159,16 @@ exercises:
     description: |
       Ajoute une variable `port_externe` (type number, défaut `8080`) utilisée pour le port publié,
       et un output `url` qui vaut `http://localhost:<port>`. Applique avec `-var port_externe=9090`.
+    cours: |
+      Une **variable** rend la configuration paramétrable : `variable "nom" { type = number, default = ... }`,
+      utilisée avec `var.nom`. Sa valeur peut venir de la valeur par défaut, d'un fichier `terraform.tfvars`,
+      d'une variable d'environnement `TF_VAR_nom` ou de l'option `-var nom=valeur` (priorité la plus forte).
+
+      Un **output** expose une valeur après l'`apply` : `output "url" { value = "..." }`. L'interpolation dans
+      une chaîne s'écrit `"http://localhost:${var.port_externe}"`. Lis-le ensuite avec `terraform output`
+      (`-raw` pour une valeur brute utilisable dans un script).
+
+      Changer le port publié d'un conteneur Docker impose de le **recréer** : observe le `-/+` dans le plan.
     checks:
       - desc: La variable port_externe est déclarée
         run: grep -rqs 'variable *"port_externe"' /root/infra/*.tf
@@ -55,6 +182,17 @@ exercises:
       Avec `count`, déploie **3** conteneurs `web-0`, `web-1`, `web-2` publiés sur 8081, 8082 et 8083
       (garde ou supprime le premier conteneur `web`, comme tu préfères).
     hint: "count = 3 ; name = \"web-${count.index}\" ; external = 8081 + count.index"
+    cours: |
+      L'argument méta `count = N` crée N exemplaires d'une ressource. Dans le bloc, `count.index` vaut 0, 1, 2…
+      et permet de faire varier le nom ou le port (`"web-${count.index}"`, `8081 + count.index`).
+
+      Les exemplaires s'adressent ensuite par index : `docker_container.web[0]`, et l'expression *splat*
+      `docker_container.web[*].name` renvoie la liste de tous les noms.
+
+      Attention si tu transformes une ressource existante en ressource avec `count` : son adresse change
+      (`web` devient `web[0]`) et Terraform veut la recréer. Le bloc `moved { from = ... to = ... }` permet de
+      le lui expliquer. Pour des exemplaires identifiés par une clé plutôt que par une position, il existe
+      `for_each`.
     checks:
       - desc: web-0, web-1 et web-2 tournent
         run: for i in 0 1 2; do test "$(docker inspect -f '{{.State.Running}}' web-$i)" = true || exit 1; done
@@ -71,6 +209,18 @@ exercises:
 
       Observe dans `terraform plan` comment Terraform déduit l'ordre de création des **références** entre ressources.
     hint: "networks_advanced { name = docker_network.tdm.name } ; volumes { volume_name = docker_volume.donnees.name  container_path = \"/data\" }"
+    cours: |
+      Le provider Docker gère aussi les réseaux (`docker_network`) et les volumes (`docker_volume`). Dans un
+      `docker_container` :
+      - le bloc `networks_advanced { name = docker_network.tdm.name }` branche le conteneur sur un réseau ;
+      - le bloc `volumes { volume_name = docker_volume.donnees.name, container_path = "/data" }` monte un volume.
+
+      Comme ces blocs **référencent** d'autres ressources, Terraform construit un **graphe de dépendances** : il
+      crée le réseau et le volume avant le conteneur, et détruit dans l'ordre inverse. `terraform graph`
+      l'affiche au format DOT.
+
+      `depends_on` existe pour les dépendances que Terraform ne peut pas deviner, mais une référence explicite
+      est toujours préférable.
     checks:
       - desc: Le state contient le réseau et le volume
         run: cd /root/infra && terraform state list | grep -q '^docker_network\.' && terraform state list | grep -q '^docker_volume\.'
@@ -89,6 +239,16 @@ exercises:
       Utilise-le deux fois depuis la configuration principale : `app1` sur le port **8091** et `app2` sur **8092**,
       puis ajoute un output `urls` qui liste les deux URL.
     hint: "module \"app1\" { source = \"./modules/webapp\"  nom = \"app1\"  port = 8091 } ; pense à terraform init après l'ajout d'un module"
+    cours: |
+      Un **module** est simplement un dossier de fichiers `.tf` avec ses propres `variable` (entrées) et `output`
+      (sorties). On l'appelle avec un bloc `module "nom" { source = "./modules/webapp", nom = "...", port = ... }`.
+
+      Le code appelant ne voit que les outputs du module : `module.app1.url`. Pour construire une liste, on
+      écrit `[module.app1.url, module.app2.url]`.
+
+      Chaque ajout ou changement de `source` d'un module nécessite un nouveau `terraform init`. Dans le module,
+      pense au bloc `required_providers` : sans lui, Terraform cherche un provider `hashicorp/docker` qui
+      n'existe pas. Les modules partagés se publient sur un registre et se versionnent, comme une bibliothèque.
     checks:
       - desc: Les ressources viennent d'un module
         run: cd /root/infra && test "$(terraform state list | grep -c '^module\.')" -ge 2
@@ -108,6 +268,17 @@ exercises:
          ou un bloc `import { ... }`) ;
       3. ajuste la configuration jusqu'à ce que `terraform plan` ne propose plus de le **remplacer**.
     hint: "Après l'import, terraform state show docker_container.manuel montre les attributs à reporter dans ta configuration"
+    cours: |
+      Une infrastructure existante, créée à la main ou par un autre outil, peut être reprise par Terraform
+      **sans la recréer** : c'est l'**import**. Terraform enregistre alors l'objet dans son state.
+
+      Deux méthodes : la commande `terraform import ADRESSE ID`, ou un bloc `import { to = ..., id = ... }`
+      appliqué lors du prochain `apply` (Terraform 1.5+). Dans les deux cas, il faut d'abord écrire le bloc
+      `resource` correspondant.
+
+      Ensuite, compare : `terraform state show` montre les attributs réels, `terraform plan` les différences.
+      Ajuste le code jusqu'à ce que le plan ne propose plus de remplacement (`forces replacement`) ; quelques
+      modifications sur place sans conséquence peuvent rester.
     checks:
       - desc: docker_container.manuel est dans le state
         run: cd /root/infra && terraform state list | grep -qx 'docker_container.manuel'
@@ -126,6 +297,17 @@ exercises:
       3. chaque variable doit avoir une `description` et un `type` ;
       4. épingle la version du provider (`version = "~> 3.0"` dans `required_providers`).
     hint: "terraform fmt -check -recursive renvoie un code non nul s'il reste des fichiers mal formatés"
+    cours: |
+      Avant de proposer du code Terraform en revue :
+      - `terraform fmt` réécrit les fichiers dans le style canonique (indentation, alignement des `=`) ;
+        `-check` se contente de signaler, ce qu'on utilise en CI, et `-recursive` traite les sous-dossiers ;
+      - `terraform validate` contrôle la syntaxe et la cohérence (références, types) sans contacter l'API ;
+      - une variable documentée a un `type` et une `description`, ce qui sert aussi de documentation
+        générée (terraform-docs) ;
+      - la contrainte `version = "~> 3.0"` accepte les versions 3.x mais pas 4.0 : on profite des correctifs sans
+        risquer une rupture de compatibilité.
+
+      Des outils comme `tflint` ou `checkov` vont plus loin (bonnes pratiques, sécurité).
     checks:
       - desc: terraform fmt ne trouve rien à corriger
         run: cd /root/infra && ls *.tf >/dev/null && terraform fmt -check -recursive
@@ -142,6 +324,16 @@ exercises:
     description: |
       Supprime toute l'infrastructure avec `terraform destroy`. Le state doit être vide
       et plus aucun conteneur `web*` ne doit exister.
+    cours: |
+      `terraform destroy` supprime **toutes** les ressources du state, dans l'ordre inverse des dépendances,
+      après confirmation. C'est l'un des grands intérêts de l'IaC : un environnement de test se crée et se
+      détruit sans rien oublier (et sans facture surprise sur le cloud).
+
+      Pour ne détruire qu'une ressource, on peut la retirer du code puis lancer `apply`, ou utiliser
+      `-target` (à réserver aux cas exceptionnels).
+
+      Après destruction, `terraform state list` ne renvoie plus rien. Une ressource importée est elle aussi
+      supprimée : si tu veux la garder, retire-la d'abord du state avec `terraform state rm` (ou un bloc `removed`).
     checks:
       - desc: Le state est vide
         run: cd /root/infra && test -z "$(terraform state list)" && test -f terraform.tfstate

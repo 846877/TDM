@@ -17,6 +17,114 @@ description: |
 
   Le parcours : état des services, écrire sa propre unité, redémarrage automatique, journaux, timers,
   tâches cron, rotation des logs, dépannage d'un service en échec et limites de ressources.
+cours: |
+  ## systemd : démarrer, surveiller et journaliser les services
+
+  Sur la quasi-totalité des distributions Linux, **systemd** est le processus n°1 : il démarre le système,
+  lance les services, les redémarre s'ils plantent, gère leurs ressources (cgroups) et centralise leurs
+  journaux (**journald**). Savoir écrire une unité et lire un journal est indispensable pour exploiter une
+  application hors conteneur.
+
+  ### Les unités
+
+  Tout ce que gère systemd est une **unité**, décrite par un fichier INI :
+
+  | Type | Rôle |
+  |---|---|
+  | `.service` | un processus (démon, tâche ponctuelle) |
+  | `.timer` | déclenche un service selon un calendrier |
+  | `.socket` | active un service à la première connexion |
+  | `.target` | groupe d'unités (équivalent des niveaux d'exécution) |
+  | `.mount`, `.path` | montages, surveillance de fichiers |
+
+  Emplacements : `/lib/systemd/system/` (paquets, ne pas modifier), `/etc/systemd/system/` (administrateur,
+  prioritaire), et les dossiers **drop-in** `unite.service.d/*.conf` qui surchargent quelques directives.
+
+  ```ini
+  [Unit]
+  Description=API TDM
+  After=network-online.target
+
+  [Service]
+  User=api
+  ExecStart=/usr/bin/python3 -m http.server 8000 --directory /srv/api
+  Restart=always
+  RestartSec=2
+  Environment=MODE=prod
+  MemoryMax=100M
+
+  [Install]
+  WantedBy=multi-user.target
+  ```
+
+  `start`/`stop` agissent maintenant ; `enable`/`disable` agissent au **prochain démarrage** (création d'un
+  lien dans `multi-user.target.wants/`). `enable --now` fait les deux.
+
+  ### Cycle de vie d'un service
+
+  ```
+  inactive ──start──▶ activating ──▶ active (running) ──stop──▶ deactivating ──▶ inactive
+                          │                 │ plantage
+                          ▼                 ▼
+                       failed ◀──── trop de redémarrages (StartLimitBurst)
+  ```
+
+  ### Journald
+
+  Tout ce qu'un service écrit sur sa sortie standard ou d'erreur est capturé et indexé :
+
+  ```bash
+  journalctl -u nginx                 # un service
+  journalctl -u nginx -f              # en direct
+  journalctl -u nginx --since "10 min ago" -p err
+  journalctl -b                       # depuis le démarrage
+  journalctl --disk-usage ; journalctl --vacuum-time=7d
+  ```
+
+  ### Planifier : cron ou timer
+
+  **cron** est simple et universel : `minute heure jour mois jour_semaine commande`. Les **timers** systemd
+  ajoutent les journaux, les dépendances, le rattrapage des exécutions manquées (`Persistent=true`) et les
+  limites de ressources. `systemctl list-timers` liste les prochaines échéances.
+
+  ### Rotation des journaux
+
+  Les applications qui écrivent dans des fichiers doivent être tournées par **logrotate** (quotidien,
+  compression, nombre d'archives) pour ne pas remplir le disque.
+
+  ### Mémo
+
+  ```bash
+  systemctl status|start|stop|restart|reload|enable|disable unite
+  systemctl daemon-reload            # après toute modification d'un fichier d'unité
+  systemctl --failed ; systemctl list-units --type=service
+  systemctl cat unite ; systemctl show -p MainPID,NRestarts unite
+  systemctl edit unite               # crée un drop-in
+  systemd-analyze verify unite.service ; systemd-analyze blame
+  ```
+
+  ### Pièges courants
+
+  - Oublier `daemon-reload` : systemd utilise l'ancienne version du fichier.
+  - Un service qui se met en arrière-plan alors que `Type=simple` : systemd croit qu'il s'est arrêté.
+  - Des chemins relatifs dans `ExecStart` : ils doivent être absolus.
+  - Le `%` dans une ligne cron doit être échappé (`\%`).
+  - Un service en root alors qu'un compte dédié suffit.
+
+  ### Bonnes pratiques
+
+  Un utilisateur dédié, `Restart=on-failure`, des limites de ressources, les options de sandbox
+  (`ProtectSystem=strict`, `PrivateTmp=yes`, `NoNewPrivileges=yes`), des drop-ins plutôt que modifier les
+  fichiers des paquets, et des journaux sur la sortie standard.
+docs:
+  - title: Documentation systemd
+    url: https://systemd.io/
+  - title: Manuel systemd.service
+    url: https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html
+  - title: Manuel journalctl
+    url: https://www.freedesktop.org/software/systemd/man/latest/journalctl.html
+  - title: Manuel systemd.timer
+    url: https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html
 exercises:
   - id: etat
     title: État des services
@@ -25,6 +133,18 @@ exercises:
       2. Un service est en échec depuis le démarrage : trouve son nom (`systemctl --failed`) et écris-le dans
          `/root/echec.txt` (par exemple `truc.service`). Tu le répareras plus tard.
     hint: "systemctl enable --now cron"
+    cours: |
+      `systemctl status unite` résume l'état d'un service : `Loaded` (fichier trouvé, `enabled` ou `disabled`
+      au démarrage), `Active` (`active (running)`, `inactive (dead)`, `failed`), le PID principal et les
+      dernières lignes du journal.
+
+      Deux notions indépendantes à ne pas confondre :
+      - `start` / `stop` : démarrer ou arrêter **maintenant** ;
+      - `enable` / `disable` : démarrer ou non **au prochain démarrage** du système.
+
+      `systemctl enable --now` fait les deux en une commande. `systemctl --failed` liste les unités en échec,
+      et `systemctl is-active` / `is-enabled` répondent par un mot et un code de sortie, pratique dans les
+      scripts.
     checks:
       - desc: cron est actif
         run: test "$(systemctl is-active cron)" = active
@@ -42,6 +162,17 @@ exercises:
 
       `curl localhost:8000/health` doit répondre.
     hint: "[Unit] Description=… / [Service] User=api ExecStart=… / [Install] WantedBy=multi-user.target ; puis systemctl daemon-reload && systemctl enable --now tdm-api"
+    cours: |
+      Une unité de service se compose de trois sections : `[Unit]` (description, dépendances d'ordre comme
+      `After=`), `[Service]` (comment lancer le processus) et `[Install]` (à quelle cible le rattacher lors d'un
+      `enable`, généralement `WantedBy=multi-user.target`).
+
+      Dans `[Service]` : `ExecStart` avec un **chemin absolu**, `User=` pour ne pas tourner en root,
+      `WorkingDirectory=`, `Environment=`. Par défaut (`Type=simple`), systemd considère que le processus lancé
+      est le service : il doit rester au premier plan.
+
+      Un **utilisateur système** (`useradd --system`, ou `-r`) n'a pas de mot de passe ni de shell de connexion.
+      Après avoir créé ou modifié le fichier : `systemctl daemon-reload`.
     checks:
       - desc: tdm-api est actif et activé
         run: test "$(systemctl is-active tdm-api)" = active && test "$(systemctl is-enabled tdm-api)" = enabled
@@ -57,6 +188,16 @@ exercises:
 
       Teste : `kill -9` sur son PID principal (`systemctl show -p MainPID tdm-api`), puis attends quelques
       secondes : il doit être revenu avec un nouveau PID.
+    cours: |
+      La directive `Restart=` décide quand systemd relance un service : `no` (par défaut), `on-failure` (code
+      de sortie non nul, signal, délai dépassé), `always` (même après une sortie normale). `RestartSec=` fixe la
+      pause entre deux tentatives.
+
+      Pour éviter une boucle infinie, systemd abandonne si le service redémarre trop souvent
+      (`StartLimitBurst` fois dans `StartLimitIntervalSec`) et le passe en `failed`.
+
+      `kill -9` simule un plantage brutal. `systemctl show -p MainPID,NRestarts tdm-api` affiche le PID et le
+      nombre de redémarrages. Un `systemctl stop` volontaire, lui, ne déclenche pas de redémarrage.
     checks:
       - desc: Restart=always et RestartSec=2s
         run: test "$(systemctl show -p Restart --value tdm-api)" = always && test "$(systemctl show -p RestartUSec --value tdm-api)" = 2s
@@ -73,6 +214,17 @@ exercises:
          `/etc/systemd/journald.conf.d/persistant.conf` avec `Storage=persistent` (section `[Journal]`) et
          redémarre `systemd-journald`. Le dossier `/var/log/journal` doit alors exister.
     hint: "journalctl -u mystere ; journalctl -p err -b liste les erreurs depuis le démarrage"
+    cours: |
+      `journalctl` interroge le journal de systemd. Filtres utiles : `-u unite` (un service), `-b` (depuis le
+      démarrage), `--since`/`--until`, `-p err` (priorité), `-g motif` (recherche), `-o cat` (messages seuls,
+      sans horodatage), `--no-pager` pour les scripts.
+
+      Par défaut, si `/var/log/journal` n'existe pas, journald garde le journal **en mémoire** dans
+      `/run/log/journal` : il est perdu au redémarrage. Avec `Storage=persistent` dans la section `[Journal]`,
+      il l'écrit sur disque.
+
+      On ne modifie pas `/etc/systemd/journald.conf` directement : un fichier dans `journald.conf.d/` surcharge
+      seulement les réglages voulus. Le service à redémarrer est `systemd-journald`.
     checks:
       - desc: Le code secret est correct
         run: test "$(tr -d '[:space:]' < /root/code.txt)" = 7319
@@ -89,6 +241,18 @@ exercises:
 
       `systemctl list-timers` affiche la prochaine exécution ; `journalctl -u sauvegarde` montre les passages.
     hint: "Le timer a une section [Timer] et [Install] WantedBy=timers.target ; systemctl enable --now sauvegarde.timer"
+    cours: |
+      Un **timer** systemd déclenche une unité de service. Par convention, `sauvegarde.timer` active
+      `sauvegarde.service` (même nom). Le service est de type `oneshot` : il lance une tâche qui se termine.
+
+      Dans `[Timer]` :
+      - `OnCalendar=` : un calendrier (`daily`, `Mon *-*-* 03:00`, `*:0/5` toutes les 5 minutes) ;
+        `systemd-analyze calendar '*:0/1'` affiche les prochaines occurrences ;
+      - `AccuracySec=` : la précision (une minute par défaut, pour regrouper les réveils) ;
+      - `Persistent=true` : rattrape une exécution manquée pendant que la machine était éteinte.
+
+      On **active le timer**, pas le service (`systemctl enable --now sauvegarde.timer`). Le script doit être
+      exécutable et le dossier de destination exister.
     checks:
       - desc: Le timer est actif et activé
         run: test "$(systemctl is-active sauvegarde.timer)" = active && test "$(systemctl is-enabled sauvegarde.timer)" = enabled
@@ -108,6 +272,17 @@ exercises:
 
       Attention : dans `/etc/cron.d`, chaque ligne indique l'utilisateur après les cinq champs de date.
     hint: "0 3 * * * root find … et * * * * * root date >> /var/log/heartbeat.log"
+    cours: |
+      Une ligne crontab comporte cinq champs de date puis la commande :
+      `minute heure jour_du_mois mois jour_de_semaine`. `*` signifie « tous », `*/5` « tous les 5 »,
+      `1-5` une plage, `1,15` une liste. Exemple : `30 2 * * 1` = le lundi à 2 h 30.
+
+      Les fichiers de `/etc/cron.d/` ajoutent un sixième champ : l'**utilisateur** qui exécute la commande
+      (contrairement à `crontab -e`, propre à un utilisateur). Le nom du fichier ne doit contenir ni point ni
+      extension, et la dernière ligne doit se terminer par un retour à la ligne.
+
+      cron utilise un `PATH` minimal et `/bin/sh` : mets des chemins absolus. Le site crontab.guru aide à
+      vérifier une expression.
     checks:
       - desc: La tâche de 3 h est correcte
         run: grep -Eq '^0 +3 +\* +\* +\* +root +.*find +/tmp/cache' /etc/cron.d/tdm
@@ -125,6 +300,17 @@ exercises:
       le fichier manque (`missingok`). Teste la configuration avec `logrotate -d`, puis force une rotation
       avec `logrotate -f /etc/logrotate.d/tdm`.
     hint: "/var/log/tdm/*.log { daily  rotate 7  compress  missingok  notifempty }"
+    cours: |
+      **logrotate** archive périodiquement les fichiers de log : le fichier courant est renommé (`app.log.1`),
+      un nouveau est créé, les anciennes archives sont compressées puis supprimées au-delà d'un certain nombre.
+      Il est lancé chaque jour par cron ou par un timer.
+
+      Directives d'un bloc `/chemin/*.log { ... }` : `daily`/`weekly`, `rotate N`, `compress`
+      (`delaycompress` attend une rotation de plus), `missingok`, `notifempty`, `create 0640 user group`,
+      `copytruncate` (pour une application qui garde le fichier ouvert) ou un `postrotate` qui lui demande de
+      rouvrir ses fichiers.
+
+      `logrotate -d` simule sans rien faire (mode débogage) ; `-f` force une rotation immédiate.
     checks:
       - desc: La configuration est valide et complète
         run: |
@@ -138,6 +324,18 @@ exercises:
       `systemctl status rapport` et `journalctl -u rapport` : il y a **deux** problèmes. Il doit tourner sous
       l'utilisateur `rapport`, être actif et activé, et plus aucune unité ne doit être en échec.
     hint: "Une faute de frappe dans un chemin, et un utilisateur qui n'existe pas (useradd --system rapport) ; n'oublie pas daemon-reload"
+    cours: |
+      Démarche face à un service en échec :
+      1. `systemctl status unite` : code de sortie et dernières lignes ;
+      2. `journalctl -u unite -n 50 --no-pager` : le message d'erreur complet ;
+      3. `systemctl cat unite` : le fichier d'unité réellement utilisé (avec ses drop-ins) ;
+      4. lancer la commande `ExecStart` à la main, sous le bon utilisateur (`sudo -u`), pour reproduire.
+
+      Erreurs typiques : binaire ou script introuvable, utilisateur inexistant (`status=217/USER`), droits
+      manquants sur un fichier (`status=203/EXEC`, *permission denied*), port déjà pris.
+
+      Après correction : `daemon-reload`, `restart`, puis `systemctl reset-failed` si l'unité reste listée en
+      échec.
     checks:
       - desc: rapport est actif et activé
         run: test "$(systemctl is-active rapport)" = active && test "$(systemctl is-enabled rapport)" = enabled
@@ -156,6 +354,18 @@ exercises:
       qui crée `/etc/systemd/system/tdm-api.service.d/override.conf`) limitant le service à **100 Mo** de mémoire
       (`MemoryMax=100M`) et **20 %** d'un processeur (`CPUQuota=20%`). Redémarre-le.
     hint: "[Service] / MemoryMax=100M / CPUQuota=20% ; systemctl cat tdm-api montre l'unité et ses drop-ins"
+    cours: |
+      systemd place chaque service dans un **cgroup**, ce qui permet de limiter ses ressources :
+      `MemoryMax=` (au-delà, le noyau tue le processus), `CPUQuota=20%` (20 % d'un cœur), `TasksMax=`,
+      `IOWeight=`.
+
+      Pour modifier une unité sans toucher au fichier d'origine (qui peut être écrasé par une mise à jour du
+      paquet), on utilise un **drop-in** : `/etc/systemd/system/<unité>.d/override.conf`, qui ne contient que la
+      section et les directives à changer. `systemctl edit` le crée et recharge systemd automatiquement ; écrit à
+      la main, il faut `daemon-reload`.
+
+      `systemctl show -p MemoryMax,CPUQuotaPerSecUSec unite` affiche les valeurs appliquées, et `systemd-cgtop`
+      la consommation en direct.
     checks:
       - desc: Un drop-in existe pour tdm-api
         run: ls /etc/systemd/system/tdm-api.service.d/*.conf >/dev/null 2>&1

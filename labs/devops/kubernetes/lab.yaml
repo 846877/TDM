@@ -12,12 +12,116 @@ description: |
 
   Le terminal s'ouvre sur `master`. `kubectl` s'utilise en root : `sudo -i` ou `sudo kubectl ...`.
   Il faut environ 4 Go de RAM libres pour les deux VM.
+cours: |
+  ## Kubernetes multi-nœuds avec kubeadm
+
+  **kubeadm** est l'outil officiel pour installer un cluster Kubernetes « à la main » : il initialise le plan
+  de contrôle, génère les certificats et fait rejoindre les nœuds. Ce lab correspond à ce que l'on manipule
+  pour les certifications CKA/CKAD : plusieurs nœuds, placement, maintenance, RBAC, stockage, sauvegarde
+  d'etcd.
+
+  ### Ce que kubeadm installe
+
+  ```
+   master (plan de contrôle)                        worker1
+   ┌──────────────────────────────────┐            ┌──────────────────────┐
+   │ pods statiques (/etc/kubernetes/ │            │ kubelet (systemd)    │
+   │   manifests) :                   │            │ kube-proxy (DaemonSet)│
+   │   kube-apiserver  etcd           │◀──6443────▶│ CNI (réseau des pods)│
+   │   scheduler  controller-manager  │            │ containerd           │
+   │ kubelet (systemd), containerd    │            │  [pods applicatifs]  │
+   └──────────────────────────────────┘            └──────────────────────┘
+   /etc/kubernetes/pki : CA du cluster, certificats ; /etc/kubernetes/admin.conf : kubeconfig admin
+  ```
+
+  Le master porte un **taint** `node-role.kubernetes.io/control-plane:NoSchedule` : les pods applicatifs
+  vont sur les workers. Le réseau des pods est fourni par un plugin **CNI** (Calico, Flannel, Cilium…).
+
+  ### Placer les pods
+
+  | Mécanisme | Effet |
+  |---|---|
+  | `nodeSelector` | le pod ne va que sur les nœuds ayant ces labels |
+  | affinité / anti-affinité | règles plus riches (préférences, répartition entre nœuds) |
+  | taints et tolérations | un nœud repousse les pods qui ne tolèrent pas sa taint |
+  | `resources.requests` | ce que le scheduler réserve ; un nœud plein n'accepte plus de pods |
+  | `resources.limits` | plafond appliqué à l'exécution (OOM kill pour la mémoire) |
+
+  ### Sécurité : RBAC
+
+  Toute requête à l'API est authentifiée (certificat, jeton de ServiceAccount) puis **autorisée** par RBAC :
+
+  ```
+  ServiceAccount lecteur ──RoleBinding──▶ Role lecture-pods (get, list, watch sur pods)
+                                           portée : namespace web
+  ClusterRole + ClusterRoleBinding        portée : tout le cluster
+  ```
+
+  ### Stockage
+
+  Un **PersistentVolume** (PV) est un morceau de stockage du cluster ; une **PersistentVolumeClaim** (PVC)
+  est la demande d'un pod. Kubernetes lie une PVC à un PV compatible (classe, taille, mode d'accès). Avec une
+  **StorageClass** dynamique, les PV sont créés à la demande.
+
+  ### etcd
+
+  etcd contient **tout** l'état du cluster. Sa sauvegarde régulière (`etcdctl snapshot save`) est la base
+  de tout plan de reprise.
+
+  ### Mémo
+
+  ```bash
+  kubectl get nodes -o wide ; kubectl describe node worker1
+  kubectl label node worker1 role=worker ; kubectl annotate node worker1 cle=valeur
+  kubectl cordon|uncordon NOEUD
+  kubectl drain NOEUD --ignore-daemonsets --delete-emptydir-data
+  kubectl create configmap app-config --from-literal=MODE=production
+  kubectl create secret generic app-secret --from-literal=DB_PASSWORD=s3cret
+  kubectl auth can-i list pods -n web --as=system:serviceaccount:web:lecteur
+  kubectl get pv,pvc -A
+  ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 --cacert=... --cert=... --key=... snapshot save f.db
+  ```
+
+  ### Pièges courants
+
+  - Un Secret n'est qu'encodé en base64, pas chiffré : protège l'accès à l'API et active le chiffrement
+    d'etcd.
+  - `drain` refuse de continuer à cause des DaemonSets ou des volumes `emptyDir` : options dédiées.
+  - Une PVC reste `Pending` : aucune StorageClass ou aucun PV compatible.
+  - Un pod `Pending` avec « Insufficient cpu » : requêtes trop élevées pour les nœuds.
+  - Donner `cluster-admin` à une application « pour que ça marche ».
+
+  ### Bonnes pratiques
+
+  Plusieurs masters derrière un répartiteur en production, sauvegardes etcd automatisées et testées, RBAC au
+  moindre privilège, requêtes et limites partout, mises à jour du cluster version par version
+  (`kubeadm upgrade`).
+docs:
+  - title: Installer un cluster avec kubeadm
+    url: https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm/
+  - title: Utiliser l'autorisation RBAC
+    url: https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+  - title: Volumes persistants
+    url: https://kubernetes.io/fr/docs/concepts/storage/persistent-volumes/
+  - title: Opérer un cluster etcd pour Kubernetes
+    url: https://kubernetes.io/docs/tasks/administer-cluster/configure-upgrade-etcd/
 exercises:
   - id: cluster
     title: État du cluster
     description: |
       Vérifie que les deux nœuds sont `Ready`, puis ajoute le label `role=worker` au nœud worker.
     hint: "kubectl get nodes -o wide, kubectl label node <nom> role=worker"
+    cours: |
+      `kubectl get nodes` affiche chaque nœud et son statut. `Ready` signifie que le kubelet fonctionne et que le
+      réseau des pods (CNI) est opérationnel ; `NotReady` vient souvent d'un CNI absent ou d'un kubelet arrêté.
+      `-o wide` ajoute les adresses IP, la version et le runtime.
+
+      Les **labels** de nœuds sont des paires clé/valeur qui servent au placement des pods (`nodeSelector`,
+      affinités). `kubectl label node NOM cle=valeur` en ajoute un ; `--overwrite` le modifie ;
+      `kubectl label node NOM cle-` le supprime.
+
+      `kubectl get nodes --show-labels` affiche les labels, dont ceux posés automatiquement
+      (`kubernetes.io/hostname`, `kubernetes.io/os`).
     checks:
       - desc: Deux nœuds Ready
         run: test "$(sudo kubectl get nodes --no-headers | grep -c ' Ready')" -ge 2
@@ -29,6 +133,16 @@ exercises:
       Crée le namespace `web`, puis un déploiement `nginx` (image `nginx:1.27`, 3 réplicas) exposé par
       un service NodePort `nginx` sur le port **30080**.
     hint: "kubectl create deployment ... --replicas=3, kubectl expose ... --type=NodePort, puis kubectl edit svc pour fixer nodePort"
+    cours: |
+      Un **namespace** regroupe les objets d'une application. `kubectl create namespace web`, puis l'option
+      `-n web` sur chaque commande (ou un `namespace:` dans le manifeste).
+
+      Un service **NodePort** ouvre le même port (plage 30000-32767) sur **chaque nœud** du cluster et redirige
+      vers les pods, où qu'ils soient. Trois ports à ne pas confondre : `port` (celui du service dans le
+      cluster), `targetPort` (celui du conteneur) et `nodePort` (celui ouvert sur les nœuds).
+
+      `kubectl expose` choisit un nodePort au hasard : pour imposer 30080, écris le manifeste ou modifie le
+      service. Teste avec `curl http://192.168.99.11:30080`.
     checks:
       - desc: 3 réplicas disponibles dans le namespace web
         run: test "$(sudo kubectl -n web get deploy nginx -o jsonpath='{.status.availableReplicas}')" = 3
@@ -43,6 +157,17 @@ exercises:
       avec `DB_PASSWORD=s3cret`. Lance un pod `app` (image `busybox:1.36`, commande `sleep 3600`) qui
       reçoit les deux en variables d'environnement.
     hint: "envFrom: configMapRef / secretRef"
+    cours: |
+      La configuration ne doit pas être figée dans l'image. Kubernetes propose :
+      - la **ConfigMap** pour les paramètres non sensibles ;
+      - le **Secret** pour les données sensibles (encodées en base64, avec des droits d'accès séparés).
+
+      Elles se créent avec `kubectl create configmap|secret generic NOM --from-literal=CLE=valeur` (ou
+      `--from-file`). Un pod les consomme en variables d'environnement (`env.valueFrom.configMapKeyRef` /
+      `secretKeyRef` pour une clé, `envFrom` pour toutes) ou en fichiers via un volume.
+
+      `kubectl run --dry-run=client -o yaml` génère un squelette de pod à compléter. Vérifie avec
+      `kubectl exec app -n web -- env`.
     checks:
       - desc: Le pod app tourne
         run: test "$(sudo kubectl -n web get pod app -o jsonpath='{.status.phase}')" = Running
@@ -56,6 +181,17 @@ exercises:
       Crée un déploiement `api` (image `nginx:1.27`, 2 réplicas) dans `web` dont les pods ne tournent
       **que** sur le nœud `role=worker`, avec une requête de 100m CPU / 64Mi et une limite de 128Mi.
     hint: "nodeSelector, resources.requests / resources.limits"
+    cours: |
+      Le **scheduler** choisit un nœud pour chaque pod en filtrant ceux qui conviennent, puis en les classant.
+      Pour le contraindre :
+      - `nodeSelector: {role: worker}` dans la spec du pod : seuls les nœuds portant ce label sont éligibles ;
+      - l'**affinité de nœud** offre des règles plus riches (obligatoires ou préférées).
+
+      Les **requests** (`resources.requests.cpu: 100m`, `memory: 64Mi`) sont réservées par le scheduler : la
+      somme des requêtes d'un nœud ne peut dépasser sa capacité. Les **limits** sont appliquées à l'exécution :
+      un conteneur qui dépasse sa limite mémoire est tué (`OOMKilled`). `100m` = 0,1 processeur.
+
+      `kubectl get pods -o wide` montre sur quel nœud tourne chaque pod.
     checks:
       - desc: 2 réplicas disponibles
         run: test "$(sudo kubectl -n web get deploy api -o jsonpath='{.status.availableReplicas}')" = 2
@@ -73,6 +209,17 @@ exercises:
       Simule une maintenance : vide (`drain`) le worker puis remets-le en service. À la fin, le worker
       doit être planifiable et une annotation `maintenance=faite` doit être posée dessus.
     hint: "kubectl drain --ignore-daemonsets --delete-emptydir-data, kubectl uncordon, kubectl annotate"
+    cours: |
+      Avant une maintenance (mise à jour du noyau, de kubelet), on vide le nœud :
+      - `kubectl cordon` le rend **non planifiable** (`SchedulingDisabled`) sans toucher aux pods existants ;
+      - `kubectl drain` fait le cordon **et** évince les pods, qui sont recréés ailleurs par leurs contrôleurs.
+        Il faut souvent `--ignore-daemonsets` (les pods de DaemonSet ne peuvent pas partir) et
+        `--delete-emptydir-data`.
+      - `kubectl uncordon` remet le nœud en service.
+
+      Les **PodDisruptionBudgets** protègent les applications pendant un drain. Les **annotations**
+      (`kubectl annotate`) stockent des informations libres, non utilisées pour la sélection, à la différence des
+      labels.
     checks:
       - desc: Le worker est planifiable
         run: test -z "$(sudo kubectl get nodes -l role=worker -o jsonpath='{.items[0].spec.unschedulable}')"
@@ -87,6 +234,18 @@ exercises:
 
       Après le déploiement progressif, les 3 réplicas doivent être de nouveau disponibles.
     hint: "kubectl -n web edit deploy nginx, ou kubectl patch ; vérifie avec kubectl -n web describe pod"
+    cours: |
+      Deux sondes, deux rôles :
+      - la **readinessProbe** décide si le pod reçoit du trafic : tant qu'elle échoue, le pod est retiré des
+        endpoints du Service. Indispensable pour des mises à jour sans erreur ;
+      - la **livenessProbe** décide si le conteneur doit être redémarré.
+
+      Une sonde `httpGet` interroge un chemin et un port ; un code entre 200 et 399 est un succès.
+      `initialDelaySeconds` laisse le temps de démarrer, `periodSeconds` règle la fréquence, `failureThreshold`
+      le nombre d'échecs tolérés.
+
+      Modifier les sondes change le modèle de pod : le Deployment fait une mise à jour progressive. Suis-la avec
+      `kubectl rollout status`.
     checks:
       - desc: readinessProbe HTTP définie
         run: sudo kubectl -n web get deploy nginx -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.port}' | grep -q 80
@@ -105,6 +264,16 @@ exercises:
 
       Vérifie avec `kubectl auth can-i ... --as=system:serviceaccount:web:lecteur`.
     hint: "kubectl -n web create role lecture-pods --verb=get,list,watch --resource=pods ; kubectl -n web create rolebinding lecteur-pods --role=lecture-pods --serviceaccount=web:lecteur"
+    cours: |
+      **RBAC** (*Role-Based Access Control*) décide qui peut faire quoi dans l'API :
+      - un **Role** liste des permissions dans un namespace : des `verbs` (`get`, `list`, `watch`, `create`,
+        `delete`…) sur des `resources` d'un `apiGroup` (les pods sont dans le groupe core, noté `""`) ;
+      - un **RoleBinding** attribue ce Role à des sujets : utilisateurs, groupes ou **ServiceAccounts** ;
+      - **ClusterRole** et **ClusterRoleBinding** font de même à l'échelle du cluster.
+
+      Un ServiceAccount est l'identité d'une application ; son nom complet est
+      `system:serviceaccount:<namespace>:<nom>`. `kubectl create role|rolebinding|serviceaccount` évitent le
+      YAML. `kubectl auth can-i VERBE RESSOURCE --as=...` teste les droits sans se connecter avec ce compte.
     checks:
       - desc: lecteur peut lister les pods de web
         run: test "$(sudo kubectl auth can-i list pods -n web --as=system:serviceaccount:web:lecteur)" = yes
@@ -123,6 +292,17 @@ exercises:
       3. Lance le pod `stockage` (image `busybox:1.36`, commande `sleep 3600`) qui monte la claim sur `/data`, puis
          écris `persistant` dans `/data/test.txt` depuis le pod.
     hint: "kubectl -n web exec stockage -- sh -c 'echo persistant > /data/test.txt'"
+    cours: |
+      Le stockage persistant sépare l'offre de la demande :
+      - le **PersistentVolume** (PV), objet du cluster (sans namespace), décrit un stockage réel : capacité,
+        modes d'accès, classe, et le support (ici `hostPath`, un dossier du nœud, à réserver aux tests) ;
+      - la **PersistentVolumeClaim** (PVC), objet d'un namespace, demande une taille, un mode et une classe.
+
+      Kubernetes **lie** la PVC à un PV compatible (classe identique, capacité suffisante, même mode d'accès) :
+      les deux passent à l'état `Bound`. Le pod référence ensuite la PVC dans `volumes` et la monte avec
+      `volumeMounts`.
+
+      Avec `hostPath`, les données restent sur le nœud qui exécute le pod.
     checks:
       - desc: La claim donnees est liée à pv-donnees
         run: test "$(sudo kubectl -n web get pvc donnees -o jsonpath='{.status.phase}/{.spec.volumeName}')" = Bound/pv-donnees
@@ -140,6 +320,17 @@ exercises:
     hint: |
       sudo kubectl -n kube-system exec etcd-master -- etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key snapshot save /var/lib/etcd/snapshot.db
       (le dossier /var/lib/etcd du pod est celui du master), puis sudo cp et sudo chown
+    cours: |
+      **etcd** est la base clé-valeur où Kubernetes stocke tout : objets, secrets, état. Perdre etcd, c'est
+      perdre le cluster ; sa sauvegarde est donc un geste fondamental.
+
+      etcd n'accepte que des clients authentifiés par certificat. `etcdctl` (API v3) a besoin de :
+      `--endpoints=https://127.0.0.1:2379`, `--cacert` (CA d'etcd), `--cert` et `--key` (un certificat client,
+      par exemple celui du serveur ou de `healthcheck-client`), tous dans `/etc/kubernetes/pki/etcd/`.
+
+      `etcdctl snapshot save fichier` crée l'instantané ; `etcdutl snapshot status fichier` (ou `etcdctl`)
+      le vérifie. Le pod statique etcd contient le binaire : `kubectl -n kube-system exec etcd-master -- ...`.
+      Pense à copier le fichier et à ajuster son propriétaire.
     checks:
       - desc: L'instantané existe et pèse plus de 1 Mo
         run: test -r /home/vagrant/etcd-snapshot.db && test "$(stat -c %s /home/vagrant/etcd-snapshot.db)" -gt 1000000

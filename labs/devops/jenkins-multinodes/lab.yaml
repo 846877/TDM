@@ -12,6 +12,107 @@ description: |
   Les nœuds `agent1` et `agent2` sont créés côté maître, mais les conteneurs agents ne reçoivent ni
   URL ni secret : **ils ne se connectent pas tout seuls**. Le premier exercice consiste à les raccorder.
   Le mot de passe initial : `docker compose exec jenkins-master cat /var/jenkins_home/secrets/initialAdminPassword`.
+cours: |
+  ## Jenkins distribué : un contrôleur, des agents
+
+  Un Jenkins seul atteint vite ses limites : builds concurrents, outils différents selon les projets
+  (Java 17, Node, Docker…), risque de sécurité si les builds tournent sur la machine qui détient tous les
+  secrets. La réponse est l'architecture **contrôleur / agents** : le contrôleur orchestre, les agents
+  exécutent.
+
+  ### Architecture
+
+  ```
+                   ┌────────────── contrôleur (jenkins-master) ──────────────┐
+                   │ interface web, configuration, file d'attente, historique │
+                   │ exécuteurs : 0  (aucun build ici)                        │
+                   └───────────────┬───────────────────────┬─────────────────┘
+               WebSocket ou TCP    │ (l'agent se connecte) │
+                   ┌───────────────▼─────┐         ┌───────▼─────────────┐
+                   │ agent1  label linux │         │ agent2  label linux │
+                   │ workspace /home/... │         │ workspace /home/... │
+                   └─────────────────────┘         └─────────────────────┘
+  ```
+
+  ### Modes de connexion des agents
+
+  | Mode | Principe |
+  |---|---|
+  | **Agent entrant** (JNLP / WebSocket) | l'agent démarre et se connecte au contrôleur avec un **secret** propre au nœud ; pratique derrière un pare-feu ou dans un conteneur |
+  | **SSH** | le contrôleur se connecte à la machine et lance l'agent |
+  | **Cloud** (Docker, Kubernetes) | des agents éphémères créés à la demande pour un build puis détruits |
+
+  L'image `jenkins/inbound-agent` lit les variables `JENKINS_URL`, `JENKINS_AGENT_NAME`, `JENKINS_SECRET` et
+  `JENKINS_WEB_SOCKET` pour se connecter.
+
+  ### Choisir où s'exécute un build
+
+  - Les **labels** décrivent les capacités d'un agent (`linux`, `docker`, `jdk17`). Le nom d'un nœud est
+    aussi un label.
+  - Dans un pipeline : `agent { label 'linux' }` globalement ou par étape, `agent none` en tête pour forcer
+    chaque étape à choisir.
+  - Dans un job freestyle : *Restrict where this project can be run* avec une expression (`linux && docker`).
+
+  ```groovy
+  pipeline {
+      agent none
+      stages {
+          stage('Build') {
+              agent { label 'agent1' }
+              steps {
+                  sh 'mkdir -p dist && echo v1 > dist/app.txt'
+                  stash name: 'livrable', includes: 'dist/**'
+              }
+          }
+          stage('Tests') {
+              parallel {
+                  stage('Unitaires')   { agent { label 'agent1' }; steps { sh 'sleep 5' } }
+                  stage('Integration') { agent { label 'agent2' }; steps { sh 'sleep 5' } }
+              }
+          }
+          stage('Deploy') {
+              agent { label 'agent2' }
+              steps { unstash 'livrable'; sh 'cat dist/app.txt' }
+          }
+      }
+  }
+  ```
+
+  Chaque agent a son propre **espace de travail** : les fichiers ne voyagent d'un agent à l'autre que par
+  `stash`/`unstash` (petits fichiers, durée d'un build) ou par des artefacts.
+
+  ### Sauvegarde
+
+  Tout l'état de Jenkins est dans `JENKINS_HOME`. Le minimum à sauvegarder : `config.xml`,
+  `jobs/*/config.xml`, `nodes/`, `users/`, `credentials.xml` et `secrets/` (sans lesquels les identifiants
+  ne peuvent pas être déchiffrés), `plugins` (ou la liste des plugins).
+
+  ### Mémo
+
+  ```bash
+  docker compose ps ; docker compose logs -f agent1
+  docker compose exec jenkins-master bash
+  curl -u admin:JETON http://192.168.99.10:8080/computer/api/json?pretty=true
+  ```
+
+  ### Pièges courants
+
+  - Un agent « hors ligne » : mauvaise URL, secret erroné, ou WebSocket non activé.
+  - Laisser des exécuteurs sur le contrôleur : un build malveillant accède à toute la configuration.
+  - Supposer qu'un fichier créé sur un agent existe sur un autre.
+  - Une étiquette sans aucun agent correspondant : le build attend indéfiniment dans la file.
+
+  ### Bonnes pratiques
+
+  Zéro exécuteur sur le contrôleur, des agents éphémères et identiques (images versionnées), des labels qui
+  décrivent des capacités et non des machines, la configuration en code (JCasC) et des sauvegardes testées.
+docs:
+  - title: Gérer les nœuds Jenkins
+    url: https://www.jenkins.io/doc/book/managing/nodes/
+  - title: Builds distribués (architecture)
+    url: https://www.jenkins.io/doc/book/scaling/architecting-for-scale/
+  - title: Syntaxe des pipelines Jenkins
+    url: https://www.jenkins.io/doc/book/pipeline/syntax/
 exercises:
   - id: agents
     title: Raccorder les agents
@@ -21,6 +122,16 @@ exercises:
       `docker-compose.yml` avec `JENKINS_URL`, `JENKINS_AGENT_NAME`, `JENKINS_SECRET` et
       `JENKINS_WEB_SOCKET=true` pour que les deux agents se connectent.
     hint: "Le service maître s'appelle jenkins-master sur le réseau jenkins"
+    cours: |
+      Un **agent entrant** se connecte lui-même au contrôleur : il a besoin de l'URL de Jenkins, du **nom** du
+      nœud tel que déclaré côté contrôleur et du **secret** associé à ce nœud (une longue chaîne hexadécimale
+      affichée sur la page du nœud). Le secret prouve que le conteneur a le droit de se présenter sous ce nom.
+
+      Avec `JENKINS_WEB_SOCKET=true`, la connexion passe par le port HTTP (8080) en WebSocket, sans ouvrir le port
+      TCP dédié aux agents (50000).
+
+      Dans un réseau Compose, le contrôleur est joignable par son nom de service. Après modification du
+      `docker-compose.yml`, `docker compose up -d` recrée les agents ; leurs journaux indiquent `Connected`.
     checks:
       - desc: agent1 est connecté
         run: |
@@ -34,6 +145,17 @@ exercises:
       Donne le label `linux` aux deux agents, passe le nombre d'exécuteurs du maître à **0**, puis crée
       un job pipeline `reparti` dont les étapes s'exécutent sur `agent { label 'linux' }`. Lance-le avec
       succès.
+    cours: |
+      Un **label** est une étiquette posée sur un nœud pour décrire ce qu'il sait faire. Les jobs demandent un
+      label plutôt qu'un nœud précis : Jenkins choisit n'importe quel agent libre qui le porte, ce qui permet
+      d'ajouter ou retirer des agents sans toucher aux jobs.
+
+      Le nombre d'**exécuteurs** d'un nœud est le nombre de builds qu'il peut mener en parallèle. Le régler à 0
+      sur le contrôleur (Manage Jenkins > Nodes > Built-In Node) garantit qu'aucun build ne s'y exécute : bonne
+      pratique de sécurité et de stabilité.
+
+      Dans un pipeline déclaratif, `agent { label 'linux' }` sélectionne les agents. La console du build indique
+      sur quel nœud il a tourné (`Running on agent1`).
     checks:
       - desc: Le maître n'a plus d'exécuteur
         run: cd /home/vagrant/jenkins-docker && docker compose exec -T jenkins-master grep -q '<numExecutors>0</numExecutors>' /var/jenkins_home/config.xml
@@ -49,6 +171,16 @@ exercises:
     description: |
       Crée un job **freestyle** `sur-agent2` restreint au nœud `agent2` (*Restrict where this project can be run*,
       expression `agent2`) avec une étape shell `hostname && java -version`. Lance-le avec succès.
+    cours: |
+      Un job freestyle peut être **restreint** à certains nœuds via l'option *Restrict where this project can be
+      run*, qui accepte une **expression de labels** : un nom de nœud, un label, ou une combinaison
+      (`linux && !windows`, `agent1 || agent2`).
+
+      Le nom d'un nœud fonctionne comme un label implicite : `agent2` cible ce seul nœud. C'est utile quand une
+      machine possède un équipement ou un accès particulier, mais cela crée une dépendance : si `agent2` est hors
+      ligne, le job attend.
+
+      `hostname` dans le script permet de vérifier dans la console où le build a réellement été exécuté.
     checks:
       - desc: Le job est restreint à agent2
         run: cd /home/vagrant/jenkins-docker && docker compose exec -T jenkins-master grep -q '<assignedNode>agent2</assignedNode>' /var/jenkins_home/jobs/sur-agent2/config.xml
@@ -64,6 +196,16 @@ exercises:
       `Unitaires` sur `agent { label 'agent1' }` et `Integration` sur `agent { label 'agent2' }`
       (le nom d'un nœud sert aussi de label). Lance-le avec succès : la durée totale doit être celle de la
       branche la plus longue.
+    cours: |
+      La directive `parallel` à l'intérieur d'un `stage` contient plusieurs `stage` exécutés **en même temps**.
+      Chacun peut déclarer son propre `agent` : les branches tournent alors sur des machines différentes, ce qui
+      réduit la durée totale à celle de la branche la plus longue.
+
+      Si le pipeline a un agent global, chaque branche le réutilise ; avec `agent none` en tête, chaque étape
+      doit choisir le sien. `failFast true` arrête les autres branches dès qu'une échoue.
+
+      La vue *Pipeline Graph* (ou *Stage View*) montre les branches côte à côte et leur durée. Un `sleep` dans
+      chaque branche rend le parallélisme visible.
     checks:
       - desc: Le dernier build a réussi en utilisant les deux agents
         run: |
@@ -78,6 +220,16 @@ exercises:
       2. une étape `Deploy` sur `agent2` le récupère avec `unstash 'livrable'` et affiche son contenu.
 
       Chaque agent a son propre espace de travail : sans `stash`, le fichier n'existerait pas sur agent2.
+    cours: |
+      Chaque agent a son propre **espace de travail** (*workspace*) sur son disque. Un fichier créé sur agent1
+      n'existe pas sur agent2.
+
+      `stash name: 'nom', includes: 'motif'` envoie des fichiers de l'espace de travail courant vers le
+      contrôleur, où ils sont gardés le temps du build. `unstash 'nom'` les restitue dans l'espace de travail
+      d'un autre agent (ou du même, dans une étape ultérieure).
+
+      Le stash est fait pour de petits fichiers échangés pendant un build. Pour des livrables à conserver ou
+      volumineux, on préfère `archiveArtifacts` ou un dépôt d'artefacts (Nexus, registre d'images).
     checks:
       - desc: Le dernier build a réussi avec stash puis unstash sur deux agents
         run: |
@@ -91,6 +243,16 @@ exercises:
       `/home/vagrant/jenkins-backup.tar.gz` : `config.xml`, les `config.xml` de tous les jobs et le dossier `nodes`.
       L'archive doit être créée **sur la VM** (pas dans le conteneur).
     hint: "docker compose exec -T jenkins-master tar czf - -C /var/jenkins_home config.xml nodes $(...) > ~/jenkins-backup.tar.gz ; ou find jobs -maxdepth 2 -name config.xml"
+    cours: |
+      Toute la configuration de Jenkins est faite de fichiers XML dans `JENKINS_HOME` : `config.xml` (global),
+      `jobs/<nom>/config.xml` (chaque job), `nodes/<nom>/config.xml` (chaque agent). L'historique des builds
+      (`jobs/*/builds/`) est volumineux et souvent exclu des sauvegardes de configuration.
+
+      Ici, `JENKINS_HOME` est à l'intérieur du conteneur (ou d'un volume) : `docker compose exec` permet d'y lancer
+      `tar`, et `docker compose cp` (ou une redirection de la sortie de `tar` vers un fichier de la VM) de
+      récupérer l'archive. `tar` accepte plusieurs chemins et des motifs ; `-C` fixe le dossier de départ.
+
+      Teste toujours une sauvegarde en listant son contenu (`tar -tzf`).
     checks:
       - desc: L'archive contient config.xml et nodes/
         run: tar -tzf /home/vagrant/jenkins-backup.tar.gz | sed 's#^\./##' | grep -qx 'config.xml' && tar -tzf /home/vagrant/jenkins-backup.tar.gz | sed 's#^\./##' | grep -q '^nodes/agent1/config.xml'

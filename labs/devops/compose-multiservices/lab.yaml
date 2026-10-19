@@ -21,6 +21,108 @@ description: |
 
   Variables reconnues par l'application : `REDIS_HOST` (défaut `redis`), `REDIS_PASSWORD`, `APP_VERSION`.
   Pour tester depuis le terminal : `wget -qO- http://localhost:8000/`.
+cours: |
+  ## Docker Compose : décrire une application complète
+
+  Une application réelle combine plusieurs conteneurs : un frontal, une ou plusieurs instances de
+  l'application, une base de données, un cache. **Docker Compose** décrit cet ensemble dans un fichier YAML
+  versionné et le pilote avec une seule commande. C'est l'outil idéal pour le poste du développeur, la CI et
+  les petits déploiements sur un seul hôte.
+
+  ### L'architecture visée
+
+  ```
+                    réseau front                       réseau back
+  navigateur ──:8080──▶ proxy (nginx) ──▶ web ×3 (Flask) ──▶ redis ──▶ volume redis-data
+                                          (APP_VERSION,       (mot de passe, AOF,
+                                           REDIS_PASSWORD)     healthcheck)
+  ```
+
+  ### Anatomie d'un `compose.yaml`
+
+  ```yaml
+  services:
+    web:
+      build: .                          # ou image: monapp:1.0
+      environment:
+        REDIS_PASSWORD: ${REDIS_PASSWORD}   # lue dans .env
+      depends_on:
+        redis:
+          condition: service_healthy
+      restart: unless-stopped
+      networks: [front, back]
+    redis:
+      image: redis:7.2-alpine
+      command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+      volumes: [redis-data:/data]
+      healthcheck:
+        test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping"]
+        interval: 5s
+      networks: [back]
+  volumes:
+    redis-data:
+  networks:
+    front:
+    back:
+  ```
+
+  ### Concepts clés
+
+  - **Projet** : un dossier = un projet (nom dérivé du dossier, ou `-p`). Conteneurs nommés
+    `projet-service-N`, réseau `projet_default` créé automatiquement.
+  - **Découverte de services** : chaque service est joignable par son nom sur les réseaux qu'il partage.
+    Avec plusieurs réplicas, le DNS renvoie plusieurs adresses.
+  - **Réconciliation** : `docker compose up -d` compare le fichier à l'existant et ne recrée que les
+    conteneurs dont la configuration a changé.
+  - **Interpolation** : `${VAR}` est remplacé par Compose à partir de l'environnement ou du fichier `.env` ;
+    `$$` produit un `$` littéral transmis au conteneur.
+
+  ### Le Dockerfile qui va avec
+
+  ```dockerfile
+  FROM python:3.12-slim
+  WORKDIR /app
+  COPY requirements.txt .
+  RUN pip install --no-cache-dir -r requirements.txt   # couche mise en cache
+  COPY . .
+  RUN useradd --create-home app
+  USER app
+  CMD ["python", "app.py"]
+  ```
+
+  ### Mémo
+
+  ```bash
+  docker compose up -d --build        # construire et démarrer
+  docker compose ps ; docker compose logs -f web
+  docker compose exec redis sh ; docker compose run --rm web pytest
+  docker compose up -d --scale web=3
+  docker compose config               # fichier final après interpolation (vérifie tout !)
+  docker compose down                 # garde les volumes ; -v pour les supprimer
+  ```
+
+  ### Pièges courants
+
+  - `depends_on` seul n'attend que le **démarrage** du conteneur, pas que le service soit prêt : ajoute un
+    healthcheck et `condition: service_healthy`.
+  - Publier un port fixe sur un service qu'on veut répliquer : conflit de ports.
+  - Commiter le fichier `.env` qui contient des mots de passe.
+  - `docker compose down -v` efface les données des volumes.
+  - Oublier `--build` : Compose réutilise l'ancienne image.
+  - Écrire `localhost` pour joindre un autre service : dans un conteneur, `localhost` est le conteneur lui-même.
+
+  ### Bonnes pratiques
+
+  Une image par service, des versions épinglées, des secrets hors du fichier, des healthchecks, des réseaux
+  séparés pour isoler les couches, un seul point d'entrée exposé, et `docker compose config` en CI pour
+  valider le fichier.
+docs:
+  - title: Documentation Docker Compose
+    url: https://docs.docker.com/compose/
+  - title: Référence du fichier Compose
+    url: https://docs.docker.com/reference/compose-file/
+  - title: Interpolation et fichier .env
+    url: https://docs.docker.com/compose/how-tos/environment-variables/
 exercises:
   - id: dockerfile
     title: Conteneuriser l'application
@@ -33,6 +135,17 @@ exercises:
 
       Construis l'image `compteur:1.0`.
     hint: "COPY requirements.txt . / RUN pip install --no-cache-dir -r requirements.txt / COPY app.py . / USER app / CMD [\"python\", \"app.py\"]"
+    cours: |
+      Chaque instruction d'un Dockerfile crée une **couche**, mise en cache. Si une instruction et ses fichiers
+      d'entrée n'ont pas changé, Docker réutilise la couche existante. D'où l'ordre classique : copier d'abord
+      `requirements.txt`, installer les dépendances (étape longue), **puis** copier le code. Modifier le code ne
+      relance alors pas l'installation.
+
+      `WORKDIR` fixe le dossier courant pour la suite. `pip install --no-cache-dir` évite d'alourdir l'image.
+
+      Par défaut, un conteneur tourne en **root**. Créer un utilisateur (`useradd`) puis basculer avec `USER`
+      limite les dégâts si l'application est compromise. `docker run --rm compteur:1.0 id` permet de vérifier
+      l'utilisateur effectif.
     checks:
       - desc: L'image compteur:1.0 contient flask et redis
         run: docker run --rm compteur:1.0 python -c "import flask, redis"
@@ -51,6 +164,16 @@ exercises:
       Démarre la pile avec `docker compose up -d --build` : à chaque rechargement de `http://localhost:8000/`,
       le compteur augmente. Explore `docker compose ps`, `logs -f web`, `exec redis redis-cli get visites`.
     hint: "services: / web: / build: . / ports: [\"8000:5000\"] / redis: / image: redis:7.2-alpine"
+    cours: |
+      Un fichier Compose commence par la clé `services:`. Pour chaque service, on indique soit `image:` (une
+      image existante), soit `build:` (un dossier contenant un Dockerfile), et éventuellement `ports:` au format
+      `"HOTE:CONTENEUR"` (entre guillemets, pour éviter des surprises d'interprétation YAML).
+
+      Compose crée un réseau commun : l'application joint Redis simplement par le nom `redis`, qui est le nom du
+      service. Regarde dans `app.py` comment l'hôte Redis est choisi.
+
+      `docker compose up -d --build` reconstruit l'image si besoin et démarre tout en arrière-plan.
+      `docker compose ps` affiche l'état, `logs -f web` suit les journaux, `exec` entre dans un service.
     checks:
       - desc: web et redis tournent
         run: test "$(docker compose -f /root/app/compose.yaml ps --status running --services | grep -cxE 'web|redis')" = 2
@@ -65,6 +188,16 @@ exercises:
       - lance Redis avec la persistance AOF : `command: redis-server --appendonly yes`.
 
       Vérifie : `docker compose down && docker compose up -d`, le compteur continue où il en était.
+    cours: |
+      `docker compose down` supprime les conteneurs et le réseau, mais **pas** les volumes nommés : c'est ce qui
+      rend les données durables. Un volume nommé se déclare deux fois : sous le service
+      (`volumes: ["redis-data:/data"]`) et dans la section `volumes:` de premier niveau.
+
+      Redis garde ses données en mémoire. Pour qu'elles survivent à un redémarrage, il doit les écrire sur
+      disque : l'option **AOF** (*append only file*, `--appendonly yes`) journalise chaque écriture dans
+      `/data`. La clé `command:` remplace la commande par défaut de l'image.
+
+      `docker volume ls` montre le volume, préfixé par le nom du projet.
     checks:
       - desc: Le volume redis-data est monté sur /data
         run: |
@@ -82,6 +215,17 @@ exercises:
 
       `docker compose exec redis redis-cli ping` doit maintenant répondre `NOAUTH`, et le site fonctionner.
     hint: "docker compose config affiche le fichier final, variables remplacées"
+    cours: |
+      Les mots de passe n'ont rien à faire dans `compose.yaml`, qui est versionné. Compose lit automatiquement le
+      fichier `.env` du dossier du projet et remplace les expressions `${VARIABLE}` dans le fichier. Le `.env`
+      lui-même est ajouté au `.gitignore`.
+
+      La même variable doit être connue de deux services : Redis (dans sa commande, `--requirepass`) et
+      l'application (dans son `environment`, pour s'authentifier).
+
+      `docker compose config` affiche le fichier après interpolation : idéal pour vérifier que la variable est
+      bien remplacée. Pour les vrais secrets de production, Compose propose aussi la clé `secrets:` (montés en
+      fichiers dans `/run/secrets/`).
     checks:
       - desc: .env définit REDIS_PASSWORD
         run: grep -Eq '^REDIS_PASSWORD=.+' /root/app/.env
@@ -100,6 +244,17 @@ exercises:
       2. Fais dépendre `web` de `redis` **seulement quand il est sain** (`depends_on` avec `condition: service_healthy`).
       3. Donne à `web` la politique de redémarrage `unless-stopped`.
     hint: "healthcheck: test: [\"CMD-SHELL\", \"redis-cli -a \\\"$$REDIS_PASSWORD\\\" ping | grep -q PONG\"], interval: 5s ; pense à passer aussi REDIS_PASSWORD à redis dans environment"
+    cours: |
+      Un **healthcheck** exécute régulièrement une commande dans le conteneur : code 0 = sain. Dans Compose :
+      `test` (forme `["CMD-SHELL", "..."]` pour passer par un shell), `interval`, `timeout`, `retries`,
+      `start_period`.
+
+      Le `$` est interprété par Compose : `$$` produit un `$` littéral, que le shell **du conteneur** remplacera
+      par la variable de son environnement (il faut donc que Redis ait cette variable).
+
+      `depends_on` avec `condition: service_healthy` fait attendre le démarrage de `web` jusqu'à ce que Redis soit
+      sain, et non simplement démarré. `restart: unless-stopped` relance le service s'il s'arrête, sauf arrêt
+      volontaire. `docker compose ps` affiche l'état de santé.
     checks:
       - desc: redis est healthy
         run: test "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose -f /root/app/compose.yaml ps -q redis)")" = healthy
@@ -119,6 +274,17 @@ exercises:
 
       En rechargeant `http://localhost:8080/`, le nom du conteneur qui répond change.
     hint: "Si le proxy a démarré avant les nouveaux réplicas, redémarre-le (docker compose restart proxy) : nginx résout le nom web au démarrage"
+    cours: |
+      Placer un **reverse proxy** devant l'application permet de n'exposer qu'un seul port, de répartir la charge
+      et, plus tard, d'ajouter TLS ou un cache.
+
+      Dans la configuration nginx, `proxy_pass http://web:5000;` utilise le DNS de Docker. Quand `web` a plusieurs
+      réplicas, ce nom correspond à plusieurs adresses et nginx les utilise à tour de rôle (il résout le nom au
+      démarrage : redémarre le proxy après une mise à l'échelle).
+
+      Un service mis à l'échelle ne peut pas publier un port fixe (plusieurs conteneurs ne peuvent pas prendre le
+      même port de l'hôte) : retire ses `ports`. `deploy.replicas` fixe le nombre dans le fichier, alors que
+      `--scale` le fixe à la volée.
     checks:
       - desc: 3 réplicas de web tournent
         run: test "$(docker compose -f /root/app/compose.yaml ps -q web | wc -l)" = 3
@@ -137,6 +303,17 @@ exercises:
       - `back` : `web` et `redis`.
 
       Ainsi `docker compose exec proxy ping redis` échoue, alors que le site fonctionne toujours.
+    cours: |
+      Par défaut, tous les services d'un projet partagent un réseau et peuvent tous se parler. Pour respecter le
+      principe du moindre privilège, on segmente : déclare les réseaux dans une section `networks:` de premier
+      niveau, puis liste sous chaque service les réseaux auxquels il appartient.
+
+      Un service branché sur deux réseaux (ici `web`) sert de passerelle applicative ; le proxy, qui n'est que
+      sur `front`, ne peut même pas résoudre le nom `redis`.
+
+      Dès qu'un service liste ses réseaux, il n'est plus rattaché au réseau `default`. Après la modification,
+      `docker compose up -d` recrée les conteneurs concernés ; `docker network ls` et `docker network inspect`
+      montrent le résultat.
     checks:
       - desc: redis n'est que sur le réseau back
         run: |
@@ -152,6 +329,16 @@ exercises:
       Publie la version **2.0** : définis la variable `APP_VERSION=2.0` pour `web` dans `compose.yaml` et applique
       le changement avec `docker compose up -d`. Seuls les conteneurs modifiés sont recréés, et le compteur
       (dans Redis) ne repart pas de zéro.
+    cours: |
+      Compose fonctionne par **réconciliation** : `docker compose up -d` compare la configuration souhaitée à
+      celle des conteneurs existants et ne recrée que ceux qui diffèrent. Changer une variable d'environnement
+      de `web` recrée donc les conteneurs `web`, sans toucher à `redis` ni au proxy.
+
+      Comme l'état (le compteur) est dans Redis et son volume, et non dans l'application, il survit au
+      déploiement : c'est l'intérêt d'une application **sans état** (*stateless*).
+
+      Pour une vraie montée de version, on construirait une nouvelle image taguée (`compteur:2.0`). `docker
+      compose up -d --no-deps web` limite le déploiement à un service.
     checks:
       - desc: Le site affiche la version 2.0
         run: wget -qO- http://localhost:8080/ | grep -q 'version 2.0'

@@ -18,6 +18,103 @@ description: |
   Le parcours : inventaire, bootstrap, premier playbook, rôle, configuration du projet (`ansible.cfg`),
   variables et faits, handlers, secrets chiffrés avec Ansible Vault, et pour finir le dépannage d'un
   playbook cassé.
+cours: |
+  ## Ansible : la gestion de configuration sans agent
+
+  Ansible automatise la configuration de serveurs : installer des paquets, déposer des fichiers, gérer des
+  services, des utilisateurs… Il se distingue par trois choix :
+
+  - **sans agent** : il se connecte en SSH et exécute de petits programmes Python sur la cible ;
+  - **déclaratif** : on décrit l'état voulu (« nginx est installé »), pas les étapes ;
+  - **idempotent** : relancer un playbook sur une machine déjà conforme ne change rien.
+
+  ### Architecture
+
+  ```
+             nœud de contrôle (ansible)
+   ┌──────────────────────────────────────────┐
+   │ ansible.cfg  inventaire  playbooks  rôles│
+   └──────────────┬───────────────┬───────────┘
+              SSH │           SSH │      (clé publique, sudo pour become)
+           ┌──────▼─────┐   ┌─────▼──────┐
+           │  client1   │   │  client2   │   Python requis (sauf module raw)
+           └────────────┘   └────────────┘
+  ```
+
+  ### Les briques
+
+  | Élément | Rôle |
+  |---|---|
+  | **Inventaire** | liste des hôtes, en groupes, avec leurs variables (INI ou YAML) |
+  | **Module** | une unité d'action : `apt`, `package`, `copy`, `template`, `user`, `service`, `file`… |
+  | **Tâche** | un appel de module avec ses paramètres |
+  | **Playbook** | fichier YAML : une liste de *plays* (hôtes ciblés + tâches) |
+  | **Handler** | tâche lancée seulement si une autre l'a notifiée (et qu'elle a changé quelque chose) |
+  | **Rôle** | arborescence réutilisable : tasks, handlers, templates, defaults, vars, files |
+  | **Faits** | informations collectées sur la cible (`ansible_facts`) |
+
+  ```yaml
+  - name: Serveurs web
+    hosts: clients
+    become: true
+    vars:
+      port: 8080
+    tasks:
+      - name: Installer nginx
+        ansible.builtin.package:
+          name: nginx
+          state: present
+      - name: Configurer nginx
+        ansible.builtin.template:
+          src: default.conf.j2
+          dest: /etc/nginx/http.d/default.conf
+        notify: Recharger nginx
+    handlers:
+      - name: Recharger nginx
+        ansible.builtin.command: nginx -s reload
+  ```
+
+  ### Variables et priorités
+
+  Les variables viennent de nombreux endroits : `defaults` d'un rôle (priorité la plus faible),
+  `group_vars/`, `host_vars/`, `vars` d'un play, `vars_files`, et `-e` en ligne de commande (la plus forte).
+  Les templates **Jinja2** les utilisent : `{{ variable }}`, `{% for %}`, filtres `| default('x')`.
+
+  ### Mémo
+
+  ```bash
+  ansible all -m ping                       # tester la connexion
+  ansible clients -m command -a "uptime"    # commande ad hoc
+  ansible-playbook site.yml --check --diff  # simulation
+  ansible-playbook site.yml --syntax-check -v
+  ansible-inventory --graph ; ansible-doc template
+  ansible-galaxy init roles/webserver
+  ansible-vault create|edit|view secrets.yml
+  ```
+
+  ### Pièges courants
+
+  - L'indentation YAML : deux espaces, jamais de tabulation ; un `-` mal placé change tout.
+  - Utiliser `command`/`shell` alors qu'un module dédié existe : on perd l'idempotence.
+  - Oublier `become: true` pour une action qui demande root.
+  - Des variables entre accolades en début de valeur sans guillemets : `"{{ var }}"`.
+  - Un handler qui ne se déclenche pas : la tâche n'a rien changé, ou le nom ne correspond pas.
+  - Des secrets en clair dans le dépôt : chiffre-les avec Ansible Vault.
+
+  ### Bonnes pratiques
+
+  Des rôles petits et réutilisables, des noms de tâches explicites, les noms complets des modules
+  (`ansible.builtin.copy`), `--check --diff` avant d'appliquer, `ansible-lint` dans la CI, et un deuxième
+  lancement qui doit afficher `changed=0`.
+docs:
+  - title: Documentation Ansible
+    url: https://docs.ansible.com/
+  - title: Premiers pas avec Ansible
+    url: https://docs.ansible.com/ansible/latest/getting_started/index.html
+  - title: Guide des playbooks
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/index.html
+  - title: Ansible Vault
+    url: https://docs.ansible.com/ansible/latest/vault_guide/index.html
 exercises:
   - id: inventaire
     title: Inventaire et connexion SSH par clé
@@ -28,6 +125,17 @@ exercises:
          l'utilisateur `ansible_user=vagrant` et `ansible_become_password=vagrant` (sudo demande le mot de passe).
 
       Le port SSH des clients (2222) est déjà configuré dans `~/.ssh/config`.
+    cours: |
+      Ansible se connecte aux machines en **SSH**. Pour automatiser sans taper de mot de passe, on utilise une
+      paire de clés : `ssh-keygen` crée une clé privée (qui reste sur le nœud de contrôle) et une clé publique,
+      que `ssh-copy-id` ajoute au fichier `~/.ssh/authorized_keys` de la cible.
+
+      L'**inventaire** liste les machines, regroupées entre crochets. Au format INI :
+      une section `[groupe]` avec un hôte par ligne, et une section `[groupe:vars]` pour les variables communes.
+      Les variables `ansible_*` règlent la connexion : `ansible_user`, `ansible_port`,
+      `ansible_become_password`…
+
+      `ansible-inventory -i hosts --graph` affiche la structure comprise par Ansible.
     checks:
       - desc: Connexion par clé sans mot de passe vers client1 et client2
         run: for h in client1 client2; do ssh -o BatchMode=yes -o StrictHostKeyChecking=no vagrant@$h true || exit 1; done
@@ -40,6 +148,16 @@ exercises:
       (qui n'a pas besoin de Python) et `--become` pour installer `python3` (`apk add python3`),
       puis vérifie que `ansible -i hosts clients -m ping` répond `pong`.
     hint: "ansible -i hosts clients -m raw -a 'apk add --no-cache python3' --become"
+    cours: |
+      La plupart des modules Ansible sont de petits programmes Python copiés et exécutés sur la cible : sans
+      Python, ils échouent. Le module **`raw`** fait exception : il envoie la commande telle quelle par SSH.
+      Il sert justement au *bootstrap* : installer Python sur une machine nue.
+
+      Une commande **ad hoc** lance un module sans écrire de playbook :
+      `ansible -i inventaire groupe -m module -a "arguments"`. `--become` (`-b`) exécute en tant que root via
+      sudo, avec le mot de passe fourni par `ansible_become_password`.
+
+      Le module `ping` n'envoie pas d'ICMP : il vérifie qu'Ansible peut se connecter **et** exécuter Python.
     checks:
       - desc: Le module ping répond sur les deux clients
         run: ansible -i /home/ansible/hosts clients -m ping | grep -c SUCCESS | grep -qx 2
@@ -53,6 +171,17 @@ exercises:
       - crée l'utilisateur `deploy`.
 
       Lance-le avec `ansible-playbook -i hosts site.yml`. Un deuxième lancement ne doit rien changer (`changed=0`).
+    cours: |
+      Un playbook est un fichier YAML contenant une liste de *plays*. Chaque play cible des hôtes (`hosts:`),
+      peut élever ses privilèges (`become: true`) et contient des `tasks`. Chaque tâche a un nom et appelle un
+      module avec ses paramètres.
+
+      Modules utiles ici : `package` (gestionnaire de paquets générique, `state: present`), `copy` avec
+      `content:` pour écrire un petit fichier, `user` pour créer un compte.
+
+      Le récapitulatif final (`PLAY RECAP`) compte les tâches `ok`, `changed` et `failed`. Un module bien utilisé
+      est **idempotent** : il ne modifie que ce qui n'est pas conforme. Au deuxième lancement, tout doit être
+      `ok`, avec `changed=0`.
     checks:
       - desc: nginx installé sur les clients
         run: ansible -i /home/ansible/hosts clients -m command -a 'which nginx' | grep -c 'rc=0' | grep -qx 2
@@ -72,6 +201,18 @@ exercises:
       Crée un rôle `webserver` (`ansible-galaxy init roles/webserver`) qui dépose une page
       `/var/www/localhost/htdocs/index.html` à partir d'un **template** `index.html.j2` affichant
       `Bienvenue sur {{ inventory_hostname }}`. Utilise ce rôle depuis un playbook `/home/ansible/web.yml`.
+    cours: |
+      Un **rôle** range le code par fonction, dans une arborescence standard créée par `ansible-galaxy init` :
+      `tasks/main.yml`, `handlers/`, `templates/`, `files/`, `defaults/` (variables par défaut), `vars/`,
+      `meta/`. Ansible y trouve chaque élément tout seul : dans un rôle, `template: src=index.html.j2` cherche
+      dans `templates/`.
+
+      Le module `template` remplit un fichier **Jinja2** avec des variables : `{{ inventory_hostname }}` est le
+      nom de l'hôte tel qu'écrit dans l'inventaire. Le dossier de destination doit exister (le module `file`
+      avec `state: directory` le crée).
+
+      Un playbook utilise le rôle avec la clé `roles:`. Ansible cherche les rôles dans `./roles` à côté du
+      playbook.
     checks:
       - desc: Le rôle a une tâche et un template
         run: test -f /home/ansible/roles/webserver/tasks/main.yml && test -f /home/ansible/roles/webserver/templates/index.html.j2
@@ -88,6 +229,18 @@ exercises:
       Depuis `/home/ansible`, `ansible clients -m ping` doit fonctionner **sans** `-i`.
       Vérifie ce qui a changé avec `ansible-config dump --only-changed`.
     hint: "[defaults] / inventory = hosts / retry_files_enabled = False"
+    cours: |
+      `ansible.cfg` règle le comportement d'Ansible pour un projet. Il est cherché dans cet ordre : variable
+      `ANSIBLE_CONFIG`, **dossier courant**, `~/.ansible.cfg`, puis `/etc/ansible/ansible.cfg`. Placer le
+      fichier à la racine du projet rend celui-ci autonome : n'importe qui peut lancer les commandes depuis ce
+      dossier.
+
+      Format INI, section `[defaults]` : `inventory`, `remote_user`, `host_key_checking`, `forks`,
+      `retry_files_enabled`… Certains réglages vont dans d'autres sections (`[privilege_escalation]`,
+      `[ssh_connection]`).
+
+      `ansible --version` indique le fichier de configuration utilisé, et `ansible-config dump --only-changed`
+      les valeurs différentes des valeurs par défaut.
     checks:
       - desc: ansible.cfg déclare l'inventaire
         run: cd /home/ansible && ansible-config dump --only-changed 2>/dev/null | grep -q '^DEFAULT_HOST_LIST'
@@ -104,6 +257,17 @@ exercises:
          (utilise `inventory_hostname` et les faits `ansible_facts['distribution']` et
          `ansible_facts['distribution_version']`).
     hint: "Les variables de group_vars/clients.yml s'appliquent automatiquement au groupe clients ; ansible client1 -m setup affiche les faits"
+    cours: |
+      Les fichiers de `group_vars/<groupe>.yml` (à côté de l'inventaire ou du playbook) définissent des
+      variables pour tous les hôtes d'un groupe : c'est l'endroit naturel pour la configuration par
+      environnement.
+
+      `loop: "{{ liste }}"` répète une tâche pour chaque élément ; l'élément courant est `{{ item }}`. (Beaucoup
+      de modules de paquets acceptent aussi directement une liste, ce qui est plus rapide.)
+
+      Au début d'un play, Ansible collecte les **faits** de chaque machine (module `setup`) : système,
+      version, réseau, mémoire… Ils sont accessibles dans `ansible_facts`. Pour les explorer :
+      `ansible client1 -m setup -a "filter=ansible_distribution*"`.
     checks:
       - desc: group_vars/clients.yml définit paquets
         run: cd /home/ansible && ansible-inventory -i hosts --host client1 | grep -q '"paquets"'
@@ -126,6 +290,17 @@ exercises:
 
       Depuis chaque client, `wget -qO- http://localhost:8080` doit afficher `Bienvenue sur <nom du client>`.
     hint: "tâche template avec notify: recharger nginx ; tâche shell: pgrep nginx || nginx ; handlers: - name: recharger nginx / command: nginx -s reload"
+    cours: |
+      Recharger un service à chaque lancement du playbook serait inutile, voire perturbant. Un **handler** est
+      une tâche spéciale, déclarée dans la section `handlers:`, qui ne s'exécute que si une autre tâche la
+      **notifie** (`notify: Nom du handler`) **et** a effectivement changé quelque chose. Les handlers
+      s'exécutent une seule fois, à la fin du play, même s'ils sont notifiés plusieurs fois.
+
+      Sans systemd, on pilote nginx avec des commandes : pour démarrer seulement s'il ne tourne pas, la
+      condition d'une tâche `command` peut s'appuyer sur le résultat d'une tâche précédente (`register`, `when`)
+      ou sur `creates:` (fichier PID).
+
+      Vérifie l'idempotence : un second lancement ne doit déclencher aucun handler.
     checks:
       - desc: Le playbook utilise un handler
         run: grep -q 'handlers:' /home/ansible/nginx.yml && grep -q 'notify:' /home/ansible/nginx.yml
@@ -142,6 +317,17 @@ exercises:
          `/etc/app.conf` contenant `password=S3cret-TDM`, propriétaire `root`, droits `0600`.
       4. Lance-le avec `--vault-password-file .vault_pass`.
     hint: "ansible-playbook app.yml --vault-password-file .vault_pass (ou vault_password_file dans ansible.cfg)"
+    cours: |
+      **Ansible Vault** chiffre des fichiers (ou des valeurs) en AES-256 pour qu'on puisse les versionner sans
+      exposer les secrets. Commandes : `ansible-vault create`, `edit`, `view`, `encrypt`, `decrypt`, `rekey`.
+      Un fichier chiffré commence par `$ANSIBLE_VAULT;1.1;AES256`.
+
+      Le mot de passe du coffre peut être demandé (`--ask-vault-pass`) ou lu dans un fichier
+      (`--vault-password-file`), qui ne doit **jamais** être commité et doit être lisible par toi seul.
+
+      Dans un playbook, `vars_files:` charge le fichier chiffré comme des variables ordinaires. Pour les fichiers
+      sensibles déposés sur les cibles, précise `owner` et `mode` (avec des guillemets : `"0600"`), et pense à
+      `no_log: true` pour ne pas afficher les secrets dans la sortie.
     checks:
       - desc: secrets.yml est chiffré
         run: head -1 /home/ansible/secrets.yml | grep -q '^\$ANSIBLE_VAULT'
@@ -161,6 +347,17 @@ exercises:
 
       Le playbook corrigé doit s'exécuter sans erreur et être idempotent.
     hint: "Il y a trois erreurs : une indentation YAML, un nom de module mal orthographié et un droit d'administrateur manquant"
+    cours: |
+      Méthode pour réparer un playbook :
+      1. `ansible-playbook fichier.yml --syntax-check` : erreurs de YAML (indentation, `:` manquant, liste mal
+         formée) ;
+      2. lancer avec `-v` (jusqu'à `-vvvv`) pour voir les paramètres envoyés et les messages des modules ;
+      3. `ansible-doc module` pour vérifier les noms et valeurs des paramètres (un paramètre inconnu ou une
+         valeur de `state` invalide est une erreur classique) ;
+      4. vérifier l'ordre des tâches : un fichier ne peut pas appartenir à un utilisateur qui n'existe pas
+         encore, et un dossier doit exister avant d'y écrire.
+
+      Une fois corrigé, relance-le : la seconde exécution doit afficher `changed=0`.
     checks:
       - desc: La syntaxe est correcte
         run: cd /home/ansible && ansible-playbook -i hosts casse.yml --syntax-check

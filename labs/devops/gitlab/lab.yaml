@@ -14,12 +14,118 @@ description: |
   Suis l'avancement avec `gitlab-ctl status`.
 
   Interface web : **http://localhost:8929** (utilisateur `root`).
+cours: |
+  ## GitLab et GitLab CI/CD
+
+  GitLab est une plateforme DevOps complète : hébergement Git, revue de code (*merge requests*), tickets,
+  intégration et livraison continues, registre d'images et de paquets, gestion des environnements. GitLab CE
+  (Community Edition) est libre et s'installe chez soi ; ce lab le fait tourner dans un conteneur.
+
+  ### Architecture de la CI
+
+  ```
+   git push ─▶ GitLab ─▶ pipeline (lu dans .gitlab-ci.yml)
+                 │          stage build ──▶ stage test ──▶ stage deploy
+                 │            job build      job test       job deploy (tags)
+                 │
+                 └─ file d'attente ◀──── gitlab-runner (interroge GitLab, exécute les jobs)
+                                          exécuteur : shell | docker | kubernetes
+  ```
+
+  GitLab ne lance pas les jobs lui-même : il faut un ou plusieurs **runners**, enregistrés auprès de
+  l'instance, qui viennent chercher le travail. L'**exécuteur** détermine où le job s'exécute : directement
+  sur la machine (`shell`), dans un conteneur jetable (`docker`, le plus courant) ou dans un pod.
+
+  ### `.gitlab-ci.yml`
+
+  ```yaml
+  stages: [build, test, deploy]
+
+  variables:
+    APP: tdm
+
+  build:
+    stage: build
+    image: alpine:3.20            # avec l'exécuteur docker
+    script:
+      - mkdir -p dist
+      - echo "version-$CI_COMMIT_SHORT_SHA" > dist/app.txt
+    artifacts:
+      paths: [dist/]
+      expire_in: 1 week
+
+  test:
+    stage: test
+    script:
+      - cat dist/app.txt          # artefacts des étapes précédentes récupérés
+
+  deploy:
+    stage: deploy
+    script: ./deploy.sh
+    environment: production
+    rules:
+      - if: $CI_COMMIT_TAG        # seulement sur un tag
+  ```
+
+  - Les **stages** s'exécutent dans l'ordre ; les jobs d'un même stage, en parallèle. `needs:` permet de
+    s'affranchir de cet ordre (graphe orienté).
+  - Les **variables prédéfinies** décrivent le contexte : `CI_COMMIT_SHA`, `CI_COMMIT_SHORT_SHA`,
+    `CI_COMMIT_BRANCH`, `CI_COMMIT_TAG`, `CI_PIPELINE_ID`, `CI_PROJECT_NAME`, `CI_REGISTRY_IMAGE`…
+  - Les **variables CI/CD** du projet stockent la configuration et les secrets : *masquées* (jamais
+    affichées dans les journaux), *protégées* (seulement sur les branches et tags protégés).
+  - `rules:` décide si un job est ajouté au pipeline (branche, tag, fichiers modifiés, merge request).
+  - `artifacts` transmet des fichiers aux étapes suivantes ; `cache` accélère (dépendances).
+
+  ### Mémo
+
+  ```bash
+  gitlab-ctl status ; gitlab-ctl tail          # état et journaux de l'instance
+  gitlab-runner register --url ... --token ... --executor shell
+  gitlab-runner list ; gitlab-runner verify
+  curl -H "PRIVATE-TOKEN: $TOKEN" http://localhost/api/v4/projects
+  curl -H "PRIVATE-TOKEN: $TOKEN" "http://localhost/api/v4/projects/root%2Ftdm-demo/pipelines"
+  ```
+
+  L'outil **CI Lint** (Build > Pipeline editor) valide la syntaxe avant de pousser.
+
+  ### Pièges courants
+
+  - Un pipeline bloqué en *pending* : aucun runner disponible ou étiquettes (`tags:`) incompatibles.
+  - Une variable masquée trop courte ou avec des caractères non autorisés : GitLab refuse de la masquer.
+  - Une variable *protégée* invisible sur une branche non protégée.
+  - Indentation YAML : `script` doit être une liste.
+  - Oublier que chaque job repart d'un clone propre : un fichier créé dans un job n'existe pas dans le
+    suivant sans artefact.
+
+  ### Bonnes pratiques
+
+  Des pipelines rapides (cache, parallélisme), des jobs reproductibles dans des images épinglées, des
+  branches protégées, des merge requests qui exigent un pipeline vert et une relecture, des déploiements
+  déclenchés par tag ou par environnement, et des jetons au moindre privilège.
+docs:
+  - title: Documentation GitLab CI/CD
+    url: https://docs.gitlab.com/ee/ci/
+  - title: Référence de la syntaxe .gitlab-ci.yml
+    url: https://docs.gitlab.com/ee/ci/yaml/
+  - title: Variables CI/CD prédéfinies
+    url: https://docs.gitlab.com/ee/ci/variables/predefined_variables.html
+  - title: GitLab Runner
+    url: https://docs.gitlab.com/runner/
 exercises:
   - id: connexion
     title: Première connexion
     description: |
       Récupère le mot de passe initial de `root` dans `/etc/gitlab/initial_root_password`, connecte-toi
       sur http://localhost:8929 et **change le mot de passe**. Écris ensuite `ok` dans `/root/connexion.txt`.
+    cours: |
+      À l'installation, GitLab génère un mot de passe aléatoire pour le compte administrateur `root` et l'écrit
+      dans `/etc/gitlab/initial_root_password`. Ce fichier est automatiquement supprimé après 24 heures (ou à la
+      reconfiguration suivante) : change le mot de passe dès la première connexion.
+
+      GitLab est composé de nombreux services (Puma pour l'application, Sidekiq pour les tâches de fond,
+      PostgreSQL, Redis, Gitaly pour le stockage Git, nginx…), orchestrés par `gitlab-ctl`. Tant que
+      `gitlab-ctl status` ne montre pas tous les services `run`, l'interface peut renvoyer une erreur 502 : il
+      suffit d'attendre.
     checks:
       - desc: GitLab répond
         run: curl -fsS -o /dev/null http://localhost/users/sign_in
@@ -33,6 +139,16 @@ exercises:
       Crée un projet **public** `tdm-demo` (sous l'utilisateur root), puis depuis le terminal du lab :
       clone-le (`git clone http://root:<mot de passe>@localhost/root/tdm-demo.git`), ajoute un
       `README.md` et pousse le commit sur `main`.
+    cours: |
+      Un projet GitLab réunit un dépôt Git et tous les outils associés (tickets, CI, wiki…). Sa **visibilité**
+      peut être privée, interne ou publique.
+
+      Pour pousser en HTTP, Git doit s'authentifier : on peut placer l'utilisateur et le mot de passe (ou mieux,
+      un jeton) dans l'URL, ou laisser Git les demander. Depuis le conteneur, l'instance est joignable sur
+      `localhost` (port 80) ; depuis ta machine, sur le port 8929.
+
+      Pense à configurer ton identité (`git config user.name/user.email`) et à vérifier le nom de la branche par
+      défaut du projet (`main`). Après le `git push`, le fichier doit apparaître dans l'interface.
     checks:
       - desc: Le projet root/tdm-demo existe et est public
         run: curl -fsS http://localhost/api/v4/projects/root%2Ftdm-demo | grep -q '"visibility":"public"'
@@ -44,6 +160,15 @@ exercises:
       Ajoute un fichier `.gitlab-ci.yml` avec deux étapes (`stages`) `build` et `test`, chacune avec un job
       qui affiche un message. Pousse-le : un pipeline doit apparaître dans **Build > Pipelines**
       (il restera en attente tant qu'aucun runner n'est enregistré, c'est l'exercice suivant).
+    cours: |
+      Le pipeline est décrit dans le fichier `.gitlab-ci.yml` à la racine du dépôt. GitLab le lit à chaque push.
+
+      La clé `stages:` liste les étapes dans l'ordre. Chaque **job** est une clé de premier niveau (son nom
+      libre), avec au minimum un `stage:` et un `script:` (une **liste** de commandes shell). Les jobs d'un même
+      stage s'exécutent en parallèle ; un stage ne commence que si le précédent a réussi.
+
+      Sans runner, les jobs restent à l'état *pending* : le pipeline est créé, mais personne ne l'exécute.
+      L'éditeur de pipeline de GitLab valide la syntaxe et affiche une visualisation.
     checks:
       - desc: .gitlab-ci.yml est présent sur main
         run: curl -fsS "http://localhost/api/v4/projects/root%2Ftdm-demo/repository/files/.gitlab-ci.yml?ref=main" >/dev/null
@@ -55,6 +180,17 @@ exercises:
       Installe `gitlab-runner` **dans ce conteneur** (exécuteur `shell`), enregistre-le sur ton instance
       avec un jeton créé dans **Admin > CI/CD > Runners**, puis relance le pipeline : il doit réussir.
     hint: "curl -L https://packages.gitlab.com/install/repositories/runner/gitlab-runner/script.deb.sh | bash && apt-get install -y gitlab-runner"
+    cours: |
+      **GitLab Runner** est un programme séparé qui interroge régulièrement GitLab, récupère les jobs en attente
+      et les exécute avec un **exécuteur** : `shell` (les commandes tournent directement sur la machine, sous
+      l'utilisateur `gitlab-runner`), `docker` (un conteneur jetable par job), `kubernetes`…
+
+      Depuis GitLab 16, on crée d'abord le runner dans l'interface (Admin > CI/CD > Runners), qui fournit un
+      **jeton d'authentification** (`glrt-...`), puis on l'enregistre avec `gitlab-runner register` en indiquant
+      l'URL, le jeton et l'exécuteur. La configuration est écrite dans `/etc/gitlab-runner/config.toml`.
+
+      Le service `gitlab-runner run` doit tourner pour traiter les jobs. Coche « exécuter les jobs sans tag » si
+      tes jobs n'en ont pas.
     checks:
       - desc: Un runner est en ligne
         run: |
@@ -71,6 +207,16 @@ exercises:
       `curl -H "PRIVATE-TOKEN: $(cat /root/gitlab-token)" http://localhost/api/v4/user`.
 
       Les exercices suivants utilisent ce jeton pour vérifier ton travail.
+    cours: |
+      Un **jeton d'accès personnel** (*Personal Access Token*) remplace le mot de passe pour l'API et Git en
+      HTTP. Il a des **portées** (*scopes*) : `api` (tout), `read_api`, `read_repository`, `write_repository`…
+      et une date d'expiration. On peut le révoquer à tout moment sans changer de mot de passe.
+
+      L'API REST est sous `/api/v4/`. Le jeton s'envoie dans l'en-tête `PRIVATE-TOKEN`. Un projet se désigne par
+      son identifiant numérique ou par son chemin encodé (`root%2Ftdm-demo`).
+
+      Comme tout secret, le jeton se stocke dans un fichier lisible par toi seul (`chmod 600`) et n'apparaît
+      jamais dans un dépôt. GitLab ne le montre qu'une fois, à sa création.
     checks:
       - desc: Le fichier du jeton est protégé (600)
         run: test "$(stat -c %a /root/gitlab-token)" = 600
@@ -86,6 +232,18 @@ exercises:
 
       Ajoute au `.gitlab-ci.yml` un job `info` qui affiche `Environnement : $DEPLOY_ENV` et tente
       `echo $API_SECRET` (le log doit montrer `[MASKED]`). Pousse et vérifie le log du job.
+    cours: |
+      Les **variables CI/CD** du projet sont injectées dans l'environnement de chaque job. On y range la
+      configuration propre à l'environnement et les secrets, plutôt que dans `.gitlab-ci.yml`.
+
+      Options importantes :
+      - **masquée** : GitLab remplace la valeur par `[MASKED]` dans les journaux. La valeur doit faire au moins
+        8 caractères et respecter certaines contraintes de caractères ;
+      - **protégée** : disponible seulement dans les pipelines de branches ou de tags protégés.
+
+      Le masquage est un filet de sécurité, pas une garantie : un script qui transforme la valeur (base64, une
+      lettre par ligne) peut encore la révéler. Dans le script, la variable se lit comme une variable shell :
+      `$DEPLOY_ENV`.
     checks:
       - desc: DEPLOY_ENV vaut production
         run: |
@@ -108,6 +266,16 @@ exercises:
         déclare comme **artefact** (`artifacts: paths: [dist/]`, `expire_in: 1 week`) ;
       - le job `test` (stage `test`) affiche le contenu de `dist/app.txt` (il récupère automatiquement les
         artefacts des étapes précédentes).
+    cours: |
+      Chaque job démarre dans un espace de travail neuf : les fichiers produits par un job précédent n'y sont pas.
+      Pour transmettre un livrable, on le déclare comme **artefact** : `artifacts: paths: [dist/]`. GitLab le
+      téléverse à la fin du job et le télécharge automatiquement dans les jobs des **stages suivants**
+      (`dependencies:` ou `needs:` permettent de choisir lesquels).
+
+      `expire_in` fixe la durée de conservation ; les artefacts restent téléchargeables depuis la page du job.
+
+      Ne confonds pas avec le **cache**, qui accélère les jobs (dépendances téléchargées) sans garantie de
+      présence. La variable `CI_COMMIT_SHORT_SHA` contient les 8 premiers caractères du commit.
     checks:
       - desc: Un job build réussi a produit un artefact
         run: |
@@ -127,6 +295,17 @@ exercises:
       (`rules: - if: $CI_COMMIT_TAG`). Pousse un commit sur `main` (pas de job deploy), puis crée et pousse le tag
       `v1.0` : son pipeline doit contenir le job `deploy` et réussir.
     hint: "git tag v1.0 && git push origin v1.0"
+    cours: |
+      `rules:` contrôle l'ajout d'un job au pipeline. Les règles sont évaluées dans l'ordre ; la première qui
+      correspond décide (`when: on_success` par défaut, `when: never`, `when: manual`…). Si aucune ne correspond,
+      le job n'est pas ajouté.
+
+      `- if: $CI_COMMIT_TAG` est vraie seulement quand le pipeline a été déclenché par un tag (la variable est
+      alors définie). D'autres exemples : `$CI_COMMIT_BRANCH == "main"`,
+      `$CI_PIPELINE_SOURCE == "merge_request_event"`, `changes:` sur des fichiers.
+
+      Un tag se crée et se pousse avec `git tag v1.0 && git push origin v1.0`. C'est le schéma classique : chaque
+      commit est testé, seules les versions taguées sont déployées.
     checks:
       - desc: Le pipeline du tag v1.0 a réussi avec le job deploy
         run: |
@@ -147,6 +326,16 @@ exercises:
          vers `main`.
       3. Une fois le pipeline vert, fusionne-la.
     hint: "git push -o merge_request.create -o merge_request.target=main origin feature/doc crée la MR en ligne de commande"
+    cours: |
+      La **merge request** est le cœur du travail en équipe : une branche est proposée pour fusion, relue,
+      commentée, et validée par le pipeline avant d'atteindre `main`.
+
+      L'option *Pipelines must succeed* empêche la fusion tant que le dernier pipeline de la branche n'a pas
+      réussi : la branche principale reste toujours dans un état fonctionnel. On la combine avec des branches
+      **protégées** (personne ne pousse directement sur `main`) et des approbations obligatoires.
+
+      Une merge request s'ouvre dans l'interface, ou directement au `git push` avec les options
+      `-o merge_request.create -o merge_request.target=main`.
     checks:
       - desc: Les pipelines doivent réussir avant fusion
         run: |

@@ -14,6 +14,96 @@ description: |
   dans `/pki/webserver`.
 
   Le port 443 est publié sur **https://localhost:8443**.
+cours: |
+  ## PKI : la confiance sur le réseau
+
+  TLS (le « S » de HTTPS) apporte trois garanties : la **confidentialité** (chiffrement), l'**intégrité**
+  (rien n'a été modifié) et l'**authentification** (le serveur est bien celui qu'il prétend être). Cette
+  dernière repose sur une **infrastructure à clés publiques** (PKI) : des autorités de certification (CA)
+  signent des certificats qui lient une clé publique à une identité.
+
+  ### Clés et certificats
+
+  - Une **paire de clés** asymétriques : la clé **privée** reste secrète (droits `600`), la clé **publique**
+    se distribue. Ce qui est signé avec la privée se vérifie avec la publique.
+  - Une **CSR** (*Certificate Signing Request*) contient la clé publique et l'identité demandée ; elle est
+    envoyée à la CA.
+  - Un **certificat X.509** est la CSR signée par la CA : sujet (`CN`), émetteur, numéro de série, dates de
+    validité, extensions (SAN, usages, contraintes) et signature.
+
+  ### La chaîne de confiance
+
+  ```
+   ┌────────────────────┐  auto-signée, hors ligne, dans le magasin de confiance des clients
+   │ CA racine          │
+   └─────────┬──────────┘ signe
+   ┌─────────▼──────────┐  CA:TRUE, pathlen:0
+   │ CA intermédiaire   │
+   └─────────┬──────────┘ signe
+   ┌─────────▼──────────┐  CN=app.tdm.local, SAN=DNS:app.tdm.local, serverAuth
+   │ certificat serveur │  ← le serveur envoie : serveur + intermédiaire (fullchain)
+   └────────────────────┘
+  ```
+
+  Le client vérifie chaque signature jusqu'à une racine qu'il connaît déjà (magasin du système ou
+  `--cacert`), puis contrôle les dates, l'usage et que le nom demandé figure dans le **SAN** (le CN n'est
+  plus utilisé par les navigateurs).
+
+  ### Extensions importantes
+
+  | Extension | Rôle |
+  |---|---|
+  | `basicConstraints=CA:TRUE,pathlen:0` | ce certificat peut signer (CA), sans sous-CA en dessous |
+  | `keyUsage` | `keyCertSign`, `cRLSign` pour une CA ; `digitalSignature` pour un serveur |
+  | `extendedKeyUsage` | `serverAuth` (serveur), `clientAuth` (client mTLS) |
+  | `subjectAltName` | `DNS:nom`, `IP:adresse` : les noms couverts |
+
+  ### Mémo OpenSSL
+
+  ```bash
+  openssl genrsa -out ca.key 4096
+  openssl req -x509 -new -key ca.key -sha256 -days 3650 -subj "/CN=TDM Root CA" \
+      -addext "basicConstraints=critical,CA:TRUE" -out ca.crt
+  openssl req -new -newkey rsa:2048 -nodes -keyout server.key -subj "/CN=webserver" -out server.csr
+  openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 365 \
+      -extfile ext.cnf -out server.crt
+  openssl x509 -in server.crt -noout -text        # lire un certificat
+  openssl verify -CAfile ca.crt server.crt        # vérifier la chaîne
+  openssl s_client -connect hote:443 -servername hote </dev/null   # voir ce que présente un serveur
+  ```
+
+  ### Révocation
+
+  Un certificat compromis doit être **révoqué** avant son expiration : la CA publie une **CRL** (liste des
+  numéros de série révoqués) ou répond en ligne via **OCSP**. D'où l'intérêt des certificats courts
+  (90 jours chez Let's Encrypt) renouvelés automatiquement (protocole ACME).
+
+  ### mTLS
+
+  Dans le TLS mutuel, le **client** présente aussi un certificat : le serveur l'authentifie sans mot de
+  passe. C'est courant entre microservices (*service mesh*) et pour les API sensibles.
+
+  ### Pièges courants
+
+  - Oublier le SAN : « certificate is not valid for name ».
+  - Servir le certificat sans l'intermédiaire : ça marche dans un navigateur qui le connaît, pas avec curl.
+  - Clé privée lisible par tous, ou commitée dans Git.
+  - `-k` / `verify=False` laissés en production : plus aucune authentification.
+  - Laisser expirer un certificat : supervise les dates d'expiration.
+
+  ### Bonnes pratiques
+
+  Racine hors ligne, intermédiaire pour signer, certificats courts et automatisés, TLS 1.2 minimum, HSTS,
+  supervision de l'expiration.
+docs:
+  - title: Documentation OpenSSL
+    url: https://docs.openssl.org/
+  - title: Module ngx_http_ssl_module (nginx)
+    url: https://nginx.org/en/docs/http/ngx_http_ssl_module.html
+  - title: Générateur de configuration TLS de Mozilla
+    url: https://ssl-config.mozilla.org/
+  - title: Comment fonctionne Let's Encrypt
+    url: https://letsencrypt.org/fr/how-it-works/
 exercises:
   - id: ca
     title: Autorité de certification racine
@@ -22,6 +112,17 @@ exercises:
       valable 10 ans, avec le CN `TDM Root CA`. Le certificat doit être marqué comme CA
       (`basicConstraints=critical,CA:TRUE`).
     hint: "openssl req -x509 -new -newkey rsa:4096 -nodes -keyout ca.key -out ca.crt -days 3650 -subj '/CN=TDM Root CA' -addext 'basicConstraints=critical,CA:TRUE'"
+    cours: |
+      Une **autorité racine** est un certificat **auto-signé** : l'émetteur et le sujet sont identiques, et sa
+      signature est faite avec sa propre clé. Il tire sa légitimité du fait que les clients l'ont installé dans
+      leur magasin de confiance.
+
+      `openssl req -x509` produit directement un certificat (au lieu d'une demande). Options à connaître :
+      `-new`, `-key` (clé existante) ou `-newkey rsa:4096 -nodes -keyout`, `-days`, `-subj "/CN=..."`, `-sha256`.
+      `-addext` ajoute une extension X.509 : la CA doit porter `basicConstraints=critical,CA:TRUE`, sinon les
+      clients refuseront les certificats qu'elle signe.
+
+      Vérifie avec `openssl x509 -in ca.crt -noout -text` : cherche `Issuer`, `Subject`, `Not After` et `CA:TRUE`.
     checks:
       - desc: ca.key est une clé RSA 4096 bits
         run: openssl rsa -in /pki/ca/ca.key -noout -text 2>/dev/null | grep -q "4096 bit"
@@ -36,6 +137,16 @@ exercises:
       puis **signe-la avec ta CA** pour obtenir `server.crt` (1 an), avec les noms alternatifs (SAN)
       `DNS:webserver` et `DNS:localhost`.
     hint: "echo 'subjectAltName=DNS:webserver,DNS:localhost' > san.ext ; openssl x509 -req -in server.csr -CA ../ca/ca.crt -CAkey ../ca/ca.key -CAcreateserial -out server.crt -days 365 -extfile san.ext"
+    cours: |
+      Le serveur génère sa clé privée et une **CSR** (`openssl req -new`), qu'il transmet à la CA : la clé privée
+      ne quitte jamais le serveur. La CA signe ensuite la CSR avec `openssl x509 -req -CA ca.crt -CAkey ca.key`.
+      `-CAcreateserial` crée le fichier de numéros de série la première fois.
+
+      Les extensions ne sont pas copiées depuis la CSR par défaut : on les fournit à la signature avec
+      `-extfile fichier` (une ligne `subjectAltName=DNS:a,DNS:b`) ou `-copy_extensions copy` (OpenSSL 3).
+
+      Le **SAN** est indispensable : les clients modernes ignorent le CN et vérifient que le nom demandé figure
+      dans `subjectAltName`. `openssl verify -CAfile ca.crt server.crt` doit répondre `OK`.
     checks:
       - desc: server.crt est signé par la CA
         run: |
@@ -51,6 +162,17 @@ exercises:
       (fichier `/etc/nginx/conf.d/tls.conf`), puis recharge-le (`nginx -s reload`).
       `curl --cacert /pki/ca/ca.crt https://localhost` doit fonctionner **sans** `-k`.
     hint: "server { listen 443 ssl; ssl_certificate /pki/webserver/server.crt; ssl_certificate_key /pki/webserver/server.key; root /usr/share/nginx/html; }"
+    cours: |
+      Dans nginx, un serveur HTTPS combine trois directives : `listen 443 ssl;`, `ssl_certificate` (le
+      certificat, éventuellement suivi des intermédiaires) et `ssl_certificate_key` (la clé privée).
+
+      Avant de recharger, `nginx -t` vérifie aussi que le certificat et la clé correspondent.
+
+      Côté client, `--cacert` indique à curl quelle CA faire confiance. Si la vérification échoue, curl explique
+      pourquoi : CA inconnue (*unable to get local issuer certificate*), nom absent du SAN (*no alternative
+      certificate subject name matches*), certificat expiré… `curl -v` affiche la poignée de main TLS et le
+      certificat reçu. L'option `-k` désactive toute vérification : elle masque les problèmes au lieu de les
+      résoudre.
     checks:
       - desc: nginx accepte la configuration
         run: nginx -t
@@ -61,6 +183,16 @@ exercises:
     description: |
       Restreins nginx à **TLS 1.2 et 1.3** uniquement (`ssl_protocols`) et ajoute l'en-tête
       `Strict-Transport-Security` (HSTS). Les droits de `server.key` doivent être `600`.
+    cours: |
+      Les anciennes versions du protocole (SSL 3, TLS 1.0 et 1.1) ont des faiblesses connues et sont
+      abandonnées. `ssl_protocols TLSv1.2 TLSv1.3;` restreint les versions acceptées ; on peut tester une version
+      précise avec `openssl s_client -tls1_1` (refusée) ou `curl --tlsv1.2 --tls-max 1.2`.
+
+      **HSTS** (`Strict-Transport-Security: max-age=31536000`) demande au navigateur de n'utiliser que HTTPS
+      pour ce domaine pendant la durée indiquée, ce qui empêche les attaques par rétrogradation vers HTTP.
+      L'en-tête s'ajoute avec `add_header` (pense à `always`).
+
+      La clé privée est le secret du serveur : seul son propriétaire doit pouvoir la lire (`chmod 600`).
     checks:
       - desc: TLS 1.1 refusé
         run: "! curl -s --cacert /pki/ca/ca.crt --tls-max 1.1 https://localhost/ >/dev/null 2>&1"
@@ -77,6 +209,17 @@ exercises:
         `sha256 Fingerprint=`) ;
       - son **numéro de série** dans `/pki/serie.txt` (juste la valeur hexadécimale, sans `serial=`).
     hint: "echo | openssl s_client -connect localhost:443 2>/dev/null | openssl x509 -noout -fingerprint -sha256 (puis cut -d= -f2)"
+    cours: |
+      En production, on vérifie ce que le serveur **présente réellement**, pas le fichier qu'on croit avoir
+      déployé. `openssl s_client -connect hote:443 -servername nom` établit une connexion TLS et affiche la
+      chaîne reçue ; ajoute `</dev/null` pour qu'il rende la main aussitôt.
+
+      Sa sortie contient le certificat au format PEM, que l'on peut **enchaîner** dans
+      `openssl x509 -noout ...` : `-fingerprint -sha256` donne l'empreinte, `-serial` le numéro de série,
+      `-dates` la validité, `-subject` et `-issuer` les noms.
+
+      Ces commandes affichent un préfixe (`sha256 Fingerprint=`, `serial=`) que `cut -d= -f2` ou `sed` retire.
+      L'empreinte sert à épingler un certificat ou à comparer deux déploiements.
     checks:
       - desc: L'empreinte SHA-256 est exacte
         run: |
@@ -98,6 +241,17 @@ exercises:
       `curl --cacert /pki/ca/ca.crt --resolve app.tdm.local:443:127.0.0.1 https://app.tdm.local/` doit fonctionner :
       le client ne connaît que la racine, c'est le serveur qui fournit l'intermédiaire.
     hint: "Les extensions se passent à openssl x509 -req avec -extfile (un fichier contenant basicConstraints=… et keyUsage=…) ; server { listen 443 ssl; server_name app.tdm.local; ssl_certificate /pki/webserver/app-fullchain.crt; … }"
+    cours: |
+      La clé de la racine est si précieuse qu'on la garde **hors ligne**. Une **CA intermédiaire**, signée par la
+      racine, signe les certificats du quotidien ; si elle est compromise, on la révoque sans toucher à la racine
+      installée chez tous les clients.
+
+      L'intermédiaire est une CA : `basicConstraints=critical,CA:TRUE,pathlen:0` (`pathlen:0` interdit qu'elle
+      crée d'autres CA en dessous) et `keyUsage=critical,keyCertSign,cRLSign`.
+
+      Le client ne connaît que la racine : le serveur doit donc envoyer **son certificat suivi de
+      l'intermédiaire** (*fullchain*), dans cet ordre. `openssl verify -CAfile ca.crt -untrusted intermediate.crt app.crt`
+      simule cette vérification. `curl --resolve nom:443:127.0.0.1` force la résolution d'un nom sans DNS.
     checks:
       - desc: L'intermédiaire est signé par la racine
         run: |
@@ -120,6 +274,18 @@ exercises:
 
       `curl --cacert /pki/ca/ca.crt https://localhost:9443/` doit être refusé, et accepté avec
       `--cert /pki/client/client.crt --key /pki/client/client.key`.
+    cours: |
+      En **TLS mutuel** (mTLS), le serveur demande lui aussi un certificat au client et le vérifie avec une CA
+      de confiance. C'est une authentification forte, sans mot de passe, utilisée entre services ou pour des
+      accès d'administration.
+
+      Côté nginx : `ssl_client_certificate` (la CA qui signe les certificats clients) et
+      `ssl_verify_client on;` (certificat obligatoire ; `optional` laisse l'application décider). La variable
+      `$ssl_client_s_dn` contient le sujet du client authentifié.
+
+      Le certificat client porte l'usage étendu `extendedKeyUsage=clientAuth`. curl le présente avec `--cert` et
+      `--key`. Sans certificat, nginx répond 400 (*No required SSL certificate was sent*) ou la poignée de main
+      échoue.
     checks:
       - desc: client.crt est un certificat client signé par la CA
         run: |
@@ -140,6 +306,17 @@ exercises:
 
       Vérifie : `openssl verify -crl_check` doit refuser `revoque.crt` mais toujours accepter `server.crt`.
     hint: "touch index.txt ; echo 1000 > serial ; openssl ca -config ca.cnf -revoke revoque.crt ; openssl ca -config ca.cnf -gencrl -out crl.pem"
+    cours: |
+      `openssl ca` est une mini-CA qui tient un **registre** de ce qu'elle signe : `index.txt` (une ligne par
+      certificat, état `V` valide ou `R` révoqué), `serial` (prochain numéro) et un dossier pour les certificats
+      émis. Sa configuration se lit avec `-config fichier` ; la section `[ca]` désigne la section par défaut
+      (`default_ca`), qui contient les chemins et une `policy`.
+
+      `openssl ca -revoke cert.crt` marque le certificat comme révoqué ; `openssl ca -gencrl -out crl.pem` publie
+      la **CRL**, liste signée des numéros révoqués, que les clients téléchargent.
+
+      Pour vérifier avec la CRL : `openssl verify -crl_check -CAfile` doit recevoir la CA **et** la CRL (fichier
+      concaténé ou option `-CRLfile`).
     checks:
       - desc: crl.pem est une CRL émise par TDM Root CA
         run: openssl crl -in /pki/ca/crl.pem -noout -issuer | grep -q 'TDM Root CA'

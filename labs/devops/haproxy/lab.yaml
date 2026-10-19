@@ -17,6 +17,100 @@ description: |
   - recharger après une modification : `haproxy -D -f haproxy.cfg -p /run/haproxy.pid -sf $(cat /run/haproxy.pid)`
 
   Le port 80 est publié sur **http://localhost:8090** et les statistiques sur **http://localhost:8404**.
+cours: |
+  ## HAProxy : répartition de charge et haute disponibilité
+
+  HAProxy est un répartiteur de charge (*load balancer*) et reverse proxy TCP/HTTP réputé pour ses
+  performances et sa fiabilité. Il répartit les requêtes entre plusieurs serveurs, retire automatiquement
+  ceux qui tombent en panne, termine le TLS et protège les applications (limitation de débit, ACL).
+  **Squid**, à l'inverse, est un proxy **sortant** : il relaie les requêtes des clients vers Internet
+  (filtrage, cache).
+
+  ```
+                           ┌────────── HAProxy ──────────┐
+  client ─▶ :80/:443 ─▶    │ frontend web                │
+                           │   ACL path_beg /site1 ──────┼──▶ backend site1 ─▶ site1:80
+                           │   ACL path_beg /site2 ──────┼──▶ backend site2 ─▶ site2:80
+                           │   défaut ───────────────────┼──▶ backend couleurs ─▶ red:8080 ✔
+                           │                             │                     └▶ blue:8080 ✔
+                           └── stats :8404 ── socket admin ┘   (health checks)
+  ```
+
+  ### Structure de `haproxy.cfg`
+
+  ```
+  global                      # réglages du processus (journaux, socket, utilisateur)
+      stats socket /run/haproxy/admin.sock mode 600 level admin
+  defaults                    # valeurs héritées par les sections suivantes
+      mode http
+      timeout connect 5s
+      timeout client  30s
+      timeout server  30s
+  frontend web                # ce qui écoute
+      bind *:80
+      acl est_api path_beg /api
+      use_backend api if est_api
+      default_backend couleurs
+  backend couleurs            # vers qui on envoie
+      balance roundrobin
+      option httpchk GET /
+      server red  red:8080  check
+      server blue blue:8080 check
+  ```
+
+  ### Algorithmes de répartition
+
+  | `balance` | Principe |
+  |---|---|
+  | `roundrobin` | chacun son tour (pondérable avec `weight`) |
+  | `leastconn` | le serveur qui a le moins de connexions (requêtes longues) |
+  | `source` | hachage de l'IP client : toujours le même serveur |
+  | `uri` | hachage de l'URI (caches) |
+
+  ### Santé et persistance
+
+  - `check` active la surveillance d'un serveur ; `option httpchk` en fait un test HTTP plutôt qu'une simple
+    connexion TCP. `inter`, `fall` et `rise` règlent la fréquence et les seuils.
+  - La **persistance** (*stickiness*) renvoie un client vers le même serveur : par cookie (`cookie SERVERID
+    insert`), par IP (`balance source`) ou par *stick-table*.
+
+  ### Mode TCP ou HTTP
+
+  En `mode tcp` (couche 4), HAProxy relaie des octets : bases de données, TLS de bout en bout. En `mode
+  http` (couche 7), il comprend les requêtes : ACL sur le chemin ou les en-têtes, réécriture, cookies.
+
+  ### Mémo
+
+  ```bash
+  haproxy -c -f haproxy.cfg                                   # valider
+  haproxy -D -f haproxy.cfg -p /run/haproxy.pid               # démarrer
+  haproxy -D -f haproxy.cfg -p /run/haproxy.pid -sf $(cat /run/haproxy.pid)   # recharger
+  echo "show stat" | socat stdio /run/haproxy/admin.sock
+  echo "disable server couleurs/blue" | socat stdio /run/haproxy/admin.sock
+  curl -x http://squid:3128 -I http://site1/                  # via le proxy sortant
+  ```
+
+  ### Pièges courants
+
+  - Oublier les `timeout` : HAProxy avertit, et des connexions peuvent rester ouvertes indéfiniment.
+  - Un serveur sans `check` reste dans la rotation même s'il est en panne.
+  - L'ordre des `use_backend` : le premier qui correspond gagne.
+  - Le fichier PEM pour TLS doit contenir le certificat **et** la clé.
+  - Un health check sur `/` qui renvoie une redirection 301 peut être considéré comme valide… ou non selon
+    la configuration : vérifie avec `http-check expect status 200`.
+
+  ### Bonnes pratiques
+
+  Valider avant chaque rechargement, rechargements sans coupure (`-sf`), page de stats protégée, journaux
+  HTTP détaillés, deux HAProxy en haute disponibilité (VRRP avec keepalived) pour ne pas créer de point
+  unique de défaillance.
+docs:
+  - title: Documentation HAProxy
+    url: https://docs.haproxy.org/
+  - title: Blog et guides HAProxy
+    url: https://www.haproxy.com/blog
+  - title: Documentation Squid
+    url: https://wiki.squid-cache.org/
 exercises:
   - id: round-robin
     title: Répartition de charge
@@ -24,6 +118,17 @@ exercises:
       Crée un `frontend` qui écoute sur le port **80** et envoie le trafic vers un `backend` `couleurs`
       contenant `red:8080` et `blue:8080` en **roundrobin**. Démarre HAProxy : en rafraîchissant
       http://localhost:8090, la couleur doit alterner.
+    cours: |
+      Une configuration HAProxy relie un **frontend** (ce qui écoute : `bind *:80`) à un ou plusieurs
+      **backends** (les serveurs réels). `default_backend` indique où envoyer le trafic qui ne correspond à
+      aucune règle particulière.
+
+      Dans le backend, `balance roundrobin` répartit les requêtes à tour de rôle et chaque ligne
+      `server nom adresse:port` déclare un serveur. Le nom est libre ; il apparaît dans les statistiques et les
+      commandes d'administration.
+
+      Pense au mode (`mode http` dans `defaults` ou dans les sections) et aux `timeout`. Valide toujours avec
+      `haproxy -c -f haproxy.cfg` avant de démarrer : le message d'erreur indique la ligne fautive.
     checks:
       - desc: La configuration est valide
         run: haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
@@ -36,6 +141,16 @@ exercises:
     description: |
       Active les **health checks** (`check`) sur les serveurs du backend `couleurs`, avec une vérification
       HTTP (`option httpchk GET /`). Recharge HAProxy.
+    cours: |
+      Sans surveillance, HAProxy continue d'envoyer du trafic à un serveur en panne. Le mot-clé `check` sur une
+      ligne `server` active des **vérifications périodiques** ; par défaut, une simple connexion TCP.
+
+      `option httpchk GET /` (dans le backend) transforme le test en requête HTTP : un code 2xx ou 3xx signifie
+      « en bonne santé ». Paramètres utiles : `inter 2s` (intervalle), `fall 3` (échecs avant de retirer le
+      serveur), `rise 2` (succès avant de le réintégrer).
+
+      L'état de chaque serveur (`UP`, `DOWN`) apparaît dans les journaux et la page de statistiques. Teste en
+      arrêtant un backend : HAProxy doit le retirer de la rotation.
     checks:
       - desc: option httpchk dans la configuration
         run: grep -Eq '^\s*option\s+httpchk' /usr/local/etc/haproxy/haproxy.cfg
@@ -47,6 +162,17 @@ exercises:
       Avec des **ACL**, envoie `/site1` vers le backend `site1` (`site1:80`) et `/site2` vers `site2`
       (`site2:80`), le reste allant toujours vers `couleurs`. Pense à retirer le préfixe du chemin
       (`http-request replace-path /site[12](.*) /\1`) ou à servir `/` côté backend.
+    cours: |
+      Une **ACL** est une condition nommée, évaluée sur la requête : `acl est_site1 path_beg /site1`. Les
+      critères courants : `path_beg` (début du chemin), `path`, `hdr(host)`, `src` (IP du client),
+      `method`. `use_backend nom if condition` route la requête quand la condition est vraie ; plusieurs ACL
+      se combinent (espace = ET, `||` = OU, `!` = NON).
+
+      Le backend reçoit le chemin tel quel : `/site1/page`. Si le serveur ne connaît que `/page`, il faut
+      réécrire le chemin avant de le transmettre (`http-request replace-path` avec une expression régulière, dans
+      le backend concerné).
+
+      Les règles `use_backend` sont évaluées dans l'ordre ; `default_backend` sert en dernier recours.
     checks:
       - desc: /site1 renvoie le site 1
         run: (curl -fsS http://localhost/site1 2>/dev/null || wget -qO- http://localhost/site1) | grep -q "Site 1"
@@ -57,6 +183,16 @@ exercises:
     description: |
       Expose la page de statistiques sur le port **8404** à l'adresse `/stats` (`stats enable`,
       `stats uri /stats`), protégée par l'utilisateur `admin` / `tdm`.
+    cours: |
+      HAProxy fournit une **page de statistiques** HTML : état de chaque serveur, sessions, octets, erreurs,
+      temps de réponse. C'est le premier outil de diagnostic d'un répartiteur.
+
+      On la sert généralement sur un frontend dédié (`frontend stats` avec `bind *:8404`), en `mode http`, avec
+      les directives `stats enable`, `stats uri /stats`, `stats refresh 10s` et `stats auth utilisateur:mdp`
+      pour la protéger. `stats admin if TRUE` permettrait même d'agir sur les serveurs depuis la page.
+
+      La même information existe au format CSV (`/stats;csv`), pratique pour les scripts et pour un exporter
+      Prometheus (HAProxy intègre aussi un point `/metrics`).
     checks:
       - desc: /stats est protégé par mot de passe
         run: test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8404/stats)" = 401
@@ -68,6 +204,17 @@ exercises:
       Vérifie depuis haproxy que le proxy Squid fonctionne :
       `curl -x http://squid:3128 -I http://site1/`. Ensuite, écris dans `/root/squid.txt` le
       **code HTTP** obtenu (juste le nombre).
+    cours: |
+      Un **proxy sortant** (*forward proxy*) relaie les requêtes des clients vers l'extérieur : contrôle
+      d'accès, filtrage, cache, journalisation centralisée. C'est l'inverse d'un reverse proxy, qui se place
+      devant des serveurs.
+
+      Le client doit être configuré pour l'utiliser : variable `http_proxy`, réglage du navigateur, ou option
+      `-x` de curl. Le port par défaut de Squid est **3128**.
+
+      `curl -I` affiche les en-têtes de réponse : la première ligne contient le code HTTP. Les en-têtes `Via` et
+      `X-Cache` ajoutés par Squid confirment que la requête est passée par lui. Pour ne garder que le code dans
+      un fichier, `curl -s -o /dev/null -w '%{http_code}'` est plus fiable que de découper la sortie.
     checks:
       - desc: Squid relaie bien vers site1
         run: curl -fsS -x http://squid:3128 http://site1/ | grep -q "Site 1"
@@ -83,6 +230,17 @@ exercises:
 
       Teste avec `curl -c /tmp/c -b /tmp/c http://localhost/` plusieurs fois : la couleur ne change plus.
     hint: "Dans le backend : cookie SERVERID insert indirect nocache ; server red red:8080 check cookie red"
+    cours: |
+      Une application qui garde ses sessions en mémoire (panier, connexion) casse si le client change de serveur
+      à chaque requête. La **persistance** garantit qu'un client retombe sur le même serveur.
+
+      Avec `cookie SERVERID insert indirect nocache` dans le backend, HAProxy ajoute à la première réponse un
+      cookie dont la valeur désigne le serveur choisi (`cookie red` sur la ligne `server`). Aux requêtes
+      suivantes, il lit ce cookie et route en conséquence ; `indirect` évite de transmettre le cookie au serveur,
+      `nocache` empêche les caches de le partager.
+
+      curl ne garde pas les cookies : `-c fichier` les enregistre, `-b fichier` les renvoie. Si le serveur désigné
+      tombe, HAProxy en choisit un autre.
     checks:
       - desc: HAProxy pose le cookie SERVERID
         run: |
@@ -100,6 +258,17 @@ exercises:
 
       `curl -k https://localhost/` doit renvoyer une couleur.
     hint: "openssl req -x509 -newkey rsa:2048 -nodes -keyout /tmp/k.pem -out /tmp/c.pem -days 365 -subj '/CN=tdm.local' ; cat /tmp/c.pem /tmp/k.pem > certs/tdm.pem"
+    cours: |
+      La **terminaison TLS** consiste à déchiffrer le HTTPS sur le répartiteur : les backends reçoivent du HTTP
+      simple, et les certificats sont gérés à un seul endroit.
+
+      `openssl req -x509 -newkey rsa:2048 -nodes -keyout cle.pem -out cert.pem -days 365 -subj "/CN=tdm.local"`
+      produit un certificat auto-signé et sa clé. HAProxy attend un **seul fichier PEM** qui contient le
+      certificat suivi de la clé privée (une simple concaténation avec `cat`). Le dossier `crt` peut aussi
+      contenir plusieurs PEM, choisis selon le nom demandé (SNI).
+
+      Le certificat étant auto-signé, curl le refuse sauf avec `-k`. En production, on utilise une autorité
+      reconnue (Let's Encrypt) et on redirige le port 80 vers 443.
     checks:
       - desc: Le site répond en HTTPS
         run: curl -sk https://localhost/ | grep -q 'red\|blue'
@@ -117,6 +286,18 @@ exercises:
       frontend, `http-request track-sc0 src if { path_beg /api }` puis
       `http-request deny deny_status 429 if { path_beg /api } { sc_http_req_rate(0) gt 10 }`.
     hint: "for i in $(seq 1 15); do curl -s -o /dev/null -w '%{http_code}\\n' http://localhost/api; done"
+    cours: |
+      Une **stick-table** est une table en mémoire indexée par une clé (souvent l'IP source) qui stocke des
+      compteurs : nombre de connexions, débit de requêtes (`http_req_rate(10s)`), erreurs…
+
+      Trois directives travaillent ensemble dans le frontend :
+      1. `stick-table` déclare la table, sa taille, sa durée de rétention et ce qu'elle mesure ;
+      2. `http-request track-sc0 src` fait suivre la requête par le compteur 0 ; une condition `if` limite le
+         suivi à certains chemins ;
+      3. `http-request deny deny_status 429 if ...` refuse quand `sc_http_req_rate(0)` dépasse le seuil.
+
+      Le code **429 Too Many Requests** est le code standard. Pour tester, enchaîne une quinzaine de requêtes
+      rapides dans une boucle et observe les codes.
     checks:
       - desc: Une rafale sur /api finit en 429 (après une première réponse normale)
         run: |
@@ -141,6 +322,17 @@ exercises:
 
       Observe l'état avec `echo "show servers state couleurs" | socat stdio /run/haproxy/admin.sock`.
     hint: "Si le socket n'apparaît pas, HAProxy n'a pas été redémarré : un rechargement avec -sf relit bien la section global"
+    cours: |
+      L'**API runtime** de HAProxy, exposée par un socket Unix (`stats socket ... level admin` dans `global`),
+      permet d'agir à chaud, sans recharger la configuration : mettre un serveur en maintenance avant une mise à
+      jour, changer son poids, ses limites, consulter les stick-tables…
+
+      `socat stdio /run/haproxy/admin.sock` envoie une commande et affiche la réponse. Commandes utiles :
+      `show stat`, `show servers state`, `disable server backend/serveur`, `enable server`,
+      `set server backend/serveur weight 50`, `set maxconn server ...`, `show table`.
+
+      Ces changements vivent en mémoire : ils sont perdus au redémarrage. C'est l'outil des déploiements
+      progressifs (vider un serveur, le mettre à jour, le réintégrer).
     checks:
       - desc: Le socket d'administration existe
         run: test -S /run/haproxy/admin.sock && echo "show info" | socat stdio /run/haproxy/admin.sock | grep -q '^Name. HAProxy'

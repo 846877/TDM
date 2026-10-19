@@ -7,12 +7,122 @@ vagrant: minikube/minikube_ubuntu22
 description: |
   Lab Vagrant de ta formation : une VM Ubuntu 22.04 avec Minikube (driver `none`, Kubernetes 1.32).
   `kubectl` s'utilise en root : `sudo -i` ou `sudo kubectl ...`. Prévois 4 Go de RAM libres.
+cours: |
+  ## Kubernetes : orchestrer des conteneurs
+
+  Docker lance des conteneurs sur une machine. **Kubernetes** (K8s) les orchestre sur un cluster : il
+  décide où les placer, les redémarre, les met à l'échelle, les expose et les met à jour sans interruption.
+  **Minikube** fournit un cluster d'un seul nœud pour apprendre et développer.
+
+  ### Le modèle déclaratif
+
+  On ne dit pas à Kubernetes « lance trois conteneurs », on lui décrit un **état désiré** (« je veux trois
+  réplicas de cette image ») dans un manifeste YAML. Des **contrôleurs** comparent en permanence l'état
+  désiré et l'état réel, et agissent pour les faire converger : c'est la **boucle de réconciliation**.
+
+  ### Architecture
+
+  ```
+   kubectl ──▶ ┌───────────── plan de contrôle ─────────────┐
+               │ kube-apiserver ◀──▶ etcd (état du cluster) │
+               │ scheduler   controller-manager             │
+               └───────────────────┬────────────────────────┘
+                       ┌───────────┴───────────┐
+                  ┌────▼────┐             ┌────▼────┐
+                  │ nœud    │ kubelet     │ nœud    │ kubelet, kube-proxy,
+                  │ [pod]   │ kube-proxy  │ [pod]   │ runtime (containerd)
+                  └─────────┘             └─────────┘
+  ```
+
+  ### Les objets essentiels
+
+  | Objet | Rôle |
+  |---|---|
+  | **Pod** | un ou plusieurs conteneurs partageant réseau et volumes ; unité de base, éphémère |
+  | **Deployment** | maintient N réplicas d'un pod via un ReplicaSet ; mises à jour progressives |
+  | **Service** | adresse et nom DNS stables devant un groupe de pods (sélection par labels) |
+  | **ConfigMap / Secret** | configuration et données sensibles injectées dans les pods |
+  | **Namespace** | espace de noms pour séparer équipes ou environnements |
+  | **Job / CronJob** | tâches ponctuelles ou planifiées |
+  | **ResourceQuota / LimitRange** | limites de consommation par namespace |
+
+  Les **labels** (`app: whoami`) sont la colle de Kubernetes : un Service ou un Deployment trouve ses pods
+  grâce à un **sélecteur** de labels, jamais par leur nom.
+
+  ### Un manifeste
+
+  ```yaml
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: whoami
+  spec:
+    replicas: 2
+    selector:
+      matchLabels: { app: whoami }
+    template:
+      metadata:
+        labels: { app: whoami }      # doit correspondre au sélecteur
+      spec:
+        containers:
+          - name: whoami
+            image: traefik/whoami:v1.10
+            ports: [{ containerPort: 80 }]
+  ```
+
+  ### Mémo kubectl
+
+  ```bash
+  kubectl get pods,deploy,svc -o wide ; kubectl get all -n equipe
+  kubectl describe pod NOM            # événements : le premier réflexe de diagnostic
+  kubectl logs NOM [-c conteneur] [-f] [--previous]
+  kubectl apply -f fichier.yaml ; kubectl delete -f fichier.yaml
+  kubectl set image deploy/whoami whoami=traefik/whoami:v1.11
+  kubectl rollout status|history|undo deploy/whoami
+  kubectl scale deploy/whoami --replicas=4
+  kubectl explain deployment.spec.template.spec.containers
+  kubectl run test --image=busybox:1.36 --rm -it -- sh
+  ```
+
+  ### Pièges courants
+
+  - Labels du template différents du sélecteur : le Deployment est refusé, ou le Service n'a aucun endpoint.
+  - `ImagePullBackOff` : nom ou tag d'image erroné.
+  - `CrashLoopBackOff` : le conteneur démarre puis plante ; lis `kubectl logs --previous`.
+  - `Pending` : pas assez de ressources ou contrainte de placement impossible (`describe` l'explique).
+  - Modifier un pod à la main : il sera remplacé par le Deployment avec la définition d'origine.
+
+  ### Bonnes pratiques
+
+  Manifestes versionnés et appliqués avec `kubectl apply`, images taguées précisément, sondes de santé,
+  requêtes et limites de ressources, un namespace par équipe ou environnement, et jamais de secrets en clair
+  dans le dépôt.
+docs:
+  - title: Documentation Kubernetes (français)
+    url: https://kubernetes.io/fr/docs/home/
+  - title: Concepts Kubernetes
+    url: https://kubernetes.io/fr/docs/concepts/
+  - title: Aide-mémoire kubectl
+    url: https://kubernetes.io/fr/docs/reference/kubectl/cheatsheet/
+  - title: Documentation Minikube
+    url: https://minikube.sigs.k8s.io/docs/
 exercises:
   - id: premier-pod
     title: Premier pod
     description: |
       Lance un pod `hello` (image `nginx:1.27`) dans le namespace `default`, avec le label `app=hello`.
     hint: "kubectl run hello --image=... --labels=app=hello"
+    cours: |
+      Un **pod** est la plus petite unité de Kubernetes : un ou plusieurs conteneurs qui partagent la même
+      adresse IP et peuvent partager des volumes. La plupart du temps, un pod contient un seul conteneur.
+
+      `kubectl run nom --image=...` crée un pod isolé, sans contrôleur : s'il est supprimé, rien ne le recrée.
+      L'option `--labels` (ou `-l`) pose des étiquettes `clé=valeur`, que les autres objets utilisent pour
+      retrouver les pods.
+
+      `kubectl get pods --show-labels` affiche les étiquettes, `kubectl describe pod hello` les événements
+      (téléchargement de l'image, démarrage). Le pod passe par les états `Pending`, `ContainerCreating`, puis
+      `Running`.
     checks:
       - desc: Le pod hello tourne
         run: test "$(sudo kubectl get pod hello -o jsonpath='{.status.phase}')" = Running
@@ -23,6 +133,17 @@ exercises:
     description: |
       Écris `/home/vagrant/whoami.yaml` qui décrit un déploiement `whoami` (image `traefik/whoami:v1.10`,
       2 réplicas) et un service ClusterIP `whoami` sur le port 80. Applique-le.
+    cours: |
+      Un manifeste décrit un ou plusieurs objets en YAML, séparés par `---`. Chaque objet a quatre parties :
+      `apiVersion`, `kind`, `metadata` (nom, labels) et `spec` (l'état désiré).
+
+      Pour un **Deployment** : `replicas`, `selector.matchLabels` et `template` (le modèle de pod, dont les
+      labels doivent correspondre au sélecteur). Pour un **Service** : `selector` (les labels des pods visés) et
+      `ports` (`port` exposé par le service, `targetPort` du conteneur). Le type par défaut, `ClusterIP`, rend le
+      service joignable uniquement dans le cluster.
+
+      `kubectl apply -f` crée ou met à jour les objets ; `kubectl get endpoints whoami` vérifie que le service a
+      trouvé ses pods.
     checks:
       - desc: Le manifeste existe
         run: |
@@ -37,6 +158,16 @@ exercises:
       Passe le déploiement `whoami` en image `traefik/whoami:v1.11` puis monte-le à 4 réplicas.
       L'historique doit contenir au moins 2 révisions.
     hint: "kubectl set image, kubectl scale, kubectl rollout history"
+    cours: |
+      Modifier le modèle de pod d'un Deployment (l'image par exemple) déclenche une **mise à jour progressive**
+      (*rolling update*) : un nouveau ReplicaSet est créé et monte en charge pendant que l'ancien descend, sans
+      interruption de service. `maxSurge` et `maxUnavailable` règlent le rythme.
+
+      `kubectl set image deploy/NOM CONTENEUR=IMAGE` change l'image ; le nom du conteneur est celui du
+      manifeste. `kubectl scale` change seulement le nombre de réplicas, ce qui ne crée **pas** de révision.
+
+      `kubectl rollout status` suit la progression, `rollout history` liste les révisions et `rollout undo`
+      revient à la précédente.
     checks:
       - desc: Image v1.11
         run: sudo kubectl get deploy whoami -o jsonpath='{.spec.template.spec.containers[0].image}' | grep -q 'v1.11'
@@ -50,6 +181,16 @@ exercises:
       Ajoute au déploiement `whoami` une `readinessProbe` et une `livenessProbe` HTTP sur le chemin `/health`
       (port 80) : Kubernetes n'envoie du trafic qu'aux pods prêts et redémarre ceux qui ne répondent plus.
     hint: "readinessProbe: httpGet: path: /health, port: 80 — à ajouter dans whoami.yaml puis kubectl apply -f"
+    cours: |
+      Kubernetes ne sait pas si ton application fonctionne vraiment : un processus vivant peut être bloqué. Les
+      **sondes** le lui disent :
+      - la **readinessProbe** indique si le pod est prêt à recevoir du trafic ; tant qu'elle échoue, le pod est
+        retiré des endpoints du Service ;
+      - la **livenessProbe** indique s'il est vivant ; en cas d'échecs répétés, le conteneur est redémarré ;
+      - la **startupProbe** laisse du temps aux applications lentes à démarrer.
+
+      Une sonde peut être `httpGet` (chemin et port), `tcpSocket` ou `exec`. Paramètres : `initialDelaySeconds`,
+      `periodSeconds`, `failureThreshold`. Les sondes font partie du conteneur, dans le template du Deployment.
     checks:
       - desc: readinessProbe sur /health
         run: sudo kubectl get deploy whoami -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.path}' | grep -qx /health
@@ -68,6 +209,17 @@ exercises:
 
       Teste : un 5ᵉ pod doit être refusé.
     hint: "kubectl create quota quota -n equipe --hard=pods=4,requests.cpu=1,requests.memory=1Gi ; le LimitRange s'écrit en YAML (type: Container, defaultRequest, default)"
+    cours: |
+      Un **namespace** isole les objets d'une équipe ou d'un environnement : les noms n'ont besoin d'être uniques
+      qu'à l'intérieur d'un namespace.
+
+      Un **ResourceQuota** plafonne la consommation totale du namespace : nombre d'objets (`pods`) et somme des
+      ressources demandées (`requests.cpu`, `requests.memory`). Dès qu'un quota porte sur les ressources, chaque
+      pod **doit** déclarer ses requêtes, sinon il est refusé.
+
+      C'est là qu'intervient le **LimitRange** : il fournit des valeurs par défaut aux conteneurs qui n'en ont pas
+      (`defaultRequest` pour les requêtes, `default` pour les limites), et peut imposer des minimums et maximums.
+      `kubectl describe quota -n equipe` montre la consommation actuelle.
     checks:
       - desc: Le quota limite à 4 pods
         run: test "$(sudo kubectl -n equipe get resourcequota quota -o jsonpath='{.spec.hard.pods}')" = 4
@@ -84,6 +236,17 @@ exercises:
       exécutant `date`, en ne gardant que les **2** derniers jobs réussis. Attends qu'un job se termine et lis son
       log (`kubectl logs job/<nom>`).
     hint: "kubectl create cronjob horodatage --image=busybox:1.36 --schedule='*/1 * * * *' -- date ; puis successfulJobsHistoryLimit: 2"
+    cours: |
+      Un **Job** lance un ou plusieurs pods jusqu'à ce qu'ils se terminent avec succès (avec des nouvelles
+      tentatives en cas d'échec). Un **CronJob** crée des Jobs selon un calendrier au format cron
+      (`*/5 * * * *`).
+
+      Champs utiles du CronJob : `schedule`, `jobTemplate` (le modèle de Job, qui contient lui-même un modèle de
+      pod avec `restartPolicy: OnFailure` ou `Never`), `successfulJobsHistoryLimit` et
+      `failedJobsHistoryLimit` (nombre de Jobs terminés conservés), `concurrencyPolicy`.
+
+      `kubectl create cronjob` génère la structure ; `kubectl get jobs --watch` montre les exécutions, et
+      `kubectl logs job/NOM` le résultat.
     checks:
       - desc: Le CronJob tourne chaque minute
         run: sudo kubectl get cronjob horodatage -o jsonpath='{.spec.schedule}' | grep -Eqx '\*(/1)? \* \* \* \*'
@@ -126,6 +289,17 @@ exercises:
         ports: [{port: 80, targetPort: 80}]
       ```
     hint: "ImagePullBackOff indique un problème d'image ; un service sans endpoints a souvent un sélecteur qui ne correspond à aucun pod"
+    cours: |
+      La démarche de diagnostic Kubernetes :
+      1. `kubectl get pods` : l'état (`ErrImagePull`, `ImagePullBackOff`, `CrashLoopBackOff`, `Pending`) ;
+      2. `kubectl describe pod NOM` : la section **Events** en bas donne la cause (image introuvable, ressources
+         insuffisantes, sonde en échec) ;
+      3. `kubectl logs NOM` : les erreurs de l'application ;
+      4. pour un Service : `kubectl get endpoints NOM`. Une liste vide signifie que le **sélecteur** ne
+         correspond aux labels d'aucun pod prêt.
+
+      Compare caractère par caractère : une faute de frappe dans une image ou un label suffit. Corrige le
+      manifeste puis réapplique-le.
     checks:
       - desc: 2 réplicas disponibles
         run: test "$(sudo kubectl get deploy depannage -o jsonpath='{.status.availableReplicas}')" = 2

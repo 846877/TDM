@@ -16,6 +16,104 @@ description: |
 
   Commandes utiles : `ls -l`, `mkdir -p`, `chmod`, `chown`, `grep`, `wc -l`, `useradd`, `find`, `tar`,
   `ps`, `kill`, `awk`, `sort`, `uniq`.
+cours: |
+  ## Linux, le socle de tout le DevOps
+
+  Serveurs, conteneurs, runners de CI, nœuds Kubernetes : presque tout tourne sous Linux. Savoir naviguer,
+  lire des fichiers, gérer des droits et des processus est le prérequis de tous les autres labs.
+
+  ### L'arborescence
+
+  Tout part de la racine `/`. Il n'y a pas de lettres de lecteur : un disque est **monté** dans un dossier.
+
+  ```
+  /
+  ├── etc/      configuration (texte !) : /etc/passwd, /etc/nginx/...
+  ├── home/     dossiers personnels (/home/eleve = ~)
+  ├── var/      données variables : /var/log, /var/lib
+  ├── usr/      programmes et bibliothèques (/usr/bin)
+  ├── opt/      logiciels installés « à la main »
+  ├── tmp/      fichiers temporaires (vidé au redémarrage)
+  └── proc/     vue du noyau sur les processus (/proc/<PID>)
+  ```
+
+  Chemin **absolu** : commence par `/`. Chemin **relatif** : part du dossier courant (`pwd`).
+  `.` = dossier courant, `..` = dossier parent, `~` = ton dossier personnel.
+
+  ### Les droits
+
+  Chaque fichier a un **propriétaire**, un **groupe** et trois triplets de droits `rwx` :
+
+  ```
+  -rwxr-x---  1 eleve devops  120 deploy.sh
+   └┬┘└┬┘└┬┘
+    │  │  └── autres  : ---  = 0
+    │  └───── groupe  : r-x  = 4+1 = 5
+    └──────── proprio : rwx  = 4+2+1 = 7      →  chmod 750
+  ```
+
+  Sur un dossier, `x` signifie « pouvoir y entrer » et `r` « pouvoir lister ». `chmod` change les droits,
+  `chown utilisateur:groupe` change le propriétaire. Les commandes d'administration passent par `sudo`.
+
+  ### Le shell et ses flux
+
+  Chaque commande a trois flux : l'entrée standard (0), la sortie standard (1) et la sortie d'erreur (2).
+
+  | Syntaxe | Effet |
+  |---|---|
+  | `cmd > f` | écrit la sortie dans `f` (écrase) |
+  | `cmd >> f` | ajoute à la fin de `f` |
+  | `cmd 2> f` | redirige les erreurs |
+  | `cmd > f 2>&1` | sortie et erreurs dans `f` |
+  | `a \| b` | la sortie de `a` devient l'entrée de `b` |
+
+  La philosophie Unix : de petits outils qui font une chose bien, combinés par des tubes.
+  `grep` filtre des lignes, `wc -l` les compte, `sort` trie, `uniq -c` compte les doublons consécutifs,
+  `cut` et `awk` découpent en colonnes, `sed` remplace, `head`/`tail` gardent le début ou la fin.
+
+  ### Utilisateurs et groupes
+
+  Les comptes sont dans `/etc/passwd`, les groupes dans `/etc/group`, les mots de passe hachés dans
+  `/etc/shadow`. `id utilisateur` affiche ses groupes, `getent` interroge ces bases. Un service doit tourner
+  avec un compte dédié et non `root` : c'est le **principe du moindre privilège**.
+
+  ### Processus
+
+  Un processus a un **PID**, un parent, un utilisateur et un état. `ps aux` les liste, `pgrep` les trouve
+  par nom, `top` les observe en direct. `kill PID` envoie le signal `SIGTERM` (arrêt propre) ;
+  `kill -9` envoie `SIGKILL` (arrêt brutal, à éviter). `&` lance en arrière-plan, `nohup` détache la
+  commande du terminal pour qu'elle survive à sa fermeture.
+
+  ### Mémo
+
+  ```bash
+  mkdir -p a/b/c          # crée les parents
+  cp -r src dst ; mv a b ; rm -r dossier
+  find /var -name '*.log' -size +1M -mtime -7
+  tar -czf archive.tar.gz dossier ; tar -tzf archive.tar.gz ; tar -xzf archive.tar.gz -C dest
+  grep -rn motif dossier ; grep -c ERROR app.log
+  awk '{print $3}' app.log | sort | uniq -c | sort -rn
+  ```
+
+  ### Pièges courants
+
+  - Oublier les **guillemets** autour d'un nom contenant des espaces.
+  - `>` au lieu de `>>` : le fichier est écrasé sans prévenir.
+  - `rm -rf` avec une variable vide (`rm -rf $DIR/`) : catastrophe. Vérifie toujours.
+  - `chmod 777` pour « régler » un problème de droits : c'est ouvrir la porte à tout le monde.
+  - Un script sans ligne `#!` ou sans droit `x` ne se lance pas avec `./script`.
+
+  ### Bonnes pratiques
+
+  Lis le manuel (`man commande`, `commande --help`), teste une commande destructrice avec `ls` ou `echo`
+  avant de la lancer pour de bon, et préfère des chemins absolus dans les scripts.
+docs:
+  - title: Linux Journey (apprendre Linux pas à pas)
+    url: https://linuxjourney.com/
+  - title: Manuel de GNU Bash
+    url: https://www.gnu.org/software/bash/manual/bash.html
+  - title: Documentation Ubuntu Server
+    url: https://ubuntu.com/server/docs
 exercises:
   - id: arborescence
     title: Créer une arborescence
@@ -23,6 +121,15 @@ exercises:
       Dans ton dossier personnel, crée l'arborescence `projets/tdm/src` et `projets/tdm/docs`,
       puis un fichier vide `projets/tdm/README.md`.
     hint: "mkdir -p crée aussi les dossiers parents ; touch crée un fichier vide"
+    cours: |
+      `mkdir` crée un dossier, mais échoue si le dossier parent n'existe pas encore. L'option `-p` (*parents*)
+      crée toute la chaîne d'un coup et ne se plaint pas si le dossier existe déjà : c'est pour cela qu'on la
+      retrouve dans presque tous les scripts. Les accolades du shell permettent de créer plusieurs frères en une
+      commande : `mkdir -p x/{a,b}` crée `x/a` et `x/b`.
+
+      `touch` met à jour la date d'un fichier, et le crée vide s'il n'existe pas. Vérifie le résultat avec
+      `tree` (s'il est installé), `ls -R` ou `find projets`. Rappelle-toi que `~` désigne ton dossier personnel :
+      `~/projets` et `/home/eleve/projets` sont le même chemin.
     checks:
       - desc: Dossiers src et docs
         run: test -d /home/eleve/projets/tdm/src && test -d /home/eleve/projets/tdm/docs
@@ -34,6 +141,16 @@ exercises:
       Crée un script `~/projets/tdm/deploy.sh` qui affiche `deploiement ok`, puis rends-le
       exécutable **uniquement par toi** (droits `700`). Il doit fonctionner avec `./deploy.sh`.
     hint: "chmod 700 deploy.sh — et n'oublie pas la première ligne #!/bin/bash"
+    cours: |
+      Un script est exécutable si deux conditions sont réunies : il porte le droit `x` pour l'utilisateur qui le
+      lance, et il commence par une ligne **shebang** (`#!/bin/bash`) qui indique l'interpréteur.
+
+      En notation octale, chaque chiffre est la somme de `r=4`, `w=2`, `x=1`, dans l'ordre propriétaire, groupe,
+      autres. `700` signifie donc « tout pour le propriétaire, rien pour les autres ». La notation symbolique
+      existe aussi : `chmod u+x`, `chmod go-rwx`.
+
+      `./deploy.sh` est nécessaire car le dossier courant n'est pas dans le `PATH` (par sécurité). Contrôle les
+      droits avec `ls -l` ou `stat -c %a fichier`.
     checks:
       - desc: Droits 700
         run: test "$(stat -c %a /home/eleve/projets/tdm/deploy.sh)" = 700
@@ -46,6 +163,17 @@ exercises:
       **le nombre** de lignes de niveau `ERROR` (juste le nombre), et dans `~/erreurs-service-2.log`
       toutes les lignes `ERROR` du service `service-2`.
     hint: "grep -c, et les redirections > ; pense à combiner deux grep avec |"
+    cours: |
+      `grep motif fichier` affiche les lignes qui contiennent le motif ; `-c` affiche seulement leur nombre,
+      `-v` inverse la sélection, `-i` ignore la casse. Pour combiner deux critères, on enchaîne deux `grep` avec
+      un tube `|` : le second filtre la sortie du premier.
+
+      Attention aux faux positifs : chercher `ERROR` trouve aussi `ERRORS` ou un message qui contient le mot.
+      Regarde la structure d'une ligne (`head -3 fichier`) et inclus les espaces autour du motif si besoin.
+      De même, `service-2` correspond aussi à `service-21`.
+
+      `>` envoie la sortie dans un fichier (en l'écrasant). Pour n'écrire que le nombre, assure-toi que ta
+      commande n'affiche rien d'autre.
     checks:
       - desc: Nombre d'erreurs correct
         run: test "$(tr -d '[:space:]' < /home/eleve/erreurs.txt)" = "$(grep -c ' ERROR ' /home/eleve/donnees/app.log)"
@@ -57,6 +185,15 @@ exercises:
       Crée le groupe `devops`, puis l'utilisateur `deployer` (avec un dossier personnel) membre de ce groupe.
       Crée ensuite `/opt/app` appartenant à `deployer:devops` avec les droits `770`.
     hint: "sudo groupadd, sudo useradd -m -G, sudo chown, sudo chmod"
+    cours: |
+      `groupadd` crée un groupe, `useradd` un utilisateur. Par défaut, `useradd` ne crée pas le dossier
+      personnel : il faut l'option `-m`. L'option `-G` ajoute l'utilisateur à des groupes **secondaires**
+      (`-g` change son groupe principal). Pour ajouter un groupe à un compte existant : `usermod -aG groupe user`
+      (sans `-a`, les autres groupes secondaires sont retirés !).
+
+      Un dossier partagé par une équipe appartient typiquement à un compte de service et à un groupe, avec des
+      droits `770` : le groupe peut lire, écrire et entrer, les autres rien. Toutes ces commandes modifient le
+      système : il faut `sudo`. Vérifie avec `id deployer`, `getent group devops` et `ls -ld /opt/app`.
     checks:
       - desc: Groupe devops
         run: getent group devops
@@ -73,6 +210,17 @@ exercises:
 
       Ensuite, crée un lien symbolique `~/archives` qui pointe vers `~/donnees/archives`.
     hint: "find ~/donnees/archives -type f -size +100k -printf '%f\\n' | sort ; ln -s cible nom_du_lien"
+    cours: |
+      `find` parcourt une arborescence et filtre selon des critères qui se combinent : `-type f` (fichiers
+      ordinaires), `-name '*.gz'`, `-size +100k` (plus de 100 Kio ; `M` pour Mio), `-mtime -7` (modifié il y a
+      moins de 7 jours). L'action `-printf` choisit l'affichage : `%p` est le chemin complet, `%f` le nom seul.
+
+      Pense à **trier** la sortie : `find` renvoie les fichiers dans l'ordre du disque, pas dans l'ordre
+      alphabétique.
+
+      Un **lien symbolique** est un petit fichier qui pointe vers un autre chemin, comme un raccourci.
+      `ln -s CIBLE NOM_DU_LIEN` : la cible vient en premier. `ls -l` affiche la flèche, `readlink -f` résout le
+      chemin final.
     checks:
       - desc: La liste des gros fichiers est exacte et triée
         run: |
@@ -88,6 +236,17 @@ exercises:
       Puis, pour t'entraîner à restaurer, extrais-la dans `~/restauration` : on doit y retrouver
       `~/restauration/projets/tdm/README.md`.
     hint: "cd ~ && tar -czf sauvegarde-projets.tar.gz projets ; mkdir restauration && tar -xzf sauvegarde-projets.tar.gz -C restauration"
+    cours: |
+      `tar` regroupe des fichiers en une archive ; avec `-z`, il la compresse en gzip. Les options courantes :
+      `-c` créer, `-x` extraire, `-t` lister, `-f` nom de l'archive, `-v` bavard, `-C dossier` se placer dans un
+      dossier avant d'agir.
+
+      Les chemins enregistrés dans l'archive sont ceux que tu donnes sur la ligne de commande. Si tu archives
+      `/home/eleve/projets`, l'archive contiendra `home/eleve/projets/...`. Pour obtenir des chemins qui
+      commencent par `projets/`, place-toi dans le dossier parent (ou utilise `-C`).
+
+      Une sauvegarde n'existe vraiment que si on sait la **restaurer** : liste toujours le contenu (`tar -tzf`)
+      et teste l'extraction dans un dossier séparé.
     checks:
       - desc: L'archive est bien un gzip
         run: file /home/eleve/sauvegarde-projets.tar.gz | grep -q gzip
@@ -106,6 +265,18 @@ exercises:
       Crée ensuite dans `~/bin` un script exécutable `bonjour` qui affiche `Bonjour eleve` :
       dans un nouveau terminal, la commande `bonjour` doit fonctionner depuis n'importe quel dossier.
     hint: "echo \"alias lt='ls -ltrh'\" >> ~/.bashrc ; export EDITOR=nano ; export PATH=\"$HOME/bin:$PATH\" ; puis source ~/.bashrc"
+    cours: |
+      Bash lit `~/.bashrc` au démarrage de chaque shell interactif : c'est là qu'on rend un réglage permanent.
+      Une modification ne s'applique pas au terminal déjà ouvert : recharge-le avec `source ~/.bashrc`.
+
+      - Un **alias** remplace un mot par une commande : `alias nom='commande'`.
+      - Une **variable d'environnement** doit être **exportée** (`export VAR=valeur`) pour être transmise aux
+        programmes lancés depuis le shell.
+      - `PATH` est la liste, séparée par `:`, des dossiers où le shell cherche les commandes. On l'étend sans
+        l'écraser : on réutilise `$PATH` dans la nouvelle valeur.
+
+      Un script placé dans un dossier du `PATH` devient une commande comme les autres, à condition d'être
+      exécutable.
     checks:
       - desc: L'alias lt existe dans un nouveau shell
         run: bash -ic 'alias lt' 2>/dev/null | grep -q 'ls -ltrh'
@@ -122,6 +293,17 @@ exercises:
       3. Pour finir, lance toi-même `sleep 4242` **en arrière-plan** (il doit survivre à la fermeture du
          terminal : utilise `nohup`).
     hint: "pgrep -f gourmand > ~/gourmand.txt ; kill <PID> ; nohup sleep 4242 > /dev/null 2>&1 &"
+    cours: |
+      Chaque programme en cours d'exécution est un processus identifié par un **PID**. `ps aux` les liste tous,
+      `pgrep -f motif` cherche dans la ligne de commande complète et affiche les PID, `pgrep -a` montre aussi la
+      commande.
+
+      `kill PID` envoie le signal **SIGTERM** : le programme peut se terminer proprement. `kill -9` (SIGKILL) le
+      tue sans lui laisser le choix ; à réserver aux processus bloqués.
+
+      Le `&` final lance une commande en arrière-plan, mais elle reste liée au terminal : quand celui-ci se ferme,
+      elle reçoit SIGHUP et s'arrête. `nohup` l'immunise contre ce signal. Pense aussi à rediriger sa sortie
+      (`> /dev/null 2>&1`) pour ne pas créer de `nohup.out`.
     checks:
       - desc: Le PID noté est celui de gourmand
         run: test "$(tr -d '[:space:]' < /home/eleve/gourmand.txt)" = "$(cat /var/tmp/.gourmand.pid)"
@@ -143,6 +325,16 @@ exercises:
 
       Les niveaux sont triés par ordre alphabétique. Bonus : fais-le en **une seule** ligne de commande.
     hint: "awk '{print $3}' fichier | sort | uniq -c donne « nombre niveau » ; un second awk peut inverser les colonnes et ajouter la virgule"
+    cours: |
+      `awk` traite un texte ligne par ligne et découpe chaque ligne en champs (`$1`, `$2`… séparés par des
+      espaces) : `awk '{print $3}'` affiche la troisième colonne. L'option `-F,` change le séparateur et
+      `BEGIN { ... }` s'exécute avant la première ligne, idéal pour une en-tête.
+
+      La chaîne classique pour compter des occurrences : extraire la colonne, `sort` (car `uniq` ne regroupe que
+      des lignes **consécutives**), puis `uniq -c` qui préfixe chaque valeur de son nombre. Il reste à remettre
+      les colonnes dans l'ordre voulu et à insérer la virgule.
+
+      Les accolades `{ cmd1; cmd2; } > fichier` regroupent plusieurs commandes vers une même redirection.
     checks:
       - desc: L'en-tête est niveau,nombre
         run: test "$(head -1 /home/eleve/rapport.csv)" = "niveau,nombre"
