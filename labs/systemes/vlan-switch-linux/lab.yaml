@@ -1,0 +1,170 @@
+title: VLAN, switch Linux et routage inter-VLAN
+level: intermediaire
+order: 6
+tags: [vlan, 802.1q, switch, bridge, trunk, router-on-a-stick, netns, nftables]
+summary: Construire un switch VLAN-aware avec un bridge Linux, ports d'accès et trunk 802.1Q, routeur « router-on-a-stick », VLAN d'administration et filtrage inter-VLAN.
+build: .
+privileged: true
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** *Ateliers Durand* segmente son réseau : comptabilité, RH et serveurs ne doivent plus être
+  sur le même domaine de diffusion. Faute de switch administrable disponible, tu montes un **switch
+  Linux** : un bridge avec filtrage VLAN (`vlan_filtering`), exactement les mêmes notions que sur un switch
+  Cisco (`switchport mode access`, `switchport trunk allowed vlan`...).
+
+  **Le câblage est fait.** Chaque poste est un **espace de noms réseau** (`ip netns`), relié par un câble
+  virtuel (paire veth) à un port `sw-pN` de ta machine, qui jouera le rôle du switch :
+
+  | Port    | Poste (netns)  | Adresse           | Passerelle      | VLAN cible       |
+  |---------|----------------|-------------------|-----------------|------------------|
+  | `sw-p1` | `pc-compta1`   | 192.168.10.11/24  | 192.168.10.254  | 10 (COMPTA)      |
+  | `sw-p2` | `pc-compta2`   | 192.168.10.12/24  | 192.168.10.254  | 10 (COMPTA)      |
+  | `sw-p3` | `pc-rh1`       | 192.168.20.11/24  | 192.168.20.254  | 20 (RH)          |
+  | `sw-p4` | `srv-fichiers` | 192.168.30.10/24  | 192.168.30.254  | 30 (SERVEURS)    |
+  | `sw-p5` | `pc-nouveau`   | 192.168.10.13/24  | 192.168.10.254  | 20 (bureau RH)   |
+  | `sw-p8` | `routeur`      | à configurer      |                 | trunk 10,20,30,99 |
+
+  Commandes : `ip netns exec pc-compta1 ping 192.168.10.12` (ou `ip -n pc-compta1 addr`),
+  `bridge link`, `bridge vlan show`, `bridge vlan add/del dev <port> vid <n> [pvid] [untagged]`, et
+  `vlans-port sw-p1` qui résume les VLAN d'un port (`10PU` = VLAN 10 natif non étiqueté, `20T` = étiqueté).
+exercises:
+  - id: switch
+    title: Créer le switch
+    description: |
+      Crée le bridge `sw0` **avec le filtrage VLAN activé** (`vlan_filtering 1`), branche-lui les ports
+      `sw-p1` à `sw-p5` et `sw-p8`, et active-le.
+
+      Sans autre configuration, tous les ports sont dans le VLAN 1 : `pc-compta1` doit déjà pouvoir pinguer
+      `pc-compta2`.
+    hint: "ip link add sw0 type bridge vlan_filtering 1 ; for p in sw-p1 sw-p2 sw-p3 sw-p4 sw-p5 sw-p8; do ip link set $p master sw0; done ; ip link set sw0 up"
+    checks:
+      - desc: sw0 est un bridge avec vlan_filtering 1
+        run: ip -d link show sw0 | grep -q 'vlan_filtering 1'
+      - desc: Les six ports sont branchés sur sw0
+        run: for p in sw-p1 sw-p2 sw-p3 sw-p4 sw-p5 sw-p8; do ip link show $p | grep -q 'master sw0' || exit 1; done
+      - desc: pc-compta1 joint pc-compta2
+        run: ip netns exec pc-compta1 ping -c2 -W1 192.168.10.12 >/dev/null
+
+  - id: acces
+    title: Ports d'accès
+    description: |
+      Configure les ports d'accès (l'équivalent de `switchport mode access` + `switchport access vlan`) :
+      chaque port porte **un seul VLAN**, natif (`pvid`) et non étiqueté (`untagged`), et le VLAN 1 par
+      défaut doit être **retiré** :
+      - `sw-p1`, `sw-p2` → VLAN 10 ;
+      - `sw-p3` → VLAN 20 ;
+      - `sw-p4` → VLAN 30.
+    hint: "bridge vlan del dev sw-p1 vid 1 ; bridge vlan add dev sw-p1 vid 10 pvid untagged"
+    checks:
+      - desc: sw-p1 et sw-p2 en accès VLAN 10
+        run: test "$(vlans-port sw-p1)" = 10PU && test "$(vlans-port sw-p2)" = 10PU
+      - desc: sw-p3 en accès VLAN 20, sw-p4 en accès VLAN 30
+        run: test "$(vlans-port sw-p3)" = 20PU && test "$(vlans-port sw-p4)" = 30PU
+      - desc: Les deux postes de la compta communiquent toujours
+        run: ip netns exec pc-compta1 ping -c2 -W1 192.168.10.12 >/dev/null
+
+  - id: nouveau-poste
+    title: Un poste dans le mauvais VLAN
+    description: |
+      Le poste `pc-nouveau` est installé dans le bureau RH (port `sw-p5`) mais a été préparé avec une
+      adresse de la compta.
+      1. Mets `sw-p5` en accès dans le **VLAN 20**. Constate que `pc-nouveau` ne joint plus la compta, bien
+         que son adresse soit dans le même sous-réseau : les VLAN isolent au niveau 2.
+      2. Corrige son adressage : `192.168.20.12/24`, passerelle `192.168.20.254`.
+    hint: "ip -n pc-nouveau addr flush dev eth0 ; ip -n pc-nouveau addr add 192.168.20.12/24 dev eth0 ; ip -n pc-nouveau route add default via 192.168.20.254"
+    checks:
+      - desc: sw-p5 en accès VLAN 20
+        run: test "$(vlans-port sw-p5)" = 20PU
+      - desc: pc-nouveau a l'adresse 192.168.20.12/24 et la bonne passerelle
+        run: ip -n pc-nouveau -4 addr show eth0 | grep -q 'inet 192.168.20.12/24' && ip -n pc-nouveau route show default | grep -q 'via 192.168.20.254'
+      - desc: pc-nouveau joint pc-rh1 dans le VLAN 20
+        run: ip netns exec pc-nouveau ping -c2 -W1 192.168.20.11 >/dev/null
+
+  - id: trunk
+    title: Lien trunk vers le routeur
+    description: |
+      Le port `sw-p8` relie le switch au routeur. Configure-le en **trunk 802.1Q** transportant les VLAN
+      **10, 20 et 30 étiquetés** (`switchport mode trunk` + `switchport trunk allowed vlan 10,20,30`), et
+      retire le VLAN 1 (aucun VLAN non étiqueté sur ce lien).
+    hint: "bridge vlan del dev sw-p8 vid 1 ; for v in 10 20 30; do bridge vlan add dev sw-p8 vid $v; done"
+    checks:
+      - desc: sw-p8 transporte 10, 20 et 30 étiquetés, sans VLAN 1 ni VLAN natif
+        run: |
+          v=" $(vlans-port sw-p8) "
+          for x in 10T 20T 30T; do echo "$v" | grep -q " $x " || exit 1; done
+          ! echo "$v" | grep -Eq 'U | 1T | 1P'
+
+  - id: router-on-a-stick
+    title: Routage inter-VLAN (router-on-a-stick)
+    description: |
+      Dans l'espace de noms `routeur`, crée sur `eth0` une **sous-interface VLAN** par VLAN (comme
+      `interface Gi0/0.10` + `encapsulation dot1Q 10` sur un routeur Cisco), nommées `eth0.10`, `eth0.20` et
+      `eth0.30`, avec l'adresse `.254` de chaque sous-réseau, puis active le routage
+      (`net.ipv4.ip_forward=1`) **dans** cet espace de noms.
+
+      Les postes de la compta et des RH doivent alors joindre `srv-fichiers`.
+    hint: "ip -n routeur link add link eth0 name eth0.10 type vlan id 10 ; ip -n routeur addr add 192.168.10.254/24 dev eth0.10 ; ip -n routeur link set eth0.10 up ; ip netns exec routeur sysctl -w net.ipv4.ip_forward=1"
+    checks:
+      - desc: Les trois sous-interfaces 802.1Q existent avec leur adresse
+        run: |
+          for v in 10 20 30; do
+            ip -n routeur -d link show eth0.$v 2>/dev/null | grep -q "802.1Q id $v " || exit 1
+            ip -n routeur -4 addr show eth0.$v | grep -q "inet 192.168.$v.254/24" || exit 1
+          done
+      - desc: Le routage est activé dans le routeur
+        run: test "$(ip netns exec routeur sysctl -n net.ipv4.ip_forward)" = 1
+      - desc: pc-compta1 et pc-rh1 joignent srv-fichiers
+        run: ip netns exec pc-compta1 ping -c2 -W1 192.168.30.10 >/dev/null && ip netns exec pc-rh1 ping -c2 -W1 192.168.30.10 >/dev/null
+
+  - id: vlan-admin
+    title: VLAN d'administration du switch
+    description: |
+      Un switch administrable possède une adresse dans un **VLAN d'administration** (`interface vlan 99`).
+      Fais de même :
+      1. autorise le VLAN 99 étiqueté sur le trunk `sw-p8` et sur le bridge lui-même
+         (`bridge vlan add dev sw0 vid 99 self`) ;
+      2. crée l'interface `sw0.99` (VLAN 99 sur `sw0`) avec l'adresse `192.168.99.2/24` ;
+      3. crée côté routeur la sous-interface `eth0.99` en `192.168.99.254/24`.
+
+      Le switch (ta machine) doit pinguer `192.168.99.254`.
+    hint: "bridge vlan add dev sw-p8 vid 99 ; bridge vlan add dev sw0 vid 99 self ; ip link add link sw0 name sw0.99 type vlan id 99 ; ip addr add 192.168.99.2/24 dev sw0.99 ; ip link set sw0.99 up"
+    checks:
+      - desc: sw0.99 a l'adresse 192.168.99.2/24
+        run: ip -4 addr show sw0.99 2>/dev/null | grep -q 'inet 192.168.99.2/24'
+      - desc: Le VLAN 99 est étiqueté sur le trunk
+        run: echo " $(vlans-port sw-p8) " | grep -q ' 99T '
+      - desc: Le switch joint le routeur dans le VLAN 99
+        run: ping -c2 -W1 192.168.99.254 >/dev/null
+
+  - id: capture-trunk
+    title: Observer les trames étiquetées
+    description: |
+      Capture le trafic du port trunk `sw-p8` **avec les en-têtes Ethernet** dans `/root/trunk.pcap`
+      pendant que `pc-compta1` pingue `srv-fichiers`. Relis-la avec `tcpdump -enr /root/trunk.pcap` : chaque
+      paquet traverse le trunk deux fois, avec l'étiquette du VLAN d'origine puis celle du VLAN de
+      destination.
+    hint: "tcpdump -i sw-p8 -e -nn -w /root/trunk.pcap &  ip netns exec pc-compta1 ping -c3 192.168.30.10 ; kill %1"
+    checks:
+      - desc: La capture montre l'ICMP étiqueté VLAN 10 et VLAN 30
+        run: |
+          tcpdump -enr /root/trunk.pcap 2>/dev/null > /tmp/trunk.txt
+          grep -q 'vlan 10,.*ICMP' /tmp/trunk.txt && grep -q 'vlan 30,.*ICMP' /tmp/trunk.txt
+
+  - id: vlan-filtrage
+    title: Filtrer entre les VLAN
+    description: |
+      Router tous les VLAN entre eux annule une partie de l'intérêt de la segmentation. Sur le **routeur**,
+      avec nftables (`ip netns exec routeur nft ...`), crée une table `inet filtre` avec une chaîne
+      `forward` (hook forward, **politique drop**) qui :
+      - accepte les connexions établies ou relatives (`ct state established,related accept`) ;
+      - autorise la compta (VLAN 10) et les RH (VLAN 20) à joindre les serveurs (VLAN 30) ;
+      - et c'est tout : la compta et les RH ne doivent plus se joindre.
+    hint: "ip netns exec routeur nft add table inet filtre ; ... add chain inet filtre forward '{ type filter hook forward priority 0; policy drop; }' ; ... add rule inet filtre forward ct state established,related accept ; ... add rule inet filtre forward iifname \"eth0.10\" oifname \"eth0.30\" accept"
+    checks:
+      - desc: La chaîne forward a une politique drop
+        run: ip netns exec routeur nft list chain inet filtre forward 2>/dev/null | grep -q 'policy drop'
+      - desc: compta et RH joignent toujours srv-fichiers
+        run: ip netns exec pc-compta1 ping -c2 -W1 192.168.30.10 >/dev/null && ip netns exec pc-rh1 ping -c2 -W1 192.168.30.10 >/dev/null
+      - desc: compta et RH ne se joignent plus
+        run: "! ip netns exec pc-compta1 ping -c2 -W1 192.168.20.11 >/dev/null 2>&1 && ! ip netns exec pc-rh1 ping -c2 -W1 192.168.10.11 >/dev/null 2>&1"

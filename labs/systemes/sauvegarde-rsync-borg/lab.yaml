@@ -1,0 +1,146 @@
+title: Sauvegarde et restauration (rsync, BorgBackup)
+level: intermediaire
+order: 7
+tags: [sauvegarde, restauration, rsync, borg, cron, pra]
+summary: Miroir rsync local et distant, dépôt Borg chiffré via SSH à clé restreinte, exclusions, rétention, contrôle d'intégrité, restauration et planification.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Le serveur de fichiers d'*Ateliers Durand* n'est sauvegardé que par une copie manuelle sur
+  disque USB. Tu mets en place une vraie politique : un **miroir rsync** pour reprendre vite, et des
+  sauvegardes **versionnées, dédupliquées et chiffrées** avec **BorgBackup** sur un serveur dédié, avec
+  une rétention et un test de restauration (une sauvegarde jamais restaurée n'est pas une sauvegarde).
+
+  **Machines** (depuis admin : `ssh srv-fichiers`, `ssh srv-sauvegarde`, en root par clé) :
+
+  | Machine          | Rôle                                              | Comptes                         |
+  |------------------|---------------------------------------------------|---------------------------------|
+  | `srv-fichiers`   | données dans `/srv/donnees`                       | root                            |
+  | `srv-sauvegarde` | `/srv/rsync` (miroir) et `/srv/borg` (dépôts Borg) | `miroir` / `Miroir2024!`, `borg` / `Borg2024!` |
+
+  Toutes les commandes de sauvegarde se lancent **depuis srv-fichiers** (en root).
+
+  - Dépôt Borg : `ssh://borg@srv-sauvegarde/srv/borg/srv-fichiers`
+  - Phrase de passe du dépôt : `Sauvegarde2024!` (dans la vraie vie : dans un coffre-fort de mots de passe
+    **et** imprimée dans le classeur du PRA, avec la clé exportée par `borg key export`).
+  - Astuce : `export BORG_REPO=ssh://borg@srv-sauvegarde/srv/borg/srv-fichiers BORG_PASSPHRASE='Sauvegarde2024!'`
+exercises:
+  - id: miroir-local
+    title: Miroir local avec rsync
+    description: |
+      Sur srv-fichiers, crée un miroir de `/srv/donnees/` dans `/backup/miroir/` avec rsync (mode archive :
+      droits, propriétaires et dates conservés). Le miroir doit être **exact** : un fichier supprimé de la
+      source doit disparaître du miroir (`--delete`).
+    hint: "mkdir -p /backup/miroir && rsync -a --delete /srv/donnees/ /backup/miroir/"
+    checks:
+      - desc: Le miroir est identique à la source
+        run: ssh srv-fichiers 'diff -r /srv/donnees /backup/miroir'
+      - desc: Les dates de modification sont conservées
+        run: ssh srv-fichiers 'test "$(stat -c %Y /srv/donnees/compta/bilan-2025.txt)" = "$(stat -c %Y /backup/miroir/compta/bilan-2025.txt)"'
+
+  - id: miroir-distant
+    title: Miroir distant par SSH
+    description: |
+      1. Sur srv-fichiers, génère une clé SSH pour root (`/root/.ssh/id_ed25519`, sans passphrase : elle
+         servira à des tâches automatiques) et autorise-la pour le compte `miroir` de srv-sauvegarde.
+      2. Synchronise `/srv/donnees/` vers `miroir@srv-sauvegarde:/srv/rsync/srv-fichiers/` en mode archive,
+         compressé, avec `--delete`.
+    hint: "ssh-keygen -t ed25519 -N '' -f /root/.ssh/id_ed25519 ; ssh-copy-id miroir@srv-sauvegarde ; rsync -az --delete /srv/donnees/ miroir@srv-sauvegarde:/srv/rsync/srv-fichiers/"
+    checks:
+      - desc: root de srv-fichiers se connecte par clé au compte miroir
+        run: ssh srv-fichiers 'ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new miroir@srv-sauvegarde true'
+      - desc: Le miroir distant contient les données
+        run: ssh srv-sauvegarde 'grep -q "RH-2023-117" /srv/rsync/srv-fichiers/rh/contrats/contrat-dupont.txt && test -f /srv/rsync/srv-fichiers/compta/bilan-2025.txt'
+
+  - id: depot-borg
+    title: Dépôt Borg chiffré et clé restreinte
+    description: |
+      1. Autorise la clé de root (srv-fichiers) pour le compte `borg` de srv-sauvegarde, **restreinte** à
+         Borg : dans `/home/borg/.ssh/authorized_keys`, préfixe la clé par
+         `command="borg serve --restrict-to-path /srv/borg",restrict`. Même volée, cette clé ne donnera
+         jamais de shell.
+      2. Depuis srv-fichiers, initialise le dépôt `ssh://borg@srv-sauvegarde/srv/borg/srv-fichiers`
+         chiffré en mode `repokey` avec la phrase de passe `Sauvegarde2024!`.
+      3. Exporte la clé du dépôt dans `/root/cle-borg.txt` (`borg key export`) : sans elle et la phrase de
+         passe, les sauvegardes sont illisibles.
+    hint: "export BORG_PASSPHRASE='Sauvegarde2024!' ; borg init --encryption=repokey ssh://borg@srv-sauvegarde/srv/borg/srv-fichiers ; borg key export ssh://borg@srv-sauvegarde/srv/borg/srv-fichiers /root/cle-borg.txt"
+    checks:
+      - desc: La clé du compte borg est restreinte à borg serve
+        run: ssh srv-sauvegarde 'grep -q "command=\"borg serve --restrict-to-path /srv/borg\"" /home/borg/.ssh/authorized_keys'
+      - desc: Cette clé ne donne pas de shell
+        run: "! ssh srv-fichiers 'ssh -o BatchMode=yes borg@srv-sauvegarde cat /etc/hostname' 2>/dev/null | grep -q srv-sauvegarde"
+      - desc: Le dépôt est chiffré (repokey) et accessible avec la phrase de passe
+        run: |
+          ssh srv-fichiers 'export BORG_PASSPHRASE="Sauvegarde2024!" BORG_RSH="ssh -o BatchMode=yes"; borg info ssh://borg@srv-sauvegarde/srv/borg/srv-fichiers' | grep -qi 'Encrypted: Yes'
+      - desc: La clé du dépôt est exportée
+        run: ssh srv-fichiers 'grep -q "BORG_KEY" /root/cle-borg.txt'
+
+  - id: premiere-archive
+    title: Première sauvegarde avec exclusions
+    description: |
+      Crée une archive nommée `srv-fichiers-{now:%Y-%m-%d_%H%M}` de `/srv/donnees`, **compressée en zstd**,
+      en **excluant** les fichiers temporaires `*.tmp` et le dossier `/srv/donnees/cache` (inutiles et
+      volumineux). Affiche les statistiques (`--stats`).
+    hint: "borg create --stats --compression zstd --exclude '*.tmp' --exclude /srv/donnees/cache ::srv-fichiers-{now:%Y-%m-%d_%H%M} /srv/donnees"
+    checks:
+      - desc: Au moins une archive srv-fichiers-* existe
+        run: |
+          ssh srv-fichiers 'export BORG_PASSPHRASE="Sauvegarde2024!" BORG_RSH="ssh -o BatchMode=yes"; borg list --short ssh://borg@srv-sauvegarde/srv/borg/srv-fichiers' | grep -q '^srv-fichiers-'
+      - desc: La dernière archive contient les contrats mais ni .tmp ni cache
+        run: |
+          ssh srv-fichiers 'export BORG_PASSPHRASE="Sauvegarde2024!" BORG_RSH="ssh -o BatchMode=yes"; R=ssh://borg@srv-sauvegarde/srv/borg/srv-fichiers; a=$(borg list --short --last 1 $R); borg list --short "$R::$a"' > /tmp/contenu.txt
+          grep -q 'srv/donnees/rh/contrats/contrat-dupont.txt' /tmp/contenu.txt && ! grep -q '\.tmp$' /tmp/contenu.txt && ! grep -q 'srv/donnees/cache/' /tmp/contenu.txt
+
+  - id: script-retention
+    title: Script de sauvegarde avec rétention
+    description: |
+      Écris `/usr/local/bin/sauvegarde-borg.sh` (exécutable) sur srv-fichiers qui :
+      1. définit `BORG_REPO` et `BORG_PASSPHRASE` (fichier lisible par root seul : droits `700`) ;
+      2. crée une archive comme à l'exercice précédent ;
+      3. applique la rétention `borg prune` : **7** journalières, **4** hebdomadaires, **6** mensuelles
+         (`--glob-archives 'srv-fichiers-*'`) ;
+      4. libère l'espace avec `borg compact`.
+    hint: "borg prune --list --glob-archives 'srv-fichiers-*' --keep-daily 7 --keep-weekly 4 --keep-monthly 6 ; borg compact"
+    checks:
+      - desc: Le script est en 700
+        run: test "$(ssh srv-fichiers stat -c %a /usr/local/bin/sauvegarde-borg.sh)" = 700
+      - desc: Le script contient la rétention 7/4/6
+        run: |
+          ssh srv-fichiers cat /usr/local/bin/sauvegarde-borg.sh > /tmp/script.sh
+          grep -q 'keep-daily[ =]7' /tmp/script.sh && grep -q 'keep-weekly[ =]4' /tmp/script.sh && grep -q 'keep-monthly[ =]6' /tmp/script.sh && grep -q 'compact' /tmp/script.sh
+      - desc: Le script s'exécute sans erreur
+        timeout: 120
+        run: ssh srv-fichiers '/usr/local/bin/sauvegarde-borg.sh >/tmp/borg-run.log 2>&1'
+
+  - id: restauration
+    title: Restaurer un fichier supprimé
+    description: |
+      Ticket urgent : le contrat de Marie Dupont a été supprimé par erreur. Simule l'incident en supprimant
+      `/srv/donnees/rh/contrats/contrat-dupont.txt` sur srv-fichiers, puis **restaure-le à son
+      emplacement** depuis la dernière archive Borg (`borg extract` s'exécute dans le dossier courant et
+      recrée le chemin sans le `/` initial : place-toi dans `/`).
+
+      Vérifie le contenu et les droits du fichier restauré.
+    hint: "cd / && borg extract ::<archive> srv/donnees/rh/contrats/contrat-dupont.txt"
+    checks:
+      - desc: Le contrat est restauré avec son contenu d'origine
+        run: ssh srv-fichiers 'grep -qx "Contrat de travail - Dupont Marie - CDI - reference RH-2023-117" /srv/donnees/rh/contrats/contrat-dupont.txt'
+      - desc: Le fichier n'a pas été restauré ailleurs par erreur
+        run: "! ssh srv-fichiers 'test -e /root/srv/donnees/rh/contrats/contrat-dupont.txt'"
+
+  - id: integrite-planification
+    title: Contrôle d'intégrité et planification
+    description: |
+      1. Vérifie l'intégrité du dépôt (`borg check`) et enregistre la sortie dans `/root/borg-check.log`.
+      2. Planifie dans la crontab de root (srv-fichiers) : `sauvegarde-borg.sh` tous les jours à **1 h 00**
+         et le miroir rsync distant tous les jours à **12 h 30**.
+    hint: "borg check -v ... > /root/borg-check.log 2>&1 ; crontab -e  →  0 1 * * * /usr/local/bin/sauvegarde-borg.sh  et  30 12 * * * rsync -az --delete /srv/donnees/ miroir@srv-sauvegarde:/srv/rsync/srv-fichiers/"
+    checks:
+      - desc: borg check a été exécuté sans erreur
+        run: ssh srv-fichiers 'test -s /root/borg-check.log && grep -qi "repository.*check\|archive.*check\|finished\|complete" /root/borg-check.log && ! grep -qi "error" /root/borg-check.log'
+      - desc: Sauvegarde Borg planifiée à 1 h 00
+        run: ssh srv-fichiers 'crontab -l' | grep -Eq '^ *0 +0?1 +\* +\* +\* +.*sauvegarde-borg\.sh'
+      - desc: Miroir rsync planifié à 12 h 30
+        run: ssh srv-fichiers 'crontab -l' | grep -Eq '^ *30 +12 +\* +\* +\* +.*rsync'

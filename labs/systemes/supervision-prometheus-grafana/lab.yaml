@@ -1,0 +1,201 @@
+title: Supervision avec Prometheus, Alertmanager et Grafana
+level: avance
+order: 8
+tags: [supervision, prometheus, grafana, alertmanager, node-exporter, blackbox, promql, alerting]
+summary: Déclarer des cibles, déployer node exporter, métriques métier, règles d'enregistrement, alertes, sondes HTTP, source de données et tableau de bord Grafana, comptes en lecture seule.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Chez *Ateliers Durand*, on découvre les pannes quand les utilisateurs appellent. La
+  direction veut une **supervision** : collecter les métriques des serveurs, alerter avant que ça casse,
+  et un écran de synthèse pour le support (NOC). La pile est installée mais presque pas configurée.
+
+  **Machines** (`ssh srv-web`, `ssh srv-bdd` depuis admin, en root par clé) :
+
+  | Machine        | Rôle                                                                 |
+  |----------------|----------------------------------------------------------------------|
+  | `prometheus`   | Prometheus 2.53 (port 9090), rechargement par API activé             |
+  | `alertmanager` | Alertmanager 0.27 (port 9093)                                        |
+  | `blackbox`     | Blackbox exporter 0.25 (port 9115, module `http_2xx`)                |
+  | `grafana`      | Grafana 11.2 (port 3000), compte `admin` / `Grafana2024!`            |
+  | `nas`          | NAS : node exporter déjà actif sur le port 9100                      |
+  | `srv-web`      | intranet nginx ; paquet `prometheus-node-exporter` installé, **arrêté** |
+  | `srv-bdd`      | node exporter déjà actif, mais sur le port **9101**                  |
+
+  - La configuration de Prometheus est **partagée** : `/srv/prometheus` sur admin = `/etc/prometheus`
+    dans le conteneur prometheus. Après chaque modification :
+    `curl -X POST http://prometheus:9090/-/reload` (une erreur de syntaxe est refusée et l'ancienne
+    configuration reste active : regarde la réponse et `curl -s http://prometheus:9090/api/v1/status/config`).
+  - API utiles : `curl -s http://prometheus:9090/api/v1/targets | jq`, requêtes PromQL avec
+    `curl -s --data-urlencode 'query=up' http://prometheus:9090/api/v1/query | jq`.
+  - Interfaces web depuis ta machine : **Grafana** http://localhost:9431 et **Prometheus**
+    http://localhost:9432. Tout peut aussi se faire par l'API HTTP de Grafana avec
+    `curl -u 'admin:Grafana2024!' http://grafana:3000/api/...`.
+exercises:
+  - id: prom-cible-nas
+    title: Superviser le NAS
+    description: |
+      Ajoute dans `/srv/prometheus/prometheus.yml` un job nommé **`nas`** qui collecte le node exporter
+      du NAS (`nas:9100`), recharge Prometheus, puis vérifie que la cible est **UP** (page *Status →
+      Targets* ou API `targets`).
+    hint: "Sous scrape_configs ajoute : - job_name: nas / static_configs: - targets: ['nas:9100'] ; puis curl -X POST http://prometheus:9090/-/reload"
+    checks:
+      - desc: La cible nas:9100 du job nas est UP
+        run: |
+          curl -sf http://prometheus:9090/api/v1/targets | jq -e '[.data.activeTargets[] | select(.labels.job=="nas" and .labels.instance=="nas:9100" and .health=="up")] | length == 1' >/dev/null
+
+  - id: prom-node-exporter-serveurs
+    title: Node exporter sur les serveurs Linux
+    description: |
+      Sur **srv-web**, démarre le node exporter installé par le paquet Ubuntu
+      (`prometheus-node-exporter`) en arrière-plan sur le port 9100, avec le collecteur *textfile* lisant
+      `/var/lib/prometheus/node-exporter` (il servira à l'exercice suivant). Il n'y a pas de systemd dans
+      ce conteneur : lance-le avec `nohup … &`.
+
+      Ajoute ensuite un job **`serveurs`** qui collecte `srv-web:9100` **et** `srv-bdd:9101`, avec
+      l'étiquette (label) **`site: lyon`** sur ces deux cibles.
+    hint: "ssh srv-web 'nohup prometheus-node-exporter --collector.textfile.directory=/var/lib/prometheus/node-exporter >/var/log/ne.log 2>&1 &' ; puis static_configs avec targets [srv-web:9100, srv-bdd:9101] et labels {site: lyon}"
+    checks:
+      - desc: Le node exporter de srv-web répond sur le port 9100
+        run: curl -sf http://srv-web:9100/metrics | grep -q '^node_load1 '
+      - desc: Les deux cibles du job serveurs sont UP avec le label site=lyon
+        run: |
+          curl -sf http://prometheus:9090/api/v1/targets | jq -e '[.data.activeTargets[] | select(.labels.job=="serveurs" and .labels.site=="lyon" and .health=="up") | .labels.instance] | sort == ["srv-bdd:9101","srv-web:9100"]' >/dev/null
+
+  - id: prom-metrique-metier
+    title: Une métrique métier par le collecteur textfile
+    description: |
+      On veut être alerté si la sauvegarde nocturne de srv-web ne tourne plus. Sur **srv-web**, écris le
+      script `/usr/local/bin/metrique-sauvegarde.sh` qui écrit dans
+      `/var/lib/prometheus/node-exporter/sauvegarde.prom` la métrique
+
+      `durand_sauvegarde_derniere_reussite_timestamp_seconds <horodatage Unix actuel>`
+
+      (écris d'abord dans un fichier temporaire puis renomme-le avec `mv`, pour que l'exporter ne lise
+      jamais un fichier à moitié écrit). Exécute-le une fois, puis planifie-le dans la crontab de root
+      **toutes les 5 minutes**.
+    hint: "echo \"durand_sauvegarde_derniere_reussite_timestamp_seconds $(date +%s)\" > $F.tmp && mv $F.tmp $F ; crontab -e  →  */5 * * * * /usr/local/bin/metrique-sauvegarde.sh"
+    checks:
+      - desc: Le script existe et est exécutable sur srv-web
+        run: ssh srv-web test -x /usr/local/bin/metrique-sauvegarde.sh
+      - desc: Il est planifié toutes les 5 minutes dans la crontab de root
+        run: ssh srv-web crontab -l 2>/dev/null | grep -v '^#' | grep -q '^\*/5 .*metrique-sauvegarde'
+      - desc: Prometheus a une valeur récente (moins d'un jour) pour srv-web
+        run: |
+          curl -sf --data-urlencode 'query=durand_sauvegarde_derniere_reussite_timestamp_seconds{instance="srv-web:9100"}' http://prometheus:9090/api/v1/query | jq -e '(.data.result[0].value[1] | tonumber) > (now - 86400)' >/dev/null
+
+  - id: prom-regle-enregistrement
+    title: Règle d'enregistrement (PromQL)
+    description: |
+      Le pourcentage de mémoire disponible sera affiché partout : on le pré-calcule. Crée le fichier
+      `/srv/prometheus/regles.yml` avec un groupe **`durand`** contenant une règle d'enregistrement
+      (*recording rule*) nommée **`instance:node_memory_disponible:pourcent`** égale à
+      `100 * node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes`. Déclare le fichier dans
+      `rule_files` et recharge.
+
+      Teste la requête dans l'interface de Prometheus avant de l'écrire dans le fichier.
+    hint: "rule_files: [regles.yml] ; groups: - name: durand / rules: - record: instance:node_memory_disponible:pourcent / expr: 100 * node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes"
+    checks:
+      - desc: La règle est chargée et saine
+        run: |
+          curl -sf http://prometheus:9090/api/v1/rules | jq -e '[.data.groups[] | select(.name=="durand") | .rules[] | select(.type=="recording" and .name=="instance:node_memory_disponible:pourcent" and .health=="ok")] | length == 1' >/dev/null
+      - desc: Elle produit une valeur entre 0 et 100 pour au moins 3 machines
+        timeout: 90
+        run: |
+          for i in $(seq 1 6); do curl -sf --data-urlencode 'query=instance:node_memory_disponible:pourcent' http://prometheus:9090/api/v1/query | jq -e '[.data.result[] | .value[1] | tonumber | select(. > 0 and . <= 100)] | length >= 3' >/dev/null && exit 0; sleep 15; done; exit 1
+
+  - id: prom-alerte-injoignable
+    title: Alerte « serveur injoignable » vers Alertmanager
+    description: |
+      1. Dans `regles.yml`, ajoute au groupe `durand` une alerte **`ServeurInjoignable`** qui se
+         déclenche quand `up == 0` **pendant 30 secondes**, avec le label `severite: critique` et une
+         annotation `summary` qui contient l'instance (`{{ $labels.instance }}`).
+      2. Déclare Alertmanager (`alertmanager:9093`) dans la section `alerting` de `prometheus.yml`.
+      3. Pour tester, ajoute un job **`anciens`** qui collecte `srv-ancien:9100` (serveur décommissionné
+         que l'on a oublié de retirer : il n'existe plus).
+
+      Recharge, puis observe l'alerte passer de *pending* à *firing* (page *Alerts*) et arriver dans
+      Alertmanager (`curl -s http://alertmanager:9093/api/v2/alerts | jq`).
+    hint: "- alert: ServeurInjoignable / expr: up == 0 / for: 30s / labels: {severite: critique} ; alerting: alertmanagers: - static_configs: - targets: ['alertmanager:9093']"
+    checks:
+      - desc: L'alerte ServeurInjoignable est chargée avec severite=critique
+        run: |
+          curl -sf http://prometheus:9090/api/v1/rules | jq -e '[.data.groups[].rules[] | select(.type=="alerting" and .name=="ServeurInjoignable" and .labels.severite=="critique" and .health=="ok")] | length == 1' >/dev/null
+      - desc: Prometheus est relié à Alertmanager
+        run: |
+          curl -sf http://prometheus:9090/api/v1/alertmanagers | jq -e '.data.activeAlertmanagers | length >= 1' >/dev/null
+      - desc: Alertmanager a reçu l'alerte pour srv-ancien:9100 (attente jusqu'à 2 min)
+        timeout: 150
+        run: |
+          for i in $(seq 1 12); do curl -sf http://alertmanager:9093/api/v2/alerts | jq -e '[.[] | select(.labels.alertname=="ServeurInjoignable" and .labels.instance=="srv-ancien:9100")] | length >= 1' >/dev/null && exit 0; sleep 10; done; exit 1
+
+  - id: prom-sonde-http
+    title: Sonde HTTP de l'intranet (blackbox exporter)
+    description: |
+      Un serveur peut être « UP » alors que le site est en panne. Ajoute un job **`intranet`** qui
+      interroge le blackbox exporter (`blackbox:9115`, chemin `/probe`, module `http_2xx`) pour sonder
+      `http://srv-web/`. Avec les *relabel_configs* classiques, l'étiquette `instance` doit valoir
+      **`http://srv-web/`** (et non l'adresse du blackbox).
+
+      Vérifie avec la requête `probe_success{job="intranet"}` puis regarde aussi
+      `probe_http_status_code` et `probe_duration_seconds`.
+    hint: "metrics_path: /probe ; params: {module: [http_2xx]} ; static_configs targets [http://srv-web/] ; relabel_configs : __address__ → __param_target ; __param_target → instance ; remplacement __address__ = blackbox:9115"
+    checks:
+      - desc: probe_success vaut 1 pour l'instance http://srv-web/ du job intranet
+        timeout: 90
+        run: |
+          for i in $(seq 1 6); do curl -sf --data-urlencode 'query=probe_success{job="intranet",instance="http://srv-web/"}' http://prometheus:9090/api/v1/query | jq -e '.data.result[0].value[1] == "1"' >/dev/null && exit 0; sleep 15; done; exit 1
+
+  - id: grafana-source-donnees
+    title: Grafana – source de données Prometheus
+    description: |
+      Dans Grafana (http://localhost:9431 ou par l'API), ajoute une source de données de type
+      **Prometheus** nommée **`Prometheus-Durand`**, d'URL `http://prometheus:9090`, définie comme
+      **source par défaut**. Le bouton *Save & test* doit être vert.
+    hint: "curl -u 'admin:Grafana2024!' -H 'Content-Type: application/json' -X POST http://grafana:3000/api/datasources -d '{\"name\":\"Prometheus-Durand\",\"type\":\"prometheus\",\"url\":\"http://prometheus:9090\",\"access\":\"proxy\",\"isDefault\":true}'"
+    checks:
+      - desc: La source Prometheus-Durand existe, pointe sur Prometheus et est par défaut
+        run: |
+          curl -sf -u 'admin:Grafana2024!' http://grafana:3000/api/datasources/name/Prometheus-Durand | jq -e '.type=="prometheus" and (.url | test("^http://prometheus:9090/?$")) and .isDefault==true' >/dev/null
+      - desc: Le test de la source de données réussit
+        run: |
+          uid=$(curl -sf -u 'admin:Grafana2024!' http://grafana:3000/api/datasources/name/Prometheus-Durand | jq -r .uid) && curl -sf -u 'admin:Grafana2024!' "http://grafana:3000/api/datasources/uid/$uid/health" | jq -e '.status=="OK"' >/dev/null
+
+  - id: grafana-tableau-bord
+    title: Grafana – tableau de bord du parc
+    description: |
+      Crée un dossier **`Supervision`** et, dedans, un tableau de bord **`Parc serveurs Durand`** avec au
+      moins **deux panneaux** :
+
+      - la mémoire disponible par machine (requête sur `instance:node_memory_disponible:pourcent`) ;
+      - l'état de l'intranet (requête sur `probe_success`), par exemple en *Stat* vert/rouge.
+
+      Enregistre-le.
+    hint: "Dashboards → New → New folder « Supervision », puis New dashboard → Add visualization → requête → Save (choisir le dossier Supervision)"
+    checks:
+      - desc: Le tableau Parc serveurs Durand est dans le dossier Supervision
+        run: |
+          curl -sf -u 'admin:Grafana2024!' -G --data-urlencode 'query=Parc serveurs Durand' --data-urlencode 'type=dash-db' http://grafana:3000/api/search | jq -e '[.[] | select(.title=="Parc serveurs Durand" and .folderTitle=="Supervision")] | length == 1' >/dev/null
+      - desc: Il a au moins deux panneaux, dont mémoire et sonde HTTP
+        run: |
+          uid=$(curl -sf -u 'admin:Grafana2024!' -G --data-urlencode 'query=Parc serveurs Durand' http://grafana:3000/api/search | jq -r '[.[] | select(.title=="Parc serveurs Durand")][0].uid') && d=$(curl -sf -u 'admin:Grafana2024!' "http://grafana:3000/api/dashboards/uid/$uid") && echo "$d" | jq -e '(.dashboard.panels | length) >= 2' >/dev/null && echo "$d" | jq -r '.. | .expr? // empty' | grep -q 'instance:node_memory_disponible:pourcent' && echo "$d" | jq -r '.. | .expr? // empty' | grep -q 'probe_success'
+
+  - id: grafana-compte-noc
+    title: Grafana – compte en lecture seule pour le support
+    description: |
+      Le support (NOC) doit voir les tableaux sans pouvoir les modifier. Crée l'utilisateur Grafana
+      **`noc`** (mot de passe `Noc2024!`, e-mail `noc@durand.lan`) avec le rôle **Viewer** dans
+      l'organisation principale. Vérifie qu'il peut lire le tableau mais pas créer de source de données.
+    hint: "Administration → Users and access → Users → New user, puis rôle Viewer ; ou POST /api/admin/users puis PATCH /api/org/users/<id> {\"role\":\"Viewer\"}"
+    checks:
+      - desc: noc est Viewer dans l'organisation
+        run: |
+          curl -sf -u 'admin:Grafana2024!' http://grafana:3000/api/org/users | jq -e '[.[] | select(.login=="noc" and .role=="Viewer")] | length == 1' >/dev/null
+      - desc: noc se connecte avec son mot de passe et voit le tableau
+        run: |
+          curl -sf -u 'noc:Noc2024!' -G --data-urlencode 'query=Parc serveurs Durand' http://grafana:3000/api/search | jq -e 'length >= 1' >/dev/null
+      - desc: noc ne peut pas créer de source de données
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -u 'noc:Noc2024!' -H 'Content-Type: application/json' -X POST http://grafana:3000/api/datasources -d '{"name":"essai-noc","type":"prometheus","url":"http://x"}') && [ "$code" = 403 ]

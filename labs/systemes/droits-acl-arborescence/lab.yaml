@@ -1,0 +1,196 @@
+title: Arborescence, permissions et ACL d'un serveur de fichiers
+level: debutant
+order: 2
+tags: [linux, permissions, acl, setgid, sticky bit, serveur de fichiers]
+summary: Construire les dossiers partagés des services avec les bons droits, le setgid, le sticky bit et les ACL.
+build: .
+shell: bash
+workdir: /srv/partages
+description: |
+  **Contexte.** Chez *Ateliers Durand*, chaque service doit disposer d'un dossier partagé sur le
+  serveur de fichiers, accessible **uniquement** par ses membres. La direction doit pouvoir consulter
+  la comptabilité sans la modifier, et un dossier commun sert d'espace d'échange pour tout le personnel.
+  Les archives récupérées de l'ancien serveur ont des droits à assainir.
+
+  **Machine.** Serveur Ubuntu, terminal `root` dans `/srv/partages`.
+
+  **Comptes déjà créés** (groupes secondaires) :
+
+  | Utilisateur | Groupes                 |
+  |-------------|-------------------------|
+  | `alice`     | `compta`, `personnel`   |
+  | `bruno`     | `compta`, `personnel`   |
+  | `chloe`     | `rh`, `personnel`       |
+  | `dimitri`   | `direction`, `personnel`|
+
+  Pour tester comme un utilisateur : `runuser -u alice -- touch /srv/partages/compta/essai`.
+  Outils : `chmod`, `chown`, `chgrp`, `find`, `stat`, `getfacl`, `setfacl`.
+exercises:
+  - id: arborescence-partages
+    title: Créer l'arborescence
+    description: |
+      Crée les dossiers `/srv/partages/compta`, `/srv/partages/rh`, `/srv/partages/direction` et
+      `/srv/partages/commun`.
+
+      Chaque dossier appartient à `root` ; le groupe propriétaire est le groupe du service
+      (`compta`, `rh`, `direction`) et `personnel` pour `commun`.
+    hint: "mkdir /srv/partages/compta && chown root:compta /srv/partages/compta"
+    checks:
+      - desc: Les dossiers des services appartiennent à root et au groupe du service
+        run: |
+          for g in compta rh direction; do
+            test -d /srv/partages/$g && test "$(stat -c %U:%G /srv/partages/$g)" = "root:$g" || exit 1
+          done
+      - desc: commun appartient à root:personnel
+        run: test "$(stat -c %U:%G /srv/partages/commun)" = root:personnel
+
+  - id: setgid
+    title: Droits des services et bit setgid
+    description: |
+      Donne aux dossiers `compta`, `rh` et `direction` les droits **2770** :
+      - `rwx` pour le propriétaire et le groupe, **rien** pour les autres ;
+      - le bit **setgid** (le `2`) : tout fichier créé dans le dossier hérite du groupe du dossier, et non
+        du groupe principal de son créateur. Sans lui, un fichier créé par `alice` appartiendrait au groupe
+        `alice` et `bruno` ne pourrait pas y accéder.
+
+      Vérifie : `chloe` (RH) ne doit pas pouvoir lister le dossier de la comptabilité.
+    hint: chmod 2770 /srv/partages/compta (idem pour rh et direction)
+    checks:
+      - desc: Droits 2770 sur les trois dossiers
+        run: for g in compta rh direction; do test "$(stat -c %a /srv/partages/$g)" = 2770 || exit 1; done
+      - desc: Un fichier créé par alice dans compta appartient au groupe compta
+        run: |
+          f=/srv/partages/compta/.verif-$$
+          runuser -u alice -- touch $f || exit 1
+          g=$(stat -c %G $f); rm -f $f; test "$g" = compta
+      - desc: Chaque service est isolé des autres
+        run: "! runuser -u chloe -- ls /srv/partages/compta >/dev/null 2>&1 && ! runuser -u alice -- ls /srv/partages/rh >/dev/null 2>&1"
+
+  - id: sticky
+    title: Dossier commun et sticky bit
+    description: |
+      Tout le personnel doit pouvoir créer des fichiers dans `commun`, mais **personne ne doit pouvoir
+      supprimer les fichiers des autres** (comme dans `/tmp`). Donne à `commun` les droits **3770**
+      (setgid + sticky bit + `rwx` pour le groupe `personnel`).
+    hint: chmod 3770 /srv/partages/commun
+    checks:
+      - desc: Droits 3770 sur commun
+        run: test "$(stat -c %a /srv/partages/commun)" = 3770
+      - desc: chloe peut déposer un fichier dans commun
+        run: |
+          f=/srv/partages/commun/.verif-chloe-$$
+          runuser -u chloe -- touch $f && rm -f $f
+      - desc: bruno ne peut pas supprimer un fichier d'alice
+        run: |
+          f=/srv/partages/commun/.verif-$$
+          runuser -u alice -- sh -c "echo x > $f" || exit 1
+          runuser -u bruno -- rm -f $f 2>/dev/null
+          r=1; test -e $f && r=0; rm -f $f; exit $r
+
+  - id: acl-direction
+    title: Lecture seule pour la direction (ACL)
+    description: |
+      La direction doit pouvoir **lire** la comptabilité, sans rien modifier, y compris les fichiers créés
+      **plus tard**. Les droits Unix classiques ne permettent qu'un seul groupe : utilise les **ACL**.
+
+      1. ACL d'accès : groupe `direction` en `r-x` sur `/srv/partages/compta`.
+      2. ACL **par défaut** (héritée par les nouveaux fichiers et sous-dossiers) : groupe `direction` en `r-x`.
+
+      Contrôle avec `getfacl /srv/partages/compta`.
+    hint: "setfacl -m g:direction:rx /srv/partages/compta ; setfacl -d -m g:direction:rx /srv/partages/compta"
+    checks:
+      - desc: ACL d'accès et ACL par défaut pour direction
+        run: |
+          getfacl -p /srv/partages/compta 2>/dev/null | grep -q '^group:direction:r-x' &&
+          getfacl -p /srv/partages/compta 2>/dev/null | grep -q '^default:group:direction:r-x'
+      - desc: dimitri lit un nouveau fichier d'alice mais ne peut pas le modifier
+        run: |
+          f=/srv/partages/compta/.verif-$$
+          runuser -u alice -- sh -c "umask 022; echo bilan > $f" || exit 1
+          ok=0
+          runuser -u dimitri -- cat $f 2>/dev/null | grep -q bilan && ok=1
+          runuser -u dimitri -- sh -c "echo x >> $f" 2>/dev/null && ok=0
+          rm -f $f; test $ok = 1
+
+  - id: acl-collaboration
+    title: Travailler à plusieurs sur les mêmes fichiers
+    description: |
+      Problème remonté par la compta : `bruno` ne peut pas modifier les fichiers créés par `alice`. Le
+      `umask` par défaut (022) crée les fichiers en `644`, donc sans écriture pour le groupe.
+
+      Plutôt que de modifier le umask de chacun, pose sur `compta`, `rh` et `direction` une **ACL par défaut**
+      donnant `rwx` au groupe propriétaire (`default:group::rwx`) et rien aux autres
+      (`default:other::---`). Les nouveaux fichiers seront alors modifiables par tout le service.
+    hint: "setfacl -d -m g::rwx,o::--- /srv/partages/compta (idem rh, direction)"
+    checks:
+      - desc: ACL par défaut group::rwx sur les trois dossiers
+        run: for g in compta rh direction; do getfacl -p /srv/partages/$g 2>/dev/null | grep -q '^default:group::rwx' || exit 1; done
+      - desc: bruno modifie un fichier créé par alice avec un umask 022
+        run: |
+          f=/srv/partages/compta/.verif-$$
+          runuser -u alice -- sh -c "umask 022; echo v1 > $f" || exit 1
+          ok=0; runuser -u bruno -- sh -c "echo v2 >> $f" 2>/dev/null && ok=1
+          rm -f $f; test $ok = 1
+
+  - id: assainir-archives
+    title: Assainir les archives de l'ancien serveur
+    description: |
+      `/srv/partages/archives` vient de l'ancien serveur. Un audit de sécurité y relève :
+      - des fichiers et dossiers **modifiables par tout le monde** (`o+w`) ;
+      - un exécutable **SUID root** (`outils/diag`) : un risque d'élévation de privilèges ;
+      - des fichiers appartenant à un UID qui n'existe plus (**orphelins**).
+
+      Corrige : les archives (et tout leur contenu) doivent appartenir à `root:direction`, en `2750` pour les
+      dossiers et `640` pour les fichiers ; supprime le bit SUID (ou le fichier). Plus aucun fichier de
+      `/srv/partages` ne doit être modifiable par les autres, SUID/SGID ou orphelin.
+
+      Commandes d'audit : `find /srv/partages -perm -o+w`, `find /srv/partages -type f -perm /6000`,
+      `find /srv/partages -nouser -o -nogroup`.
+    hint: "chown -R root:direction archives ; find archives -type d -exec chmod 2750 {} + ; find archives -type f -exec chmod 640 {} +"
+    checks:
+      - desc: Aucun fichier ni dossier modifiable par les autres
+        run: test -z "$(find /srv/partages \( -type f -o -type d \) -perm -0002)"
+      - desc: Aucun fichier SUID ou SGID
+        run: test -z "$(find /srv/partages -type f -perm /6000)"
+      - desc: Aucun fichier orphelin
+        run: test -z "$(find /srv/partages \( -nouser -o -nogroup \))"
+      - desc: dimitri lit les archives, chloe non
+        run: |
+          runuser -u dimitri -- cat /srv/partages/archives/2019/budget.txt >/dev/null 2>&1 &&
+          ! runuser -u chloe -- cat /srv/partages/archives/2019/budget.txt >/dev/null 2>&1
+
+  - id: script-service
+    title: Industrialiser la création d'un service
+    description: |
+      De nouveaux services vont arriver. Écris le script `/root/nouveau-service.sh` (exécutable) qui prend
+      deux arguments, le **nom** du service et son **GID**, et qui :
+      1. crée le groupe avec ce GID ;
+      2. crée `/srv/partages/<nom>` (propriétaire `root:<nom>`, droits `2770`) ;
+      3. pose l'ACL par défaut `group::rwx` et `other::---`.
+
+      La vérification lance `/root/nouveau-service.sh juridique 2005`.
+    hint: "#!/bin/bash puis set -e ; groupadd -g \"$2\" \"$1\" ; mkdir -p ... ; chown root:\"$1\" ... ; chmod 2770 ... ; setfacl -d -m g::rwx,o::--- ..."
+    checks:
+      - desc: Le script existe et est exécutable
+        run: test -x /root/nouveau-service.sh
+      - desc: Le script crée le service juridique (GID 2005, 2770, ACL par défaut)
+        run: |
+          /root/nouveau-service.sh juridique 2005 >/dev/null 2>&1
+          test "$(getent group juridique | cut -d: -f3)" = 2005 &&
+          test "$(stat -c %a:%U:%G /srv/partages/juridique)" = 2770:root:juridique &&
+          getfacl -p /srv/partages/juridique 2>/dev/null | grep -q '^default:group::rwx'
+
+  - id: sauvegarde-acl
+    title: Sauvegarder les droits
+    description: |
+      Une restauration de fichiers depuis une sauvegarde qui ne conserve pas les ACL ferait perdre tout ce
+      travail. Exporte les droits et ACL de toute l'arborescence dans `/root/acl-partages.txt`
+      (format de `getfacl`, avec des chemins **absolus**), pour pouvoir les réappliquer avec
+      `setfacl --restore=/root/acl-partages.txt`.
+    hint: getfacl -R -p /srv/partages > /root/acl-partages.txt
+    checks:
+      - desc: L'export contient les dossiers des services avec leurs ACL
+        run: |
+          grep -q '^# file: /srv/partages/compta$' /root/acl-partages.txt &&
+          grep -q '^default:group:direction:r-x' /root/acl-partages.txt &&
+          grep -q '^# file: /srv/partages/archives/2019/budget.txt$' /root/acl-partages.txt

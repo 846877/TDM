@@ -1,0 +1,11 @@
+#!/bin/sh
+# Service applicatif (tourne sous l'utilisateur appli) : lit sa configuration et écrit un battement
+# de cœur toutes les 5 secondes. Ses erreurs vont dans /var/log/appli/service.log.
+while true; do
+  if ! conf=$(cat /etc/appli/appli.conf 2>&1); then
+    echo "$(date '+%F %T') ERREUR lecture configuration : $conf" >> /var/log/appli/service.log
+  elif ! date +%s > /srv/appli/data/heartbeat 2>>/var/log/appli/service.log; then
+    echo "$(date '+%F %T') ERREUR écriture /srv/appli/data/heartbeat" >> /var/log/appli/service.log
+  fi
+  sleep 5
+done

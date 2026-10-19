@@ -1,0 +1,166 @@
+title: Haute disponibilité de la passerelle avec VRRP (keepalived)
+level: avance
+order: 6
+tags: [vrrp, keepalived, haute disponibilité, passerelle, basculement]
+summary: Passerelle virtuelle VRRP sur deux routeurs, groupe de synchronisation, test de bascule, script de surveillance, notifications et VRRP en unicast.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** La passerelle du LAN d'*Ateliers Durand* est un point unique de défaillance : quand elle
+  redémarre, plus personne ne travaille. Un second routeur a été installé. Avec **VRRP** (l'équivalent
+  libre de HSRP chez Cisco), les deux routeurs partagent une **adresse IP virtuelle** portée par le
+  routeur maître ; si celui-ci tombe, le secours la reprend en quelques secondes.
+
+  **Topologie.**
+
+  ```
+   LAN 192.168.50.0/24                         SERVEURS 10.50.0.0/24
+   pc .10 (passerelle .254) ──┬── r1 (.2 / .2) ──┬── srv .10 (passerelle .254, web)
+                              └── r2 (.3 / .3) ──┘
+           VIP 192.168.50.254                    VIP 10.50.0.254
+  ```
+
+  Interfaces des routeurs : `lan`, `serveurs` et `mgmt` (administration hors bande : `ssh r1`, `ssh r2`,
+  `ssh pc`, `ssh srv` depuis admin). keepalived est installé sur r1 et r2 mais pas configuré
+  (`/etc/keepalived/keepalived.conf`). Démarrage : `keepalived -D` ;
+  arrêt : `pkill keepalived` ; journal : `grep Keepalived /var/log/syslog` (rsyslog est démarré).
+
+  Pour l'instant, la passerelle `.254` n'existe pas : pc ne joint pas srv.
+exercises:
+  - id: vip-lan
+    title: Adresse virtuelle côté LAN
+    description: |
+      Configure sur r1 et r2 une instance VRRP `VI_LAN` sur l'interface `lan` :
+      - `virtual_router_id 50` (identique sur les deux routeurs), `advert_int 1` ;
+      - r1 `state MASTER` priorité **150**, r2 `state BACKUP` priorité **100** ;
+      - adresse virtuelle `192.168.50.254/24`.
+
+      Démarre keepalived sur les deux. La VIP doit être portée par r1 **seulement**.
+    hint: "vrrp_instance VI_LAN { state MASTER  interface lan  virtual_router_id 50  priority 150  advert_int 1  virtual_ipaddress { 192.168.50.254/24 } }"
+    checks:
+      - desc: keepalived tourne sur r1 et r2
+        run: ssh r1 pgrep keepalived >/dev/null && ssh r2 pgrep keepalived >/dev/null
+      - desc: La VIP 192.168.50.254 est sur r1 et pas sur r2
+        run: ssh r1 'ip -4 addr show lan' | grep -q '192.168.50.254' && ! ssh r2 'ip -4 addr show lan' | grep -q '192.168.50.254'
+      - desc: pc pingue sa passerelle virtuelle
+        run: ssh pc 'ping -c2 -W2 192.168.50.254' >/dev/null
+
+  - id: groupe-sync
+    title: Deuxième VIP et groupe de synchronisation
+    description: |
+      Le serveur utilise lui aussi une passerelle virtuelle. Ajoute une instance `VI_SRV` sur l'interface
+      `serveurs` (`virtual_router_id 51`, VIP `10.50.0.254/24`, mêmes priorités), puis un
+      `vrrp_sync_group` `VG_DURAND` contenant les deux instances : si l'une bascule, l'autre bascule aussi
+      (sinon l'aller passerait par r1 et le retour par r2).
+
+      pc doit alors consulter l'application de srv (`curl http://10.50.0.10/`).
+    hint: "vrrp_sync_group VG_DURAND { group { VI_LAN VI_SRV } }"
+    checks:
+      - desc: Les deux VIP sont sur r1
+        run: ssh r1 'ip -4 addr show lan; ip -4 addr show serveurs' | grep -c '192.168.50.254\|10.50.0.254' | grep -qx 2
+      - desc: Groupe de synchronisation déclaré sur r1 et r2
+        run: for r in r1 r2; do ssh $r 'grep -q "vrrp_sync_group" /etc/keepalived/keepalived.conf' || exit 1; done
+      - desc: pc consulte l'application de srv
+        run: ssh pc 'curl -s -m5 http://10.50.0.10/' | grep -q 'Application metier'
+
+  - id: bascule
+    title: Tester la bascule
+    description: |
+      Teste la panne du maître : arrête keepalived sur r1 et observe sur r2 (`ip addr`, journal) la reprise
+      des deux VIP ; depuis pc, un `ping 10.50.0.10` lancé pendant la bascule ne perd que quelques paquets.
+      Redémarre ensuite keepalived sur r1 : ayant la priorité la plus haute, il reprend la main
+      (préemption).
+
+      La vérification refait ce test elle-même : laisse keepalived démarré sur les deux routeurs.
+    hint: "Si r2 ne prend pas la main : même virtual_router_id ? interface correcte ? journal : grep Keepalived /var/log/syslog"
+    checks:
+      - desc: Bascule vers r2 quand r1 tombe, sans coupure durable pour pc
+        timeout: 90
+        run: |
+          ssh r1 'pkill keepalived'
+          ok=0
+          for i in $(seq 1 20); do
+            ssh r2 'ip -4 addr show lan; ip -4 addr show serveurs' | grep -c '192.168.50.254\|10.50.0.254' | grep -qx 2 && { ok=1; break; }
+            sleep 1
+          done
+          sleep 2
+          ssh pc 'curl -s -m5 http://10.50.0.10/' | grep -q 'Application metier' || ok=0
+          ssh r1 'keepalived -D'
+          test $ok = 1
+      - desc: r1 reprend les VIP après son retour (attente jusqu'à 20 s)
+        timeout: 40
+        run: |
+          for i in $(seq 1 20); do
+            ssh r1 'ip -4 addr show lan' | grep -q '192.168.50.254' && ! ssh r2 'ip -4 addr show lan' | grep -q '192.168.50.254' && exit 0
+            sleep 1
+          done
+          exit 1
+
+  - id: surveillance
+    title: Script de surveillance
+    description: |
+      Un routeur peut être vivant mais inutilisable (maintenance, lien amont coupé). Sur r1 **et** r2,
+      ajoute un `vrrp_script chk_maintenance` qui échoue si le fichier `/etc/keepalived/maintenance` existe
+      (`script "/usr/bin/test ! -e /etc/keepalived/maintenance"`, `interval 2`, `weight -60`) et suis-le
+      dans les instances (`track_script`). Ajoute dans `global_defs` : `script_user root` et
+      `enable_script_security`.
+
+      Ainsi, `touch /etc/keepalived/maintenance` sur r1 fait tomber sa priorité à 90 : r2 (100) prend la
+      main, sans arrêter keepalived.
+    hint: "vrrp_script chk_maintenance { script \"/usr/bin/test ! -e /etc/keepalived/maintenance\" interval 2 weight -60 }  et dans chaque instance : track_script { chk_maintenance }"
+    checks:
+      - desc: Le mode maintenance de r1 bascule les VIP sur r2, puis elles reviennent
+        timeout: 90
+        run: |
+          ssh r1 'grep -q "track_script" /etc/keepalived/keepalived.conf' || exit 1
+          ssh r1 'touch /etc/keepalived/maintenance'
+          ok=0
+          for i in $(seq 1 20); do
+            ssh r2 'ip -4 addr show lan' | grep -q '192.168.50.254' && { ok=1; break; }
+            sleep 1
+          done
+          ssh r1 'rm -f /etc/keepalived/maintenance'
+          test $ok = 1 || exit 1
+          for i in $(seq 1 20); do
+            ssh r1 'ip -4 addr show lan' | grep -q '192.168.50.254' && exit 0
+            sleep 1
+          done
+          exit 1
+
+  - id: notifications
+    title: Notifications de changement d'état
+    description: |
+      L'équipe veut être prévenue de chaque bascule. Écris sur r1 et r2 le script
+      `/etc/keepalived/notify.sh` (exécutable, propriétaire root) qui ajoute à `/var/log/vrrp-etat.log` une
+      ligne contenant la date, le nom de l'instance ou du groupe et le nouvel état (keepalived lui passe
+      `$1` = GROUP|INSTANCE, `$2` = nom, `$3` = MASTER|BACKUP|FAULT). Déclare-le avec `notify` dans le
+      groupe de synchronisation, redémarre keepalived et provoque une bascule (mode maintenance).
+    hint: "#!/bin/sh puis echo \"$(date '+%F %T') $1 $2 $3\" >> /var/log/vrrp-etat.log ; dans vrrp_sync_group : notify /etc/keepalived/notify.sh"
+    checks:
+      - desc: Le script est déclaré et exécutable sur r1 et r2
+        run: for r in r1 r2; do ssh $r 'test -x /etc/keepalived/notify.sh && grep -q "notify.*/etc/keepalived/notify.sh" /etc/keepalived/keepalived.conf' || exit 1; done
+      - desc: r1 a journalisé MASTER, r2 a journalisé BACKUP
+        run: ssh r1 'grep -q MASTER /var/log/vrrp-etat.log' && ssh r2 'grep -q BACKUP /var/log/vrrp-etat.log'
+
+  - id: unicast
+    title: VRRP en unicast
+    description: |
+      Dans beaucoup d'environnements (clouds, certains commutateurs filtrants), le multicast VRRP
+      (224.0.0.18) ne passe pas. Configure les deux instances en **unicast** : `unicast_src_ip` (adresse du
+      routeur sur l'interface de l'instance) et `unicast_peer { <adresse de l'autre routeur> }`.
+
+      Après redémarrage, il ne doit toujours y avoir qu'**un seul** maître. Vérifie avec
+      `tcpdump -ni lan vrrp` : les annonces partent vers l'adresse de l'autre routeur.
+    hint: "Dans VI_LAN de r1 : unicast_src_ip 192.168.50.2  unicast_peer { 192.168.50.3 }  (et l'inverse sur r2, idem pour VI_SRV)"
+    checks:
+      - desc: unicast_peer configuré sur r1 et r2
+        run: |
+          ssh r1 'grep -A1 unicast_peer /etc/keepalived/keepalived.conf' | grep -q '192.168.50.3' &&
+          ssh r2 'grep -A1 unicast_peer /etc/keepalived/keepalived.conf' | grep -q '192.168.50.2'
+      - desc: Les annonces VRRP sont envoyées en unicast
+        timeout: 30
+        run: ssh r1 'timeout 5 tcpdump -c 2 -ni lan vrrp 2>/dev/null' | grep -q '192.168.50.2 > 192.168.50.3'
+      - desc: Un seul maître - VIP sur r1 uniquement
+        run: ssh r1 'ip -4 addr show lan' | grep -q '192.168.50.254' && ! ssh r2 'ip -4 addr show lan' | grep -q '192.168.50.254'

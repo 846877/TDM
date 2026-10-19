@@ -1,0 +1,77 @@
+# Projet multisite : siège (VLAN 10/20/30 sur un seul lien, router-on-a-stick) et agence, reliés par
+# un tunnel WireGuard à travers Internet, routage dynamique OSPF dans le tunnel, filtrage nftables.
+#   WAN      198.18.0.0/24 : r-siege .11, r-agence .12
+#   SIÈGE    réseau Docker 10.1.0.0/24 (support des VLAN : adresses non tagguées retirées au démarrage)
+#            VLAN 10 bureaux 10.1.10.0/24 (pc-siege .10), VLAN 20 serveurs 10.1.20.0/24 (srv-siege .10),
+#            VLAN 30 invités 10.1.30.0/24 (invite .50)
+#   AGENCE   10.2.0.0/24 : pc-agence .10, r-agence .254
+#   MGMT     10.99.7.0/24 : réseau d'administration hors bande
+x-noeud: &noeud
+  build: {context: ., dockerfile: noeud/Dockerfile}
+  cap_add: [NET_ADMIN]
+  volumes: [cles:/lab-ssh]
+x-routeur: &routeur
+  <<: *noeud
+  # privileged : FRRouting pilote les tables de routage ; wireguard-go a besoin de /dev/net/tun.
+  privileged: true
+  sysctls: {net.ipv4.ip_forward: "1"}
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    cap_add: [NET_ADMIN]
+    environment: {IFNAMES: "10.99.7.=mgmt"}
+    volumes: [cles:/lab-ssh]
+    networks:
+      mgmt: {ipv4_address: 10.99.7.5}
+  r-siege:
+    <<: *routeur
+    hostname: r-siege
+    environment: {ROLE: routeur, VIDER_LAN: "1", IFNAMES: "10.1.0.=lan 198.18.0.=wan 10.99.7.=mgmt"}
+    networks:
+      siege: {ipv4_address: 10.1.0.254}
+      wan: {ipv4_address: 198.18.0.11}
+      mgmt: {ipv4_address: 10.99.7.11}
+  r-agence:
+    <<: *routeur
+    hostname: r-agence
+    environment: {ROLE: routeur, IFNAMES: "10.2.0.=lan 198.18.0.=wan 10.99.7.=mgmt"}
+    networks:
+      agence: {ipv4_address: 10.2.0.254}
+      wan: {ipv4_address: 198.18.0.12}
+      mgmt: {ipv4_address: 10.99.7.12}
+  pc-siege:
+    <<: *noeud
+    hostname: pc-siege
+    environment: {ROLE: vlan, VLAN: "10", IPVLAN: 10.1.10.10/24, GWVLAN: 10.1.10.254, IFNAMES: "10.1.0.=lan 10.99.7.=mgmt"}
+    networks:
+      siege: {ipv4_address: 10.1.0.21}
+      mgmt: {ipv4_address: 10.99.7.21}
+  srv-siege:
+    <<: *noeud
+    hostname: srv-siege
+    environment: {ROLE: vlan, WEB: "1", VLAN: "20", IPVLAN: 10.1.20.10/24, GWVLAN: 10.1.20.254, IFNAMES: "10.1.0.=lan 10.99.7.=mgmt"}
+    networks:
+      siege: {ipv4_address: 10.1.0.22}
+      mgmt: {ipv4_address: 10.99.7.22}
+  invite:
+    <<: *noeud
+    hostname: invite
+    environment: {ROLE: vlan, VLAN: "30", IPVLAN: 10.1.30.50/24, GWVLAN: 10.1.30.254, IFNAMES: "10.1.0.=lan 10.99.7.=mgmt"}
+    networks:
+      siege: {ipv4_address: 10.1.0.23}
+      mgmt: {ipv4_address: 10.99.7.23}
+  pc-agence:
+    <<: *noeud
+    hostname: pc-agence
+    environment: {ROLE: poste, IFNAMES: "10.2.0.=lan 10.99.7.=mgmt", PASSERELLE: 10.2.0.254}
+    networks:
+      agence: {ipv4_address: 10.2.0.10}
+      mgmt: {ipv4_address: 10.99.7.31}
+volumes:
+  cles:
+networks:
+  siege: {internal: true, ipam: {config: [{subnet: 10.1.0.0/24}]}}
+  agence: {internal: true, ipam: {config: [{subnet: 10.2.0.0/24}]}}
+  wan: {internal: true, ipam: {config: [{subnet: 198.18.0.0/24}]}}
+  mgmt: {internal: true, ipam: {config: [{subnet: 10.99.7.0/24}]}}

@@ -1,0 +1,205 @@
+title: Virtualisation avec QEMU (images, disques, snapshots, réseau)
+level: avance
+order: 7
+tags: [qemu, kvm, virtualisation, qcow2, snapshots, cirros, hyperviseur]
+summary: Créer des disques qcow2 chaînés, démarrer des VM CirrOS en TCG, les piloter par le moniteur, prendre des snapshots, les relier en réseau et exporter.
+build: .
+shell: bash
+workdir: /srv/vms
+description: |
+  **Contexte.** *Ateliers Durand* veut virtualiser ses petits serveurs. Avant d'acheter un hyperviseur,
+  le responsable informatique te demande de maîtriser les briques de base que l'on retrouve partout
+  (Proxmox, libvirt, OpenStack) : images disque **qcow2** et chaînes de *backing files*, lancement de VM,
+  console série, moniteur, snapshots, réseau entre VM et export vers VMware.
+
+  **Machine.** Un hyperviseur Ubuntu avec QEMU. Pas de KVM ici : les VM tournent en émulation
+  logicielle **TCG** (`-accel tcg`), donc **un démarrage prend 1 à 3 minutes**. Sois patient.
+
+  | Élément | Valeur |
+  |---|---|
+  | Image de base (lecture seule) | `/srv/images/cirros-0.6.2-x86_64-disk.img` |
+  | Dossier des VM | `/srv/vms` (dossier courant) |
+  | Dossier d'export | `/srv/export` |
+  | Compte dans les VM CirrOS | `cirros` / `gocubsgo` (`sudo` sans mot de passe) |
+  | SSH vers vm1 / vm2 | `127.0.0.1:2222` / `127.0.0.1:2223` (redirections QEMU) |
+  | Lien entre VM | socket TCP QEMU `127.0.0.1:4000`, réseau `10.10.10.0/24` |
+
+  Outils fournis : `qemu-img`, `qemu-system-x86_64`, `console-vm <vm>` (console série, Ctrl+C pour
+  quitter), `moniteur-vm <vm> "<commande>"` (moniteur QEMU) et `ssh-vm <port> [commande]`
+  (SSH vers une VM avec le mot de passe CirrOS).
+
+  Réponses à écrire dans `/root/reponses.txt`, au format `cle=valeur`.
+exercises:
+  - id: qemu-inspecter-image
+    title: Inspecter l'image de base
+    description: |
+      Avant tout, examine l'image fournie avec `qemu-img info`. Quel est son **format** ? Quelle est
+      sa **taille virtuelle** (taille du disque vu par la VM), à comparer avec la place réellement
+      occupée sur l'hôte (`ls -lh`) ?
+
+      Réponses : `format=` (en minuscules) et `taille_mio=` (taille virtuelle en Mio, nombre entier).
+    hint: "qemu-img info /srv/images/cirros-0.6.2-x86_64-disk.img  (ligne virtual size)"
+    checks:
+      - desc: Format de l'image
+        run: grep -Eqi '^format *= *qcow2 *$' /root/reponses.txt
+      - desc: Taille virtuelle en Mio
+        run: grep -Eq '^taille_mio *= *112 *$' /root/reponses.txt
+
+  - id: qemu-overlay-vm1
+    title: Disque système de vm1 en overlay
+    description: |
+      On ne modifie jamais l'image de base : chaque VM reçoit un **overlay** qcow2 qui n'enregistre que
+      les différences. Crée `/srv/vms/vm1.qcow2`, dont le *backing file* est l'image CirrOS (format de
+      l'image de base : qcow2), puis agrandis-le à **1 Gio**.
+
+      Vérifie la chaîne avec `qemu-img info --backing-chain vm1.qcow2`.
+    hint: "qemu-img create -f qcow2 -b /srv/images/cirros-0.6.2-x86_64-disk.img -F qcow2 vm1.qcow2 ; qemu-img resize vm1.qcow2 1G"
+    checks:
+      - desc: vm1.qcow2 est un qcow2
+        run: |
+          qemu-img info -U --output=json /srv/vms/vm1.qcow2 | grep -Eq '"format": *"qcow2"'
+      - desc: Son backing file est l'image CirrOS
+        run: qemu-img info -U --output=json /srv/vms/vm1.qcow2 | grep -q 'backing-filename.*cirros-0.6.2-x86_64-disk.img'
+      - desc: Taille virtuelle de 1 Gio
+        run: |
+          qemu-img info -U --output=json /srv/vms/vm1.qcow2 | grep -Eq '"virtual-size": *1073741824,'
+
+  - id: qemu-disque-donnees
+    title: Disque de données
+    description: |
+      vm1 hébergera des données : crée un second disque **indépendant** (sans backing file)
+      `/srv/vms/vm1-data.qcow2` de **2 Gio** au format qcow2. Constate avec `ls -lh` que le fichier
+      ne pèse presque rien (allocation à la demande).
+    hint: "qemu-img create -f qcow2 vm1-data.qcow2 2G"
+    checks:
+      - desc: vm1-data.qcow2 est un qcow2 de 2 Gio
+        run: |
+          qemu-img info -U --output=json /srv/vms/vm1-data.qcow2 | grep -Eq '"virtual-size": *2147483648,' && qemu-img info -U --output=json /srv/vms/vm1-data.qcow2 | grep -Eq '"format": *"qcow2"'
+      - desc: Il n'a pas de backing file
+        run: "! qemu-img info -U --output=json /srv/vms/vm1-data.qcow2 | grep -q backing-filename"
+
+  - id: qemu-demarrer-vm1
+    title: Démarrer vm1 en arrière-plan
+    description: |
+      Démarre vm1 **en tâche de fond** (`-daemonize`, `-display none`) avec :
+
+      - 256 Mio de RAM, accélération `tcg`, nom `vm1` ;
+      - les deux disques en `virtio` (système puis données) ;
+      - une carte réseau en mode *user* (NAT) qui redirige `127.0.0.1:2222` vers le port 22 de la VM ;
+      - une **seconde carte** `virtio-net-pci` d'adresse MAC `52:54:00:00:01:02` reliée à un
+        netdev `socket` qui **écoute** sur `127.0.0.1:4000` (elle servira à l'exercice 7) ;
+      - la console série sur le socket unix `/srv/vms/vm1.console` et le moniteur sur
+        `/srv/vms/vm1.monitor` (options `server,nowait`) ;
+      - le PID dans `/srv/vms/vm1.pid`.
+
+      Suis le démarrage avec `console-vm vm1` (Ctrl+C pour quitter), puis connecte-toi :
+      `ssh -p 2222 cirros@127.0.0.1` (ou `ssh-vm 2222`).
+    hint: |
+      qemu-system-x86_64 -name vm1 -accel tcg -m 256 \
+        -drive file=vm1.qcow2,if=virtio,format=qcow2 -drive file=vm1-data.qcow2,if=virtio,format=qcow2 \
+        -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 -device virtio-net-pci,netdev=n0 \
+        -netdev socket,id=n1,listen=127.0.0.1:4000 -device virtio-net-pci,netdev=n1,mac=52:54:00:00:01:02 \
+        -serial unix:/srv/vms/vm1.console,server,nowait -monitor unix:/srv/vms/vm1.monitor,server,nowait \
+        -display none -pidfile /srv/vms/vm1.pid -daemonize
+    checks:
+      - desc: Le processus QEMU de vm1 tourne (PID dans vm1.pid)
+        run: test -s /srv/vms/vm1.pid && kill -0 "$(cat /srv/vms/vm1.pid)" && grep -q qemu /proc/"$(cat /srv/vms/vm1.pid)"/cmdline
+      - desc: Les sockets console et moniteur existent
+        run: test -S /srv/vms/vm1.console && test -S /srv/vms/vm1.monitor
+      - desc: Le moniteur indique que la VM est en marche
+        run: moniteur-vm vm1 info status | grep -q running
+      - desc: La VM est joignable en SSH sur le port 2222 (attente jusqu'à 3 min)
+        timeout: 200
+        run: for i in $(seq 1 18); do ssh-vm 2222 true 2>/dev/null && exit 0; sleep 10; done; exit 1
+
+  - id: qemu-disques-invites
+    title: Vérifier le matériel vu par l'invité
+    description: |
+      Connecte-toi à vm1 et vérifie ce que voit le système invité : `cat /proc/partitions`,
+      `ip link`, `free -m`. Le disque système `vda` doit faire 1 Gio et le disque de données `vdb`
+      2 Gio. Côté hôte, compare avec `moniteur-vm vm1 "info block"` et `moniteur-vm vm1 "info network"`.
+
+      Réponses : `nb_cartes=` (nombre d'interfaces réseau Ethernet de vm1, hors `lo`) et
+      `disque_donnees=` (nom du périphérique du disque de données dans la VM).
+    hint: "ssh-vm 2222 cat /proc/partitions ; ssh-vm 2222 ip -br link"
+    checks:
+      - desc: vda fait 1 Gio et vdb 2 Gio dans la VM
+        run: |
+          p=$(ssh-vm 2222 cat /proc/partitions) && echo "$p" | awk '$4=="vda"{a=$3} $4=="vdb"{b=$3} END{exit !(a==1048576 && b==2097152)}'
+      - desc: Réponses sur le matériel
+        run: grep -Eq '^nb_cartes *= *2 *$' /root/reponses.txt && grep -Eq '^disque_donnees *= *(/dev/)?vdb *$' /root/reponses.txt
+
+  - id: qemu-snapshot
+    title: Snapshot avant mise à jour
+    description: |
+      Avant une intervention risquée, prends un **snapshot interne à chaud** de vm1 nommé
+      `avant-maj` depuis le moniteur (il inclut l'état de la RAM). Crée ensuite dans la VM le fichier
+      `/home/cirros/apres-snapshot` puis liste les snapshots (`info snapshots` dans le moniteur,
+      `qemu-img snapshot -l -U vm1.qcow2` côté hôte).
+
+      Pour la culture : `loadvm avant-maj` reviendrait à l'état d'avant (le fichier disparaîtrait).
+      Ne le fais pas : les vérifications attendent le fichier.
+    hint: "moniteur-vm vm1 savevm avant-maj ; ssh-vm 2222 touch apres-snapshot ; moniteur-vm vm1 info snapshots"
+    checks:
+      - desc: Le snapshot avant-maj existe dans vm1.qcow2
+        run: qemu-img snapshot -l -U /srv/vms/vm1.qcow2 | grep -qw avant-maj
+      - desc: Le moniteur le liste aussi
+        run: moniteur-vm vm1 info snapshots | grep -qw avant-maj
+      - desc: Le fichier apres-snapshot existe dans la VM
+        run: ssh-vm 2222 test -f /home/cirros/apres-snapshot
+
+  - id: qemu-reseau-entre-vm
+    title: Deuxième VM et réseau privé entre VM
+    description: |
+      Crée `/srv/vms/vm2.qcow2` (overlay de l'image CirrOS) et démarre **vm2** sur le même modèle que
+      vm1, mais :
+
+      - SSH redirigé sur `127.0.0.1:2223`, moniteur `/srv/vms/vm2.monitor`, console
+        `/srv/vms/vm2.console`, PID `/srv/vms/vm2.pid`, pas de disque de données ;
+      - sa seconde carte (MAC `52:54:00:00:02:02`) se **connecte** au socket `127.0.0.1:4000` de vm1.
+
+      Dans les VM, configure la seconde interface (`eth1`) : `10.10.10.1/24` sur vm1 et
+      `10.10.10.2/24` sur vm2 (`sudo ip addr add …`, `sudo ip link set eth1 up`), puis vérifie que les
+      deux VM se pinguent par ce lien privé.
+    hint: |
+      qemu-img create -f qcow2 -b /srv/images/cirros-0.6.2-x86_64-disk.img -F qcow2 vm2.qcow2
+      qemu-system-x86_64 -name vm2 -accel tcg -m 256 -drive file=vm2.qcow2,if=virtio,format=qcow2 \
+        -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2223-:22 -device virtio-net-pci,netdev=n0 \
+        -netdev socket,id=n1,connect=127.0.0.1:4000 -device virtio-net-pci,netdev=n1,mac=52:54:00:00:02:02 \
+        -serial unix:/srv/vms/vm2.console,server,nowait -monitor unix:/srv/vms/vm2.monitor,server,nowait \
+        -display none -pidfile /srv/vms/vm2.pid -daemonize
+      ssh-vm 2222 sudo ip addr add 10.10.10.1/24 dev eth1 ; ssh-vm 2222 sudo ip link set eth1 up   (idem sur 2223 avec .2)
+    checks:
+      - desc: vm2.qcow2 est un overlay de l'image CirrOS
+        run: qemu-img info -U --output=json /srv/vms/vm2.qcow2 | grep -q 'backing-filename.*cirros-0.6.2-x86_64-disk.img'
+      - desc: vm2 tourne et répond en SSH sur 2223 (attente jusqu'à 3 min)
+        timeout: 200
+        run: test -s /srv/vms/vm2.pid && kill -0 "$(cat /srv/vms/vm2.pid)" && for i in $(seq 1 18); do ssh-vm 2223 true 2>/dev/null && exit 0; sleep 10; done; exit 1
+      - desc: vm1 a l'adresse 10.10.10.1 et vm2 10.10.10.2
+        run: ssh-vm 2222 ip -4 addr show eth1 | grep -q 'inet 10\.10\.10\.1/24' && ssh-vm 2223 ip -4 addr show eth1 | grep -q 'inet 10\.10\.10\.2/24'
+      - desc: vm1 pingue vm2 par le lien privé
+        timeout: 60
+        run: ssh-vm 2222 ping -c 3 -W 2 10.10.10.2
+
+  - id: qemu-arret-export
+    title: Arrêt propre et export de vm2
+    description: |
+      vm2 doit être livrée à une équipe qui utilise VMware. Arrête-la **proprement** (arrêt ACPI avec
+      `system_powerdown` dans le moniteur, ou `sudo poweroff` dans la VM) et attends la fin du processus.
+      Exporte ensuite son disque :
+
+      - en **VMDK** dans `/srv/export/vm2.vmdk` ;
+      - en qcow2 **autonome** (sans backing file, compressé avec `-c`) dans `/srv/export/vm2-autonome.qcow2`.
+
+      vm1 doit continuer à tourner.
+    hint: "moniteur-vm vm2 system_powerdown ; qemu-img convert -O vmdk vm2.qcow2 /srv/export/vm2.vmdk ; qemu-img convert -c -O qcow2 vm2.qcow2 /srv/export/vm2-autonome.qcow2"
+    checks:
+      - desc: vm2 est arrêtée et vm1 tourne toujours
+        run: |
+          p2=$(cat /srv/vms/vm2.pid 2>/dev/null); test -f /srv/vms/vm2.qcow2 && ! { [ -n "$p2" ] && kill -0 "$p2" 2>/dev/null; } && kill -0 "$(cat /srv/vms/vm1.pid)"
+      - desc: Export VMDK valide
+        run: |
+          qemu-img info --output=json /srv/export/vm2.vmdk | grep -Eq '"format": *"vmdk"'
+      - desc: Export qcow2 autonome (sans backing file)
+        run: |
+          qemu-img info --output=json /srv/export/vm2-autonome.qcow2 | grep -Eq '"format": *"qcow2"' && ! qemu-img info --output=json /srv/export/vm2-autonome.qcow2 | grep -q backing-filename

@@ -1,0 +1,34 @@
+# Serveur de temps et de journaux (srv-log) et deux serveurs clients à raccorder.
+x-serveur: &serveur
+  build: {context: ., dockerfile: serveur/Dockerfile}
+  volumes: [cles:/lab-ssh]
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.40.0.5}
+  srv-log:
+    <<: *serveur
+    hostname: srv-log
+    networks:
+      lan: {ipv4_address: 10.40.0.10}
+  srv-web:
+    <<: *serveur
+    hostname: srv-web
+    networks:
+      lan: {ipv4_address: 10.40.0.20}
+  srv-bdd:
+    <<: *serveur
+    hostname: srv-bdd
+    environment: {ROLE: bdd}
+    networks:
+      lan: {ipv4_address: 10.40.0.30}
+volumes:
+  cles:
+networks:
+  lan:
+    internal: true
+    ipam:
+      config: [{subnet: 10.40.0.0/24, ip_range: 10.40.0.0/28}]

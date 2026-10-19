@@ -1,0 +1,39 @@
+# Réseau bureautique et réseau interne séparés : seul le bastion est relié aux deux.
+#   bureau  10.50.1.0/24 : admin (.10), bastion (.2)
+#   interne 10.50.2.0/24 : bastion (.2), srv-interne (.10), srv-bdd (.20)
+x-serveur: &serveur
+  build: ./serveur
+services:
+  admin:
+    build: ./admin
+    hostname: admin
+    networks:
+      bureau: {ipv4_address: 10.50.1.10}
+  bastion:
+    <<: *serveur
+    hostname: bastion
+    environment: {ROLE: bastion}
+    networks:
+      bureau: {ipv4_address: 10.50.1.2}
+      interne: {ipv4_address: 10.50.2.2}
+  srv-interne:
+    <<: *serveur
+    hostname: srv-interne
+    environment: {ROLE: interne}
+    networks:
+      interne: {ipv4_address: 10.50.2.10}
+  srv-bdd:
+    <<: *serveur
+    hostname: srv-bdd
+    environment: {ROLE: bdd}
+    networks:
+      interne: {ipv4_address: 10.50.2.20}
+networks:
+  bureau:
+    internal: true
+    ipam:
+      config: [{subnet: 10.50.1.0/24, ip_range: 10.50.1.128/25}]
+  interne:
+    internal: true
+    ipam:
+      config: [{subnet: 10.50.2.0/24, ip_range: 10.50.2.128/25}]

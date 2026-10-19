@@ -1,0 +1,149 @@
+title: Administrer des serveurs à distance avec SSH
+level: debutant
+order: 4
+tags: [ssh, clés, scp, rsync, sudo, accès distant]
+summary: Connexion par mot de passe puis par clé, fichier ~/.ssh/config, commandes distantes, scp, rsync et sudo à distance.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Les serveurs d'*Ateliers Durand* sont dans une baie au sous-sol : on les administre
+  depuis le poste du service informatique, en **SSH**. Ton chef te demande de mettre en place un accès par
+  clé, plus sûr et plus pratique que le mot de passe, puis de réaliser quelques opérations courantes.
+
+  **Machines.**
+
+  | Machine        | Rôle               | Compte SSH                   |
+  |----------------|--------------------|------------------------------|
+  | `admin`        | ton poste (root)   | -                            |
+  | `srv-fichiers` | serveur de fichiers| `tech` / `Tech2024!` (sudo)  |
+  | `srv-web`      | serveur intranet   | `tech` / `Tech2024!` (sudo)  |
+
+  Sur ton poste : `/root/site/` (nouvelle version du site intranet) et `/root/outils/maj.sh`
+  (script de maintenance).
+exercises:
+  - id: premiere-connexion
+    title: Première connexion et empreinte du serveur
+    description: |
+      Connecte-toi à `srv-fichiers` avec le compte `tech` (mot de passe `Tech2024!`). À la première
+      connexion, SSH affiche l'**empreinte** de la clé du serveur : en entreprise, on la compare avec celle
+      communiquée par l'administrateur avant de répondre `yes`. Elle est alors enregistrée dans
+      `~/.ssh/known_hosts` et toute modification future (serveur réinstallé... ou attaque de
+      l'homme du milieu) déclenchera une alerte.
+
+      Fais de même avec `srv-web`, puis déconnecte-toi (`exit`).
+    hint: ssh tech@srv-fichiers
+    checks:
+      - desc: srv-fichiers est dans known_hosts
+        run: ssh-keygen -F srv-fichiers -f /root/.ssh/known_hosts >/dev/null
+      - desc: srv-web est dans known_hosts
+        run: ssh-keygen -F srv-web -f /root/.ssh/known_hosts >/dev/null
+
+  - id: ssh-cles
+    title: Générer une paire de clés
+    description: |
+      Génère une paire de clés **ed25519** dans `~/.ssh/id_ed25519` avec le commentaire `admin@durand`.
+      Pour ce lab, laisse la passphrase vide (en production, on protège la clé par une passphrase et on
+      utilise `ssh-agent`).
+
+      La clé **privée** ne quitte jamais ton poste et doit être lisible par toi seul.
+    hint: ssh-keygen -t ed25519 -C admin@durand -f ~/.ssh/id_ed25519
+    checks:
+      - desc: Clé ed25519 présente avec le bon commentaire
+        run: ssh-keygen -l -f /root/.ssh/id_ed25519.pub | grep -q 'admin@durand (ED25519)'
+      - desc: La clé privée est en 600
+        run: test "$(stat -c %a /root/.ssh/id_ed25519)" = 600
+
+  - id: deployer-cle
+    title: Déployer la clé sur les serveurs
+    description: |
+      Copie ta clé publique dans `~/.ssh/authorized_keys` du compte `tech` sur **les deux serveurs**
+      (avec `ssh-copy-id`). Ensuite, la connexion ne doit plus demander de mot de passe.
+    hint: ssh-copy-id tech@srv-fichiers && ssh-copy-id tech@srv-web
+    checks:
+      - desc: Connexion par clé vers srv-fichiers
+        run: ssh -o BatchMode=yes -o ConnectTimeout=5 tech@srv-fichiers true
+      - desc: Connexion par clé vers srv-web
+        run: ssh -o BatchMode=yes -o ConnectTimeout=5 tech@srv-web true
+
+  - id: ssh-config-client
+    title: Fichier ~/.ssh/config
+    description: |
+      Pour ne plus taper `tech@srv-fichiers`, crée `~/.ssh/config` avec deux alias :
+
+      | Alias      | Machine        | Utilisateur |
+      |------------|----------------|-------------|
+      | `fichiers` | `srv-fichiers` | `tech`      |
+      | `web`      | `srv-web`      | `tech`      |
+
+      `ssh fichiers` doit suffire. Ajoute aussi, pour tous les hôtes, `ServerAliveInterval 30` (évite les
+      coupures des sessions inactives).
+    hint: "Host fichiers / HostName srv-fichiers / User tech  (un bloc Host par alias, puis Host * / ServerAliveInterval 30)"
+    checks:
+      - desc: L'alias fichiers pointe vers srv-fichiers avec tech
+        run: ssh -G fichiers | grep -qx 'hostname srv-fichiers' && ssh -G fichiers | grep -qx 'user tech'
+      - desc: L'alias web pointe vers srv-web avec tech
+        run: ssh -G web | grep -qx 'hostname srv-web' && ssh -G web | grep -qx 'user tech'
+      - desc: ServerAliveInterval 30
+        run: ssh -G web | grep -qx 'serveraliveinterval 30'
+      - desc: ssh fichiers fonctionne sans mot de passe
+        run: test "$(ssh -o BatchMode=yes fichiers hostname)" = srv-fichiers
+
+  - id: commandes-distantes
+    title: Lancer des commandes à distance
+    description: |
+      Sans ouvrir de session interactive, collecte pour **chaque** serveur son nom (`hostname`), sa version du
+      noyau (`uname -r`) et l'occupation de son disque racine (`df -h /`), et enregistre le tout dans
+      `/root/inventaire.txt` (une boucle `for s in fichiers web; do ssh $s '...'; done` est idéale).
+    hint: "for s in fichiers web; do ssh $s 'hostname; uname -r; df -h /'; done > /root/inventaire.txt"
+    checks:
+      - desc: L'inventaire contient les deux serveurs
+        run: grep -qx srv-fichiers /root/inventaire.txt && grep -qx srv-web /root/inventaire.txt
+      - desc: L'inventaire contient le noyau et l'espace disque
+        run: grep -q "$(uname -r)" /root/inventaire.txt && grep -q 'Filesystem\|Sys. de fichiers' /root/inventaire.txt
+
+  - id: scp
+    title: Copier des fichiers avec scp
+    description: |
+      1. Copie `/root/outils/maj.sh` dans le dossier personnel de `tech` sur `srv-web`, puis **exécute-le à
+         distance** (il crée le fichier `~/maj-ok`).
+      2. Rapatrie le journal `/var/log/app/app.log` de `srv-fichiers` dans `/root/logs/srv-fichiers-app.log`
+         sur ton poste.
+    hint: "scp /root/outils/maj.sh web: && ssh web ./maj.sh ; scp fichiers:/var/log/app/app.log /root/logs/srv-fichiers-app.log"
+    checks:
+      - desc: Le script a été exécuté sur srv-web
+        run: ssh -o BatchMode=yes tech@srv-web 'grep -q "maintenance effectuee sur srv-web" ~/maj-ok'
+      - desc: Le journal de srv-fichiers a été rapatrié
+        run: grep -q 'ERROR disque presque plein' /root/logs/srv-fichiers-app.log
+
+  - id: rsync
+    title: Synchroniser un site avec rsync
+    description: |
+      Publie la nouvelle version du site : synchronise le **contenu** de `/root/site/` vers
+      `/var/www/site/` sur `srv-web` avec `rsync` (archive, compression, affichage des fichiers transférés).
+      Le serveur contient une vieille page `obsolete.html` qui doit **disparaître** : le dossier distant doit
+      être le reflet exact du dossier local.
+
+      Commence par un essai à blanc (`--dry-run`) : c'est le réflexe à avoir avant tout `--delete`.
+    hint: "rsync -avz --delete /root/site/ web:/var/www/site/   (attention au / final de la source)"
+    checks:
+      - desc: index.html et contact.html sont publiés à l'identique
+        run: |
+          for f in index.html contact.html; do
+            test "$(ssh -o BatchMode=yes tech@srv-web md5sum /var/www/site/$f | cut -d' ' -f1)" = "$(md5sum /root/site/$f | cut -d' ' -f1)" || exit 1
+          done
+      - desc: obsolete.html a été supprimée et aucun sous-dossier site/ n'a été créé
+        run: ssh -o BatchMode=yes tech@srv-web 'test ! -e /var/www/site/obsolete.html && test ! -e /var/www/site/site'
+
+  - id: sudo-distant
+    title: Administrer avec sudo à distance
+    description: |
+      Sur `srv-fichiers`, crée le message d'accueil `/etc/motd` contenant `Serveur de fichiers - acces
+      reserve au service informatique`. Le fichier appartient à root : il faut `sudo` (mot de passe de
+      `tech`), donc un terminal (`ssh -t`).
+    hint: "ssh -t fichiers \"echo 'Serveur de fichiers - acces reserve au service informatique' | sudo tee /etc/motd\""
+    checks:
+      - desc: /etc/motd de srv-fichiers contient le message et appartient à root
+        run: |
+          ssh -o BatchMode=yes tech@srv-fichiers 'grep -q "Serveur de fichiers - acces reserve au service informatique" /etc/motd && test "$(stat -c %U /etc/motd)" = root'

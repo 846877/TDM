@@ -1,0 +1,24 @@
+# Contrôleur de domaine Active Directory Samba (dc1) à provisionner, et poste d'administration.
+# dc1 est privilégié : Samba AD enregistre les ACL NTFS dans des attributs étendus « security.* ».
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    dns: [10.60.0.10]
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.60.0.5}
+  dc1:
+    build: {context: ., dockerfile: dc/Dockerfile}
+    hostname: dc1
+    privileged: true
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.60.0.10}
+volumes:
+  cles:
+networks:
+  lan:
+    internal: true
+    ipam:
+      config: [{subnet: 10.60.0.0/24, ip_range: 10.60.0.128/26}]

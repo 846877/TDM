@@ -1,0 +1,206 @@
+title: DNS d'entreprise avec BIND 9
+level: intermediaire
+order: 2
+tags: [dns, bind9, zone, ptr, secondaire, délégation, forward]
+summary: Zones directe et inverse, enregistrements A/CNAME/MX/TXT/SRV, serveur secondaire, numéro de série, délégation et redirection conditionnelle.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** *Ateliers Durand* remplace son vieux DNS par deux serveurs **BIND 9** redondants pour le
+  domaine interne `durand.lan` (réseau `10.30.0.0/24`). L'agence de Lyon gère elle-même sa sous-zone, et
+  un fournisseur nous expose son extranet par un DNS privé.
+
+  **Machines.**
+
+  | Machine   | Adresse     | Rôle                                                         |
+  |-----------|-------------|--------------------------------------------------------------|
+  | `admin`   | 10.30.0.5   | ton poste (`dig`, `ssh`)                                      |
+  | `ns1`     | 10.30.0.53  | DNS **primaire** à configurer (`ssh ns1`)                     |
+  | `ns2`     | 10.30.0.54  | DNS **secondaire** à configurer (`ssh ns2`)                   |
+  | `ns-lyon` | 10.30.0.60  | DNS de Lyon (déjà configuré) : `lyon.durand.lan` et `fournisseur.example` |
+
+  **Plan d'adressage de `durand.lan`** :
+
+  | Nom            | Adresse     |
+  |----------------|-------------|
+  | `ns1`          | 10.30.0.53  |
+  | `ns2`          | 10.30.0.54  |
+  | `srv-web`      | 10.30.0.10  |
+  | `srv-fichiers` | 10.30.0.20  |
+  | `srv-mail`     | 10.30.0.25  |
+  | `srv-ad`       | 10.30.0.30  |
+
+  Sur ns1/ns2, BIND est installé (configuration Ubuntu : `/etc/bind/named.conf` inclut
+  `named.conf.options` et `named.conf.local`) mais **pas démarré**.
+  - vérifier : `named-checkconf -z` et `named-checkzone durand.lan /etc/bind/db.durand.lan`
+  - démarrer : `named -u bind` ; recharger : `rndc reload` ; journaux : `named -u bind -g` au premier plan
+    pour voir les erreurs, ou `rndc status`.
+exercises:
+  - id: zone-directe
+    title: Zone directe durand.lan sur ns1
+    description: |
+      Sur **ns1**, déclare la zone `durand.lan` de type `primary` dans `/etc/bind/named.conf.local`, avec le
+      fichier `/etc/bind/db.durand.lan` contenant :
+      - un enregistrement **SOA** (serveur primaire `ns1.durand.lan.`, contact `hostmaster.durand.lan.`,
+        numéro de série au format `AAAAMMJJNN`, par exemple `2026101801`) ;
+      - deux enregistrements **NS** : `ns1.durand.lan.` et `ns2.durand.lan.` ;
+      - les enregistrements **A** du plan d'adressage.
+
+      Démarre BIND et teste depuis admin : `dig @10.30.0.53 srv-web.durand.lan`.
+    hint: "$TTL 3600 / @ IN SOA ns1.durand.lan. hostmaster.durand.lan. ( 2026101801 3600 900 604800 300 ) / @ IN NS ns1.durand.lan. / ns1 IN A 10.30.0.53 ..."
+    checks:
+      - desc: ns1 répond avec autorité pour durand.lan
+        run: dig +norec +time=3 @10.30.0.53 durand.lan SOA | grep -q 'flags:.* aa'
+      - desc: Les deux serveurs de noms sont déclarés
+        run: test "$(dig +short +time=3 @10.30.0.53 durand.lan NS | sort | tr '\n' ' ')" = "ns1.durand.lan. ns2.durand.lan. "
+      - desc: Les enregistrements A du plan d'adressage
+        run: |
+          for e in ns1:10.30.0.53 ns2:10.30.0.54 srv-web:10.30.0.10 srv-fichiers:10.30.0.20 srv-mail:10.30.0.25 srv-ad:10.30.0.30; do
+            test "$(dig +short +time=3 @10.30.0.53 ${e%%:*}.durand.lan A)" = "${e#*:}" || { echo "${e%%:*} incorrect"; exit 1; }
+          done
+
+  - id: enregistrements
+    title: Alias, messagerie et services
+    description: |
+      Complète la zone (et **incrémente le numéro de série** à chaque modification, puis `rndc reload`) :
+      - **CNAME** : `www` et `intranet` pointent vers `srv-web` ;
+      - **MX** : le courrier de `durand.lan` est livré à `srv-mail`, priorité **10** ;
+      - **TXT** : enregistrement SPF `v=spf1 mx -all` sur le domaine ;
+      - **SRV** : `_ldap._tcp` pointe vers `srv-ad.durand.lan` sur le port **389** (priorité 0, poids 100).
+        C'est ainsi que les postes trouvent un contrôleur de domaine Active Directory.
+    hint: "www IN CNAME srv-web / @ IN MX 10 srv-mail / @ IN TXT \"v=spf1 mx -all\" / _ldap._tcp IN SRV 0 100 389 srv-ad"
+    checks:
+      - desc: www et intranet sont des alias de srv-web
+        run: |
+          dig +short +time=3 @10.30.0.53 www.durand.lan CNAME | grep -qx 'srv-web.durand.lan.' &&
+          dig +short +time=3 @10.30.0.53 intranet.durand.lan CNAME | grep -qx 'srv-web.durand.lan.'
+      - desc: MX 10 srv-mail
+        run: dig +short +time=3 @10.30.0.53 durand.lan MX | grep -qx '10 srv-mail.durand.lan.'
+      - desc: SPF v=spf1 mx -all
+        run: dig +short +time=3 @10.30.0.53 durand.lan TXT | grep -qx '"v=spf1 mx -all"'
+      - desc: SRV _ldap._tcp vers srv-ad:389
+        run: dig +short +time=3 @10.30.0.53 _ldap._tcp.durand.lan SRV | grep -qx '0 100 389 srv-ad.durand.lan.'
+
+  - id: zone-inverse
+    title: Zone inverse
+    description: |
+      Crée sur ns1 la zone inverse `0.30.10.in-addr.arpa` (fichier `/etc/bind/db.10.30.0`) avec un
+      enregistrement **PTR** pour chacune des six machines du plan d'adressage. Les journaux de sécurité, la
+      messagerie et de nombreux outils l'utilisent pour afficher des noms à la place des adresses.
+    hint: "zone \"0.30.10.in-addr.arpa\" { type primary; file \"/etc/bind/db.10.30.0\"; };  puis  10 IN PTR srv-web.durand.lan."
+    checks:
+      - desc: ns1 fait autorité sur 0.30.10.in-addr.arpa
+        run: dig +norec +time=3 @10.30.0.53 0.30.10.in-addr.arpa SOA | grep -q 'flags:.* aa'
+      - desc: Résolution inverse des six machines
+        run: |
+          for e in 53:ns1 54:ns2 10:srv-web 20:srv-fichiers 25:srv-mail 30:srv-ad; do
+            test "$(dig +short +time=3 @10.30.0.53 -x 10.30.0.${e%%:*})" = "${e#*:}.durand.lan." || { echo "10.30.0.${e%%:*} incorrect"; exit 1; }
+          done
+
+  - id: secondaire
+    title: Serveur secondaire et transferts de zone
+    description: |
+      1. Sur **ns1**, n'autorise les transferts de zone (`allow-transfer`) **que vers ns2** (10.30.0.54) et
+         prévient ns2 des modifications (`also-notify`, `notify yes`).
+      2. Sur **ns2**, déclare les deux zones en type `secondary` avec `primaries { 10.30.0.53; };` et des
+         fichiers dans `/var/cache/bind/` (le dossier où l'utilisateur `bind` peut écrire). Démarre BIND.
+
+      Un transfert complet (`AXFR`) demandé depuis admin doit être **refusé** par ns1 : la zone complète
+      est une carte de ton réseau pour un attaquant.
+    hint: "ns2 : zone \"durand.lan\" { type secondary; primaries { 10.30.0.53; }; file \"/var/cache/bind/db.durand.lan\"; };"
+    checks:
+      - desc: ns2 répond avec autorité pour les deux zones
+        run: |
+          dig +norec +time=3 @10.30.0.54 durand.lan SOA | grep -q 'flags:.* aa' &&
+          dig +norec +time=3 @10.30.0.54 0.30.10.in-addr.arpa SOA | grep -q 'flags:.* aa'
+      - desc: ns2 résout srv-mail et la résolution inverse
+        run: test "$(dig +short +time=3 @10.30.0.54 srv-mail.durand.lan)" = 10.30.0.25 && test "$(dig +short +time=3 @10.30.0.54 -x 10.30.0.25)" = srv-mail.durand.lan.
+      - desc: ns2 est bien secondaire (il a reçu la zone par transfert)
+        run: ssh ns2 'ls /var/cache/bind/' | grep -q durand
+      - desc: L'AXFR depuis admin est refusé
+        run: dig +time=3 +tries=1 @10.30.0.53 durand.lan AXFR | grep -qi 'transfer failed'
+
+  - id: dns-mise-a-jour-zone
+    title: Mise à jour et numéro de série
+    description: |
+      Un nouveau serveur de sauvegarde arrive : ajoute `srv-backup` → `10.30.0.40` (A **et** PTR) sur ns1,
+      incrémente les numéros de série des deux zones et recharge (`rndc reload`).
+
+      Grâce à la notification (NOTIFY), ns2 doit récupérer les zones en quelques secondes : vérifie que
+      les numéros de série de ns1 et ns2 sont identiques. Oublier d'incrémenter le série est **l'erreur
+      classique** : ns2 ne voit alors jamais la modification.
+    hint: "dig +short @10.30.0.53 durand.lan SOA puis dig +short @10.30.0.54 durand.lan SOA : les deux séries doivent être égales"
+    checks:
+      - desc: srv-backup est résolu par ns1 (A et PTR)
+        run: test "$(dig +short +time=3 @10.30.0.53 srv-backup.durand.lan)" = 10.30.0.40 && test "$(dig +short +time=3 @10.30.0.53 -x 10.30.0.40)" = srv-backup.durand.lan.
+      - desc: ns2 a reçu la mise à jour (attente jusqu'à 30 s)
+        timeout: 60
+        run: |
+          for i in $(seq 1 15); do
+            test "$(dig +short +time=2 @10.30.0.54 srv-backup.durand.lan)" = 10.30.0.40 &&
+            test "$(dig +short +time=2 @10.30.0.54 -x 10.30.0.40)" = srv-backup.durand.lan. && exit 0
+            sleep 2
+          done
+          exit 1
+      - desc: Mêmes numéros de série sur ns1 et ns2
+        run: |
+          for z in durand.lan 0.30.10.in-addr.arpa; do
+            a=$(dig +short +time=3 @10.30.0.53 $z SOA | awk '{print $3}'); b=$(dig +short +time=3 @10.30.0.54 $z SOA | awk '{print $3}')
+            test -n "$a" && test "$a" = "$b" || exit 1
+          done
+
+  - id: delegation
+    title: Déléguer la sous-zone de Lyon
+    description: |
+      L'agence de Lyon gère elle-même `lyon.durand.lan` sur `ns-lyon` (10.30.0.60). Dans la zone
+      `durand.lan` de ns1, **délègue** cette sous-zone :
+      - un enregistrement `NS` pour `lyon` vers `ns-lyon.lyon.durand.lan.` ;
+      - l'enregistrement **de colle** (glue) : `ns-lyon.lyon` → `10.30.0.60` (sans lui, personne ne peut
+        trouver l'adresse du serveur qui fait autorité).
+
+      Pour que ns1 suive la délégation pour les postes du réseau, la récursion doit être autorisée pour
+      `10.30.0.0/24` (`allow-recursion`) et, sans accès Internet aux serveurs racine, la validation DNSSEC
+      désactivée (`dnssec-validation no;` dans `named.conf.options`).
+    hint: "lyon IN NS ns-lyon.lyon.durand.lan.  et  ns-lyon.lyon IN A 10.30.0.60  (pense au série)"
+    checks:
+      - desc: ns1 renvoie une délégation (référence) vers ns-lyon
+        run: dig +norec +time=3 @10.30.0.53 srv-lyon.lyon.durand.lan | sed -n '/AUTHORITY SECTION/,/^$/p' | grep -q 'NS.*ns-lyon\.lyon\.durand\.lan\.'
+      - desc: La colle 10.30.0.60 est fournie
+        run: dig +norec +time=3 @10.30.0.53 srv-lyon.lyon.durand.lan | sed -n '/ADDITIONAL SECTION/,/^$/p' | grep -q '10\.30\.0\.60'
+      - desc: Avec récursion, ns1 résout srv-lyon.lyon.durand.lan
+        run: test "$(dig +short +time=5 @10.30.0.53 srv-lyon.lyon.durand.lan)" = 10.31.0.10
+
+  - id: forward
+    title: Redirection conditionnelle
+    description: |
+      Les postes doivent joindre l'extranet du fournisseur, dont la zone privée `fournisseur.example` est
+      hébergée sur `10.30.0.60`. Sur ns1, ajoute une zone de type **forward** (`forward only;`,
+      `forwarders { 10.30.0.60; };`) pour ce domaine.
+    hint: "zone \"fournisseur.example\" { type forward; forward only; forwarders { 10.30.0.60; }; };"
+    checks:
+      - desc: ns1 résout extranet.fournisseur.example
+        run: test "$(dig +short +time=5 @10.30.0.53 extranet.fournisseur.example)" = 172.20.5.15
+      - desc: La zone est déclarée en forward sur ns1
+        run: ssh ns1 'named-checkconf -p' | grep -A4 'zone "fournisseur.example"' | grep -q 'type forward'
+
+  - id: dns-durcissement
+    title: Durcissement
+    description: |
+      Dernières règles de sécurité sur **ns1 et ns2** :
+      - masquer la version de BIND : `version "non communiquee";` (les attaquants cherchent les versions
+        vulnérables avec `dig version.bind chaos txt`) ;
+      - sur **ns2**, refuser tout transfert de zone (`allow-transfer { none; };`) ;
+      - les configurations doivent passer `named-checkconf -z` sans erreur.
+    hint: "Dans options { } de named.conf.options : version \"non communiquee\";"
+    checks:
+      - desc: Version masquée sur ns1 et ns2
+        run: |
+          for s in 10.30.0.53 10.30.0.54; do
+            dig +short +time=3 @$s version.bind chaos txt | grep -qx '"non communiquee"' || exit 1
+          done
+      - desc: AXFR refusé par ns2
+        run: dig +time=3 +tries=1 @10.30.0.54 durand.lan AXFR | grep -qi 'transfer failed'
+      - desc: named-checkconf -z sans erreur sur ns1 et ns2
+        run: ssh ns1 named-checkconf -z >/dev/null && ssh ns2 named-checkconf -z >/dev/null

@@ -1,0 +1,214 @@
+title: Projet de synthèse – l'infrastructure complète d'une PME
+level: expert
+order: 4
+tags: [projet, dhcp, dns, nat, nftables, dnat, samba, ssh, sauvegarde, rsync, cron]
+summary: Construire de bout en bout le réseau d'une PME de 15 personnes, passerelle DHCP/DNS/NAT/pare-feu, publication web, serveur de fichiers, SSH durci, sauvegarde automatique, puis recette finale.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** *PME Durand* (15 salariés) emménage dans de nouveaux locaux. Le câblage est fait et les
+  machines sont installées, **mais rien n'est configuré**. Tu es le prestataire : à la fin de la journée,
+  les postes doivent obtenir leur adresse, résoudre les noms internes, sortir sur Internet, partager des
+  fichiers, et le serveur doit être protégé et sauvegardé. Le cahier des charges est donné exercice par
+  exercice ; à toi de choisir les commandes.
+
+  | Machine    | LAN 192.168.100.0/24 | Serveurs 10.100.0.0/24 | WAN 203.0.113.0/24 | Rôle |
+  |------------|----------------------|------------------------|--------------------|------|
+  | `admin`    | .5                   |                        |                    | ton poste |
+  | `poste`    | .20 + adresse DHCP   |                        |                    | poste d'un salarié (client DHCP, publie son bail sur `http://192.168.100.20/bail.txt`) |
+  | `gw`       | .254                 | .254                   | .2 (IP publique)   | passerelle : nftables, dnsmasq installés |
+  | `srv`      |                      | .10                    |                    | serveur : nginx (site public), Samba installé |
+  | `nas`      |                      | .20                    |                    | NAS de sauvegarde (compte `sauvegarde`) |
+  | `internet` |                      |                        | .80                | « Internet » : `http://203.0.113.80` renvoie l'IP source vue de l'extérieur |
+
+  - `ssh <machine>` depuis admin (root, par clé) passe par le réseau d'administration **10.99.6.0/24**
+    (interface `mgmt` de chaque machine) : ne le coupe jamais, les vérifications l'utilisent.
+  - Les interfaces de gw s'appellent `lan`, `serveurs`, `wan` et `mgmt`. Le routage IP y est activé.
+  - Pas de systemd : `dnsmasq` (`pkill dnsmasq; dnsmasq`), `nft -f /etc/nftables.conf`, `smbd`,
+    `kill -HUP $(cat /run/sshd.pid)`.
+exercises:
+  - id: pme-dhcp
+    title: Distribution d'adresses (DHCP)
+    description: |
+      Configure **dnsmasq sur gw** (fichier `/etc/dnsmasq.d/pme.conf`) pour distribuer, **uniquement sur
+      l'interface `lan`** :
+
+      - les adresses `192.168.100.100` à `192.168.100.199`, bail de **12 heures** ;
+      - la passerelle et le DNS `192.168.100.254`, le domaine `pme.lan`.
+
+      Démarre dnsmasq. poste redemande une adresse toutes les 10 secondes : surveille
+      `curl http://192.168.100.20/bail.txt`.
+    hint: "interface=lan / dhcp-range=192.168.100.100,192.168.100.199,255.255.255.0,12h / dhcp-option=option:router,192.168.100.254 / dhcp-option=option:dns-server,192.168.100.254 / domain=pme.lan"
+    checks:
+      - desc: poste a obtenu un bail dans la plage prévue, de 12 h
+        timeout: 40
+        run: |
+          for i in 1 2 3; do b=$(curl -sf --max-time 3 http://192.168.100.20/bail.txt); echo "$b" | grep -qx 'etat=ok' && echo "$b" | grep -Eqx 'ip=192\.168\.100\.1[0-9][0-9]' && echo "$b" | grep -qx 'bail=43200' && exit 0; sleep 10; done; exit 1
+      - desc: Passerelle, DNS et domaine distribués
+        run: |
+          b=$(curl -sf --max-time 3 http://192.168.100.20/bail.txt) && echo "$b" | grep -qx 'routeur=192.168.100.254' && echo "$b" | grep -qx 'dns=192.168.100.254' && echo "$b" | grep -qx 'domaine=pme.lan'
+      - desc: dnsmasq n'écoute pas côté WAN
+        run: ssh gw cat /etc/dnsmasq.d/pme.conf | grep -Eq '^\s*(interface\s*=\s*lan|except-interface\s*=\s*wan)'
+
+  - id: pme-dns
+    title: Noms internes (DNS)
+    description: |
+      Toujours avec dnsmasq sur gw, sers la zone **`pme.lan`** (sans transmettre ces noms à l'extérieur) :
+
+      | Nom                    | Type  | Valeur          |
+      |------------------------|-------|-----------------|
+      | `gw.pme.lan`           | A     | 192.168.100.254 |
+      | `srv.pme.lan`          | A + PTR | 10.100.0.10   |
+      | `nas.pme.lan`          | A + PTR | 10.100.0.20   |
+      | `intranet.pme.lan`     | CNAME | srv.pme.lan     |
+
+      Les postes clients DHCP doivent aussi être enregistrés automatiquement (`poste.pme.lan`).
+      Le DNS doit répondre aux réseaux LAN et serveurs.
+    hint: "local=/pme.lan/ ; domain=pme.lan ; host-record=srv.pme.lan,10.100.0.10 (crée aussi le PTR) ; cname=intranet.pme.lan,srv.pme.lan ; no-resolv ; interface=serveurs (en plus de lan)"
+    checks:
+      - desc: srv, nas et gw résolvent
+        run: |
+          test "$(dig +short @192.168.100.254 srv.pme.lan A)" = 10.100.0.10 && test "$(dig +short @192.168.100.254 nas.pme.lan A)" = 10.100.0.20 && test "$(dig +short @192.168.100.254 gw.pme.lan A)" = 192.168.100.254
+      - desc: intranet.pme.lan est un alias de srv.pme.lan
+        run: dig +noall +answer @192.168.100.254 intranet.pme.lan | grep -Eq 'CNAME\s+srv\.pme\.lan\.'
+      - desc: Résolution inverse de 10.100.0.10
+        run: test "$(dig +short @192.168.100.254 -x 10.100.0.10)" = srv.pme.lan.
+      - desc: poste.pme.lan pointe sur l'adresse DHCP de poste
+        run: |
+          ip=$(curl -sf --max-time 3 http://192.168.100.20/bail.txt | sed -n 's/^ip=//p') && test -n "$ip" && test "$(dig +short @192.168.100.254 poste.pme.lan A)" = "$ip"
+      - desc: Le DNS répond aussi côté serveurs
+        run: test "$(ssh srv dig +short +time=2 +tries=1 @10.100.0.254 nas.pme.lan A)" = 10.100.0.20
+
+  - id: pme-nat
+    title: Accès à Internet (NAT)
+    description: |
+      Les réseaux LAN et serveurs utilisent des adresses privées. Sur gw, mets en place la **traduction
+      d'adresses source** (masquerade) pour tout ce qui sort par `wan`, dans une table nftables écrite dans
+      `/etc/nftables.conf`. Vérifie avec `curl http://203.0.113.80` depuis admin et depuis srv.
+    hint: "table ip nat { chain postrouting { type nat hook postrouting priority srcnat; oifname \"wan\" masquerade } }"
+    checks:
+      - desc: admin sort avec l'IP publique de gw
+        run: curl -sf --max-time 5 http://203.0.113.80/ | grep -qx 'client=203\.0\.113\.2'
+      - desc: srv aussi
+        run: ssh srv curl -sf --max-time 5 http://203.0.113.80/ | grep -qx 'client=203\.0\.113\.2'
+
+  - id: pme-parefeu
+    title: Pare-feu de la passerelle
+    description: |
+      Le fournisseur d'accès route (à tort) les réseaux internes de la PME vers gw : aujourd'hui,
+      `internet` peut joindre directement srv ! Écris une politique de filtrage **par défaut fermée**
+      dans `/etc/nftables.conf` :
+
+      - **input** (vers gw), politique `drop` : boucle locale, connexions établies, ICMP, DHCP et DNS
+        depuis `lan` (et DNS depuis `serveurs`), SSH **uniquement depuis `mgmt`** ;
+      - **forward**, politique `drop` : connexions établies ; `lan` → `serveurs` en TCP 22, 80 et 445 et
+        ICMP ; `lan` → `wan` tout ; `serveurs` → `wan` en TCP 80/443 et ICMP ;
+      - rien n'entre depuis `wan`, sauf ce qui sera publié à l'exercice suivant.
+    hint: "chain input { type filter hook input priority filter; policy drop; iif lo accept; ct state established,related accept; iifname \"mgmt\" tcp dport 22 accept; iifname \"lan\" udp dport { 53, 67 } accept; … }"
+    checks:
+      - desc: Les chaînes input et forward de gw sont en politique drop
+        run: |
+          r=$(ssh gw nft list ruleset) && echo "$r" | grep -Eq 'hook input .*policy drop' && echo "$r" | grep -Eq 'hook forward .*policy drop'
+      - desc: Internet ne joint ni srv ni le SSH de gw
+        run: "! ssh internet nc -z -w 2 10.100.0.10 22 && ! ssh internet nc -z -w 2 10.100.0.10 80 && ! ssh internet nc -z -w 2 203.0.113.2 22"
+      - desc: Le LAN joint toujours srv (SSH, web) et Internet
+        run: nc -z -w 2 10.100.0.10 22 && nc -z -w 2 10.100.0.10 80 && curl -sf --max-time 5 http://203.0.113.80/ | grep -q 'client=203.0.113.2'
+      - desc: DHCP et DNS fonctionnent toujours pour le LAN
+        timeout: 40
+        run: |
+          test "$(dig +short +time=2 +tries=1 @192.168.100.254 srv.pme.lan A)" = 10.100.0.10 || exit 1
+          for i in 1 2 3; do curl -sf --max-time 3 http://192.168.100.20/bail.txt | grep -qx 'etat=ok' && exit 0; sleep 10; done; exit 1
+
+  - id: pme-publication-web
+    title: Publier le site web (DNAT)
+    description: |
+      Le site public est hébergé sur srv (nginx, port 80). Publie-le sur l'**adresse publique** de gw
+      (`203.0.113.2`, port 80) par une **translation de destination** (DNAT), et autorise ce flux (et lui
+      seul) dans la chaîne forward. Teste depuis `internet` : `ssh internet curl http://203.0.113.2/`.
+    hint: "chain prerouting { type nat hook prerouting priority dstnat; iifname \"wan\" tcp dport 80 dnat to 10.100.0.10 } + dans forward : iifname \"wan\" ip daddr 10.100.0.10 tcp dport 80 ct status dnat accept"
+    checks:
+      - desc: Internet voit le site public via l'IP publique
+        run: ssh internet curl -sf --max-time 5 http://203.0.113.2/ | grep -q 'Site public PME Durand'
+      - desc: Aucun autre service de srv n'est exposé
+        run: "! ssh internet nc -z -w 2 203.0.113.2 445 && ! ssh internet nc -z -w 2 10.100.0.10 22"
+
+  - id: pme-partage-fichiers
+    title: Serveur de fichiers (Samba)
+    description: |
+      Sur srv, crée le groupe `employes` et les comptes **`alice`** (`Alice2024!`) et **`bob`**
+      (`Bob2024!`), membres de ce groupe. Partage **`commun`** (`/srv/commun`, propriétaire `root:employes`,
+      droits `2770`) en lecture/écriture pour le groupe `employes` uniquement, sans accès invité. Démarre
+      `smbd`.
+    hint: "useradd -m -G employes alice ; (echo 'Alice2024!'; echo 'Alice2024!') | smbpasswd -s -a alice ; [commun] path = /srv/commun / read only = no / valid users = @employes / guest ok = no ; smbd"
+    checks:
+      - desc: alice écrit dans commun
+        run: |
+          smbclient //10.100.0.10/commun -U 'alice%Alice2024!' -c 'put /etc/hostname verif-alice.txt; rm verif-alice.txt' >/dev/null 2>&1
+      - desc: bob liste commun, l'accès anonyme est refusé
+        run: |
+          smbclient //10.100.0.10/commun -U 'bob%Bob2024!' -c ls >/dev/null 2>&1 && ! smbclient -N //10.100.0.10/commun -c ls >/dev/null 2>&1
+      - desc: Droits Unix du dossier partagé
+        run: test "$(ssh srv stat -c %a:%U:%G /srv/commun)" = 2770:root:employes
+
+  - id: pme-ssh-durci
+    title: Durcir l'accès SSH au serveur
+    description: |
+      Sur srv, durcis sshd dans un fichier `/etc/ssh/sshd_config.d/durcissement.conf` :
+      root seulement par clé, **aucune** authentification par mot de passe, 3 essais maximum, pas de
+      redirection X11, déconnexion des sessions inactives (`ClientAliveInterval 300`,
+      `ClientAliveCountMax 2`). Teste (`sshd -t`) **avant** de recharger : une erreur te couperait l'accès.
+    hint: "PermitRootLogin prohibit-password / PasswordAuthentication no / KbdInteractiveAuthentication no / MaxAuthTries 3 / X11Forwarding no ; sshd -t && kill -HUP $(cat /run/sshd.pid)"
+    checks:
+      - desc: Configuration effective de sshd conforme
+        run: |
+          c=$(ssh srv sshd -T) && echo "$c" | grep -Eqx 'permitrootlogin (prohibit-password|without-password)' && echo "$c" | grep -qx 'passwordauthentication no' && echo "$c" | grep -qx 'maxauthtries 3' && echo "$c" | grep -qx 'x11forwarding no' && echo "$c" | grep -qx 'clientaliveinterval 300'
+      - desc: alice ne peut pas se connecter par mot de passe (le sshd rechargé l'applique)
+        run: |
+          ssh srv id alice >/dev/null && ssh srv cat /etc/ssh/sshd_config.d/durcissement.conf | grep -qi '^PasswordAuthentication no' && ! sshpass -p 'Alice2024!' ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive alice@10.99.6.10 true 2>/dev/null
+
+  - id: pme-sauvegarde
+    title: Sauvegarde automatique vers le NAS
+    description: |
+      Le partage `commun` doit être copié chaque nuit sur le NAS :
+
+      1. sur srv, génère une clé SSH pour root et autorise-la pour le compte **`sauvegarde`** de nas ;
+         enregistre la clé d'hôte de nas (une tâche cron ne peut pas répondre « yes ») ;
+      2. écris `/usr/local/bin/sauvegarde-commun.sh` qui fait un miroir
+         (`rsync -a --delete`) de `/srv/commun/` vers `sauvegarde@10.100.0.20:/sauvegardes/commun/` ;
+      3. planifie-le dans la crontab de root de srv **chaque nuit à 2 h 30**.
+    hint: "ssh-keygen -t ed25519 -N '' -f /root/.ssh/id_ed25519 ; ssh-keyscan 10.100.0.20 >> /root/.ssh/known_hosts ; clé publique dans ~sauvegarde/.ssh/authorized_keys sur nas ; crontab : 30 2 * * * /usr/local/bin/sauvegarde-commun.sh"
+    checks:
+      - desc: Tâche planifiée à 2 h 30
+        run: ssh srv crontab -l 2>/dev/null | grep -Eq '^30 +2 +\* +\* +\* +/usr/local/bin/sauvegarde-commun\.sh'
+      - desc: Le script copie bien un nouveau fichier sur le NAS (en tant que sauvegarde)
+        timeout: 60
+        run: |
+          v=$(date +%s)
+          ssh srv "echo $v > /srv/commun/.verif-sauvegarde && /usr/local/bin/sauvegarde-commun.sh" </dev/null >/dev/null 2>&1
+          test "$(ssh nas cat /sauvegardes/commun/.verif-sauvegarde 2>/dev/null)" = "$v" && test "$(ssh nas stat -c %U /sauvegardes/commun/.verif-sauvegarde)" = sauvegarde
+      - desc: Le miroir supprime les fichiers effacés à la source
+        timeout: 60
+        run: |
+          ssh srv "rm -f /srv/commun/.verif-sauvegarde && /usr/local/bin/sauvegarde-commun.sh" </dev/null >/dev/null 2>&1
+          ! ssh nas test -e /sauvegardes/commun/.verif-sauvegarde
+
+  - id: pme-recette
+    title: Recette finale et persistance
+    description: |
+      Avant de partir, assure-toi que tout survivrait à un redémarrage de gw : le jeu de règles complet
+      (NAT, DNAT, filtrage) est dans `/etc/nftables.conf`, dont la syntaxe est valide. Les vérifications
+      **rechargent ce fichier** puis rejouent les tests clés. Rédige aussi le dossier d'exploitation
+      `/root/dossier-exploitation.txt` avec au minimum les lignes `passerelle=`, `dns=`, `plage_dhcp=`,
+      `serveur_fichiers=` et `sauvegarde=` (description libre de chaque élément).
+    hint: "nft -c -f /etc/nftables.conf ; nft -f /etc/nftables.conf (le fichier doit commencer par flush ruleset)"
+    checks:
+      - desc: nftables.conf est valide et se recharge
+        run: ssh gw 'nft -c -f /etc/nftables.conf && nft -f /etc/nftables.conf'
+      - desc: Après rechargement, NAT, DNAT et filtrage sont toujours en place
+        run: |
+          curl -sf --max-time 5 http://203.0.113.80/ | grep -q 'client=203.0.113.2' && ssh internet curl -sf --max-time 5 http://203.0.113.2/ | grep -q 'Site public PME Durand' && ! ssh internet nc -z -w 2 10.100.0.10 22
+      - desc: Le dossier d'exploitation est rempli
+        run: |
+          for k in passerelle dns plage_dhcp serveur_fichiers sauvegarde; do grep -Eq "^$k *= *.{3,}" /root/dossier-exploitation.txt || exit 1; done

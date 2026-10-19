@@ -1,0 +1,151 @@
+title: Bastion SSH, durcissement et tunnels
+level: intermediaire
+order: 4
+tags: [ssh, bastion, proxyjump, durcissement, tunnel, socks, sécurité]
+summary: Durcir sshd sur un bastion, rebondir avec ProxyJump, tunnels local, dynamique (SOCKS) et inverse, clé restreinte.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Suite à un audit, *Ateliers Durand* isole ses serveurs dans un réseau **interne** que le
+  réseau bureautique ne peut plus joindre directement. Le seul point d'entrée est un **bastion** SSH, qui
+  doit être durci. Tu dois ensuite continuer à travailler sur les serveurs internes à travers lui.
+
+  **Topologie.**
+
+  ```
+   bureau 10.50.1.0/24              interne 10.50.2.0/24
+   admin 10.50.1.10 ── bastion ──┬── srv-interne 10.50.2.10 (intranet web)
+                    .1.2    .2.2 └── srv-bdd     10.50.2.20 (console sur 127.0.0.1:8080)
+  ```
+
+  Compte `tech` / `Tech2024!` sur bastion, srv-interne et srv-bdd. Sur le **bastion**, `tech` a `sudo` sans
+  mot de passe. Ton terminal est `root` sur admin, qui ne voit **pas** le réseau interne.
+
+  ⚠️ Sur le bastion, sshd tourne en arrière-plan : avant chaque rechargement
+  (`sudo kill -HUP $(cat /run/sshd.pid)`), **teste la configuration** avec `sudo sshd -t`. Une erreur
+  arrêterait sshd et te couperait l'accès (il faudrait réinitialiser le lab) : c'est exactement ce qui
+  arrive en production.
+exercises:
+  - id: cle-bastion
+    title: Accès par clé au bastion
+    description: |
+      Génère une clé ed25519 sur admin (`~/.ssh/id_ed25519`, sans passphrase pour le lab) et installe-la
+      pour `tech` sur le bastion.
+    hint: ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N '' && ssh-copy-id tech@bastion
+    checks:
+      - desc: Connexion par clé au bastion
+        run: ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 tech@bastion true
+
+  - id: bastion-durcissement
+    title: Durcir le serveur SSH du bastion
+    description: |
+      Sur le bastion, crée `/etc/ssh/sshd_config.d/10-durcissement.conf` avec :
+
+      | Directive                      | Valeur    | Pourquoi                                   |
+      |--------------------------------|-----------|--------------------------------------------|
+      | `PermitRootLogin`              | `no`      | root ne se connecte jamais directement     |
+      | `PasswordAuthentication`       | `no`      | clés uniquement : plus de force brute      |
+      | `KbdInteractiveAuthentication` | `no`      | idem                                       |
+      | `MaxAuthTries`                 | `3`       | limite les essais par connexion            |
+      | `LoginGraceTime`               | `30`      | délai pour s'authentifier                  |
+      | `AllowUsers`                   | `tech`    | liste blanche des comptes                  |
+      | `X11Forwarding`                | `no`      | inutile sur un bastion                     |
+      | `LogLevel`                     | `VERBOSE` | journalise l'empreinte de la clé utilisée  |
+
+      Ne désactive **pas** le transfert TCP (`AllowTcpForwarding`) : le bastion sert justement à rebondir.
+      Teste (`sudo sshd -t`) puis recharge sshd **sans fermer ta session** ; ouvre une seconde connexion pour
+      vérifier que tu peux toujours entrer.
+    hint: "sudo sshd -t && sudo kill -HUP $(cat /run/sshd.pid)  ;  sudo sshd -T | grep -i passwordauthentication"
+    checks:
+      - desc: Configuration effective de sshd conforme
+        run: |
+          c=$(ssh -o BatchMode=yes tech@bastion 'sudo -n sshd -T' 2>/dev/null) || exit 1
+          for l in 'permitrootlogin no' 'passwordauthentication no' 'kbdinteractiveauthentication no' 'maxauthtries 3' 'logingracetime 30' 'allowusers tech' 'x11forwarding no' 'loglevel VERBOSE'; do
+            echo "$c" | grep -qix "$l" || { echo "manquant : $l"; exit 1; }
+          done
+      - desc: sshd en cours d'exécution refuse désormais les mots de passe
+        run: ssh -o BatchMode=yes -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive tech@bastion true 2>&1 | grep -q 'Permission denied (publickey)'
+      - desc: La connexion par clé fonctionne toujours
+        run: ssh -o BatchMode=yes tech@bastion true
+
+  - id: proxyjump
+    title: Rebondir avec ProxyJump
+    description: |
+      1. Installe ta clé pour `tech` sur `srv-interne` et `srv-bdd` **à travers le bastion**
+         (`ssh-copy-id -o ProxyJump=tech@bastion tech@srv-interne`).
+      2. Dans `~/.ssh/config`, crée les alias `bastion` (10.50.1.2, utilisateur tech), `interne`
+         (srv-interne) et `bdd` (srv-bdd), ces deux derniers avec l'utilisateur `tech` et
+         `ProxyJump bastion`.
+
+      `ssh interne` doit ouvrir une session sur srv-interne en une seule commande.
+    hint: "Host interne / HostName srv-interne / User tech / ProxyJump bastion"
+    checks:
+      - desc: ssh interne arrive sur srv-interne
+        run: test "$(ssh -o BatchMode=yes interne hostname 2>/dev/null)" = srv-interne
+      - desc: ssh bdd arrive sur srv-bdd
+        run: test "$(ssh -o BatchMode=yes bdd hostname 2>/dev/null)" = srv-bdd
+      - desc: Les alias utilisent ProxyJump
+        run: ssh -G interne | grep -qi '^proxyjump bastion' && ssh -G bdd | grep -qi '^proxyjump bastion'
+
+  - id: tunnel-local
+    title: Tunnel local vers une console locale
+    description: |
+      La console d'administration de la base de données n'écoute que sur `127.0.0.1:8080` **de srv-bdd** :
+      même depuis le bastion, on ne peut pas l'atteindre. Ouvre en arrière-plan (`-f -N`) un **tunnel
+      local** pour que `http://127.0.0.1:9080` sur admin affiche cette console.
+    hint: ssh -f -N -L 9080:127.0.0.1:8080 bdd
+    checks:
+      - desc: http://127.0.0.1:9080 sur admin affiche la console BDD
+        run: curl -fsS -m5 http://127.0.0.1:9080/ | grep -q 'Console BDD'
+
+  - id: socks
+    title: Tunnel dynamique (proxy SOCKS)
+    description: |
+      Pour consulter les sites web du réseau interne depuis admin sans créer un tunnel par service, ouvre un
+      **tunnel dynamique** (proxy SOCKS 5) sur le port local **1080**, via le bastion.
+
+      Teste : `curl --socks5-hostname 127.0.0.1:1080 http://srv-interne/` (le nom est résolu côté bastion).
+    hint: ssh -f -N -D 1080 bastion
+    checks:
+      - desc: L'intranet interne est accessible via le proxy SOCKS
+        run: curl -fsS -m5 --socks5-hostname 127.0.0.1:1080 http://srv-interne/ | grep -q 'Intranet interne'
+
+  - id: tunnel-inverse
+    title: Tunnel inverse depuis le réseau interne
+    description: |
+      Scénario d'assistance : un serveur interne doit **lui-même** ouvrir un accès vers le bastion (comme
+      un serveur derrière un pare-feu qui n'accepte aucune connexion entrante).
+
+      1. Sur `srv-interne`, en tant que `tech`, génère une clé et autorise-la sur le bastion (attention : le
+         bastion refuse désormais les mots de passe, passe par admin pour copier la clé publique).
+      2. Depuis `srv-interne`, ouvre en arrière-plan un **tunnel inverse** : le port **9022** du bastion
+         (sur sa boucle locale) doit mener au port 22 de srv-interne.
+
+      Depuis le bastion, `ssh -p 9022 tech@127.0.0.1` atteindra alors srv-interne.
+    hint: "Sur srv-interne : ssh -f -N -R 9022:127.0.0.1:22 tech@bastion"
+    checks:
+      - desc: Le port 9022 du bastion mène au serveur SSH de srv-interne
+        run: ssh -o BatchMode=yes tech@bastion 'timeout 3 nc 127.0.0.1 9022 </dev/null | head -1' | grep -q '^SSH-2.0'
+      - desc: Le tunnel a été ouvert depuis srv-interne
+        run: ssh -o BatchMode=yes interne 'pgrep -af "ssh .*-R" ' | grep -q '9022'
+
+  - id: cle-restreinte
+    title: Clé restreinte pour un script automatique
+    description: |
+      Un script de supervision doit pouvoir lire la charge de `srv-interne` sans jamais obtenir de shell.
+      1. Génère une seconde clé sur admin : `~/.ssh/id_supervision` (sans passphrase).
+      2. Ajoute-la dans `~/.ssh/authorized_keys` de `tech` sur srv-interne avec les options
+         `command="uptime",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding` (ou
+         `restrict,command="uptime"`).
+
+      Quelle que soit la commande demandée, cette clé ne doit exécuter que `uptime`.
+    hint: "Ligne dans authorized_keys : restrict,command=\"uptime\" ssh-ed25519 AAAA... root@admin"
+    checks:
+      - desc: La clé de supervision n'exécute que uptime
+        run: |
+          out=$(ssh -o BatchMode=yes -o IdentitiesOnly=yes -i /root/.ssh/id_supervision -J tech@bastion tech@srv-interne 'cat /etc/passwd' 2>/dev/null)
+          echo "$out" | grep -q 'load average' && ! echo "$out" | grep -q 'root:x'
+      - desc: La clé principale donne toujours un shell
+        run: ssh -o BatchMode=yes interne 'cat /etc/hostname' | grep -qx srv-interne

@@ -1,0 +1,162 @@
+title: Projet de synthèse – réseau multisite (VLAN, WireGuard, OSPF, filtrage)
+level: expert
+order: 5
+tags: [projet, vlan, router-on-a-stick, wireguard, ospf, frrouting, nftables, multisite]
+summary: Segmenter le siège en VLAN routés sur un seul lien, relier l'agence par WireGuard, y faire tourner OSPF, filtrer les flux inter-sites, isoler un VLAN invités et rendre le tout persistant.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** *Ateliers Durand* a racheté une entreprise à Paris, qui devient son **agence**. Au
+  **siège** (Lyon), le réseau à plat doit être segmenté en VLAN. Les deux sites seront reliés par un
+  **tunnel WireGuard** à travers Internet, et les routes seront échangées dynamiquement par **OSPF**
+  (d'autres agences suivront : pas de routes statiques entre sites).
+
+  ```
+  SIÈGE (lien unique tagué « lan »)                         AGENCE 10.2.0.0/24
+   pc-siege  VLAN 10  10.1.10.10 ┐                             ┌ pc-agence 10.2.0.10
+   srv-siege VLAN 20  10.1.20.10 ├─ lan ─ r-siege ─ wan ═══ wan ─ r-agence ─ lan ┘
+   invite    VLAN 30  10.1.30.50 ┘        198.18.0.11  Internet  198.18.0.12  10.2.0.254
+  ```
+
+  | Élément | Valeur |
+  |---|---|
+  | Passerelles VLAN du siège (sur r-siege) | `10.1.10.254`, `10.1.20.254`, `10.1.30.254` (/24) |
+  | Tunnel `wg0` | r-siege `172.31.255.1/30` (écoute UDP 51820), r-agence `172.31.255.2/30` |
+  | OSPF | aire 0, router-id `1.1.1.1` (r-siege) et `2.2.2.2` (r-agence) |
+
+  - Les hôtes du siège sont déjà configurés dans leur VLAN (interface `lan.<vlan>`) ; pc-agence a pour
+    passerelle 10.2.0.254. Le routage IP est activé sur les deux routeurs.
+  - `ssh <machine>` depuis admin passe par un réseau d'administration séparé (10.99.7.0/24).
+  - FRRouting tourne sur les routeurs (`vtysh`). WireGuard : `wg-quick up wg0` (bascule seul sur
+    **wireguard-go** si le noyau n'a pas le module).
+exercises:
+  - id: ms-vlan-siege
+    title: Routage inter-VLAN au siège (router-on-a-stick)
+    description: |
+      Sur **r-siege**, crée les sous-interfaces 802.1Q **`lan.10`** et **`lan.20`** sur le lien `lan`, avec
+      les adresses `10.1.10.254/24` et `10.1.20.254/24`. pc-siege (VLAN 10) doit alors joindre sa
+      passerelle et consulter le serveur web de srv-siege (VLAN 20), en passant par r-siege.
+    hint: "ip link add link lan name lan.10 type vlan id 10 ; ip addr add 10.1.10.254/24 dev lan.10 ; ip link set lan.10 up (idem pour 20)"
+    checks:
+      - desc: lan.10 et lan.20 sont des VLAN 10 et 20 avec les bonnes adresses
+        run: |
+          ssh r-siege ip -d addr show lan.10 | grep -q 'vlan protocol 802.1Q id 10' && ssh r-siege ip -4 addr show lan.10 | grep -q 'inet 10\.1\.10\.254/24' && ssh r-siege ip -d addr show lan.20 | grep -q 'vlan protocol 802.1Q id 20' && ssh r-siege ip -4 addr show lan.20 | grep -q 'inet 10\.1\.20\.254/24'
+      - desc: pc-siege et srv-siege joignent leur passerelle
+        run: ssh pc-siege ping -c 2 -W 2 10.1.10.254 >/dev/null && ssh srv-siege ping -c 2 -W 2 10.1.20.254 >/dev/null
+      - desc: pc-siege consulte le serveur du VLAN 20
+        run: ssh pc-siege curl -sf --max-time 5 http://10.1.20.10/ | grep -q 'Serveur du siege'
+
+  - id: ms-tunnel-wireguard
+    title: Tunnel WireGuard entre les sites
+    description: |
+      Sur chaque routeur, génère une paire de clés et écris `/etc/wireguard/wg0.conf` (droits `600`) :
+      adresse du tunnel, `ListenPort = 51820`, et un `[Peer]` avec la clé publique et l'`Endpoint` WAN
+      de l'autre routeur. Comme c'est OSPF qui choisira les routes, mets **`AllowedIPs = 0.0.0.0/0`**
+      (un seul pair : tout ce qui part dans le tunnel va vers lui ; cela laisse aussi passer le
+      multicast OSPF) **et `Table = off`** dans `[Interface]` pour que `wg-quick` n'ajoute aucune route.
+      Monte le tunnel des deux côtés.
+    hint: "umask 077 ; wg genkey | tee privatekey | wg pubkey > publickey ; [Interface] Address = 172.31.255.1/30 / ListenPort = 51820 / PrivateKey = … / Table = off ; [Peer] PublicKey = … / Endpoint = 198.18.0.12:51820 / AllowedIPs = 0.0.0.0/0 ; wg-quick up wg0"
+    checks:
+      - desc: wg0.conf en 600 avec Table = off sur les deux routeurs
+        run: |
+          for r in r-siege r-agence; do test "$(ssh $r stat -c %a /etc/wireguard/wg0.conf)" = 600 && ssh $r cat /etc/wireguard/wg0.conf | grep -Eqi '^\s*Table\s*=\s*off' || exit 1; done
+      - desc: Les routeurs se joignent dans le tunnel
+        run: ssh r-siege ping -c 2 -W 2 172.31.255.2 >/dev/null && ssh r-agence ping -c 2 -W 2 172.31.255.1 >/dev/null
+      - desc: Poignée de main établie
+        run: ssh r-siege wg show wg0 latest-handshakes | awk '$2 > 0 {ok=1} END {exit !ok}'
+
+  - id: ms-ospf
+    title: OSPF dans le tunnel
+    description: |
+      Configure OSPF (aire 0) avec `vtysh` sur les deux routeurs :
+
+      - router-id `1.1.1.1` (r-siege) et `2.2.2.2` (r-agence) ;
+      - adjacence **uniquement dans le tunnel** : `wg0` en type de réseau `point-to-point` ;
+      - annonce des réseaux du tunnel, des VLAN 10 et 20 du siège et du LAN de l'agence, avec les
+        interfaces LAN en **passive** (pas d'hello vers les postes) ;
+      - **jamais** d'OSPF sur `wan` ni `mgmt`.
+
+      Les routes vers le site distant doivent apparaître en `O` dans `show ip route`.
+    hint: "router ospf / ospf router-id 1.1.1.1 / network 172.31.255.0/30 area 0 / network 10.1.10.0/24 area 0 / passive-interface lan.10 … ; interface wg0 / ip ospf network point-to-point"
+    checks:
+      - desc: Adjacence Full via wg0
+        timeout: 90
+        run: |
+          for i in $(seq 1 8); do ssh r-siege "vtysh -c 'show ip ospf neighbor'" | grep -q 'Full.*wg0' && ssh r-agence "vtysh -c 'show ip ospf neighbor'" | grep -q 'Full.*wg0' && exit 0; sleep 10; done; exit 1
+      - desc: r-agence apprend les VLAN 10 et 20 du siège par OSPF, r-siege apprend l'agence
+        run: |
+          a=$(ssh r-agence "vtysh -c 'show ip route ospf'") && echo "$a" | grep -q '10\.1\.10\.0/24' && echo "$a" | grep -q '10\.1\.20\.0/24' && ssh r-siege "vtysh -c 'show ip route ospf'" | grep -q '10\.2\.0\.0/24'
+      - desc: Router-id corrects, pas d'OSPF sur wan ni mgmt
+        run: |
+          ssh r-siege "vtysh -c 'show ip ospf'" | grep -q 'Router ID: 1.1.1.1' && ssh r-agence "vtysh -c 'show ip ospf'" | grep -q 'Router ID: 2.2.2.2' && for r in r-siege r-agence; do ssh $r "vtysh -c 'show ip ospf interface'" > /tmp/ospf-$r.txt; ! grep -Eq '^(wan|mgmt) is up' /tmp/ospf-$r.txt || exit 1; done
+
+  - id: ms-bout-en-bout
+    title: Communication de bout en bout entre les sites
+    description: |
+      Vérifie que pc-agence joint pc-siege et consulte le serveur du siège, et que le trafic passe bien
+      **dans le tunnel** (`traceroute -n` montre l'adresse de tunnel du routeur distant ;
+      `tcpdump -ni wan` sur un routeur ne montre que de l'UDP 51820).
+    hint: "ssh pc-agence traceroute -n 10.1.20.10 ; si ça bloque : routes OSPF, AllowedIPs, tcpdump -ni wg0"
+    checks:
+      - desc: pc-agence consulte le serveur du siège
+        run: ssh pc-agence curl -sf --max-time 5 http://10.1.20.10/ | grep -q 'Serveur du siege'
+      - desc: pc-siege pingue pc-agence
+        run: ssh pc-siege ping -c 2 -W 2 10.2.0.10 >/dev/null
+      - desc: Le chemin passe par le tunnel (172.31.255.1)
+        run: ssh pc-agence traceroute -n -w 2 -q 1 10.1.20.10 | grep -q '172\.31\.255\.1'
+
+  - id: ms-filtrage-intersites
+    title: Filtrage des flux venant de l'agence
+    description: |
+      La sécurité demande que l'agence n'accède au siège **qu'au serveur web** de srv-siege (TCP 80) et
+      au ping vers le VLAN serveurs ; les postes du siège (VLAN 10) ne doivent pas être joignables
+      depuis l'agence. Le siège, lui, peut tout initier vers l'agence. Sur **r-siege**, écris ces règles
+      dans `/etc/nftables.conf` (chaîne forward en politique `drop`) et applique-les.
+      N'oublie pas le trafic entre VLAN 10 et VLAN 20 du siège, qui doit continuer à fonctionner.
+    hint: "chain forward { type filter hook forward priority filter; policy drop; ct state established,related accept; iifname \"lan.*\" oifname { \"lan.*\", \"wg0\" } accept; iifname \"wg0\" oifname \"lan.20\" tcp dport 80 accept; iifname \"wg0\" oifname \"lan.20\" icmp type echo-request accept }"
+    checks:
+      - desc: La chaîne forward de r-siege est en politique drop
+        run: ssh r-siege nft list ruleset | grep -Eq 'hook forward .*policy drop'
+      - desc: L'agence accède au web du siège et pingue srv-siege
+        run: ssh pc-agence curl -sf --max-time 5 http://10.1.20.10/ | grep -q 'Serveur du siege' && ssh pc-agence ping -c 2 -W 2 10.1.20.10 >/dev/null
+      - desc: L'agence ne joint ni le SSH de srv-siege ni pc-siege
+        run: "! ssh pc-agence nc -z -w 2 10.1.20.10 22 && ! ssh pc-agence nc -z -w 2 10.1.10.10 22 && ! ssh pc-agence ping -c 1 -W 2 10.1.10.10 >/dev/null"
+      - desc: Le siège joint toujours l'agence et le VLAN 20
+        run: ssh pc-siege ping -c 2 -W 2 10.2.0.10 >/dev/null && ssh pc-siege curl -sf --max-time 5 http://10.1.20.10/ | grep -q 'Serveur du siege'
+
+  - id: ms-vlan-invites
+    title: VLAN invités isolé
+    description: |
+      Le VLAN **30** accueille le Wi-Fi des visiteurs (hôte `invite`, 10.1.30.50). Crée `lan.30`
+      (`10.1.30.254/24`) sur r-siege. Les invités doivent joindre leur passerelle mais **aucun** réseau
+      interne (VLAN 10, VLAN 20, agence), et ce réseau ne doit **pas** être annoncé en OSPF.
+    hint: "ip link add link lan name lan.30 type vlan id 30 … ; dans forward : iifname \"lan.30\" drop (avant la règle qui autorise lan.*) ; ne pas ajouter 10.1.30.0/24 dans router ospf"
+    checks:
+      - desc: invite joint sa passerelle 10.1.30.254
+        run: ssh r-siege ip -d link show lan.30 | grep -q 'id 30' && ssh invite ping -c 2 -W 2 10.1.30.254 >/dev/null
+      - desc: invite ne joint ni le siège ni l'agence
+        run: "! ssh invite ping -c 1 -W 2 10.1.20.10 >/dev/null && ! ssh invite ping -c 1 -W 2 10.1.10.10 >/dev/null && ! ssh invite ping -c 1 -W 2 10.2.0.10 >/dev/null && ! ssh invite nc -z -w 2 10.1.20.10 80"
+      - desc: 10.1.30.0/24 n'est pas connu de r-agence
+        run: "! ssh r-agence ip route | grep -q '10\\.1\\.30\\.0'"
+
+  - id: ms-persistance
+    title: Tout survit au redémarrage
+    description: |
+      Rends la configuration persistante sur les routeurs (le démarrage relance automatiquement
+      `/usr/local/bin/vlans-siege.sh` s'il est exécutable, `wg-quick up wg0` et `nft -f /etc/nftables.conf`) :
+
+      - script **idempotent** `/usr/local/bin/vlans-siege.sh` sur r-siege qui recrée `lan.10`, `lan.20`
+        et `lan.30` avec leurs adresses (sans erreur s'il est relancé) ;
+      - configuration FRR enregistrée (`write memory`) sur les deux routeurs ;
+      - `/etc/nftables.conf` de r-siege valide.
+    hint: "ip link show lan.10 >/dev/null 2>&1 || ip link add link lan name lan.10 type vlan id 10 ; ip addr replace 10.1.10.254/24 dev lan.10 ; ip link set lan.10 up ; vtysh -c 'write memory'"
+    checks:
+      - desc: vlans-siege.sh est exécutable, idempotent et couvre les trois VLAN
+        run: |
+          ssh r-siege 'test -x /usr/local/bin/vlans-siege.sh && /usr/local/bin/vlans-siege.sh && /usr/local/bin/vlans-siege.sh' && ssh r-siege cat /usr/local/bin/vlans-siege.sh > /tmp/vlans.sh && for v in 10 20 30; do grep -q "lan\.$v" /tmp/vlans.sh || exit 1; done
+      - desc: La configuration OSPF est enregistrée sur les deux routeurs
+        run: for r in r-siege r-agence; do ssh $r cat /etc/frr/frr.conf | grep -q '^router ospf' || exit 1; done
+      - desc: nftables.conf de r-siege est valide et filtre
+        run: ssh r-siege 'nft -c -f /etc/nftables.conf' && ssh r-siege cat /etc/nftables.conf | grep -q 'policy drop'

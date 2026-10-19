@@ -1,0 +1,179 @@
+title: Heure et journaux centralisés (chrony, rsyslog)
+level: intermediaire
+order: 3
+tags: [ntp, chrony, rsyslog, syslog, journalisation, logrotate]
+summary: Serveur NTP interne, synchronisation des serveurs, serveur rsyslog central, transfert fiable des journaux, filtrage et investigation.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Après un incident, impossible de reconstituer la chronologie : chaque serveur d'*Ateliers
+  Durand* garde ses journaux localement et leurs horloges ne sont pas d'accord. Tu mets en place une
+  **source de temps interne** et un **serveur de journaux central** sur `srv-log`, puis tu y raccordes les
+  serveurs.
+
+  **Machines** (réseau `10.40.0.0/24`, accès `ssh <machine>` en root par clé depuis admin) :
+
+  | Machine   | Adresse    | Rôle                                   |
+  |-----------|------------|----------------------------------------|
+  | `admin`   | 10.40.0.5  | ton poste                              |
+  | `srv-log` | 10.40.0.10 | futur serveur NTP et syslog central    |
+  | `srv-web` | 10.40.0.20 | serveur intranet (client)              |
+  | `srv-bdd` | 10.40.0.30 | serveur de base de données (client)    |
+
+  `chrony` et `rsyslog` sont installés partout mais ni configurés ni démarrés.
+
+  **Particularités des conteneurs :** un conteneur ne peut pas régler l'horloge de l'hôte. Démarre
+  chrony avec **`chronyd -x`** (il mesure et sert l'heure sans toucher à l'horloge système). Redémarrage :
+  `pkill chronyd; sleep 1; chronyd -x`. Pour rsyslog : `rsyslogd -N1` (vérifier la configuration), `rsyslogd`
+  (démarrer), `pkill rsyslogd; sleep 1; rsyslogd` (redémarrer). rsyslog s'exécute sous l'utilisateur
+  `syslog` : les dossiers où il écrit doivent lui appartenir.
+exercises:
+  - id: serveur-ntp
+    title: Serveur de temps interne
+    description: |
+      Sur **srv-log**, configure chrony (`/etc/chrony/chrony.conf`) pour qu'il serve l'heure au réseau
+      `10.40.0.0/24` (`allow`) même sans source extérieure (`local stratum 8`). Supprime ou commente les
+      sources `pool` d'Internet, inaccessibles ici. Démarre `chronyd -x`.
+
+      Teste depuis admin : `chronyd -Q -t 15 'server 10.40.0.10 iburst'` affiche le décalage mesuré.
+    hint: "allow 10.40.0.0/24  et  local stratum 8  dans chrony.conf, pools commentés"
+    checks:
+      - desc: chronyd tourne sur srv-log
+        run: ssh srv-log pgrep -x chronyd >/dev/null
+      - desc: srv-log répond aux requêtes NTP
+        timeout: 40
+        run: timeout 30 chronyd -Q -t 20 'server 10.40.0.10 iburst' 2>&1 | grep -qi 'clock wrong\|offset'
+
+  - id: clients-ntp
+    title: Synchroniser les serveurs
+    description: |
+      Sur **srv-web** et **srv-bdd**, configure chrony pour utiliser **uniquement** `srv-log` comme source
+      (`server srv-log iburst`) et démarre-le. `chronyc sources` doit afficher srv-log précédé de `^*`
+      (source sélectionnée).
+    hint: "Remplace les lignes pool par server 10.40.0.10 iburst, puis chronyd -x ; chronyc -n sources"
+    checks:
+      - desc: srv-web et srv-bdd ont sélectionné srv-log (attente jusqu'à 60 s)
+        timeout: 120
+        run: |
+          for h in srv-web srv-bdd; do
+            ok=0
+            for i in $(seq 1 20); do
+              ssh $h 'chronyc -n sources 2>/dev/null' | grep -q '^\^\* *10\.40\.0\.10' && { ok=1; break; }
+              sleep 3
+            done
+            test $ok = 1 || { echo "$h non synchronisé"; exit 1; }
+          done
+      - desc: Aucune autre source configurée
+        run: |
+          for h in srv-web srv-bdd; do
+            test "$(ssh $h 'chronyc -n sources 2>/dev/null' | grep -c '^\^')" = 1 || exit 1
+          done
+
+  - id: serveur-syslog
+    title: Serveur syslog central
+    description: |
+      Sur **srv-log**, crée `/etc/rsyslog.d/10-central.conf` qui :
+      - charge les modules de réception **TCP** et **UDP** sur le port **514** (`imtcp`, `imudp`) ;
+      - range les messages **reçus du réseau** dans `/var/log/central/<hôte>/<programme>.log`, grâce à un
+        `template` dynamique (`%HOSTNAME%`, `%PROGRAMNAME%`) et un `ruleset` attaché aux entrées réseau
+        (les journaux locaux de srv-log ne doivent pas s'y retrouver).
+
+      Crée `/var/log/central` (propriétaire `syslog:adm`) et démarre rsyslog. Teste depuis admin :
+      `logger -n 10.40.0.10 -P 514 -T -t testadmin "message de test"`.
+    hint: "template(name=\"ParHote\" type=\"string\" string=\"/var/log/central/%HOSTNAME%/%PROGRAMNAME%.log\") ; ruleset(name=\"distant\") { action(type=\"omfile\" dynaFile=\"ParHote\") } ; input(type=\"imtcp\" port=\"514\" ruleset=\"distant\")"
+    checks:
+      - desc: srv-log écoute en TCP 514
+        run: nc -z -w3 10.40.0.10 514
+      - desc: Un message envoyé par admin en TCP est rangé dans central/admin/
+        run: |
+          m="verif-tcp-$$-$(date +%s)"
+          logger -n 10.40.0.10 -P 514 -T -t verifadmin "$m"
+          sleep 2
+          ssh srv-log "grep -q '$m' /var/log/central/admin/verifadmin.log"
+      - desc: Un message envoyé en UDP est aussi reçu
+        run: |
+          m="verif-udp-$$-$(date +%s)"
+          logger -n 10.40.0.10 -P 514 -d -t verifudp "$m"
+          sleep 2
+          ssh srv-log "grep -rq '$m' /var/log/central/"
+
+  - id: transfert
+    title: Transférer les journaux des serveurs
+    description: |
+      Sur **srv-web** et **srv-bdd**, crée `/etc/rsyslog.d/90-central.conf` pour envoyer **tous** les
+      messages à srv-log en **TCP** (`omfwd`), avec une **file d'attente** pour ne rien perdre si srv-log
+      redémarre : `queue.type="LinkedList"`, `queue.filename="central"`, `action.resumeRetryCount="-1"`.
+      Les journaux restent aussi écrits localement. Démarre rsyslog sur les deux serveurs.
+    hint: "*.* action(type=\"omfwd\" target=\"10.40.0.10\" port=\"514\" protocol=\"tcp\" queue.type=\"LinkedList\" queue.filename=\"central\" action.resumeRetryCount=\"-1\")"
+    checks:
+      - desc: Un message de srv-web arrive dans central/srv-web/
+        run: |
+          m="verif-web-$$-$(date +%s)"
+          ssh srv-web "logger -t appweb '$m'"
+          sleep 3
+          ssh srv-log "grep -q '$m' /var/log/central/srv-web/appweb.log"
+      - desc: Un message de srv-bdd arrive dans central/srv-bdd/
+        run: |
+          m="verif-bdd-$$-$(date +%s)"
+          ssh srv-bdd "logger -t appbdd '$m'"
+          sleep 3
+          ssh srv-log "grep -q '$m' /var/log/central/srv-bdd/appbdd.log"
+      - desc: Le transfert utilise TCP avec une file d'attente
+        run: ssh srv-web 'cat /etc/rsyslog.d/*.conf' | grep -i omfwd | grep -qi 'tcp' && ssh srv-web 'cat /etc/rsyslog.d/*.conf' | grep -qi 'queue.type'
+
+  - id: alertes
+    title: Fichier d'alertes
+    description: |
+      Sur **srv-log**, copie en plus dans `/var/log/central/alertes.log` tous les messages distants de
+      gravité **warning ou plus grave** (warning, err, crit, alert, emerg), quel que soit l'hôte. Les
+      messages `info` ne doivent pas y figurer.
+    hint: "Dans le ruleset : if $syslogseverity <= 4 then action(type=\"omfile\" file=\"/var/log/central/alertes.log\")"
+    checks:
+      - desc: Un message err de srv-bdd est dans alertes.log
+        run: |
+          m="verif-err-$$-$(date +%s)"
+          ssh srv-bdd "logger -p user.err -t verif '$m'"
+          sleep 3
+          ssh srv-log "grep -q '$m' /var/log/central/alertes.log"
+      - desc: Un message info n'y est pas
+        run: |
+          m="verif-info-$$-$(date +%s)"
+          ssh srv-bdd "logger -p user.info -t verif '$m'"
+          sleep 3
+          ssh srv-log "grep -q '$m' /var/log/central/srv-bdd/verif.log && ! grep -q '$m' /var/log/central/alertes.log"
+
+  - id: investigation
+    title: Investigation
+    description: |
+      Maintenant que les journaux sont centralisés, le RSSI te demande d'enquêter : des échecs
+      d'authentification SSH se répètent sur l'un des serveurs. À partir des fichiers de
+      `/var/log/central` sur srv-log uniquement, trouve et écris dans `/root/reponses.txt` (sur admin) :
+      - `serveur=` le nom du serveur visé ;
+      - `ip_attaquant=` l'adresse IP source des tentatives ;
+      - `compte=` le compte utilisé par l'attaquant.
+    hint: "ssh srv-log \"grep -r 'Failed password' /var/log/central/\""
+    checks:
+      - desc: Les messages d'attaque sont bien centralisés
+        run: ssh srv-log "grep -rq 'Failed password for invalid user oracle' /var/log/central/srv-bdd/"
+      - desc: Réponses serveur, ip_attaquant et compte
+        run: |
+          f=/root/reponses.txt
+          grep -Eqi '^serveur *= *srv-bdd *$' $f && grep -Eqi '^ip_attaquant *= *203\.0\.113\.45 *$' $f && grep -Eqi '^compte *= *oracle *$' $f
+
+  - id: rotation
+    title: Rotation des journaux centralisés
+    description: |
+      Le serveur central va accumuler beaucoup de journaux. Crée `/etc/logrotate.d/central` sur srv-log pour
+      `/var/log/central/*/*.log` et `/var/log/central/alertes.log` : rotation **hebdomadaire**, **12**
+      archives compressées, `missingok`, `notifempty`, `sharedscripts` et, après rotation, demande à rsyslog
+      de rouvrir ses fichiers (`postrotate` ... `pkill -HUP rsyslogd` ... `endscript`).
+    hint: "/var/log/central/*/*.log /var/log/central/alertes.log { weekly rotate 12 compress missingok notifempty sharedscripts postrotate pkill -HUP rsyslogd endscript }"
+    checks:
+      - desc: logrotate accepte la configuration
+        run: ssh srv-log 'logrotate -d /etc/logrotate.d/central 2>&1' | grep -q 'rotating pattern.*/var/log/central' && ! ssh srv-log 'logrotate -d /etc/logrotate.d/central 2>&1' | grep -qi '^error'
+      - desc: weekly, rotate 12, compress et postrotate
+        run: |
+          ssh srv-log cat /etc/logrotate.d/central > /tmp/central.lr
+          grep -Eq '^\s*weekly' /tmp/central.lr && grep -Eq '^\s*rotate\s+12' /tmp/central.lr && grep -Eq '^\s*compress' /tmp/central.lr && grep -Eq '^\s*postrotate' /tmp/central.lr
