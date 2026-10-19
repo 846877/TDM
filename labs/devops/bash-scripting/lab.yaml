@@ -358,3 +358,102 @@ exercises:
         run: test "$(ls /home/eleve/scripts/*.sh 2>/dev/null | wc -l)" -ge 8
       - desc: shellcheck ne signale rien
         run: shellcheck /home/eleve/scripts/*.sh
+  - id: bs-fonctions
+    title: Une bibliothèque de fonctions
+    description: |
+      Écris `~/scripts/outils.sh`, une **bibliothèque** destinée à être chargée avec `source` par d'autres
+      scripts. Elle définit trois fonctions :
+      - `majuscules TEXTE` : affiche le texte en majuscules (`majuscules abc` → `ABC`) ;
+      - `est_entier VALEUR` : n'affiche rien et renvoie le code `0` si la valeur est un entier positif ou nul,
+        `1` sinon ;
+      - `log NIVEAU MESSAGE` : écrit `[NIVEAU] MESSAGE` sur la **sortie d'erreur**.
+
+      Le fichier reste exécutable avec un shebang (pour shellcheck), mais ne fait rien quand on le charge à part
+      définir les fonctions.
+    hint: "majuscules() { echo \"$1\" | tr '[:lower:]' '[:upper:]'; } ; est_entier() { [[ $1 =~ ^[0-9]+$ ]]; } ; log() { echo \"[$1] $2\" >&2; }"
+    cours: |
+      Une **fonction** Bash se déclare avec `nom() { ...; }`. Elle reçoit ses propres arguments dans `$1`,
+      `$2`, `$@` (ceux du script sont masqués pendant son exécution) et déclare ses variables avec `local` pour
+      ne pas polluer le reste du script.
+
+      Une fonction ne « renvoie » pas de valeur comme dans d'autres langages :
+      - le **résultat** est ce qu'elle affiche, récupéré avec `$(fonction ...)` ;
+      - le **code de retour** (`return N`, ou celui de la dernière commande) sert aux tests :
+        `if est_entier "$x"; then ...`.
+
+      `source fichier` (ou `.`) exécute un fichier **dans le shell courant** : ses fonctions et variables y
+      restent disponibles. C'est ainsi qu'on partage du code entre scripts. Pour la validation, `[[ $1 =~ regex ]]`
+      teste une expression régulière ; `tr '[:lower:]' '[:upper:]'` ou `${1^^}` passent en majuscules.
+    checks:
+      - desc: majuscules fonctionne
+        run: bash -c 'source /home/eleve/scripts/outils.sh && test "$(majuscules abc)" = ABC && test "$(majuscules "Bonjour tdm")" = "BONJOUR TDM"'
+      - desc: est_entier distingue les entiers
+        run: bash -c 'source /home/eleve/scripts/outils.sh && est_entier 42 && est_entier 0 && ! est_entier abc && ! est_entier -3 && ! est_entier 4.2 && test -z "$(est_entier 7)"'
+      - desc: log écrit sur la sortie d'erreur
+        run: bash -c 'source /home/eleve/scripts/outils.sh && test -z "$(log INFO test 2>/dev/null)" && test "$(log INFO test 2>&1)" = "[INFO] test"'
+      - desc: Le chargement seul n'affiche rien
+        run: test -x /home/eleve/scripts/outils.sh && test -z "$(bash -c 'source /home/eleve/scripts/outils.sh' 2>&1)"
+  - id: bs-tableaux
+    title: Tableaux et arithmétique
+    description: |
+      Écris `~/scripts/stats.sh N1 N2 ...` qui reçoit une liste d'entiers et affiche sur une ligne
+      `min=<min> max=<max> moyenne=<moyenne>` (moyenne **entière**, arrondie vers le bas).
+
+      `stats.sh 4 8 15 16 23 42` affiche `min=4 max=42 moyenne=18`. Sans argument, le script écrit un message
+      d'utilisation sur la sortie d'erreur et quitte avec le code `1`.
+    hint: "nombres=(\"$@\") ; for n in \"${nombres[@]}\" ; (( n < min )) && min=$n ; moyenne=$(( somme / ${#nombres[@]} ))"
+    cours: |
+      Bash propose des **tableaux** indexés :
+      - création : `tab=(a b c)` ou `tab=("$@")` pour copier les arguments ;
+      - accès : `${tab[0]}`, tous les éléments `"${tab[@]}"`, nombre d'éléments `${#tab[@]}` ;
+      - ajout : `tab+=(d)`.
+
+      L'**arithmétique entière** se fait avec `$(( expression ))` pour obtenir une valeur, et `(( condition ))`
+      pour tester (code 0 si vrai) : `(( a > b ))`, `(( total += n ))`. À l'intérieur, les variables n'ont pas
+      besoin de `$`. La division est entière : `7 / 2` vaut 3. Pour des décimaux, il faut `bc` ou `awk`.
+
+      Pour un minimum et un maximum, initialise les deux avec le premier élément, puis parcours le tableau.
+      `declare -A` crée un tableau **associatif** (clé → valeur), pratique pour compter des occurrences.
+    checks:
+      - desc: Exemple de l'énoncé
+        run: test "$(/home/eleve/scripts/stats.sh 4 8 15 16 23 42)" = "min=4 max=42 moyenne=18"
+      - desc: Un seul nombre, ordre quelconque
+        run: test "$(/home/eleve/scripts/stats.sh 7)" = "min=7 max=7 moyenne=7" && test "$(/home/eleve/scripts/stats.sh 10 3 5)" = "min=3 max=10 moyenne=6"
+      - desc: Sans argument → code 1 et message d'erreur
+        run: test -x /home/eleve/scripts/stats.sh && /home/eleve/scripts/stats.sh >/tmp/o 2>/tmp/e; test $? -eq 1 && test -s /tmp/e && ! test -s /tmp/o
+  - id: bs-case
+    title: Un script de service avec case
+    description: |
+      Écris `~/scripts/service.sh ACTION` qui simule un service, son état étant stocké dans `~/.service.etat` :
+      - `start` : écrit `actif` dans le fichier d'état et affiche `demarre` ;
+      - `stop` : écrit `inactif` et affiche `arrete` ;
+      - `status` : affiche `actif` ou `inactif` (`inactif` si le fichier n'existe pas) et quitte avec le code
+        `0` si actif, **`3`** si inactif (convention des scripts d'init) ;
+      - toute autre action : message `Usage : service.sh {start|stop|status}` sur la sortie d'erreur, code `1`.
+    hint: "case \"$1\" in start) ... ;; stop) ... ;; status) ... ;; *) echo 'Usage ...' >&2; exit 1 ;; esac"
+    cours: |
+      `case` compare une valeur à une série de **motifs**, plus lisiblement qu'une cascade de `if/elif` :
+
+      ```
+      case "$1" in
+          start|demarrer) ... ;;
+          stop)           ... ;;
+          *)              ... ;;   # tout le reste
+      esac
+      ```
+
+      Chaque branche se termine par `;;`. Les motifs acceptent les jokers du shell (`*`, `?`, `[abc]`) et
+      l'alternative `|`. `*)` en dernier attrape les valeurs inattendues : c'est là qu'on affiche l'aide.
+
+      C'est la structure classique des scripts de démarrage (`/etc/init.d/`) et de nombreux outils en ligne de
+      commande. Les codes de sortie de `status` suivent la convention LSB : 0 = en marche, 3 = arrêté. Un fichier
+      d'état se lit avec `$(cat fichier 2>/dev/null)` ou `$(< fichier)`.
+    checks:
+      - desc: start puis status → actif, code 0
+        run: rm -f /home/eleve/.service.etat && test "$(/home/eleve/scripts/service.sh start)" = demarre && test "$(/home/eleve/scripts/service.sh status)" = actif
+      - desc: stop puis status → inactif, code 3
+        run: test "$(/home/eleve/scripts/service.sh stop)" = arrete && /home/eleve/scripts/service.sh status > /tmp/s; test $? -eq 3 && test "$(cat /tmp/s)" = inactif
+      - desc: Sans fichier d'état → inactif
+        run: rm -f /home/eleve/.service.etat && /home/eleve/scripts/service.sh status > /tmp/s; test $? -eq 3 && test "$(cat /tmp/s)" = inactif
+      - desc: Action inconnue → code 1, aide sur la sortie d'erreur
+        run: test -x /home/eleve/scripts/service.sh && /home/eleve/scripts/service.sh redemarrer >/tmp/o 2>/tmp/e; test $? -eq 1 && grep -q 'Usage' /tmp/e && ! test -s /tmp/o
