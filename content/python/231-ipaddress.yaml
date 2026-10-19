@@ -1,0 +1,211 @@
+title: Sous-réseaux avec ipaddress
+level: avance
+order: 31
+tags: [réseau, ipaddress, subnetting]
+summary: Découper, agréger et interroger des réseaux IPv4/IPv6 avec ipaddress.
+description: |
+  Utilise le module `ipaddress`. Les réseaux sont donnés en notation CIDR (`"10.0.0.0/24"`).
+
+  1. `infos(reseau)` renvoie un dictionnaire avec les clés `"reseau"`, `"masque"`,
+     `"broadcast"`, `"premier"`, `"dernier"` (premier et dernier hôte utilisable) et
+     `"hotes"` (nombre d'hôtes utilisables) — valeurs en chaînes, sauf `"hotes"` (entier).
+     Un réseau dont des bits d'hôte sont à 1 (`"10.0.0.5/24"`) est accepté et ramené à son
+     adresse réseau (`strict=False`). Pour un `/31`, les deux adresses sont utilisables ; pour
+     un `/32`, l'unique adresse.
+  2. `decouper(reseau, nouveau_prefixe)` renvoie la liste des sous-réseaux (chaînes CIDR).
+     Un préfixe plus petit que celui du réseau lève `ValueError`.
+  3. `appartient(ip, reseaux)` renvoie la liste des réseaux (chaînes, dans l'ordre reçu) qui
+     contiennent l'adresse (IPv4 ou IPv6 ; un réseau d'une autre version ne la contient pas).
+  4. `agreger(reseaux)` résume une liste de réseaux en la plus petite liste équivalente
+     (`collapse_addresses`), triée, en chaînes.
+  5. `prochain_libre(reseau, prefixe, utilises)` renvoie le **premier** sous-réseau de taille
+     `prefixe` du réseau qui ne chevauche aucun des réseaux `utilises`, ou `None`.
+
+  ```python
+  infos("192.168.1.0/26")["broadcast"]          # "192.168.1.63"
+  decouper("10.0.0.0/24", 26)                   # ["10.0.0.0/26", "10.0.0.64/26", "10.0.0.128/26", "10.0.0.192/26"]
+  agreger(["10.0.0.0/25", "10.0.0.128/25"])     # ["10.0.0.0/24"]
+  prochain_libre("10.0.0.0/24", 26, ["10.0.0.0/25"])   # "10.0.0.128/26"
+  ```
+starter: |
+  import ipaddress
+
+
+  def infos(reseau):
+      pass
+
+
+  def decouper(reseau, nouveau_prefixe):
+      pass
+
+
+  def appartient(ip, reseaux):
+      pass
+
+
+  def agreger(reseaux):
+      pass
+
+
+  def prochain_libre(reseau, prefixe, utilises):
+      pass
+tests: |
+  def test_infos():
+      "infos d'un /26"
+      r = solution.infos("192.168.1.0/26")
+      att = {"reseau": "192.168.1.0", "masque": "255.255.255.192", "broadcast": "192.168.1.63",
+             "premier": "192.168.1.1", "dernier": "192.168.1.62", "hotes": 62}
+      assert r == att, f"obtenu {r!r}"
+
+  def test_infos_non_strict():
+      "infos accepte des bits d'hôte"
+      assert solution.infos("10.0.0.5/24")["reseau"] == "10.0.0.0"
+
+  def test_infos_petits():
+      "/31 et /32"
+      r = solution.infos("10.0.0.0/31")
+      assert (r["premier"], r["dernier"], r["hotes"]) == ("10.0.0.0", "10.0.0.1", 2), r
+      r = solution.infos("10.0.0.7/32")
+      assert (r["premier"], r["dernier"], r["hotes"]) == ("10.0.0.7", "10.0.0.7", 1), r
+
+  def test_decouper():
+      "decouper"
+      assert solution.decouper("10.0.0.0/24", 26) == ["10.0.0.0/26", "10.0.0.64/26", "10.0.0.128/26", "10.0.0.192/26"]
+      assert solution.decouper("10.0.0.0/24", 24) == ["10.0.0.0/24"]
+      assert len(solution.decouper("172.16.0.0/16", 24)) == 256
+      try:
+          solution.decouper("10.0.0.0/24", 23)
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("préfixe trop petit : ValueError attendue")
+
+  def test_appartient():
+      "appartient (IPv4 et IPv6)"
+      reseaux = ["10.0.0.0/8", "10.1.0.0/16", "192.168.0.0/16", "2001:db8::/32"]
+      assert solution.appartient("10.1.2.3", reseaux) == ["10.0.0.0/8", "10.1.0.0/16"]
+      assert solution.appartient("2001:db8::1", reseaux) == ["2001:db8::/32"]
+      assert solution.appartient("8.8.8.8", reseaux) == []
+
+  def test_agreger():
+      "agreger"
+      assert solution.agreger(["10.0.0.0/25", "10.0.0.128/25"]) == ["10.0.0.0/24"]
+      r = solution.agreger(["192.168.2.0/24", "192.168.0.0/24", "192.168.1.0/24", "192.168.3.0/24", "10.0.0.0/8", "10.5.0.0/16"])
+      assert r == ["10.0.0.0/8", "192.168.0.0/22"], f"obtenu {r!r}"
+
+  def test_prochain_libre():
+      "prochain_libre"
+      assert solution.prochain_libre("10.0.0.0/24", 26, ["10.0.0.0/25"]) == "10.0.0.128/26"
+      assert solution.prochain_libre("10.0.0.0/24", 26, ["10.0.0.64/26", "10.0.0.0/26"]) == "10.0.0.128/26"
+      assert solution.prochain_libre("10.0.0.0/24", 25, ["10.0.0.100/32"]) == "10.0.0.128/25"
+      assert solution.prochain_libre("10.0.0.0/24", 24, ["10.0.0.0/30"]) is None
+      assert solution.prochain_libre("10.0.0.0/24", 28, []) == "10.0.0.0/28"
+solution: |
+  import ipaddress
+
+
+  def infos(reseau):
+      net = ipaddress.ip_network(reseau, strict=False)
+      if net.prefixlen >= net.max_prefixlen - 1:
+          premier, dernier = net[0], net[-1]
+          hotes = net.num_addresses
+      else:
+          premier, dernier = net[1], net[-2]
+          hotes = net.num_addresses - 2
+      return {
+          "reseau": str(net.network_address),
+          "masque": str(net.netmask),
+          "broadcast": str(net.broadcast_address),
+          "premier": str(premier),
+          "dernier": str(dernier),
+          "hotes": hotes,
+      }
+
+
+  def decouper(reseau, nouveau_prefixe):
+      net = ipaddress.ip_network(reseau, strict=False)
+      return [str(s) for s in net.subnets(new_prefix=nouveau_prefixe)]
+
+
+  def appartient(ip, reseaux):
+      adresse = ipaddress.ip_address(ip)
+      resultat = []
+      for r in reseaux:
+          net = ipaddress.ip_network(r, strict=False)
+          if net.version == adresse.version and adresse in net:
+              resultat.append(r)
+      return resultat
+
+
+  def agreger(reseaux):
+      nets = [ipaddress.ip_network(r, strict=False) for r in reseaux]
+      return [str(n) for n in sorted(ipaddress.collapse_addresses(nets))]
+
+
+  def prochain_libre(reseau, prefixe, utilises):
+      net = ipaddress.ip_network(reseau, strict=False)
+      pris = [ipaddress.ip_network(u, strict=False) for u in utilises]
+      for candidat in net.subnets(new_prefix=prefixe):
+          if not any(candidat.overlaps(p) for p in pris):
+              return str(candidat)
+      return None
+cours: |
+  ## Le module `ipaddress`
+
+  Il représente adresses, réseaux et interfaces, en IPv4 comme en IPv6, et fait tous les
+  calculs de sous-réseau à ta place.
+
+  ```python
+  import ipaddress
+  ip = ipaddress.ip_address("192.168.1.10")
+  net = ipaddress.ip_network("192.168.1.0/24")
+  ip in net                    # True
+  ip + 1                       # IPv4Address('192.168.1.11')
+  ip.is_private                # True
+  net.netmask, net.broadcast_address, net.num_addresses
+  net[0], net[-1]              # première et dernière adresse
+  list(net.hosts())[:2]        # hôtes utilisables (attention aux très grands réseaux !)
+  iface = ipaddress.ip_interface("192.168.1.10/24")
+  iface.network                # IPv4Network('192.168.1.0/24')
+  ```
+
+  ## Strict ou non ?
+
+  `ip_network("10.0.0.5/24")` lève `ValueError` : des bits d'hôte sont à 1. Avec
+  `strict=False`, le réseau est ramené à `10.0.0.0/24`. Une **interface** (`ip_interface`)
+  garde l'adresse et le réseau.
+
+  ## Découper : le subnetting
+
+  `net.subnets(new_prefix=26)` produit les sous-réseaux de la taille voulue
+  (`prefixlen_diff=2` est équivalent). L'inverse, `net.supernet(new_prefix=...)`, donne le
+  réseau englobant.
+
+  ## Agréger : la summarization
+
+  `collapse_addresses(liste)` fusionne les réseaux adjacents ou inclus en la plus petite liste
+  équivalente : c'est le résumé de routes (*route summarization*) qu'on configure sur un
+  routeur pour réduire la taille des tables. Quatre /24 contigus et alignés deviennent un
+  /22 ; un réseau inclus dans un autre disparaît.
+
+  ## Chevauchements
+
+  `a.overlaps(b)` indique si deux réseaux partagent au moins une adresse,
+  `a.subnet_of(b)` si `a` est inclus dans `b`. Ces tests sont la base d'un outil de gestion
+  d'adresses (IPAM) : allouer un nouveau sous-réseau, c'est trouver le premier candidat qui ne
+  chevauche rien d'existant.
+
+  ## IPv4 et IPv6 ensemble
+
+  Comparer ou tester l'appartenance entre versions différentes lève `TypeError`, ou renvoie
+  faux selon l'opération : vérifie `.version` (4 ou 6) avant de mélanger.
+
+  ## Tri
+
+  Les objets adresses et réseaux se trient correctement (numériquement), contrairement aux
+  chaînes : `sorted(ips, key=ipaddress.ip_address)`.
+docs:
+  - title: Module ipaddress
+    url: https://docs.python.org/fr/3/library/ipaddress.html
+  - title: HOWTO — introduction au module ipaddress
+    url: https://docs.python.org/fr/3/howto/ipaddress.html

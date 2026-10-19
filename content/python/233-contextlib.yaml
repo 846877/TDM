@@ -1,0 +1,267 @@
+title: contextlib en pratique
+level: avance
+order: 33
+tags: [with, contextlib, context manager, générateurs]
+summary: Écrire des gestionnaires de contexte avec @contextmanager et ExitStack.
+description: |
+  Utilise le module `contextlib`.
+
+  1. `dossier_courant(chemin)` : gestionnaire de contexte (avec `@contextmanager`) qui se
+     place dans le dossier `chemin` (`os.chdir`) et revient au dossier précédent à la sortie,
+     **même en cas d'exception**. `with ... as p` donne le chemin du dossier (chaîne).
+  2. `variable_env(nom, valeur)` : définit temporairement une variable d'environnement
+     (`os.environ`) ; à la sortie, restaure l'ancienne valeur ou supprime la variable si elle
+     n'existait pas. Si `valeur` vaut `None`, la variable est supprimée pendant le bloc.
+  3. `chronometre(journal)` : mesure la durée du bloc avec `time.perf_counter()` ; `as`
+     renvoie un dictionnaire dont la clé `"duree"` (secondes, float) est remplie à la sortie
+     (y compris en cas d'exception) ; à la sortie, la fonction ajoute aussi ce dictionnaire à
+     la liste `journal`.
+  4. `ouvrir_tous(chemins)` : ouvre tous les fichiers de la liste en lecture (UTF-8) avec un
+     `ExitStack` et renvoie la liste de leurs contenus. Si l'ouverture d'un fichier échoue,
+     tous les fichiers **déjà ouverts** doivent être fermés avant que l'exception se propage.
+     Pour le vérifier, la fonction ouvre les fichiers avec `ouvrir(chemin)` — une fonction
+     module-level que tu définis comme `open(chemin, encoding="utf-8")` (la moulinette la
+     remplace pour espionner les fermetures).
+
+  ```python
+  with dossier_courant("/tmp") as d:
+      print(os.getcwd())     # /tmp
+  with variable_env("LANG", "C"):
+      ...
+  ```
+starter: |
+  import os
+  import time
+  from contextlib import contextmanager, ExitStack
+
+
+  def ouvrir(chemin):
+      return open(chemin, encoding="utf-8")
+
+
+  def dossier_courant(chemin):
+      pass
+
+
+  def variable_env(nom, valeur):
+      pass
+
+
+  def chronometre(journal):
+      pass
+
+
+  def ouvrir_tous(chemins):
+      pass
+tests: |
+  import io
+  import os
+  import tempfile
+
+  def test_dossier_courant():
+      "dossier_courant revient au dossier initial"
+      depart = os.getcwd()
+      with tempfile.TemporaryDirectory() as d:
+          with solution.dossier_courant(d) as p:
+              assert os.path.samefile(os.getcwd(), d)
+              assert os.path.samefile(p, d)
+          assert os.getcwd() == depart
+
+  def test_dossier_courant_exception():
+      "dossier_courant : retour même en cas d'exception"
+      depart = os.getcwd()
+      with tempfile.TemporaryDirectory() as d:
+          try:
+              with solution.dossier_courant(d):
+                  raise KeyError("boum")
+          except KeyError:
+              pass
+          else:
+              raise AssertionError("l'exception doit se propager")
+          assert os.getcwd() == depart
+
+  def test_variable_env():
+      "variable_env : remplacement et restauration"
+      os.environ["TDM_TEST"] = "avant"
+      with solution.variable_env("TDM_TEST", "pendant"):
+          assert os.environ["TDM_TEST"] == "pendant"
+      assert os.environ["TDM_TEST"] == "avant"
+      os.environ.pop("TDM_ABSENTE", None)
+      with solution.variable_env("TDM_ABSENTE", "x"):
+          assert os.environ["TDM_ABSENTE"] == "x"
+      assert "TDM_ABSENTE" not in os.environ
+
+  def test_variable_env_none():
+      "variable_env avec None supprime temporairement"
+      os.environ["TDM_TEST2"] = "valeur"
+      try:
+          with solution.variable_env("TDM_TEST2", None):
+              assert "TDM_TEST2" not in os.environ
+              raise ValueError
+      except ValueError:
+          pass
+      assert os.environ["TDM_TEST2"] == "valeur"
+
+  def test_chronometre():
+      "chronometre"
+      journal = []
+      with solution.chronometre(journal) as mesure:
+          sum(range(10000))
+      assert isinstance(mesure["duree"], float) and mesure["duree"] >= 0
+      assert journal == [mesure]
+      try:
+          with solution.chronometre(journal) as m2:
+              raise RuntimeError
+      except RuntimeError:
+          pass
+      assert "duree" in m2 and len(journal) == 2
+
+  def test_ouvrir_tous():
+      "ouvrir_tous lit tous les fichiers"
+      with tempfile.TemporaryDirectory() as d:
+          chemins = []
+          for i, texte in enumerate(["un", "deux", "trois"]):
+              c = os.path.join(d, f"f{i}.txt")
+              with open(c, "w", encoding="utf-8") as f:
+                  f.write(texte)
+              chemins.append(c)
+          assert solution.ouvrir_tous(chemins) == ["un", "deux", "trois"]
+
+  def test_ouvrir_tous_echec():
+      "ouvrir_tous ferme les fichiers déjà ouverts en cas d'échec"
+      ouverts = []
+      original = solution.ouvrir
+      def espion(chemin):
+          if chemin == "absent":
+              raise FileNotFoundError(chemin)
+          f = io.StringIO("contenu")
+          ouverts.append(f)
+          return f
+      solution.ouvrir = espion
+      try:
+          try:
+              solution.ouvrir_tous(["a", "b", "absent", "c"])
+          except FileNotFoundError:
+              pass
+          else:
+              raise AssertionError("FileNotFoundError attendue")
+      finally:
+          solution.ouvrir = original
+      assert len(ouverts) == 2 and all(f.closed for f in ouverts), "les fichiers déjà ouverts doivent être fermés"
+solution: |
+  import os
+  import time
+  from contextlib import contextmanager, ExitStack
+
+
+  def ouvrir(chemin):
+      return open(chemin, encoding="utf-8")
+
+
+  @contextmanager
+  def dossier_courant(chemin):
+      precedent = os.getcwd()
+      os.chdir(chemin)
+      try:
+          yield os.getcwd()
+      finally:
+          os.chdir(precedent)
+
+
+  _ABSENT = object()
+
+
+  @contextmanager
+  def variable_env(nom, valeur):
+      ancienne = os.environ.get(nom, _ABSENT)
+      if valeur is None:
+          os.environ.pop(nom, None)
+      else:
+          os.environ[nom] = valeur
+      try:
+          yield
+      finally:
+          if ancienne is _ABSENT:
+              os.environ.pop(nom, None)
+          else:
+              os.environ[nom] = ancienne
+
+
+  @contextmanager
+  def chronometre(journal):
+      mesure = {}
+      debut = time.perf_counter()
+      try:
+          yield mesure
+      finally:
+          mesure["duree"] = time.perf_counter() - debut
+          journal.append(mesure)
+
+
+  def ouvrir_tous(chemins):
+      with ExitStack() as pile:
+          fichiers = [pile.enter_context(ouvrir(c)) for c in chemins]
+          return [f.read() for f in fichiers]
+cours: |
+  ## `@contextmanager` : un gestionnaire en quelques lignes
+
+  Écrire une classe avec `__enter__` / `__exit__` est verbeux. `contextlib.contextmanager`
+  transforme une **fonction génératrice** en gestionnaire de contexte :
+
+  ```python
+  from contextlib import contextmanager
+
+  @contextmanager
+  def verrou(fichier_lock):
+      creer(fichier_lock)          # code d'entrée
+      try:
+          yield                    # le bloc with s'exécute ici
+      finally:
+          supprimer(fichier_lock)  # code de sortie, toujours exécuté
+  ```
+
+  - ce qui précède `yield` correspond à `__enter__` ; la valeur produite par `yield` est celle
+    de `as` ;
+  - ce qui suit correspond à `__exit__`.
+
+  **Le `try / finally` est indispensable** : si le bloc lève une exception, elle est relancée
+  *au point du `yield`*. Sans `finally`, le code de nettoyage serait sauté. Sans `except`,
+  l'exception continue sa propagation, ce qui est presque toujours le comportement voulu.
+
+  ## Restaurer un état
+
+  Beaucoup de gestionnaires suivent le même schéma : **sauvegarder** l'état, le **modifier**,
+  `yield`, puis **restaurer**. Dossier courant, variables d'environnement, niveau de
+  journalisation, configuration globale… Quand l'état initial peut être « absent », on utilise
+  une **sentinelle** (`_ABSENT = object()`) pour le distinguer de toute valeur réelle.
+
+  ## Renvoyer un résultat après le bloc
+
+  La valeur de `as` est fixée à l'entrée, mais si c'est un objet **mutable** (un dictionnaire),
+  le gestionnaire peut le compléter à la sortie : l'appelant le consulte après le `with`.
+
+  ## `ExitStack` : un nombre variable de contextes
+
+  Pour ouvrir N fichiers dont on ne connaît le nombre qu'à l'exécution, on ne peut pas écrire
+  N `with` imbriqués. `ExitStack` empile les gestionnaires et les ferme tous, dans l'ordre
+  inverse, à la sortie de son propre `with`, **y compris** si l'un d'eux échoue en cours de
+  route :
+
+  ```python
+  with ExitStack() as pile:
+      connexions = [pile.enter_context(connecter(h)) for h in hotes]
+      ...
+  ```
+
+  `pile.callback(fonction, *args)` enregistre aussi une fonction de nettoyage quelconque.
+
+  ## Autres outils de `contextlib`
+
+  `suppress(Exception)` ignore des exceptions, `redirect_stdout(f)` capture les `print`,
+  `closing(obj)` appelle `obj.close()`, `nullcontext()` ne fait rien (pratique quand un
+  gestionnaire est optionnel), et `chdir` existe directement depuis Python 3.11.
+docs:
+  - title: Module contextlib
+    url: https://docs.python.org/fr/3/library/contextlib.html
+  - title: Référence — l'instruction with
+    url: https://docs.python.org/fr/3/reference/compound_stmts.html#the-with-statement
