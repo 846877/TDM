@@ -326,3 +326,64 @@ exercises:
       - desc: server.crt reste valide avec la CRL
         run: |
           cat /pki/ca/ca.crt /pki/ca/crl.pem > /tmp/ca-crl.pem && openssl verify -crl_check -CAfile /tmp/ca-crl.pem /pki/webserver/server.crt | grep -q ': OK'
+  - id: pki-formats
+    title: Formats de certificats (PEM, DER, PKCS#12)
+    description: |
+      Tous les logiciels n'acceptent pas le même format. Prépare :
+      1. `/pki/ca/ca.der` : le certificat de la CA au format binaire **DER** (attendu par certains équipements) ;
+      2. `/pki/webserver/server.p12` : un fichier **PKCS#12** qui regroupe `server.key`, `server.crt` et le
+         certificat de la CA, protégé par le mot de passe `tdm` et portant le nom convivial (`-name`) `webserver`
+         (format attendu par Windows, Java, de nombreux serveurs d'applications).
+    hint: "openssl x509 -in ca.crt -outform der -out ca.der ; openssl pkcs12 -export -inkey server.key -in server.crt -certfile ca.crt -name webserver -passout pass:tdm -out server.p12"
+    cours: |
+      Un certificat X.509 peut être encodé de plusieurs façons :
+      - **PEM** : du base64 entre des lignes `-----BEGIN CERTIFICATE-----`, lisible et copiable. Extensions
+        `.pem`, `.crt`, `.key`. C'est le format de nginx, HAProxy, Apache et de la plupart des outils Linux ;
+      - **DER** : le même contenu en binaire. Extensions `.der`, `.cer`. `openssl x509 -inform/-outform` convertit ;
+      - **PKCS#12** (`.p12`, `.pfx`) : un conteneur binaire, protégé par mot de passe, qui regroupe une clé
+        privée, son certificat et la chaîne de CA. Format d'import de Windows, des navigateurs et de Java
+        (`keytool`).
+
+      `openssl pkcs12 -export` crée un PKCS#12 ; `openssl pkcs12 -in fichier -info` en affiche le contenu
+      (`-nokeys`, `-nocerts` pour filtrer). L'empreinte d'un certificat est la même dans tous les formats : c'est
+      le moyen de vérifier une conversion.
+    checks:
+      - desc: ca.der est le certificat de la CA en DER
+        run: test "$(openssl x509 -inform der -in /pki/ca/ca.der -noout -fingerprint -sha256)" = "$(openssl x509 -in /pki/ca/ca.crt -noout -fingerprint -sha256)"
+      - desc: server.p12 contient le certificat du serveur et sa clé (mot de passe tdm)
+        run: openssl pkcs12 -in /pki/webserver/server.p12 -passin pass:tdm -nokeys -clcerts 2>/dev/null | openssl x509 -noout -subject | grep -q 'CN *= *webserver' && openssl pkcs12 -in /pki/webserver/server.p12 -passin pass:tdm -nocerts -nodes 2>/dev/null | grep -q 'PRIVATE KEY'
+      - desc: server.p12 contient aussi la CA et le nom webserver
+        run: |
+          openssl pkcs12 -in /pki/webserver/server.p12 -passin pass:tdm -nokeys -cacerts 2>/dev/null | openssl x509 -noout -subject | grep -q 'TDM Root CA' && openssl pkcs12 -in /pki/webserver/server.p12 -passin pass:tdm -nokeys -clcerts 2>/dev/null | grep -q 'friendlyName: *webserver'
+  - id: pki-expiration
+    title: Surveiller l'expiration des certificats
+    description: |
+      Un certificat expiré coupe un service du jour au lendemain. Écris le script exécutable
+      `/pki/expiration.sh FICHIER JOURS` :
+      - si le certificat `FICHIER` est encore valide **au-delà** de `JOURS` jours, il affiche `OK` et quitte
+        avec le code `0` ;
+      - sinon, il affiche `EXPIRE BIENTOT` et quitte avec le code `1` ;
+      - si le fichier n'existe pas ou n'est pas un certificat, il affiche une erreur sur la sortie d'erreur et
+        quitte avec le code `2`.
+    hint: "openssl x509 -in \"$1\" -noout -checkend $(( $2 * 86400 )) renvoie 0 si le certificat est encore valide après ce délai"
+    cours: |
+      `openssl x509 -checkend SECONDES` répond à la question « ce certificat sera-t-il encore valide dans N
+      secondes ? » par son **code de sortie** : 0 si oui, 1 s'il aura expiré. C'est la brique idéale d'une sonde
+      de supervision ou d'une tâche cron. `-enddate` affiche la date d'expiration (`notAfter=...`), `-dates` les
+      deux bornes.
+
+      Pour un certificat distant, on enchaîne `openssl s_client -connect hote:443 </dev/null` et
+      `openssl x509 -checkend`. Les outils de supervision (Prometheus avec *blackbox_exporter*, Nagios) font la
+      même chose et alertent typiquement 30 jours, puis 7 jours avant l'échéance.
+
+      Un script robuste distingue ses cas d'erreur : un fichier illisible n'est pas un certificat « bientôt
+      expiré ». Pense à vérifier le nombre d'arguments et à protéger les variables par des guillemets.
+    checks:
+      - desc: server.crt (1 an) est valide au-delà de 30 jours
+        run: test -x /pki/expiration.sh && test "$(/pki/expiration.sh /pki/webserver/server.crt 30)" = OK
+      - desc: server.crt expire avant 400 jours → code 1
+        run: test -x /pki/expiration.sh && /pki/expiration.sh /pki/webserver/server.crt 400 > /tmp/exp; test $? -eq 1 && test "$(cat /tmp/exp)" = "EXPIRE BIENTOT"
+      - desc: Un certificat d'un jour expire avant 7 jours
+        run: cd /tmp && openssl req -x509 -newkey rsa:2048 -nodes -keyout /tmp/court.key -out /tmp/court.crt -days 1 -subj /CN=court 2>/dev/null && /pki/expiration.sh /tmp/court.crt 7 >/dev/null; test $? -eq 1
+      - desc: Fichier absent → code 2 et message d'erreur
+        run: test -x /pki/expiration.sh && /pki/expiration.sh /tmp/inexistant.crt 30 >/tmp/o 2>/tmp/e; test $? -eq 2 && test -s /tmp/e
