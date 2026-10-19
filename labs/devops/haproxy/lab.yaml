@@ -342,3 +342,65 @@ exercises:
       - desc: blue est de nouveau en service
         run: |
           echo "show servers state couleurs" | socat stdio /run/haproxy/admin.sock | awk '$4=="blue" && $6==2 && $7==0' | grep -q blue
+  - id: hp-entetes
+    title: En-têtes de proxy et de diagnostic
+    description: |
+      Les backends ne voient que l'adresse de HAProxy. Corrige cela et facilite le diagnostic :
+      1. transmets l'adresse du client dans l'en-tête `X-Forwarded-For` (`option forwardfor`) pour le trafic HTTP ;
+      2. ajoute à chaque réponse du backend `couleurs` l'en-tête **`X-Servi-Par`** contenant le **nom du serveur**
+         qui a répondu (`red` ou `blue`).
+
+      Recharge HAProxy, puis observe : `curl -sI http://localhost/` plusieurs fois.
+    hint: "option forwardfor dans defaults ou dans le backend ; http-response set-header X-Servi-Par %s dans le backend couleurs"
+    cours: |
+      Derrière un reverse proxy, l'application voit toutes les connexions venir de l'adresse du proxy. Les
+      en-têtes de proxy rétablissent l'information :
+      - `X-Forwarded-For` : l'adresse du client (ajoutée par `option forwardfor`), complétée à chaque proxy
+        traversé ;
+      - `X-Forwarded-Proto` : `http` ou `https`, à poser soi-même (`http-request set-header`) quand HAProxy
+        termine le TLS ;
+      - l'en-tête standard `Forwarded` (RFC 7239) regroupe ces informations.
+
+      `http-request` agit sur la requête avant de l'envoyer au backend, `http-response` sur la réponse avant de
+      la renvoyer au client : `set-header`, `add-header`, `del-header`, `replace-header`… Les valeurs peuvent
+      utiliser le format de journalisation de HAProxy : `%s` est le nom du serveur, `%b` celui du backend,
+      `%ci` l'IP du client.
+
+      Un en-tête de diagnostic est précieux pour savoir quel serveur a répondu ; en production, on évite d'y
+      exposer des noms internes.
+    checks:
+      - desc: option forwardfor est active
+        run: grep -Eq '^\s*option\s+forwardfor' /usr/local/etc/haproxy/haproxy.cfg && haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg >/dev/null
+      - desc: Les réponses portent X-Servi-Par avec red et blue
+        run: for i in 1 2 3 4; do curl -s -o /dev/null -D - http://localhost/; done | tr -d '\r' | grep -i '^x-servi-par:' | grep -Eio 'red|blue' | sort -u | wc -l | grep -qx 2
+  - id: hp-maintenance
+    title: Page de maintenance personnalisée
+    description: |
+      Quand un backend n'a plus aucun serveur disponible, HAProxy renvoie une page 503 austère. Personnalise-la :
+      1. crée `/usr/local/etc/haproxy/errors/503.http` : une **réponse HTTP complète** (ligne de statut
+         `HTTP/1.0 503 Service Unavailable`, en-têtes, ligne vide, corps) dont le corps contient
+         `Maintenance en cours` ;
+      2. déclare un backend `maintenance` **sans aucun serveur**, qui utilise ce fichier (`errorfile 503 ...`) ;
+      3. envoie le chemin `/maintenance` vers ce backend.
+
+      `curl -i http://localhost/maintenance` doit renvoyer le code `503` et ta page.
+    hint: "printf 'HTTP/1.0 503 Service Unavailable\\r\\nContent-Type: text/html\\r\\nCache-Control: no-cache\\r\\nConnection: close\\r\\n\\r\\n<h1>Maintenance en cours</h1>\\n' > errors/503.http"
+    cours: |
+      `errorfile CODE fichier` remplace la page d'erreur que HAProxy génère lui-même (400, 403, 408, 500, 502,
+      503, 504). Le fichier n'est pas une simple page HTML : c'est une **réponse HTTP brute**, envoyée telle
+      quelle, avec la ligne de statut, les en-têtes, une ligne vide (`\r\n\r\n`) puis le corps. Il est chargé au
+      démarrage : sa taille est limitée et il faut recharger HAProxy après une modification.
+
+      Un backend sans serveur (ou dont tous les serveurs sont `DOWN` ou en maintenance) répond **503**. C'est ce
+      qui permet une page de maintenance propre pendant une intervention : on met les serveurs en maintenance
+      avec l'API runtime, et les clients voient un message clair au lieu d'une erreur technique.
+
+      `errorfile` se déclare dans `defaults`, `frontend` ou `backend` ; `http-error status 503 content-type
+      text/html file ...` est une syntaxe plus récente.
+    checks:
+      - desc: Le fichier d'erreur est une réponse HTTP 503
+        run: head -1 /usr/local/etc/haproxy/errors/503.http | grep -q '^HTTP/1\.[01] 503' && grep -q 'Maintenance en cours' /usr/local/etc/haproxy/errors/503.http
+      - desc: /maintenance renvoie 503 et la page personnalisée
+        run: test "$(curl -s -o /tmp/m -w '%{http_code}' http://localhost/maintenance)" = 503 && grep -q 'Maintenance en cours' /tmp/m
+      - desc: Le reste du site fonctionne toujours
+        run: curl -fsS http://localhost/ | grep -q 'red\|blue'
