@@ -186,11 +186,11 @@ exercises:
       lisibles partout. Le résultat se contrôle avec `Get-Volume F`.
     ci: true
     checks:
-      - desc: F: est un volume NTFS nommé DONNEES
+      - desc: 'F: est un volume NTFS nommé DONNEES'
         run: |
           $v = Get-Volume -DriveLetter F
           $v.FileSystem -eq 'NTFS' -and $v.FileSystemLabel -eq 'DONNEES'
-      - desc: F: est sur le disque de 2 Go et en occupe la quasi-totalité
+      - desc: 'F: est sur le disque de 2 Go et en occupe la quasi-totalité'
         run: |
           $p = Get-Partition -DriveLetter F
           $d = Get-Disk -Number $p.DiskNumber
@@ -225,7 +225,7 @@ exercises:
       - desc: Le disque de 1,5 Go est en MBR
         run: |
           (Get-Disk | Where-Object Size -eq 1536MB).PartitionStyle -eq 'MBR'
-      - desc: G: est un volume NTFS ARCHIVES avec des clusters de 64 Ko
+      - desc: 'G: est un volume NTFS ARCHIVES avec des clusters de 64 Ko'
         run: |
           $v = Get-Volume -DriveLetter G
           $v.FileSystem -eq 'NTFS' -and $v.FileSystemLabel -eq 'ARCHIVES' -and $v.AllocationUnitSize -eq 65536
@@ -258,7 +258,7 @@ exercises:
       partition dans Windows : c'est le ticket le plus fréquent sur les serveurs virtualisés.
     ci: true
     checks:
-      - desc: L: occupe tout l'espace possible de son disque
+      - desc: 'L: occupe tout l''espace possible de son disque'
         run: |
           $max = (Get-PartitionSupportedSize -DriveLetter L).SizeMax
           (Get-Partition -DriveLetter L).Size -ge ($max - 1MB) -and (Get-Partition -DriveLetter L).Size -gt 900MB
@@ -291,7 +291,7 @@ exercises:
       monté. Avec diskpart : `select volume G` puis `assign mount=C:\Partages\Archives`.
     ci: true
     checks:
-      - desc: Le volume G: est monté dans C:\Partages\Archives
+      - desc: 'Le volume G: est monté dans C:\Partages\Archives'
         run: |
           (Get-Partition -DriveLetter G).AccessPaths -contains 'C:\Partages\Archives\'
     solution: |
@@ -341,7 +341,7 @@ exercises:
       Sur `F:`, active les **quotas NTFS** en mode **appliqué** (refuser l'espace au-delà de la limite), puis
       fixe pour `mdupont` un **seuil d'avertissement de 400 Mo** (419430400 octets) et une **limite de
       500 Mo** (524288000 octets).
-    hint: fsutil quota enforce F: ; fsutil quota modify F: 419430400 524288000 SRV01\mdupont   (le nom de la machine : $env:COMPUTERNAME)
+    hint: 'fsutil quota enforce F: ; fsutil quota modify F: 419430400 524288000 SRV01\mdupont   (le nom de la machine : $env:COMPUTERNAME)'
     cours: |
       Les **quotas NTFS** comptent l'espace occupé par chaque **propriétaire** de fichiers sur un volume.
       Deux modes : *suivi* (on journalise les dépassements) ou *appliqué* (Windows refuse d'écrire au-delà
@@ -359,7 +359,7 @@ exercises:
       par courriel) sont plus souples : c'est ce qu'on utilise sur un serveur de fichiers moderne.
     ci: true
     checks:
-      - desc: Les quotas de F: sont suivis et appliqués
+      - desc: 'Les quotas de F: sont suivis et appliqués'
         run: |
           $q = (fsutil.exe quota query F:) -join "`n"
           $LASTEXITCODE -eq 0 -and $q -match 'enforced'
@@ -367,7 +367,7 @@ exercises:
         run: |
           $q = (fsutil.exe quota query F:) -join "`n"
           $bloc = ($q -split '(?=SID Name)') | Where-Object { $_ -match '\\mdupont' }
-          [bool]$bloc -and $bloc -match 'Quota Threshold\s*=\s*0x0*19000000' -and $bloc -match 'Quota Limit\s*=\s*0x0*1f400000'
+          [bool]$bloc -and $bloc -match 'Quota Threshold\s*=\s*(419430400|0x0*19000000)\b' -and $bloc -match 'Quota Limit\s*=\s*(524288000|0x0*1f400000)\b'
     solution: |
       fsutil.exe quota enforce F:
       fsutil.exe quota modify F: 419430400 524288000 "$env:COMPUTERNAME\mdupont"

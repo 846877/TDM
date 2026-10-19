@@ -233,7 +233,7 @@ exercises:
       Crée le dossier `C:\inetpub\intranet` avec une page `index.html` contenant le texte
       `Intranet Ateliers Durand`, puis un site IIS nommé **`Intranet`** qui le publie sur le **port 8080**
       (toutes les adresses). Ouvre le pare-feu pour TCP 8080 (règle nommée `TDM-Intranet-8080`).
-    hint: appcmd.exe add site /name:Intranet /bindings:http/*:8080: /physicalPath:C:\inetpub\intranet ; New-NetFirewallRule -Name TDM-Intranet-8080 ... -LocalPort 8080
+    hint: 'appcmd.exe add site /name:Intranet /bindings:http/*:8080: /physicalPath:C:\inetpub\intranet ; New-NetFirewallRule -Name TDM-Intranet-8080 ... -LocalPort 8080'
     cours: |
       Un **site** IIS associe une ou plusieurs **liaisons** (*bindings* : protocole, adresse, port, nom
       d'hôte) à un dossier physique. Plusieurs sites peuvent partager le port 80 grâce au nom d'hôte
