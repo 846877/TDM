@@ -1,0 +1,140 @@
+title: Saisies invalides avec try/except
+level: debutant
+order: 47
+tags: [exceptions, try, input]
+summary: Intercepter une ValueError au lieu de laisser le programme planter.
+mode: stdio
+description: |
+  La première ligne contient le nombre `n` de saisies. Chacune des `n` lignes suivantes est
+  censée contenir un **âge** (un entier).
+
+  Pour chaque ligne :
+
+  - si ce n'est pas un entier, affiche `Ligne <i> : pas un nombre` ;
+  - si c'est un entier négatif ou supérieur à 130, affiche `Ligne <i> : âge impossible` ;
+  - sinon, affiche `Ligne <i> : <âge> ans`.
+
+  (`<i>` est le numéro de la saisie, à partir de 1.) Les espaces autour des valeurs sont
+  tolérés. À la fin, affiche `Valides : <nombre>/<n>`.
+
+  Entrée :
+
+  ```
+  4
+  25
+  vingt
+  -3
+   42
+  ```
+
+  Sortie :
+
+  ```
+  Ligne 1 : 25 ans
+  Ligne 2 : pas un nombre
+  Ligne 3 : âge impossible
+  Ligne 4 : 42 ans
+  Valides : 2/4
+  ```
+
+  Le programme ne doit **jamais** planter : utilise `try` / `except ValueError`.
+starter: |
+  # Écris ton code ici
+cases:
+  - name: Exemple de l'énoncé
+    input: "4\n25\nvingt\n-3\n 42\n"
+    output: |
+      Ligne 1 : 25 ans
+      Ligne 2 : pas un nombre
+      Ligne 3 : âge impossible
+      Ligne 4 : 42 ans
+      Valides : 2/4
+  - name: Décimaux, vide et bornes
+    input: "5\n12.5\n\n0\n130\n131\n"
+    output: |
+      Ligne 1 : pas un nombre
+      Ligne 2 : pas un nombre
+      Ligne 3 : 0 ans
+      Ligne 4 : 130 ans
+      Ligne 5 : âge impossible
+      Valides : 2/5
+  - name: Aucune saisie
+    input: "0\n"
+    output: |
+      Valides : 0/0
+solution: |
+  n = int(input())
+  valides = 0
+  for i in range(1, n + 1):
+      texte = input()
+      try:
+          age = int(texte)
+      except ValueError:
+          print(f"Ligne {i} : pas un nombre")
+          continue
+      if age < 0 or age > 130:
+          print(f"Ligne {i} : âge impossible")
+      else:
+          print(f"Ligne {i} : {age} ans")
+          valides += 1
+  print(f"Valides : {valides}/{n}")
+cours: |
+  ## Qu'est-ce qu'une exception ?
+
+  Quand une opération est impossible, Python **lève une exception** : l'exécution normale
+  s'interrompt et, si rien ne l'intercepte, le programme s'arrête avec un message
+  (*traceback*) :
+
+  ```
+  >>> int("vingt")
+  ValueError: invalid literal for int() with base 10: 'vingt'
+  ```
+
+  Quelques exceptions courantes : `ValueError` (valeur incorrecte), `TypeError` (mauvais
+  type), `KeyError` (clé absente), `IndexError` (indice hors limites),
+  `ZeroDivisionError`, `FileNotFoundError`.
+
+  ## Intercepter avec `try` / `except`
+
+  ```python
+  saisie = input()
+  try:
+      port = int(saisie)
+  except ValueError:
+      print("Ce n'est pas un numéro de port")
+  else:
+      print("Port choisi :", port)    # seulement si aucune exception
+  ```
+
+  - Le bloc `try` contient le code qui **peut** échouer ; garde-le le plus court possible.
+  - `except ValueError` n'intercepte **que** ce type d'erreur : les autres bugs restent
+    visibles. N'écris jamais un `except:` nu, qui masquerait tout (même `Ctrl+C`).
+  - Le bloc `else` (facultatif) s'exécute si le `try` a réussi.
+  - Un bloc `finally` (facultatif) s'exécute dans tous les cas.
+
+  ## Demander pardon plutôt que la permission
+
+  On pourrait tester avant de convertir (`texte.isdigit()`), mais `isdigit` refuse `"-3"` et
+  accepte des chiffres exotiques. La philosophie Python (EAFP : *Easier to Ask Forgiveness
+  than Permission*) consiste à **essayer** et à gérer l'échec : c'est plus simple et plus
+  fiable.
+
+  ## Erreur de format ou erreur de valeur ?
+
+  Une conversion réussie ne garantit pas une valeur valable : `int("-3")` fonctionne, mais un
+  âge négatif est absurde. On distingue donc deux contrôles : le **format** (exception) puis
+  la **plage** (simple `if`).
+
+  ## Continuer après une erreur
+
+  Dans une boucle, `continue` dans le `except` passe à la saisie suivante. Un programme
+  robuste traite chaque donnée indépendamment : une ligne invalide ne doit pas empêcher de
+  traiter les autres.
+
+  `int()` tolère les espaces autour (`int(" 42 ")` vaut 42) mais refuse les décimaux
+  (`int("12.5")` lève `ValueError`) et la chaîne vide.
+docs:
+  - title: Tutoriel — gestion des exceptions
+    url: https://docs.python.org/fr/3/tutorial/errors.html#handling-exceptions
+  - title: Exceptions natives
+    url: https://docs.python.org/fr/3/library/exceptions.html
