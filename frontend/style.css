@@ -434,3 +434,19 @@ input, textarea, .search { font-family: var(--sans); }
   .glitch::before, .glitch::after, .cursor::after, .title-badge.god { animation: none; }
   #matrix { display: none; }
 }
+
+/* Cours et choix du système */
+.doc-tabs { padding: 0; margin: 8px 0 4px; background: transparent; }
+.cours { border-left: 2px solid var(--accent); padding-left: 12px; }
+.cours h2, .cours h3 { color: var(--accent); }
+details.cours { margin: 6px 0; padding: 4px 12px; background: rgba(0, 255, 102, 0.03); }
+details.cours > summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+.doc-links h4 { margin: 14px 0 4px; color: var(--muted); font-size: 0.85em; text-transform: uppercase; }
+.doc-links a { color: var(--accent); }
+.os-switch { display: flex; align-items: center; gap: 8px; margin: 4px 0 12px; }
+.os-btn {
+  background: var(--panel); color: var(--muted); border: 1px solid var(--border);
+  padding: 8px 16px; font: inherit; cursor: pointer; border-radius: 4px;
+}
+.os-btn.active { color: var(--accent); border-color: var(--accent); box-shadow: var(--glow); }
+.os-count { margin-left: 8px; font-size: 0.8em; opacity: 0.7; }

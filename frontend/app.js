@@ -107,8 +107,44 @@ function h(tag, attrs = {}, ...children) {
   return el;
 }
 
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  if (node.tagName === "A" && /^https?:/.test(node.getAttribute("href") || "")) {
+    node.setAttribute("target", "_blank");
+    node.setAttribute("rel", "noopener");
+  }
+});
+
 function markdown(text) {
   return h("div", { class: "markdown", html: DOMPurify.sanitize(marked.parse(text || "")) });
+}
+
+function docLinks(docs) {
+  if (!docs || !docs.length) return null;
+  return h("div", { class: "doc-links" }, h("h4", {}, "Pour aller plus loin"),
+    h("ul", {}, docs.map((d) => h("li", {}, h("a", { href: d.url, target: "_blank", rel: "noopener" }, d.title || d.url)))));
+}
+
+/* Énoncé et cours dans deux onglets ; sans cours, l'énoncé seul. */
+function withCours(enonce, cours, docs) {
+  if (!cours && !(docs && docs.length)) return h("div", {}, ...enonce);
+  const panes = { enonce: h("div", {}, ...enonce), cours: h("div", { class: "cours" }, markdown(cours), docLinks(docs)) };
+  const buttons = {};
+  const show = (name) => {
+    for (const [key, pane] of Object.entries(panes)) {
+      pane.style.display = key === name ? "" : "none";
+      buttons[key].classList.toggle("active", key === name);
+    }
+  };
+  buttons.enonce = h("button", { onclick: () => show("enonce") }, "Énoncé");
+  buttons.cours = h("button", { onclick: () => show("cours") }, "📖 Cours");
+  const node = h("div", {}, h("div", { class: "tabs doc-tabs" }, buttons.enonce, buttons.cours), panes.enonce, panes.cours);
+  show("enonce");
+  return node;
+}
+
+function coursDetails(item) {
+  if (!item.cours && !(item.docs && item.docs.length)) return null;
+  return h("details", { class: "cours" }, h("summary", {}, "📖 Cours"), markdown(item.cours || ""), docLinks(item.docs));
 }
 
 function levelBadge(level) {
@@ -300,7 +336,15 @@ async function renderHome() {
 async function renderList(cat) {
   const meta = CATEGORIES[cat];
   document.title = `TDM · ${meta.title}`;
-  const items = await api(meta.api);
+  const allItems = await api(meta.api);
+  const osList = [["windows", "🪟 Windows"], ["linux", "🐧 Linux"]];
+  const hasOs = cat === "systemes";
+  let os = storage.get(`${cat}.os`, "windows");
+  let items = hasOs ? allItems.filter((it) => (it.os || "linux") === os) : allItems;
+  const osButtons = hasOs ? osList.map(([key, label]) => h("button", {
+    class: `os-btn ${key === os ? "active" : ""}`,
+    onclick: () => { storage.set(`${cat}.os`, key); router(); },
+  }, label, h("span", { class: "os-count" }, String(allItems.filter((it) => (it.os || "linux") === key).length)))) : [];
   const search = h("input", { class: "search", type: "search", placeholder: "Filtrer (titre, notion…)" });
   const body = h("div");
 
@@ -321,11 +365,11 @@ async function renderList(cat) {
               h("div", { class: "title" }, it.title),
               it.summary ? h("div", { class: "summary" }, it.summary) : null,
               meta.labs ? h("div", { class: "summary" },
-                `${it.kind === "vagrant" ? "🖥 VM Vagrant" : "🐳 Docker"} · ${labDoneCount(cat, it)} / ${it.exercise_count} exercice(s)`) : null,
+                `${it.kind === "vagrant" ? (it.os === "windows" ? "🪟 VM Windows" : "🖥 VM Vagrant") : "🐳 Docker"} · ${labDoneCount(cat, it)} / ${it.exercise_count} exercice(s)`) : null,
               h("div", { class: "tags" }, (it.tags || []).map((t) => h("span", { class: "tag" }, t)))));
         }))));
     }
-    if (!body.children.length) body.append(h("p", { class: "muted" }, "Aucun résultat."));
+    if (!body.children.length) body.append(h("p", { class: "muted" }, q ? "Aucun résultat." : "Aucun lab pour ce système pour l'instant."));
   };
   search.addEventListener("input", draw);
   draw();
@@ -336,10 +380,12 @@ async function renderList(cat) {
       h("h1", {}, `${meta.icon} ${meta.title}`),
       doneCount !== null ? h("span", { class: "badge ok" }, `${doneCount} / ${items.length} validés`) : null,
       search),
+    hasOs ? h("div", { class: "os-switch" }, h("span", { class: "muted" }, "Système :"), ...osButtons) : null,
     cat === "reseaux" ? h("p", { class: "muted" },
       "Les exercices se font dans un terminal Cisco IOS simulé (switch 2960 / routeur ISR) : mêmes modes, mêmes commandes, abréviations comprises.") : null,
-    meta.labs ? h("p", { class: "muted" },
-      "Chaque lab démarre un environnement isolé dans Docker en un clic, avec un terminal intégré et des exercices vérifiés automatiquement.") : null,
+    meta.labs ? h("p", { class: "muted" }, hasOs && os === "windows"
+      ? "Chaque lab démarre de vraies machines virtuelles Windows Server et Windows 11 (Vagrant + VirtualBox) en un clic, avec un terminal PowerShell intégré et des exercices vérifiés automatiquement."
+      : "Chaque lab démarre un environnement isolé dans Docker en un clic, avec un terminal intégré et des exercices vérifiés automatiquement.") : null,
     body));
 }
 
@@ -387,7 +433,11 @@ async function renderPythonExercise(id) {
   const editorHost = h("div", { class: "editor-wrap" });
   const runBtn = h("button", { class: "btn", title: "Exécuter (Ctrl+Entrée)" }, "▶ Exécuter");
   const submitBtn = h("button", { class: "btn primary", title: "Lancer la moulinette (Ctrl+Maj+Entrée)" }, "✔ Valider");
-  const resetBtn = h("button", { class: "btn small danger" }, "Réinitialiser");
+  const resetBtn = h("button", { class: "btn small danger" }, "Effacer");
+  // L'éditeur démarre vide : le squelette (signatures attendues) n'est inséré qu'à la demande.
+  const blank = "# Écris ton code ici\n";
+  const hasSkeleton = exercise.starter.trim() && exercise.starter.trim() !== blank.trim();
+  const skeletonBtn = hasSkeleton ? h("button", { class: "btn small", title: "Insérer les signatures attendues par la moulinette" }, "Squelette") : null;
 
   const outputPane = h("pre", { class: "output muted" }, "Clique sur « Exécuter » pour lancer ton code, ou sur « Valider » pour la moulinette.");
   const resultsPane = h("div", { class: "results" }, h("p", { class: "muted" }, "Pas encore de correction."));
@@ -420,16 +470,17 @@ async function renderPythonExercise(id) {
   }
 
   app.replaceChildren(h("div", { class: "workspace" },
-    h("section", { class: "left" }, ...meta, markdown(exercise.description), exerciseNav("python", items, id)),
+    h("section", { class: "left" }, ...meta, withCours([markdown(exercise.description)], exercise.cours, exercise.docs),
+      exerciseNav("python", items, id)),
     h("section", { class: "right" },
       h("div", { class: "toolbar" }, runBtn, submitBtn, h("span", { class: "spacer" }),
-        h("span", { class: "hint" }, isStdio ? "Programme lu sur l'entrée standard" : "Fonctions testées par la moulinette"), resetBtn),
+        h("span", { class: "hint" }, isStdio ? "Programme lu sur l'entrée standard" : "Fonctions testées par la moulinette"), skeletonBtn, resetBtn),
       editorHost,
       h("div", { class: "bottom" }, tabs, panes.output, panes.results, panes.terminal))));
   showTab("output");
 
   const editor = CodeMirror(editorHost, {
-    value: storage.get(codeKey, null) ?? exercise.starter,
+    value: storage.get(codeKey, null) ?? blank,
     mode: "python",
     lineNumbers: true,
     indentUnit: 4,
@@ -502,9 +553,15 @@ async function renderPythonExercise(id) {
   runBtn.addEventListener("click", run);
   submitBtn.addEventListener("click", submit);
   resetBtn.addEventListener("click", () => {
-    if (editor.getValue() === exercise.starter) return;
-    editor.setValue(exercise.starter);
+    editor.setValue(blank);
     sync();
+  });
+  skeletonBtn?.addEventListener("click", () => {
+    const current = editor.getValue().trim();
+    if (!current || current === blank.trim()) editor.setValue(exercise.starter);
+    else editor.replaceSelection(exercise.starter);
+    sync();
+    editor.focus();
   });
 }
 
@@ -533,8 +590,9 @@ async function renderNetworkExercise(id) {
   cli.addEventListener("click", () => { if (!getSelection().toString()) input.focus(); });
 
   app.replaceChildren(h("div", { class: "workspace" },
-    h("section", { class: "left" }, ...meta, markdown(exercise.description),
-      h("h3", {}, "Ce que la moulinette vérifie"), checklist, verdict,
+    h("section", { class: "left" }, ...meta,
+      withCours([markdown(exercise.description), h("h3", {}, "Ce que la moulinette vérifie"), checklist],
+        exercise.cours, exercise.docs), verdict,
       exerciseNav("reseaux", items, id)),
     h("section", { class: "right" },
       h("div", { class: "toolbar" }, checkBtn, h("span", { class: "spacer" }),
@@ -683,14 +741,15 @@ async function renderLab(id, cat = "devops") {
         btn.replaceChildren("Vérifier");
       }
     });
-    card.append(h("header", {}, h("h3", {}, ex.title), btn), markdown(ex.description || ""), result);
+    card.append(h("header", {}, h("h3", {}, ex.title), btn), markdown(ex.description || ""), coursDetails(ex), result);
     return card;
   });
 
   app.replaceChildren(h("div", { class: "workspace" },
     h("section", { class: "left" }, ...exerciseHeader(cat, lab),
-      lab.kind === "vagrant" ? h("p", {}, h("span", { class: "badge warn" }, "🖥 Machine virtuelle Vagrant")) : null,
-      markdown(lab.description),
+      lab.kind === "vagrant" ? h("p", {}, h("span", { class: "badge warn" },
+        lab.os === "windows" ? "🪟 Machine virtuelle Windows (Vagrant)" : "🖥 Machine virtuelle Vagrant")) : null,
+      withCours([markdown(lab.description)], lab.cours, lab.docs),
       h("div", { class: "lab-controls" }, statusDot, statusText, startBtn, stopBtn, resetBtn), errorBox,
       h("h3", {}, `Exercices (${lab.exercises.length})`), ...exerciseCards,
       exerciseNav(cat, items, id)),

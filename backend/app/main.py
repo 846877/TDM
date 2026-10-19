@@ -263,7 +263,7 @@ def network_check(session_id: str, profile: int | None = ProfileHeader):
 @app.get("/api/devops/labs")
 def devops_labs(category: str = "devops"):
     return [
-        {k: v for k, v in devops.public(lab).items() if k != "description"} | {"exercise_count": len(lab["exercises"])}
+        {k: v for k, v in devops.public(lab).items() if k not in ("description", "cours", "exercises")} | {"exercise_count": len(lab["exercises"])}
         for lab in devops.load_labs(category=category)
     ]
 

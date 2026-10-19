@@ -71,7 +71,8 @@ def _load_dir(root: Path, default_category: str) -> list[dict[str, Any]]:
                 data["compose"] = "docker-compose.yml"
             else:
                 data["image"] = "ubuntu:24.04"
-        data.setdefault("shell", "bash")
+        data.setdefault("os", "linux")
+        data.setdefault("shell", "powershell" if data["os"] == "windows" else "bash")
         data.setdefault("exercises", [])
         for index, exercise in enumerate(data["exercises"], start=1):
             exercise.setdefault("id", f"ex{index}")
@@ -90,8 +91,11 @@ def public(lab: dict[str, Any]) -> dict[str, Any]:
         "ports": lab.get("ports", []),
         "kind": "vagrant" if "vagrant" in lab else "docker",
         "category": lab["category"],
+        "os": lab.get("os", "linux"),
+        "cours": lab.get("cours", ""),
+        "docs": lab.get("docs", []),
         "exercises": [
-            {k: e.get(k) for k in ("id", "title", "description", "hint") if e.get(k) is not None}
+            {k: e.get(k) for k in ("id", "title", "description", "hint", "cours", "docs") if e.get(k) is not None}
             for e in lab["exercises"]
         ],
     }
