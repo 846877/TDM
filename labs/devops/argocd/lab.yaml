@@ -46,3 +46,73 @@ exercises:
         run: test "$(sudo kubectl -n guestbook get deploy guestbook -o jsonpath='{.status.availableReplicas}')" = 3
       - desc: Le dépôt déclare 3 réplicas
         run: git --git-dir=/repos grep -h 'replicas' $(git --git-dir=/repos rev-parse HEAD) -- guestbook | grep -q 3
+  - id: auto-reparation
+    title: Auto-réparation et nettoyage
+    description: |
+      Avec GitOps, Git est la seule source de vérité. Active sur l'application `guestbook` :
+      - `selfHeal` : toute modification manuelle dans le cluster est annulée ;
+      - `prune` : une ressource retirée du dépôt est supprimée du cluster.
+
+      Teste : supprime le déploiement à la main (`sudo kubectl -n guestbook delete deploy guestbook`)
+      et observe Argo CD le recréer.
+    hint: "argocd app set guestbook --self-heal --auto-prune"
+    checks:
+      - desc: selfHeal activé
+        run: test "$(sudo kubectl -n argocd get application guestbook -o jsonpath='{.spec.syncPolicy.automated.selfHeal}')" = true
+      - desc: prune activé
+        run: test "$(sudo kubectl -n argocd get application guestbook -o jsonpath='{.spec.syncPolicy.automated.prune}')" = true
+      - desc: Le déploiement guestbook existe et est disponible
+        run: test "$(sudo kubectl -n guestbook get deploy guestbook -o jsonpath='{.status.availableReplicas}')" -ge 1
+  - id: kustomize
+    title: Environnements avec Kustomize
+    description: |
+      Dans le dépôt, crée `guestbook-kustomize/base` (le déploiement et le service `guestbook` + un
+      `kustomization.yaml`) et un overlay `guestbook-kustomize/overlays/prod` qui :
+      - ajoute le préfixe `prod-` aux noms (`namePrefix`) ;
+      - passe à **2 réplicas** ;
+      - cible le namespace `guestbook-prod`.
+
+      Pousse, puis crée l'Application `guestbook-prod` qui suit `guestbook-kustomize/overlays/prod`
+      (synchronisation automatique, création du namespace).
+    hint: "Teste le rendu en local avec kubectl kustomize guestbook-kustomize/overlays/prod avant de pousser"
+    checks:
+      - desc: L'application guestbook-prod est Synced et Healthy
+        run: |
+          test "$(sudo kubectl -n argocd get application guestbook-prod -o jsonpath='{.status.sync.status}/{.status.health.status}')" = Synced/Healthy
+      - desc: Argo CD a détecté une source Kustomize
+        run: test "$(sudo kubectl -n argocd get application guestbook-prod -o jsonpath='{.status.sourceType}')" = Kustomize
+      - desc: prod-guestbook a 2 réplicas dans guestbook-prod
+        run: test "$(sudo kubectl -n guestbook-prod get deploy prod-guestbook -o jsonpath='{.status.availableReplicas}')" = 2
+  - id: helm
+    title: Déployer un chart Helm avec Argo CD
+    description: |
+      Ajoute au dépôt un chart Helm `charts/hello` (`helm create charts/hello`), pousse-le, puis crée l'Application
+      `hello` qui déploie ce chart dans le namespace `hello` en **surchargeant** la valeur `replicaCount` à `2`
+      (paramètre Helm de l'application, sans modifier le `values.yaml` du dépôt).
+    hint: "argocd app create hello --repo ... --path charts/hello --dest-namespace hello --helm-set replicaCount=2 --sync-policy automated --sync-option CreateNamespace=true"
+    checks:
+      - desc: L'application hello est de type Helm
+        run: test "$(sudo kubectl -n argocd get application hello -o jsonpath='{.status.sourceType}')" = Helm
+      - desc: replicaCount est surchargé à 2 dans l'application
+        run: sudo kubectl -n argocd get application hello -o jsonpath='{.spec.source.helm}' | grep -q 'replicaCount'
+      - desc: Le déploiement a 2 réplicas disponibles
+        run: test "$(sudo kubectl -n hello get deploy -o jsonpath='{.items[0].status.availableReplicas}')" = 2
+  - id: projet
+    title: Cloisonner avec un AppProject
+    description: |
+      Le projet `default` autorise tout. Crée un **AppProject** `equipe-web` qui :
+      - n'autorise que ton dépôt comme source (`sourceRepos`) ;
+      - n'autorise que les namespaces `guestbook` et `guestbook-prod` du cluster local comme destinations.
+
+      Rattache ensuite l'application `guestbook` à ce projet (elle doit rester Synced/Healthy).
+    hint: "argocd proj create equipe-web -d https://kubernetes.default.svc,guestbook -d https://kubernetes.default.svc,guestbook-prod -s <url du dépôt> ; argocd app set guestbook --project equipe-web"
+    checks:
+      - desc: L'AppProject equipe-web limite les destinations
+        run: |
+          d=$(sudo kubectl -n argocd get appproject equipe-web -o jsonpath='{.spec.destinations[*].namespace}'); echo "$d" | grep -qw guestbook && ! echo "$d" | grep -q '\*'
+      - desc: Les sources sont restreintes
+        run: |
+          s=$(sudo kubectl -n argocd get appproject equipe-web -o jsonpath='{.spec.sourceRepos[*]}'); test -n "$s" && test "$s" != '*'
+      - desc: guestbook appartient à equipe-web et reste saine
+        run: |
+          test "$(sudo kubectl -n argocd get application guestbook -o jsonpath='{.spec.project} {.status.health.status}')" = "equipe-web Healthy"

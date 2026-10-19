@@ -1,8 +1,8 @@
 title: Ansible, de l'inventaire aux rôles
 level: intermediaire
 order: 2
-tags: [ansible, automatisation, ssh]
-summary: Inventaire, commandes ad hoc, playbooks et rôles sur deux clients.
+tags: [ansible, automatisation, ssh, vault]
+summary: Inventaire, ad hoc, playbooks, rôles, variables, handlers, Ansible Vault et dépannage.
 compose: docker-compose.yml
 service: ansible
 shell: sh
@@ -14,6 +14,10 @@ description: |
 
   Particularité : les clients n'ont **pas Python**, qu'Ansible utilise pour la plupart de ses modules.
   Tu vas commencer par l'installer avec Ansible lui-même.
+
+  Le parcours : inventaire, bootstrap, premier playbook, rôle, configuration du projet (`ansible.cfg`),
+  variables et faits, handlers, secrets chiffrés avec Ansible Vault, et pour finir le dépannage d'un
+  playbook cassé.
 exercises:
   - id: inventaire
     title: Inventaire et connexion SSH par clé
@@ -74,3 +78,98 @@ exercises:
       - desc: Chaque client affiche son propre nom
         run: for h in client1 client2; do ansible -i /home/ansible/hosts $h -m command -a 'cat /var/www/localhost/htdocs/index.html' | grep -q "Bienvenue sur $h" || exit 1; done
         timeout: 90
+  - id: configuration
+    title: Configurer le projet avec ansible.cfg
+    description: |
+      Taper `-i hosts` à chaque commande devient pénible. Crée `/home/ansible/ansible.cfg` (section `[defaults]`) qui :
+      - utilise `hosts` comme inventaire par défaut (`inventory = hosts`) ;
+      - désactive la création des fichiers `.retry` (`retry_files_enabled = False`).
+
+      Depuis `/home/ansible`, `ansible clients -m ping` doit fonctionner **sans** `-i`.
+      Vérifie ce qui a changé avec `ansible-config dump --only-changed`.
+    hint: "[defaults] / inventory = hosts / retry_files_enabled = False"
+    checks:
+      - desc: ansible.cfg déclare l'inventaire
+        run: cd /home/ansible && ansible-config dump --only-changed 2>/dev/null | grep -q '^DEFAULT_HOST_LIST'
+      - desc: ansible clients -m ping fonctionne sans -i
+        run: cd /home/ansible && ansible clients -m ping | grep -c SUCCESS | grep -qx 2
+        timeout: 90
+  - id: variables
+    title: Variables, boucles et faits
+    description: |
+      1. Crée `/home/ansible/group_vars/clients.yml` qui définit la liste `paquets` contenant `curl` et `git`.
+      2. Écris `/home/ansible/paquets.yml` (avec `become: true`) qui installe **en boucle** chaque paquet de la
+         liste (`loop: "{{ paquets }}"`), puis dépose le fichier `/etc/tdm-info` à partir d'un **template**
+         `templates/tdm-info.j2` contenant une ligne du type `client1 tourne sous Alpine 3.xx`
+         (utilise `inventory_hostname` et les faits `ansible_facts['distribution']` et
+         `ansible_facts['distribution_version']`).
+    hint: "Les variables de group_vars/clients.yml s'appliquent automatiquement au groupe clients ; ansible client1 -m setup affiche les faits"
+    checks:
+      - desc: group_vars/clients.yml définit paquets
+        run: cd /home/ansible && ansible-inventory -i hosts --host client1 | grep -q '"paquets"'
+      - desc: git et curl sont installés sur les clients
+        run: ansible -i /home/ansible/hosts clients -m command -a 'git --version' | grep -c 'rc=0' | grep -qx 2 && ansible -i /home/ansible/hosts clients -m command -a 'which curl' | grep -c 'rc=0' | grep -qx 2
+        timeout: 90
+      - desc: /etc/tdm-info contient le nom de l'hôte et la distribution
+        run: for h in client1 client2; do ansible -i /home/ansible/hosts $h -m command -a 'cat /etc/tdm-info' | grep -q "$h tourne sous Alpine" || exit 1; done
+        timeout: 90
+      - desc: Une boucle est utilisée dans paquets.yml
+        run: grep -Eq '^\s*(loop|with_items)' /home/ansible/paquets.yml
+  - id: handlers
+    title: Configurer nginx avec un handler
+    description: |
+      Écris `/home/ansible/nginx.yml` (avec `become: true`) qui :
+      1. dépose depuis un template la configuration `/etc/nginx/http.d/default.conf` : un serveur qui écoute
+         sur le port **8080** et sert `/var/www/localhost/htdocs` (la page du rôle `webserver`) ;
+      2. s'assure que nginx tourne (les clients n'ont pas de systemd : `nginx` le démarre, `pgrep nginx` le vérifie) ;
+      3. **recharge** nginx via un **handler** notifié uniquement quand la configuration change (`nginx -s reload`).
+
+      Depuis chaque client, `wget -qO- http://localhost:8080` doit afficher `Bienvenue sur <nom du client>`.
+    hint: "tâche template avec notify: recharger nginx ; tâche shell: pgrep nginx || nginx ; handlers: - name: recharger nginx / command: nginx -s reload"
+    checks:
+      - desc: Le playbook utilise un handler
+        run: grep -q 'handlers:' /home/ansible/nginx.yml && grep -q 'notify:' /home/ansible/nginx.yml
+      - desc: Chaque client sert sa page sur le port 8080
+        run: for h in client1 client2; do ansible -i /home/ansible/hosts $h -m command -a 'wget -qO- http://localhost:8080' | grep -q "Bienvenue sur $h" || exit 1; done
+        timeout: 90
+  - id: vault
+    title: Secrets chiffrés avec Ansible Vault
+    description: |
+      1. Mets le mot de passe du coffre dans `/home/ansible/.vault_pass` (droits `600`).
+      2. Crée le fichier **chiffré** `/home/ansible/secrets.yml` contenant `db_password: S3cret-TDM`
+         (`ansible-vault create --vault-password-file .vault_pass secrets.yml`).
+      3. Écris `/home/ansible/app.yml` qui charge ce fichier (`vars_files`) et dépose sur les clients
+         `/etc/app.conf` contenant `password=S3cret-TDM`, propriétaire `root`, droits `0600`.
+      4. Lance-le avec `--vault-password-file .vault_pass`.
+    hint: "ansible-playbook app.yml --vault-password-file .vault_pass (ou vault_password_file dans ansible.cfg)"
+    checks:
+      - desc: secrets.yml est chiffré
+        run: head -1 /home/ansible/secrets.yml | grep -q '^\$ANSIBLE_VAULT'
+      - desc: Le coffre s'ouvre avec .vault_pass et contient db_password
+        run: test "$(stat -c %a /home/ansible/.vault_pass)" = 600 && ansible-vault view --vault-password-file /home/ansible/.vault_pass /home/ansible/secrets.yml | grep -q 'db_password'
+      - desc: /etc/app.conf est déployé en 0600 avec le mot de passe
+        run: ansible -i /home/ansible/hosts clients --become -m shell -a 'test "$(stat -c %a /etc/app.conf)" = 600 && grep -qx password=S3cret-TDM /etc/app.conf' | grep -c 'rc=0' | grep -qx 2
+        timeout: 90
+  - id: depannage
+    title: Réparer un playbook cassé
+    description: |
+      Un collègue a laissé `/home/ansible/casse.yml` qui doit créer `/opt/tdm` (propriétaire `deploy`) et y
+      écrire le fichier `version` contenant `1.2.3`… mais il ne fonctionne pas. Trouve et corrige **toutes**
+      les erreurs, en t'aidant de :
+      - `ansible-playbook casse.yml --syntax-check`
+      - `ansible-doc <module>` et `ansible-playbook casse.yml -v`
+
+      Le playbook corrigé doit s'exécuter sans erreur et être idempotent.
+    hint: "Il y a trois erreurs : une indentation YAML, un nom de module mal orthographié et un droit d'administrateur manquant"
+    checks:
+      - desc: La syntaxe est correcte
+        run: cd /home/ansible && ansible-playbook -i hosts casse.yml --syntax-check
+      - desc: /opt/tdm/version contient 1.2.3 sur les clients
+        run: ansible -i /home/ansible/hosts clients --become -m command -a 'cat /opt/tdm/version' | grep -cx '1.2.3' | grep -qx 2
+        timeout: 90
+      - desc: /opt/tdm appartient à deploy
+        run: ansible -i /home/ansible/hosts clients -m command -a 'stat -c %U /opt/tdm' | grep -cx 'deploy' | grep -qx 2
+        timeout: 90
+      - desc: Le playbook passe sans erreur et sans changement
+        run: cd /home/ansible && ansible-playbook -i hosts casse.yml | grep -E 'client[12] .*changed=0.*failed=0' | wc -l | grep -qx 2
+        timeout: 120

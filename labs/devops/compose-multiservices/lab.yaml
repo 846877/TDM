@@ -1,0 +1,160 @@
+title: Docker Compose multi-services
+level: intermediaire
+order: 8
+tags: [docker, compose, redis, nginx, réseaux, volumes, healthcheck]
+summary: Conteneuriser une application puis l'orchestrer avec Compose - persistance, secrets, santé, proxy, mise à l'échelle et réseaux.
+build: .
+privileged: true
+command: []
+shell: sh
+workdir: /root/app
+setup: |
+  for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+description: |
+  Un hôte Docker rien qu'à toi (Docker dans Docker). Dans `/root/app` se trouve une petite application
+  **Flask** (`app.py`, `requirements.txt`) qui compte les visites dans **Redis**. À chaque requête sur `/`,
+  elle répond `Bonjour ! N visites - servi par <conteneur> - version X`.
+
+  Tu vas la conteneuriser puis décrire toute la pile dans **`/root/app/compose.yaml`** (lance toujours
+  `docker compose` depuis `/root/app`), en l'améliorant étape par étape comme on le ferait avant une mise en
+  production : persistance, secrets, contrôles de santé, reverse proxy, mise à l'échelle et cloisonnement réseau.
+
+  Variables reconnues par l'application : `REDIS_HOST` (défaut `redis`), `REDIS_PASSWORD`, `APP_VERSION`.
+  Pour tester depuis le terminal : `wget -qO- http://localhost:8000/`.
+exercises:
+  - id: dockerfile
+    title: Conteneuriser l'application
+    description: |
+      Écris `/root/app/Dockerfile` :
+      - basé sur `python:3.12-slim` ;
+      - installe les dépendances de `requirements.txt` **avant** de copier le code (pour profiter du cache) ;
+      - s'exécute avec un utilisateur **non root** (`useradd app` puis `USER app`) ;
+      - lance `python app.py` (l'application écoute sur le port 5000).
+
+      Construis l'image `compteur:1.0`.
+    hint: "COPY requirements.txt . / RUN pip install --no-cache-dir -r requirements.txt / COPY app.py . / USER app / CMD [\"python\", \"app.py\"]"
+    checks:
+      - desc: L'image compteur:1.0 contient flask et redis
+        run: docker run --rm compteur:1.0 python -c "import flask, redis"
+      - desc: Elle s'exécute en non root
+        run: u=$(docker image inspect -f '{{.Config.User}}' compteur:1.0); test -n "$u" && test "$u" != root && test "$u" != 0
+      - desc: Les dépendances sont installées avant la copie du code
+        run: |
+          f=/root/app/Dockerfile; r=$(grep -n 'requirements' $f | head -1 | cut -d: -f1); a=$(grep -nE '^COPY.*(app\.py|\. )' $f | grep -v requirements | head -1 | cut -d: -f1); test -n "$r" && test -n "$a" && test "$r" -lt "$a"
+  - id: compose
+    title: Première pile Compose
+    description: |
+      Écris `/root/app/compose.yaml` avec deux services :
+      - `web` : construit depuis le dossier courant (`build: .`), port 5000 publié sur **8000** ;
+      - `redis` : image `redis:7.2-alpine`.
+
+      Démarre la pile avec `docker compose up -d --build` : à chaque rechargement de `http://localhost:8000/`,
+      le compteur augmente. Explore `docker compose ps`, `logs -f web`, `exec redis redis-cli get visites`.
+    hint: "services: / web: / build: . / ports: [\"8000:5000\"] / redis: / image: redis:7.2-alpine"
+    checks:
+      - desc: web et redis tournent
+        run: test "$(docker compose -f /root/app/compose.yaml ps --status running --services | grep -cxE 'web|redis')" = 2
+      - desc: Le compteur augmente à chaque visite
+        run: |
+          u=http://localhost:8000/; wget -q -T 2 -O /dev/null $u 2>/dev/null || u=http://localhost:8080/; a=$(wget -qO- $u | grep -o '[0-9]* visites'); b=$(wget -qO- $u | grep -o '[0-9]* visites'); test -n "$a" && test "$a" != "$b"
+  - id: persistance
+    title: Persister les données de Redis
+    description: |
+      Si tu fais `docker compose down`, le compteur repart de zéro. Corrige cela :
+      - monte un **volume nommé** `redis-data` sur `/data` dans le service `redis` ;
+      - lance Redis avec la persistance AOF : `command: redis-server --appendonly yes`.
+
+      Vérifie : `docker compose down && docker compose up -d`, le compteur continue où il en était.
+    checks:
+      - desc: Le volume redis-data est monté sur /data
+        run: |
+          docker inspect -f '{{range .Mounts}}{{.Name}}:{{.Destination}} {{end}}' "$(docker compose -f /root/app/compose.yaml ps -q redis)" | grep -q 'redis-data:/data'
+      - desc: Redis tourne avec --appendonly yes
+        run: |
+          docker inspect -f '{{json .Config.Cmd}}' "$(docker compose -f /root/app/compose.yaml ps -q redis)" | grep -q 'appendonly'
+  - id: secrets
+    title: Mot de passe Redis dans un fichier .env
+    description: |
+      Protège Redis par un mot de passe **sans l'écrire dans `compose.yaml`** :
+      1. crée `/root/app/.env` contenant `REDIS_PASSWORD=<un mot de passe>` (Compose le lit automatiquement) ;
+      2. lance Redis avec `--requirepass ${REDIS_PASSWORD}` ;
+      3. passe la variable `REDIS_PASSWORD` au service `web`.
+
+      `docker compose exec redis redis-cli ping` doit maintenant répondre `NOAUTH`, et le site fonctionner.
+    hint: "docker compose config affiche le fichier final, variables remplacées"
+    checks:
+      - desc: .env définit REDIS_PASSWORD
+        run: grep -Eq '^REDIS_PASSWORD=.+' /root/app/.env
+      - desc: Le mot de passe n'est pas écrit en clair dans compose.yaml
+        run: |
+          p=$(sed -n 's/^REDIS_PASSWORD=//p' /root/app/.env); test -n "$p" && ! grep -qF -- "$p" /root/app/compose.yaml
+      - desc: Redis exige une authentification
+        run: docker compose -f /root/app/compose.yaml exec -T redis redis-cli ping 2>&1 | grep -q NOAUTH
+      - desc: Le site fonctionne toujours
+        run: wget -qO- http://localhost:8000/ 2>/dev/null | grep -q visites || wget -qO- http://localhost:8080/ | grep -q visites
+  - id: sante
+    title: Contrôles de santé et ordre de démarrage
+    description: |
+      1. Ajoute à `redis` un **healthcheck** (`redis-cli -a "$$REDIS_PASSWORD" ping`, toutes les 5 s) — le
+         `$$` empêche Compose de remplacer la variable lui-même.
+      2. Fais dépendre `web` de `redis` **seulement quand il est sain** (`depends_on` avec `condition: service_healthy`).
+      3. Donne à `web` la politique de redémarrage `unless-stopped`.
+    hint: "healthcheck: test: [\"CMD-SHELL\", \"redis-cli -a \\\"$$REDIS_PASSWORD\\\" ping | grep -q PONG\"], interval: 5s ; pense à passer aussi REDIS_PASSWORD à redis dans environment"
+    checks:
+      - desc: redis est healthy
+        run: test "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose -f /root/app/compose.yaml ps -q redis)")" = healthy
+      - desc: web attend que redis soit sain
+        run: docker compose -f /root/app/compose.yaml config | grep -q 'condition. service_healthy'
+      - desc: web redémarre automatiquement (unless-stopped)
+        run: |
+          for c in $(docker compose -f /root/app/compose.yaml ps -q web); do test "$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$c")" = unless-stopped || exit 1; done; test -n "$(docker compose -f /root/app/compose.yaml ps -q web)"
+  - id: proxy
+    title: Reverse proxy et mise à l'échelle
+    description: |
+      1. Ajoute un service `proxy` construit depuis `/root/app/proxy` : un `Dockerfile` basé sur
+         `nginx:1.27-alpine` qui copie un `nginx.conf` dans `/etc/nginx/conf.d/default.conf` (un `server` qui
+         transmet tout à `http://web:5000`). Publie son port 80 sur **8080**.
+      2. Retire la publication du port 8000 de `web` (seul le proxy est exposé), puis passe `web` à **3 réplicas**
+         (`deploy.replicas: 3` ou `docker compose up -d --scale web=3`).
+
+      En rechargeant `http://localhost:8080/`, le nom du conteneur qui répond change.
+    hint: "Si le proxy a démarré avant les nouveaux réplicas, redémarre-le (docker compose restart proxy) : nginx résout le nom web au démarrage"
+    checks:
+      - desc: 3 réplicas de web tournent
+        run: test "$(docker compose -f /root/app/compose.yaml ps -q web | wc -l)" = 3
+      - desc: Le proxy répond sur 8080
+        run: wget -qO- http://localhost:8080/ | grep -q visites
+      - desc: Les requêtes sont réparties sur plusieurs réplicas
+        run: |
+          for i in 1 2 3 4 5 6 7 8 9; do wget -qO- http://localhost:8080/; done | grep -o 'servi par [^ ]*' | sort -u | wc -l | grep -qv '^[01]$'
+      - desc: web n'est plus publié sur 8000
+        run: "! wget -q -T 2 -O- http://localhost:8000/ >/dev/null 2>&1"
+  - id: reseaux
+    title: Cloisonner avec deux réseaux
+    description: |
+      Le proxy n'a aucune raison de parler à Redis. Déclare deux réseaux :
+      - `front` : `proxy` et `web` ;
+      - `back` : `web` et `redis`.
+
+      Ainsi `docker compose exec proxy ping redis` échoue, alors que le site fonctionne toujours.
+    checks:
+      - desc: redis n'est que sur le réseau back
+        run: |
+          n=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$(docker compose -f /root/app/compose.yaml ps -q redis)"); echo "$n" | grep -q '_back' && ! echo "$n" | grep -q '_front'
+      - desc: proxy n'est que sur le réseau front
+        run: |
+          n=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$(docker compose -f /root/app/compose.yaml ps -q proxy)"); echo "$n" | grep -q '_front' && ! echo "$n" | grep -q '_back'
+      - desc: Le site fonctionne toujours via le proxy
+        run: wget -qO- http://localhost:8080/ | grep -q visites
+  - id: version
+    title: Déployer une nouvelle version
+    description: |
+      Publie la version **2.0** : définis la variable `APP_VERSION=2.0` pour `web` dans `compose.yaml` et applique
+      le changement avec `docker compose up -d`. Seuls les conteneurs modifiés sont recréés, et le compteur
+      (dans Redis) ne repart pas de zéro.
+    checks:
+      - desc: Le site affiche la version 2.0
+        run: wget -qO- http://localhost:8080/ | grep -q 'version 2.0'
+      - desc: Tous les réplicas sont en version 2.0
+        run: |
+          test -n "$(docker compose -f /root/app/compose.yaml ps -q web)" || exit 1; for c in $(docker compose -f /root/app/compose.yaml ps -q web); do docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$c" | grep -qx 'APP_VERSION=2.0' || exit 1; done

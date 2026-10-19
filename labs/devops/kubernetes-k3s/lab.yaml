@@ -1,0 +1,150 @@
+title: Kubernetes avec k3s
+level: avance
+order: 5
+tags: [kubernetes, k3s, kubectl, déploiement, stockage]
+summary: Un vrai cluster k3s sans VM - déploiements, services, ConfigMap, sondes, stockage, rollback, jobs et dépannage.
+compose: docker-compose.yml
+service: ops
+shell: bash
+workdir: /root
+description: |
+  Un cluster **k3s** (Kubernetes certifié CNCF, en version légère) tourne dans le conteneur `k3s`.
+  Ton terminal est sur **ops**, avec `kubectl` (alias `k`, complétion activée) déjà configuré.
+  Le cluster met une trentaine de secondes à démarrer : attends que `kubectl get nodes` affiche `Ready`.
+
+  Les NodePort sont joignables depuis ops à l'adresse `http://k3s:<port>`, et le port **30080** est publié sur
+  **http://localhost:30880** de ta machine.
+
+  Le parcours : explorer le cluster, déployer et exposer une application, la configurer, la rendre robuste,
+  lui donner du stockage persistant, la mettre à jour (et revenir en arrière), lancer des tâches, puis dépanner
+  une application cassée. Travaille dans le namespace **`tdm`**.
+exercises:
+  - id: cluster
+    title: Explorer le cluster
+    description: |
+      1. Liste les nœuds (`kubectl get nodes -o wide`) et écris le **nom** du nœud dans `/root/noeud.txt`.
+      2. Pose l'étiquette `role=lab` sur ce nœud.
+      3. Crée le namespace `tdm` et fais-en le namespace par défaut de ton contexte.
+    hint: "kubectl label node <nom> role=lab ; kubectl create namespace tdm ; kubectl config set-context --current --namespace=tdm"
+    checks:
+      - desc: Le nom du nœud est correct
+        run: test -s /root/noeud.txt && test "$(tr -d '[:space:]' < /root/noeud.txt)" = "$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')"
+      - desc: Le nœud porte l'étiquette role=lab
+        run: kubectl get nodes -l role=lab --no-headers | grep -q .
+      - desc: Le namespace tdm est celui du contexte
+        run: kubectl get namespace tdm >/dev/null && test "$(kubectl config view --minify -o jsonpath='{.contexts[0].context.namespace}')" = tdm
+  - id: deploiement
+    title: Déployer et exposer une application
+    description: |
+      Dans `tdm`, crée le déploiement `web` (image `nginx:1.27-alpine`, **3 réplicas**) et un service
+      **ClusterIP** `web` sur le port 80. Observe la découverte de service :
+      `kubectl exec deploy/web -- wget -qO- http://web` (le nom `web` est résolu par le DNS du cluster).
+    hint: "kubectl create deployment web --image=nginx:1.27-alpine --replicas=3 ; kubectl expose deployment web --port=80"
+    checks:
+      - desc: 3 réplicas disponibles
+        run: test "$(kubectl -n tdm get deploy web -o jsonpath='{.status.availableReplicas}')" = 3
+      - desc: Le service web a 3 endpoints
+        run: test "$(kubectl -n tdm get endpoints web -o jsonpath='{.subsets[*].addresses[*].ip}' | wc -w)" = 3
+      - desc: Le service répond par son nom
+        run: kubectl -n tdm exec deploy/web -- wget -q -O /dev/null -T 5 http://web
+  - id: nodeport
+    title: Exposer à l'extérieur (NodePort)
+    description: |
+      Crée un second service `web-externe` de type **NodePort** qui expose `web` sur le port **30080** du nœud.
+      Teste depuis ops (`curl http://k3s:30080`) puis depuis ton navigateur (http://localhost:30880).
+    hint: "kubectl expose deployment web --name=web-externe --type=NodePort --port=80, puis kubectl edit svc web-externe pour fixer nodePort: 30080"
+    checks:
+      - desc: web-externe est un NodePort sur 30080
+        run: test "$(kubectl -n tdm get svc web-externe -o jsonpath='{.spec.type}/{.spec.ports[0].nodePort}')" = NodePort/30080
+      - desc: L'application répond sur k3s:30080
+        run: curl -fsS --max-time 5 http://k3s:30080/ >/dev/null
+  - id: configuration
+    title: Configurer avec une ConfigMap
+    description: |
+      Remplace la page d'accueil de nginx sans reconstruire d'image : crée la ConfigMap `web-contenu` avec une
+      clé `index.html` contenant `Bonjour depuis une ConfigMap`, et monte-la dans le déploiement `web` sur
+      `/usr/share/nginx/html`.
+    hint: "kubectl create configmap web-contenu --from-literal=index.html='Bonjour depuis une ConfigMap' ; puis un volume configMap et un volumeMount (kubectl edit deploy web)"
+    checks:
+      - desc: Le déploiement monte la ConfigMap
+        run: kubectl -n tdm get deploy web -o jsonpath='{.spec.template.spec.volumes[*].configMap.name}' | grep -qw web-contenu
+      - desc: La page vient de la ConfigMap
+        run: curl -fsS --max-time 5 http://k3s:30080/ | grep -q 'Bonjour depuis une ConfigMap'
+  - id: robustesse
+    title: Sondes et ressources
+    description: |
+      Rends `web` digne de la production :
+      - `readinessProbe` et `livenessProbe` HTTP sur `/`, port 80 ;
+      - requêtes de **50m** de CPU et **32Mi** de mémoire, limite de **64Mi** de mémoire.
+
+      Observe le déploiement progressif avec `kubectl rollout status deploy/web`.
+    hint: "kubectl set resources deploy web --requests=cpu=50m,memory=32Mi --limits=memory=64Mi ; les sondes s'ajoutent avec kubectl edit"
+    checks:
+      - desc: Les deux sondes HTTP sont définies
+        run: |
+          test "$(kubectl -n tdm get deploy web -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.port} {.spec.template.spec.containers[0].livenessProbe.httpGet.port}')" = "80 80"
+      - desc: Requêtes et limite définies
+        run: |
+          test "$(kubectl -n tdm get deploy web -o jsonpath='{.spec.template.spec.containers[0].resources.requests.cpu} {.spec.template.spec.containers[0].resources.requests.memory} {.spec.template.spec.containers[0].resources.limits.memory}')" = "50m 32Mi 64Mi"
+      - desc: Les 3 réplicas sont prêts
+        run: test "$(kubectl -n tdm get deploy web -o jsonpath='{.status.readyReplicas}')" = 3
+  - id: stockage
+    title: Stockage persistant
+    description: |
+      k3s fournit une classe de stockage par défaut (`local-path`). Crée la PersistentVolumeClaim `donnees`
+      (100Mi, `ReadWriteOnce`) puis le pod `ecrivain` (image `busybox:1.36`, commande `sleep 3600`) qui la monte
+      sur `/data`. Écris `persistant` dans `/data/test.txt` depuis le pod.
+
+      Bonus : supprime le pod, recrée-le, et constate que le fichier est toujours là.
+    hint: "kubectl get storageclass ; kubectl exec ecrivain -- sh -c 'echo persistant > /data/test.txt'"
+    checks:
+      - desc: La claim donnees est liée
+        run: test "$(kubectl -n tdm get pvc donnees -o jsonpath='{.status.phase}')" = Bound
+      - desc: Le pod ecrivain monte donnees
+        run: kubectl -n tdm get pod ecrivain -o jsonpath='{.spec.volumes[*].persistentVolumeClaim.claimName}' | grep -qw donnees
+      - desc: Le fichier est sur le volume
+        run: test "$(kubectl -n tdm exec ecrivain -- cat /data/test.txt)" = persistant
+  - id: rollout
+    title: Mise à jour et retour arrière
+    description: |
+      1. Mets à jour `web` vers l'image `nginx:1.27.3-alpine` et suis le déploiement progressif.
+      2. Oups, la recette a trouvé un problème : **reviens à la révision précédente** avec `kubectl rollout undo`.
+
+      Consulte l'historique avec `kubectl rollout history deploy/web`.
+    hint: "kubectl set image deploy/web nginx=nginx:1.27.3-alpine (le conteneur s'appelle nginx si tu as utilisé kubectl create deployment)"
+    checks:
+      - desc: Une révision en nginx:1.27.3-alpine a existé
+        run: kubectl -n tdm get rs -o jsonpath='{.items[*].spec.template.spec.containers[0].image}' | grep -q 'nginx:1.27.3-alpine'
+      - desc: web est revenu sur nginx:1.27-alpine
+        run: test "$(kubectl -n tdm get deploy web -o jsonpath='{.spec.template.spec.containers[0].image}')" = nginx:1.27-alpine
+      - desc: Le déploiement est terminé
+        run: kubectl -n tdm rollout status deploy/web --timeout=30s
+        timeout: 45
+  - id: taches
+    title: Jobs et CronJobs
+    description: |
+      1. Lance le Job `calcul` (image `busybox:1.36`) qui affiche le résultat de `6 * 7` puis se termine
+         (`sh -c 'echo $((6*7))'`). Lis son résultat avec `kubectl logs job/calcul`.
+      2. Crée le CronJob `menage` (image `busybox:1.36`, commande `date`) exécuté **toutes les 5 minutes**.
+    hint: "kubectl create job calcul --image=busybox:1.36 -- sh -c 'echo $((6*7))' ; kubectl create cronjob menage --image=busybox:1.36 --schedule='*/5 * * * *' -- date"
+    checks:
+      - desc: Le job calcul a réussi
+        run: test "$(kubectl -n tdm get job calcul -o jsonpath='{.status.succeeded}')" = 1
+      - desc: Il a affiché 42
+        run: kubectl -n tdm logs job/calcul | grep -qx 42
+      - desc: Le CronJob menage tourne toutes les 5 minutes
+        run: test "$(kubectl -n tdm get cronjob menage -o jsonpath='{.spec.schedule}')" = '*/5 * * * *'
+  - id: depannage
+    title: Dépanner une application
+    description: |
+      Une autre équipe a livré `/root/manifestes/boutique.yaml`. Applique-le : l'application ne démarre pas et
+      son service ne répond pas. Diagnostique avec `kubectl get pods`, `describe`, `logs`, `get endpoints`… et
+      corrige **toutes** les erreurs (il y en a trois) jusqu'à ce que `http://boutique` réponde dans le cluster.
+    hint: "Un nom d'image, un sélecteur de service et un port cible : compare les étiquettes des pods et le port du conteneur"
+    checks:
+      - desc: 2 réplicas de boutique disponibles
+        run: test "$(kubectl -n tdm get deploy boutique -o jsonpath='{.status.availableReplicas}')" = 2
+      - desc: Le service boutique a des endpoints
+        run: kubectl -n tdm get endpoints boutique -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q .
+      - desc: Le service répond
+        run: kubectl -n tdm exec deploy/boutique -- wget -qO- -T 5 http://boutique | grep -qi nginx

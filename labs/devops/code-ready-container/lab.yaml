@@ -29,3 +29,39 @@ exercises:
         run: eval $(crc oc-env) && oc -n demo get pods --no-headers | grep hello | grep -q Running
       - desc: La route hello existe
         run: eval $(crc oc-env) && oc -n demo get route hello
+  - id: configuration
+    title: Configuration par ConfigMap
+    description: |
+      Crée dans `demo` la ConfigMap `hello-config` contenant `RESPONSE=Bonjour depuis OpenShift 4` et injecte-la
+      dans le déploiement `hello` comme variables d'environnement. La route doit afficher ce message.
+    hint: "oc create configmap hello-config --from-literal=RESPONSE='Bonjour depuis OpenShift 4' ; oc set env deployment/hello --from=configmap/hello-config"
+    checks:
+      - desc: hello utilise la ConfigMap
+        run: eval $(crc oc-env) && oc -n demo get deployment hello -o yaml | grep -q 'hello-config'
+      - desc: La route affiche le nouveau message
+        run: |
+          eval $(crc oc-env) && curl -fsSk --max-time 10 "http://$(oc -n demo get route hello -o jsonpath='{.spec.host}')" | grep -q 'Bonjour depuis OpenShift 4'
+  - id: sondes
+    title: Sondes et mise à l'échelle
+    description: |
+      Ajoute au déploiement `hello` des sondes *readiness* et *liveness* HTTP sur le port **8080**, puis
+      passe-le à **3 réplicas**.
+    hint: "oc set probe deployment/hello --readiness --liveness --get-url=http://:8080/ ; oc scale deployment/hello --replicas=3"
+    checks:
+      - desc: Sondes readiness et liveness définies
+        run: |
+          eval $(crc oc-env) && oc -n demo get deployment hello -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.port} {.spec.template.spec.containers[0].livenessProbe.httpGet.port}' | grep -qx '8080 8080'
+      - desc: 3 réplicas prêts
+        run: eval $(crc oc-env) && test "$(oc -n demo get deployment hello -o jsonpath='{.status.readyReplicas}')" = 3
+  - id: stockage
+    title: Stockage persistant
+    description: |
+      Crée dans `demo` une PersistentVolumeClaim `donnees` de 1Gi (classe de stockage par défaut de CRC) et
+      monte-la dans le déploiement `hello` sur `/data`. La claim doit passer à l'état `Bound`.
+    hint: "oc set volume deployment/hello --add --name=donnees --type=pvc --claim-name=donnees --claim-size=1Gi --mount-path=/data"
+    checks:
+      - desc: La claim donnees est liée
+        run: eval $(crc oc-env) && test "$(oc -n demo get pvc donnees -o jsonpath='{.status.phase}')" = Bound
+      - desc: hello monte la claim sur /data
+        run: |
+          eval $(crc oc-env) && oc -n demo get deployment hello -o jsonpath='{.spec.template.spec.containers[0].volumeMounts[*].mountPath}' | grep -qw /data

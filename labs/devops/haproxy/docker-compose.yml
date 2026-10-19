@@ -7,11 +7,13 @@ services:
       - "8090:80"
       - "8404:8404"
   red:
-    image: kodekloud/webapp-color
-    environment: {APP_COLOR: red}
+    build:
+      context: ./couleur
+      args: {COULEUR: red}
   blue:
-    image: kodekloud/webapp-color
-    environment: {APP_COLOR: blue}
+    build:
+      context: ./couleur
+      args: {COULEUR: blue}
   site1:
     build: ./site1
   site2:

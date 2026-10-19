@@ -1,0 +1,33 @@
+# Application « boutique » livrée par une autre équipe : elle ne fonctionne pas.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: boutique
+  namespace: tdm
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: boutique
+  template:
+    metadata:
+      labels:
+        app: boutique
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.27-alpinne
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: boutique
+  namespace: tdm
+spec:
+  selector:
+    app: boutik
+  ports:
+    - port: 80
+      targetPort: 8080

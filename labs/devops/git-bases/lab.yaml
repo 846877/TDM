@@ -1,8 +1,8 @@
 title: Git au quotidien
 level: debutant
 order: 2
-tags: [git, versioning]
-summary: Dépôt, commits, branches et fusion.
+tags: [git, versioning, branches, collaboration]
+summary: Dépôt, commits, branches, conflits, dépôt distant, rebase, annulation et hooks.
 image: alpine/git:latest
 entrypoint: ""
 shell: sh
@@ -11,13 +11,18 @@ setup: |
   git config --global user.name "Eleve TDM" && git config --global user.email eleve@tdm.local && git config --global init.defaultBranch main
 description: |
   Un conteneur Alpine avec `git` déjà configuré (`user.name` et `user.email`).
-  Travaille dans `/root/app`.
+  Travaille dans `/root/app` : tous les exercices s'enchaînent sur ce même dépôt.
+
+  On part du premier commit pour aller jusqu'aux situations du quotidien en équipe : conflit de fusion,
+  dépôt distant, historique linéaire avec `rebase`, annulation d'un commit publié et hook de contrôle.
+  Commandes utiles : `git status`, `git log --oneline --graph --all`, `git diff`.
 exercises:
   - id: init
     title: Premier dépôt
     description: |
       Crée le dossier `/root/app`, initialise un dépôt git, ajoute un fichier `README.md`
       et fais un premier commit avec le message `Premier commit`.
+    hint: "git init, git add README.md, git commit -m 'Premier commit'"
     checks:
       - desc: Dépôt git initialisé
         run: test -d /root/app/.git
@@ -28,6 +33,7 @@ exercises:
     description: |
       Crée une branche `feature/login`, ajoute-y un fichier `login.py` dans un commit, puis reviens
       sur `main` et **fusionne** la branche.
+    hint: "git switch -c feature/login … git switch main && git merge feature/login"
     checks:
       - desc: La branche feature/login existe
         run: cd /root/app && git rev-parse --verify feature/login
@@ -47,3 +53,121 @@ exercises:
         run: cd /root/app && git check-ignore -q debug.log
       - desc: __pycache__ est ignoré
         run: cd /root/app && mkdir -p __pycache__ && touch __pycache__/x.pyc && git check-ignore -q __pycache__/x.pyc
+  - id: tag
+    title: Historique et version taguée
+    description: |
+      1. Ajoute une ligne de description dans `README.md` et commite-la avec le message `Ajout description`.
+      2. Pose sur ce commit un **tag annoté** `v1.0` avec le message `Version 1.0`.
+
+      Explore ensuite l'historique avec `git log --oneline --graph --decorate` et `git show v1.0`.
+    hint: "git tag -a v1.0 -m 'Version 1.0'"
+    checks:
+      - desc: Un commit « Ajout description » existe
+        run: cd /root/app && git log --format=%s main | grep -qx "Ajout description"
+      - desc: v1.0 est un tag annoté
+        run: cd /root/app && test "$(git cat-file -t v1.0)" = tag
+      - desc: Le tag pointe sur le commit « Ajout description »
+        run: cd /root/app && test "$(git log -1 --format=%s v1.0)" = "Ajout description"
+      - desc: Message du tag « Version 1.0 »
+        run: cd /root/app && git tag -l --format='%(contents:subject)' v1.0 | grep -qx "Version 1.0"
+  - id: conflit
+    title: Résoudre un conflit de fusion
+    description: |
+      Provoque puis résous un vrai conflit :
+      1. Crée la branche `feature/titre` depuis `main` et remplace la **première ligne** de `README.md`
+         par `# App TDM`, puis commite.
+      2. Reviens sur `main` et remplace cette même première ligne par `# Application`, puis commite.
+      3. Fusionne `feature/titre` dans `main` : git signale un conflit. Résous-le pour que la première ligne
+         soit **`# Application TDM`**, puis termine la fusion par un commit.
+    hint: "Après git merge, édite README.md pour retirer les marqueurs <<<<<<< ======= >>>>>>>, puis git add README.md && git commit"
+    checks:
+      - desc: feature/titre est fusionnée dans main
+        run: cd /root/app && git rev-parse --verify -q feature/titre >/dev/null && git merge-base --is-ancestor feature/titre main
+      - desc: Un commit de fusion a été créé (deux parents)
+        run: cd /root/app && git rev-list --merges main | grep -q . && git log --merges --format=%s main | grep -q 'feature/titre'
+      - desc: "La première ligne vaut « # Application TDM »"
+        run: cd /root/app && test "$(git show main:README.md | head -1)" = "# Application TDM"
+      - desc: Plus aucun marqueur de conflit
+        run: cd /root/app && ! git grep -nE '^(<<<<<<<|=======|>>>>>>>)' main -- README.md
+  - id: distant
+    title: Publier sur un dépôt distant
+    description: |
+      Simule un serveur Git avec un **dépôt nu** :
+      1. Crée le dépôt nu `/root/remote.git` (`git init --bare`).
+      2. Dans `/root/app`, ajoute-le comme distant `origin`.
+      3. Pousse `main` en définissant la branche amont (`-u`), puis pousse aussi tes **tags**.
+      4. Vérifie que tout fonctionne en clonant `/root/remote.git` dans `/root/clone`.
+    hint: "git remote add origin /root/remote.git ; git push -u origin main ; git push --tags ; git clone /root/remote.git /root/clone"
+    checks:
+      - desc: /root/remote.git est un dépôt nu
+        run: test "$(git --git-dir=/root/remote.git rev-parse --is-bare-repository)" = true
+      - desc: origin pointe vers /root/remote.git
+        run: cd /root/app && git remote get-url origin | grep -q '/root/remote.git$'
+      - desc: main est poussée et suit origin/main
+        run: cd /root/app && test "$(git rev-parse main)" = "$(git --git-dir=/root/remote.git rev-parse main)" && test "$(git rev-parse --abbrev-ref main@{upstream})" = origin/main
+      - desc: Le tag v1.0 est publié
+        run: git --git-dir=/root/remote.git rev-parse -q --verify refs/tags/v1.0
+      - desc: Le clone contient README.md
+        run: test -f /root/clone/README.md && test -d /root/clone/.git
+  - id: rebase
+    title: Historique linéaire avec rebase
+    description: |
+      1. Crée la branche `feature/api` depuis `main` et fais-y **deux commits** (par exemple `api.py`
+         puis `test_api.py`).
+      2. Pendant ce temps, `main` avance : reviens sur `main`, ajoute un fichier `CHANGELOG.md` et commite.
+      3. Retourne sur `feature/api` et **rebase**-la sur `main` (pas de merge !) : son historique doit
+         repartir du dernier commit de `main`, sans commit de fusion.
+      4. Enfin, intègre-la dans `main` en **fast-forward** (`git merge --ff-only feature/api`).
+    hint: "git switch feature/api && git rebase main ; git switch main && git merge --ff-only feature/api"
+    checks:
+      - desc: CHANGELOG.md et api.py sont sur main
+        run: cd /root/app && git ls-tree --name-only main | grep -qx CHANGELOG.md && git ls-tree --name-only main | grep -qx api.py
+      - desc: feature/api repart du commit qui a ajouté CHANGELOG.md
+        run: |
+          cd /root/app && c=$(git log --format=%H --diff-filter=A -1 main -- CHANGELOG.md) && test -n "$c" && git merge-base --is-ancestor "$c" feature/api
+      - desc: Au moins deux commits propres à la branche, sans fusion
+        run: |
+          cd /root/app && c=$(git log --format=%H --diff-filter=A -1 main -- CHANGELOG.md) && test "$(git rev-list --count "$c..feature/api")" -ge 2 && test -z "$(git rev-list --merges "$c..feature/api")"
+      - desc: main a intégré feature/api sans commit de fusion
+        run: |
+          cd /root/app && c=$(git log --format=%H --diff-filter=A -1 main -- CHANGELOG.md) && git merge-base --is-ancestor feature/api main && test -z "$(git rev-list --merges "$c..main")"
+  - id: annuler
+    title: Annuler un commit déjà publié
+    description: |
+      Un collègue a publié une erreur : reproduis la situation puis corrige-la **sans réécrire l'historique**.
+      1. Sur `main`, ajoute un fichier `bug.txt`, commite-le avec le message `Bug` et pousse sur `origin`.
+      2. Annule ce commit avec **`git revert`** (un nouveau commit qui défait le précédent), puis pousse.
+
+      Pourquoi pas `git reset` ? Parce que le commit est déjà partagé : réécrire `main` obligerait tout le
+      monde à forcer leur dépôt.
+    hint: "git revert <hash du commit Bug> (ou git revert HEAD juste après), puis git push"
+    checks:
+      - desc: Le commit « Bug » est toujours dans l'historique
+        run: cd /root/app && git log --format=%s main | grep -qx "Bug"
+      - desc: Un commit « Revert "Bug" » existe
+        run: cd /root/app && git log --format=%s main | grep -qx 'Revert "Bug"'
+      - desc: bug.txt n'est plus sur main
+        run: cd /root/app && ! git ls-tree --name-only main | grep -qx bug.txt
+      - desc: La correction est publiée sur origin
+        run: cd /root/app && test "$(git rev-parse main)" = "$(git --git-dir=/root/remote.git rev-parse main)"
+  - id: hook
+    title: Un hook pre-commit qui bloque les TODO
+    description: |
+      Automatise un contrôle qualité : écris le hook `/root/app/.git/hooks/pre-commit` (exécutable) qui
+      **refuse le commit** (code de sortie non nul, avec un message d'erreur) si les modifications indexées
+      contiennent le mot `TODO`, et l'accepte sinon.
+
+      Teste-le : `echo "TODO finir" > todo.txt && git add todo.txt && git commit -m test` doit échouer.
+      Pense ensuite à retirer le fichier de l'index (`git restore --staged todo.txt`).
+    hint: |
+      #!/bin/sh
+      if git diff --cached | grep -q '^+.*TODO'; then echo "Commit refusé : TODO trouvé" >&2; exit 1; fi
+    checks:
+      - desc: Le hook existe et est exécutable
+        run: test -x /root/app/.git/hooks/pre-commit
+      - desc: Il refuse un commit qui ajoute un TODO
+        run: |
+          r=1; cd /root/app && test -x .git/hooks/pre-commit && export GIT_INDEX_FILE=/tmp/tdm-index-todo && rm -f $GIT_INDEX_FILE && git read-tree HEAD && b=$(echo "TODO a finir" | git hash-object -w --stdin) && git update-index --add --cacheinfo 100644,$b,verif-todo.txt && if .git/hooks/pre-commit >/dev/null 2>&1; then r=1; else r=0; fi; rm -f $GIT_INDEX_FILE; exit $r
+      - desc: Il accepte un commit propre
+        run: |
+          cd /root/app && export GIT_INDEX_FILE=/tmp/tdm-index-ok && rm -f $GIT_INDEX_FILE && git read-tree HEAD && b=$(echo "tout va bien" | git hash-object -w --stdin) && git update-index --add --cacheinfo 100644,$b,verif-ok.txt && .git/hooks/pre-commit >/dev/null 2>&1; r=$?; rm -f $GIT_INDEX_FILE; exit $r

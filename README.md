@@ -6,9 +6,10 @@ Une plateforme web pour s'entraîner **en pratiquant**, organisée en catégorie
 |-----------|-----------------|------------|
 | 🐍 **Python** | 120 exercices (30 par niveau), du « Bonjour le monde » jusqu'aux métaclasses, asyncio, A* et parsers, avec un éditeur, une console et un vrai terminal | Une **moulinette** lance des tests sur ton code dans un bac à sable |
 | 🌐 **Réseaux** | 60 exercices Cisco IOS (15 par niveau) : VLAN, trunks, EtherChannel, VTP, STP, routage statique, RIP, EIGRP, OSPF multizone, IPv6, HSRP, DHCP snooping, ACL, NAT, AAA, SNMP, projets complets dans un terminal IOS simulé | La moulinette inspecte la configuration obtenue |
-| 🚀 **DevOps** | 18 labs lancés **en un clic** : conteneurs Docker (Linux, Git, Docker, Swarm, Ansible, Jenkins, HAProxy, PKI, Terraform, GitLab…) ou machines virtuelles Vagrant (Kubernetes, Minikube, Argo CD, Jenkins multi-nœuds, OpenShift), avec un terminal dans le navigateur | Des scripts de vérification s'exécutent dans le lab |
+| 🖥️ **Systèmes & réseaux** | 27 labs (208 exercices) : le parcours complet d'un technicien systèmes et réseaux, des comptes et droits Linux, SSH, PowerShell, DHCP, DNS, VLAN, bureau à distance et sauvegardes jusqu'à Active Directory (Samba), routage OSPF, pare-feu nftables, VPN WireGuard, VRRP, VM QEMU, supervision, dépannage et projets PME/multisite | Des scripts de vérification s'exécutent dans le lab |
+| 🚀 **DevOps** | 27 labs (221 exercices) lancés **en un clic**, du débutant à l'expert : conteneurs Docker (Linux, Bash, réseau, Git, Docker, Compose, systemd, Swarm, Ansible, Jenkins, HAProxy, PKI, Terraform, GitLab, Prometheus/Grafana, k3s, Helm/Kustomize, sécurité des conteneurs, Vault…) ou machines virtuelles Vagrant (Kubernetes, Minikube, Argo CD, Jenkins multi-nœuds, OpenShift), avec un terminal dans le navigateur | Des scripts de vérification s'exécutent dans le lab |
 
-Chaque catégorie a quatre niveaux : **Débutant, Intermédiaire, Avancé, Expert**. La progression est mémorisée dans le navigateur.
+Chaque catégorie a quatre niveaux : **Débutant, Intermédiaire, Avancé, Expert**. Chaque profil gagne de l'XP, des niveaux et des titres, avec un classement entre profils.
 
 ## Application Windows (TDM.exe)
 

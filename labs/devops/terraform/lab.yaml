@@ -1,8 +1,8 @@
 title: Terraform, l'infrastructure as code
 level: intermediaire
 order: 6
-tags: [terraform, iac, docker]
-summary: Décrire, déployer, paramétrer et détruire une infrastructure.
+tags: [terraform, iac, docker, modules]
+summary: Décrire, déployer, paramétrer, factoriser en modules, importer et détruire une infrastructure.
 build: .
 privileged: true
 command: []
@@ -16,6 +16,9 @@ description: |
   Les concepts sont les mêmes : providers, ressources, variables, outputs, state, plan/apply/destroy.
 
   Travaille dans `/root/infra`.
+
+  Le parcours : premier déploiement, variables et outputs, `count`, réseau et volume, modules, import d'une
+  ressource créée à la main, qualité du code (`fmt`, `validate`), puis destruction propre.
 exercises:
   - id: init
     title: Premier déploiement
@@ -57,6 +60,83 @@ exercises:
         run: for i in 0 1 2; do test "$(docker inspect -f '{{.State.Running}}' web-$i)" = true || exit 1; done
       - desc: Ports 8081 à 8083
         run: docker port web-0 80 | grep -q ':8081$' && docker port web-2 80 | grep -q ':8083$'
+  - id: reseau-volume
+    title: Réseau, volume et dépendances
+    description: |
+      Ajoute à ton infrastructure :
+      - un réseau Docker `tdm` (ressource `docker_network`) ;
+      - un volume `donnees` (ressource `docker_volume`) ;
+      - un conteneur `db` basé sur `redis:7.2-alpine`, branché sur le réseau `tdm` (bloc `networks_advanced`)
+        et qui monte le volume sur `/data` (bloc `volumes`).
+
+      Observe dans `terraform plan` comment Terraform déduit l'ordre de création des **références** entre ressources.
+    hint: "networks_advanced { name = docker_network.tdm.name } ; volumes { volume_name = docker_volume.donnees.name  container_path = \"/data\" }"
+    checks:
+      - desc: Le state contient le réseau et le volume
+        run: cd /root/infra && terraform state list | grep -q '^docker_network\.' && terraform state list | grep -q '^docker_volume\.'
+      - desc: db tourne sur le réseau tdm
+        run: |
+          test "$(docker inspect -f '{{.State.Running}}' db)" = true && docker inspect -f '{{json .NetworkSettings.Networks}}' db | grep -q '"tdm"'
+      - desc: Le volume donnees est monté sur /data
+        run: |
+          docker inspect -f '{{range .Mounts}}{{.Name}}:{{.Destination}} {{end}}' db | grep -q 'donnees:/data'
+  - id: module
+    title: Factoriser avec un module
+    description: |
+      Crée un **module** local `/root/infra/modules/webapp` qui prend en entrée `nom` et `port` (variables) et
+      crée un conteneur nginx publié sur ce port ; il expose en sortie l'URL (`output "url"`).
+
+      Utilise-le deux fois depuis la configuration principale : `app1` sur le port **8091** et `app2` sur **8092**,
+      puis ajoute un output `urls` qui liste les deux URL.
+    hint: "module \"app1\" { source = \"./modules/webapp\"  nom = \"app1\"  port = 8091 } ; pense à terraform init après l'ajout d'un module"
+    checks:
+      - desc: Les ressources viennent d'un module
+        run: cd /root/infra && test "$(terraform state list | grep -c '^module\.')" -ge 2
+      - desc: app1 et app2 tournent sur 8091 et 8092
+        run: docker port app1 80 | grep -q ':8091$' && docker port app2 80 | grep -q ':8092$'
+      - desc: Le module déclare ses variables et son output
+        run: grep -rqs 'variable *"port"' /root/infra/modules/webapp/ && grep -rqs 'output *"url"' /root/infra/modules/webapp/
+      - desc: L'output urls contient les deux adresses
+        run: cd /root/infra && terraform output -json urls | grep -q 8091 && terraform output -json urls | grep -q 8092
+  - id: import
+    title: Reprendre une ressource existante (import)
+    description: |
+      Quelqu'un a créé un conteneur **à la main** : `docker run -d --name manuel nginx:alpine`.
+      Fais-le entrer sous la gestion de Terraform **sans le recréer** :
+      1. écris une ressource `docker_container.manuel` qui le décrit ;
+      2. importe-le (`terraform import docker_container.manuel $(docker inspect -f '{{.Id}}' manuel)`
+         ou un bloc `import { ... }`) ;
+      3. ajuste la configuration jusqu'à ce que `terraform plan` ne propose plus de le **remplacer**.
+    hint: "Après l'import, terraform state show docker_container.manuel montre les attributs à reporter dans ta configuration"
+    checks:
+      - desc: docker_container.manuel est dans le state
+        run: cd /root/infra && terraform state list | grep -qx 'docker_container.manuel'
+      - desc: Le state référence bien le conteneur d'origine
+        run: |
+          cd /root/infra && test -n "$(docker inspect -f '{{.Id}}' manuel)" && terraform state show docker_container.manuel | grep -q "$(docker inspect -f '{{.Id}}' manuel)"
+      - desc: Le plan ne remplace pas le conteneur
+        run: cd /root/infra && terraform plan -no-color > /tmp/plan-import.txt 2>&1 && ! grep -q 'docker_container.manuel must be replaced' /tmp/plan-import.txt
+        timeout: 120
+  - id: qualite
+    title: Qualité du code Terraform
+    description: |
+      Avant de pousser du code d'infrastructure, on vérifie sa forme et sa cohérence :
+      1. `terraform fmt -recursive` doit ne plus rien trouver à reformater ;
+      2. `terraform validate` doit réussir ;
+      3. chaque variable doit avoir une `description` et un `type` ;
+      4. épingle la version du provider (`version = "~> 3.0"` dans `required_providers`).
+    hint: "terraform fmt -check -recursive renvoie un code non nul s'il reste des fichiers mal formatés"
+    checks:
+      - desc: terraform fmt ne trouve rien à corriger
+        run: cd /root/infra && ls *.tf >/dev/null && terraform fmt -check -recursive
+      - desc: terraform validate réussit
+        run: cd /root/infra && terraform validate -no-color
+        timeout: 120
+      - desc: Toutes les variables ont une description
+        run: |
+          cd /root/infra && n=$(cat *.tf modules/*/*.tf 2>/dev/null | grep -c '^variable'); d=$(cat *.tf modules/*/*.tf 2>/dev/null | grep -c '^ *description'); test "$n" -ge 1 && test "$d" -ge "$n"
+      - desc: La version du provider est épinglée
+        run: grep -rqsE 'version *= *"[~>=]' /root/infra/*.tf
   - id: destroy
     title: Tout détruire proprement
     description: |
@@ -66,4 +146,4 @@ exercises:
       - desc: Le state est vide
         run: cd /root/infra && test -z "$(terraform state list)" && test -f terraform.tfstate
       - desc: Plus aucun conteneur web
-        run: test -z "$(docker ps -aq --filter name=^web)"
+        run: test -z "$(docker ps -aq --filter name=^web)" && test -z "$(docker ps -aq --filter name=^app)" && test -z "$(docker ps -aq --filter name=^db$)"

@@ -1,8 +1,8 @@
 title: Jenkins, intégration continue
 level: intermediaire
 order: 3
-tags: [jenkins, ci/cd, pipeline]
-summary: Installer Jenkins, créer un job puis un pipeline déclaratif.
+tags: [jenkins, ci/cd, pipeline, git, junit, api]
+summary: Installer Jenkins, jobs, pipelines déclaratifs, Jenkinsfile dans Git, tests, artefacts et API.
 image: jenkins/jenkins:lts-jdk17
 command: []
 ports: ["8081:8080"]
@@ -14,6 +14,9 @@ description: |
   (Jenkins met environ une minute à démarrer).
 
   Ton terminal est dans le conteneur (utilisateur `jenkins`, dossier `/var/jenkins_home`).
+
+  Le parcours : installation, job freestyle, pipeline déclaratif, paramètres et déclencheurs, Jenkinsfile
+  versionné dans Git, rapports de tests et artefacts, pipeline robuste et parallèle, puis pilotage par l'API.
 exercises:
   - id: installation
     title: Terminer l'installation
@@ -65,3 +68,78 @@ exercises:
         run: grep -q "H/15" /var/jenkins_home/jobs/pipeline-tdm/config.xml
       - desc: Un build a été lancé avec ENV=prod
         run: grep -lq "Déploiement sur prod\|Deploiement sur prod" /var/jenkins_home/jobs/pipeline-tdm/builds/*/log
+  - id: scm
+    title: Jenkinsfile versionné dans Git
+    description: |
+      En entreprise, le pipeline vit **dans le dépôt** de l'application (fichier `Jenkinsfile`).
+      1. Crée le dépôt `/var/jenkins_home/depots/app` (branche `main`) contenant un `Jenkinsfile` déclaratif
+         avec les étapes `Build` et `Test`, et commite-le.
+      2. Jenkins refuse de cloner un chemin local : publie le dossier avec le démon Git
+         `git daemon --reuseaddr --base-path=/var/jenkins_home/depots --export-all --detach`
+         (le dépôt est alors joignable à l'adresse `git://localhost/app`).
+      3. Crée un job **Pipeline** `app-scm` de type *Pipeline script from SCM* (Git, URL `git://localhost/app`,
+         branche `*/main`, chemin `Jenkinsfile`) et lance-le avec succès.
+    hint: "git init -b main /var/jenkins_home/depots/app ; git config --global user.email/user.name si git le demande"
+    checks:
+      - desc: Le job lit son pipeline depuis Git
+        run: grep -q 'CpsScmFlowDefinition' /var/jenkins_home/jobs/app-scm/config.xml && grep -q 'git://localhost/app' /var/jenkins_home/jobs/app-scm/config.xml
+      - desc: Le dépôt contient un Jenkinsfile commité sur main
+        run: git -C /var/jenkins_home/depots/app cat-file -e main:Jenkinsfile
+      - desc: Un build a réussi en lisant le Jenkinsfile
+        run: |
+          d=/var/jenkins_home/jobs/app-scm/builds; n=$(sed -n 's/^lastSuccessfulBuild //p' $d/permalinks); test -n "$n" && test "$n" -gt 0 && grep -q 'Obtained Jenkinsfile from' "$d/$n/log"
+  - id: qualite
+    title: Rapports de tests et artefacts
+    description: |
+      Crée un job **Pipeline** `qualite` dont le script :
+      1. produit un fichier `dist/app-${BUILD_NUMBER}.txt` (le « livrable ») et l'**archive**
+         (`archiveArtifacts artifacts: 'dist/*.txt'`) ;
+      2. écrit un rapport de tests au format **JUnit** dans `rapports/tests.xml` (au moins deux cas de test
+         réussis, écrits avec `sh` ou `writeFile`) et le publie avec l'étape `junit 'rapports/*.xml'`.
+
+      Lance-le : la page du build affiche les artefacts et le résultat des tests.
+    hint: |
+      writeFile file: 'rapports/tests.xml', text: '<testsuite name="tdm" tests="2"><testcase classname="tdm" name="a"/><testcase classname="tdm" name="b"/></testsuite>'
+    checks:
+      - desc: Le dernier build réussi a archivé un livrable
+        run: |
+          d=/var/jenkins_home/jobs/qualite/builds; n=$(sed -n 's/^lastSuccessfulBuild //p' $d/permalinks); test -n "$n" && test "$n" -gt 0 && ls $d/$n/archive/dist/*.txt >/dev/null
+      - desc: Un rapport JUnit a été publié
+        run: |
+          d=/var/jenkins_home/jobs/qualite/builds; n=$(sed -n 's/^lastSuccessfulBuild //p' $d/permalinks); test -n "$n" && test "$n" -gt 0 && test -f $d/$n/junitResult.xml && test "$(grep -c '<case>' $d/$n/junitResult.xml)" -ge 2
+  - id: robuste
+    title: Pipeline robuste et parallèle
+    description: |
+      Crée un job **Pipeline** `robuste` qui utilise les mécanismes d'un pipeline de production :
+      - `options { timeout(time: 10, unit: 'MINUTES') }` pour ne jamais rester bloqué ;
+      - un bloc `environment` qui définit `APP = 'tdm'` ;
+      - une étape `Vérifications` qui lance **en parallèle** (`parallel`) deux branches `Lint` et `Tests` ;
+      - une commande réessayée jusqu'à 3 fois (`retry(3) { ... }`) ;
+      - une section `post` avec `always { echo 'Nettoyage termine' }`.
+
+      Lance-le avec succès et observe la vue *Pipeline Graph* ou *Stage View*.
+    checks:
+      - desc: timeout, parallel, retry et post sont utilisés
+        run: |
+          f=/var/jenkins_home/jobs/robuste/config.xml; grep -q 'timeout(' $f && grep -q 'parallel' $f && grep -q 'retry(' $f && grep -q 'post' $f && grep -q 'environment' $f
+      - desc: Le dernier build a réussi et lancé les branches en parallèle
+        run: |
+          d=/var/jenkins_home/jobs/robuste/builds; n=$(sed -n 's/^lastSuccessfulBuild //p' $d/permalinks); test -n "$n" && test "$n" -gt 0 && grep -q '\[Pipeline\] parallel' $d/$n/log && grep -q 'Nettoyage termine' $d/$n/log
+  - id: api
+    title: Piloter Jenkins par son API
+    description: |
+      Automatise Jenkins sans l'interface web :
+      1. Dans ton profil (`admin` > *Security*), génère un **jeton d'API** et enregistre-le sous la forme
+         `admin:<jeton>` dans `/var/jenkins_home/api-token.txt`, avec les droits `600`.
+      2. Déclenche un build du job `hello-tdm` **avec curl** :
+         `curl -X POST -u "$(cat /var/jenkins_home/api-token.txt)" http://localhost:8080/job/hello-tdm/build`
+      3. Récupère le résultat du dernier build en JSON : `.../job/hello-tdm/lastBuild/api/json`.
+    hint: "Avec un jeton d'API, Jenkins n'exige pas de jeton CSRF (crumb) pour les requêtes POST"
+    checks:
+      - desc: Le jeton est protégé (600)
+        run: test "$(stat -c %a /var/jenkins_home/api-token.txt)" = 600
+      - desc: Le jeton permet de s'authentifier en tant qu'admin
+        run: |
+          curl -fsS -u "$(cat /var/jenkins_home/api-token.txt)" http://localhost:8080/me/api/json | grep -q '"id":"admin"'
+      - desc: hello-tdm a été construit au moins deux fois
+        run: test "$(cat /var/jenkins_home/jobs/hello-tdm/nextBuildNumber)" -ge 3

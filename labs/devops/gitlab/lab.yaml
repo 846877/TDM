@@ -1,8 +1,8 @@
 title: GitLab et GitLab CI
 level: avance
 order: 2
-tags: [gitlab, git, ci/cd, runner]
-summary: Héberger ses dépôts et lancer ses premiers pipelines GitLab CI.
+tags: [gitlab, git, ci/cd, runner, api]
+summary: Héberger ses dépôts, pipelines GitLab CI, runner, variables, artefacts, règles et merge requests.
 image: gitlab/gitlab-ce:latest
 command: []
 ports: ["8929:80", "2224:22"]
@@ -62,3 +62,95 @@ exercises:
         timeout: 240
       - desc: Le dernier pipeline de tdm-demo a réussi
         run: curl -fsS "http://localhost/api/v4/projects/root%2Ftdm-demo/pipelines?per_page=1" | grep -q '"status":"success"'
+  - id: jeton
+    title: Jeton d'accès pour l'API
+    description: |
+      Pour automatiser GitLab (scripts, outils), on utilise un **jeton d'accès personnel**.
+      Dans **Preferences > Access tokens** de `root`, crée un jeton avec le droit `api` et enregistre-le dans
+      `/root/gitlab-token` (droits `600`). Teste-le :
+      `curl -H "PRIVATE-TOKEN: $(cat /root/gitlab-token)" http://localhost/api/v4/user`.
+
+      Les exercices suivants utilisent ce jeton pour vérifier ton travail.
+    checks:
+      - desc: Le fichier du jeton est protégé (600)
+        run: test "$(stat -c %a /root/gitlab-token)" = 600
+      - desc: Le jeton authentifie root sur l'API
+        run: |
+          curl -fsS -H "PRIVATE-TOKEN: $(tr -d '[:space:]' < /root/gitlab-token)" http://localhost/api/v4/user | grep -q '"username":"root"'
+  - id: variables
+    title: Variables CI/CD et secrets masqués
+    description: |
+      Dans **Settings > CI/CD > Variables** du projet `tdm-demo`, crée :
+      - `DEPLOY_ENV` = `production` ;
+      - `API_SECRET` (au moins 8 caractères) **masquée** : sa valeur n'apparaîtra jamais dans les logs.
+
+      Ajoute au `.gitlab-ci.yml` un job `info` qui affiche `Environnement : $DEPLOY_ENV` et tente
+      `echo $API_SECRET` (le log doit montrer `[MASKED]`). Pousse et vérifie le log du job.
+    checks:
+      - desc: DEPLOY_ENV vaut production
+        run: |
+          curl -fsS -H "PRIVATE-TOKEN: $(tr -d '[:space:]' < /root/gitlab-token)" http://localhost/api/v4/projects/root%2Ftdm-demo/variables/DEPLOY_ENV | grep -q '"value":"production"'
+      - desc: API_SECRET est masquée
+        run: |
+          curl -fsS -H "PRIVATE-TOKEN: $(tr -d '[:space:]' < /root/gitlab-token)" http://localhost/api/v4/projects/root%2Ftdm-demo/variables/API_SECRET | grep -q '"masked":true'
+      - desc: Un job réussi a affiché l'environnement
+        run: |
+          T=$(tr -d '[:space:]' < /root/gitlab-token); P=root%2Ftdm-demo
+          for id in $(curl -fsS -H "PRIVATE-TOKEN: $T" "http://localhost/api/v4/projects/$P/jobs?scope=success&per_page=50" | /opt/gitlab/embedded/bin/ruby -rjson -e 'JSON.parse(STDIN.read).each { |j| puts j["id"] }'); do
+            curl -fsS -H "PRIVATE-TOKEN: $T" "http://localhost/api/v4/projects/$P/jobs/$id/trace"
+          done | grep -q 'Environnement : production'
+        timeout: 120
+  - id: artefacts
+    title: Artefacts entre les étapes
+    description: |
+      Fais circuler un livrable dans le pipeline :
+      - le job `build` (stage `build`) crée `dist/app.txt` contenant `version-$CI_COMMIT_SHORT_SHA` et le
+        déclare comme **artefact** (`artifacts: paths: [dist/]`, `expire_in: 1 week`) ;
+      - le job `test` (stage `test`) affiche le contenu de `dist/app.txt` (il récupère automatiquement les
+        artefacts des étapes précédentes).
+    checks:
+      - desc: Un job build réussi a produit un artefact
+        run: |
+          T=$(tr -d '[:space:]' < /root/gitlab-token)
+          curl -fsS -H "PRIVATE-TOKEN: $T" "http://localhost/api/v4/projects/root%2Ftdm-demo/jobs?scope=success&per_page=50" | /opt/gitlab/embedded/bin/ruby -rjson -e 'exit(JSON.parse(STDIN.read).any? { |j| j["name"] == "build" && j["artifacts_file"] } ? 0 : 1)'
+      - desc: Un job test réussi a lu le livrable
+        run: |
+          T=$(tr -d '[:space:]' < /root/gitlab-token); P=root%2Ftdm-demo
+          for id in $(curl -fsS -H "PRIVATE-TOKEN: $T" "http://localhost/api/v4/projects/$P/jobs?scope=success&per_page=50" | /opt/gitlab/embedded/bin/ruby -rjson -e 'JSON.parse(STDIN.read).each { |j| puts j["id"] if j["name"] == "test" }'); do
+            curl -fsS -H "PRIVATE-TOKEN: $T" "http://localhost/api/v4/projects/$P/jobs/$id/trace"
+          done | grep -q 'version-[0-9a-f]'
+        timeout: 120
+  - id: regles
+    title: Déployer uniquement sur un tag
+    description: |
+      Ajoute un stage `deploy` avec un job `deploy` qui ne s'exécute **que pour les tags**
+      (`rules: - if: $CI_COMMIT_TAG`). Pousse un commit sur `main` (pas de job deploy), puis crée et pousse le tag
+      `v1.0` : son pipeline doit contenir le job `deploy` et réussir.
+    hint: "git tag v1.0 && git push origin v1.0"
+    checks:
+      - desc: Le pipeline du tag v1.0 a réussi avec le job deploy
+        run: |
+          T=$(tr -d '[:space:]' < /root/gitlab-token); P=root%2Ftdm-demo
+          id=$(curl -fsS -H "PRIVATE-TOKEN: $T" "http://localhost/api/v4/projects/$P/pipelines?ref=v1.0&status=success&per_page=1" | /opt/gitlab/embedded/bin/ruby -rjson -e 'p = JSON.parse(STDIN.read); puts p[0]["id"] if p[0]')
+          test -n "$id" && curl -fsS -H "PRIVATE-TOKEN: $T" "http://localhost/api/v4/projects/$P/pipelines/$id/jobs" | grep -q '"name":"deploy"'
+      - desc: Le dernier pipeline de main n'a pas de job deploy
+        run: |
+          T=$(tr -d '[:space:]' < /root/gitlab-token); P=root%2Ftdm-demo
+          id=$(curl -fsS -H "PRIVATE-TOKEN: $T" "http://localhost/api/v4/projects/$P/pipelines?ref=main&per_page=1" | /opt/gitlab/embedded/bin/ruby -rjson -e 'p = JSON.parse(STDIN.read); puts p[0]["id"] if p[0]')
+          test -n "$id" && ! curl -fsS -H "PRIVATE-TOKEN: $T" "http://localhost/api/v4/projects/$P/pipelines/$id/jobs" | grep -q '"name":"deploy"'
+  - id: merge-request
+    title: Merge request protégée par le pipeline
+    description: |
+      Travaille comme en équipe :
+      1. Dans **Settings > Merge requests**, coche **Pipelines must succeed**.
+      2. Crée une branche `feature/doc`, modifie `README.md`, pousse la branche et ouvre une **merge request**
+         vers `main`.
+      3. Une fois le pipeline vert, fusionne-la.
+    hint: "git push -o merge_request.create -o merge_request.target=main origin feature/doc crée la MR en ligne de commande"
+    checks:
+      - desc: Les pipelines doivent réussir avant fusion
+        run: |
+          curl -fsS -H "PRIVATE-TOKEN: $(tr -d '[:space:]' < /root/gitlab-token)" http://localhost/api/v4/projects/root%2Ftdm-demo | grep -q '"only_allow_merge_if_pipeline_succeeds":true'
+      - desc: La merge request de feature/doc est fusionnée
+        run: |
+          curl -fsS -H "PRIVATE-TOKEN: $(tr -d '[:space:]' < /root/gitlab-token)" "http://localhost/api/v4/projects/root%2Ftdm-demo/merge_requests?state=merged&source_branch=feature/doc" | grep -q '"state":"merged"'

@@ -1,20 +1,32 @@
 title: Python pour le DevOps
 level: debutant
 order: 4
-tags: [python, venv, pip, api, flask]
-summary: Environnements virtuels, scripts d'automatisation et petite API.
+tags: [python, venv, pip, api, flask, pytest, automatisation]
+summary: Environnements virtuels, scripts d'automatisation, API, sonde, tests et paquet installable.
 image: python:3.12-slim
 ports: ["5001:5000"]
 shell: bash
 workdir: /root
 setup: |
   mkdir -p /root/projet && printf '{"serveurs": [{"nom": "web1", "cpu": 82}, {"nom": "web2", "cpu": 35}, {"nom": "db1", "cpu": 91}]}\n' > /root/projet/metrics.json
+  python3 - <<'EOF'
+  ips = ["10.0.0.1"] * 40 + ["10.0.0.2"] * 25 + ["192.168.1.7"] * 18 + ["172.16.0.9"] * 12 + ["10.0.0.3"] * 5
+  pages = ["/", "/login", "/api/serveurs", "/static/app.css", "/admin"]
+  codes = ["200"] * 7 + ["404", "500", "301"]
+  with open("/root/projet/access.log", "w") as f:
+      for i in range(100):
+          ip = ips[(i * 37) % 100]
+          f.write(f'{ip} - - [18/Oct/2026:10:{i // 60:02d}:{i % 60:02d} +0000] "GET {pages[i % 5]} HTTP/1.1" {codes[i % 10]} {500 + i * 7}\n')
+  EOF
 description: |
   Le lab Vagrant `python` de ta formation est une VM de bureau avec PyCharm. Ici, on se concentre sur
   l'usage de Python en ops, dans un conteneur Python 3.12. Pour l'apprentissage du langage, il y a
   la catégorie **Python** de la plateforme.
 
   Travaille dans `/root/projet`. Le port 5000 du conteneur est publié sur **http://localhost:5001**.
+
+  Le parcours : environnement virtuel, scripts d'automatisation (alertes, analyse de logs, sauvegarde avec
+  rotation), petite API, sonde de supervision, tests automatisés et enfin un outil installable avec `pip`.
 exercises:
   - id: venv
     title: Environnement virtuel
@@ -53,3 +65,108 @@ exercises:
         run: python -c "import urllib.request,json; assert json.load(urllib.request.urlopen('http://localhost:5000/health'))['status']=='ok'"
       - desc: /serveurs renvoie les 3 serveurs
         run: python -c "import urllib.request,json; assert len(json.load(urllib.request.urlopen('http://localhost:5000/serveurs'))['serveurs'])==3"
+  - id: logs
+    title: Analyser des logs d'accès
+    description: |
+      `/root/projet/access.log` contient 100 lignes de log nginx (format *combined*). Écris `analyse.py` :
+      `python analyse.py access.log` doit afficher **un objet JSON** avec :
+      - `total` : le nombre de requêtes ;
+      - `codes` : le nombre de requêtes par code HTTP, par exemple `{"200": 70, "404": 10, ...}` ;
+      - `top_ip` : l'adresse IP qui a fait le plus de requêtes.
+    hint: "line.split() : l'IP est le champ 0 et le code HTTP le champ 8 ; collections.Counter et json.dumps font le reste"
+    checks:
+      - desc: analyse.py produit du JSON
+        run: cd /root/projet && python analyse.py access.log | python -c "import json,sys; json.load(sys.stdin)"
+      - desc: total, codes et top_ip sont exacts
+        run: |
+          cd /root/projet && python analyse.py access.log > /tmp/analyse.json && python -c "
+          import json, collections
+          lignes = [l.split() for l in open('access.log') if l.strip()]
+          r = json.load(open('/tmp/analyse.json'))
+          assert r['total'] == len(lignes), 'total'
+          assert {str(k): v for k, v in r['codes'].items()} == dict(collections.Counter(l[8] for l in lignes)), 'codes'
+          assert r['top_ip'] == collections.Counter(l[0] for l in lignes).most_common(1)[0][0], 'top_ip'
+          "
+  - id: sauvegarde
+    title: Sauvegarde avec rotation
+    description: |
+      Écris `sauvegarde.py SOURCE DESTINATION [--garder N]` (module `argparse`) qui :
+      1. crée dans `DESTINATION` (à créer si besoin) une archive `sauvegarde-AAAAMMJJ-HHMMSS.tar.gz` du dossier `SOURCE` ;
+      2. ne **garde que les N archives les plus récentes** (3 par défaut) et supprime les plus anciennes ;
+      3. si `SOURCE` n'existe pas, affiche une erreur sur la **sortie d'erreur** et quitte avec le code **2**.
+    hint: "tarfile.open(chemin, 'w:gz'), datetime.now().strftime('%Y%m%d-%H%M%S'), sorted(Path(dest).glob('sauvegarde-*.tar.gz'))"
+    checks:
+      - desc: Une archive valide est créée
+        run: |
+          rm -rf /tmp/sv && mkdir -p /tmp/sv/src && echo important > /tmp/sv/src/data.txt && cd /root/projet && python sauvegarde.py /tmp/sv/src /tmp/sv/dest && ls /tmp/sv/dest/sauvegarde-*.tar.gz >/dev/null && tar -tzf /tmp/sv/dest/sauvegarde-*.tar.gz | grep -q 'data.txt'
+      - desc: Seules les 3 plus récentes sont gardées
+        run: |
+          rm -rf /tmp/sv && mkdir -p /tmp/sv/src && echo x > /tmp/sv/src/a.txt && cd /root/projet && for i in 1 2 3 4 5; do python sauvegarde.py /tmp/sv/src /tmp/sv/dest || exit 1; sleep 1.1; done; test "$(ls /tmp/sv/dest | grep -c '^sauvegarde-.*\.tar\.gz$')" = 3
+      - desc: --garder 1 ne garde qu'une archive
+        run: |
+          cd /root/projet && python sauvegarde.py /tmp/sv/src /tmp/sv/dest --garder 1 && test "$(ls /tmp/sv/dest | wc -l)" = 1
+      - desc: Code 2 et message d'erreur si la source n'existe pas
+        run: |
+          test -f /root/projet/sauvegarde.py && cd /root/projet && python sauvegarde.py /tmp/nexiste/pas /tmp/sv/dest 2>/tmp/sv-err >/dev/null; test $? -eq 2 && test -s /tmp/sv-err
+  - id: sonde
+    title: Sonde de supervision HTTP
+    description: |
+      Écris `sonde.py URL`, une sonde utilisable par un outil de supervision :
+      - si l'URL répond avec un code 2xx ou 3xx : affiche `OK <code>` et quitte avec le code **0** ;
+      - si elle répond avec un code d'erreur (4xx, 5xx) : affiche `KO <code>` et quitte avec le code **1** ;
+      - si elle est injoignable (connexion refusée, délai de 3 s dépassé) : affiche `KO injoignable`, code **2**.
+
+      Teste-la sur ton API de l'exercice précédent (qui doit tourner) : `.venv/bin/python sonde.py http://localhost:5000/health`.
+    hint: "requests.get(url, timeout=3) et requests.exceptions.RequestException ; ou urllib.request avec HTTPError / URLError"
+    checks:
+      - desc: OK 200 sur /health (code 0)
+        run: cd /root/projet && .venv/bin/python sonde.py http://localhost:5000/health | grep -qx 'OK 200'
+      - desc: KO 404 sur une page absente (code 1)
+        run: cd /root/projet && out=$(.venv/bin/python sonde.py http://localhost:5000/nexistepas); test $? -eq 1 && test "$out" = "KO 404"
+      - desc: KO injoignable sur un port fermé (code 2)
+        run: cd /root/projet && out=$(.venv/bin/python sonde.py http://localhost:5999/); test $? -eq 2 && test "$out" = "KO injoignable"
+  - id: tests
+    title: Tests automatisés avec pytest
+    description: |
+      Installe `pytest` dans le venv et écris `/root/projet/tests/test_alerte.py` avec **au moins 3 tests**
+      du script `alerte.py` (par exemple : la sortie avec un seuil de 80, le code de sortie 1 en cas d'alerte,
+      le code 0 sans alerte). Utilise `subprocess.run` pour lancer le script.
+
+      `cd /root/projet && .venv/bin/python -m pytest -q` doit réussir.
+    hint: "subprocess.run([sys.executable, 'alerte.py', '80'], capture_output=True, text=True, cwd=...) puis assert sur returncode et stdout"
+    checks:
+      - desc: pytest est installé dans le venv
+        run: /root/projet/.venv/bin/python -m pytest --version
+      - desc: Au moins 3 tests sont collectés
+        run: cd /root/projet && test "$(.venv/bin/python -m pytest --collect-only -q tests 2>/dev/null | grep -c '::')" -ge 3
+      - desc: Tous les tests passent
+        run: cd /root/projet && .venv/bin/python -m pytest -q tests
+        timeout: 120
+  - id: paquet
+    title: Un outil installable avec pip
+    description: |
+      Transforme ton script d'alerte en **commande installable** :
+      1. Ajoute une fonction `main()` dans `alerte.py` (garde le bloc `if __name__ == "__main__": main()`).
+      2. Écris `/root/projet/pyproject.toml` (projet `tdm-outils`, version `0.1.0`) qui déclare la commande
+         `tdm-alerte` pointant vers `alerte:main` (section `[project.scripts]`) et le module `alerte`.
+      3. Installe le projet en mode éditable dans le venv : `.venv/bin/pip install -e .`
+
+      `cd /root/projet && .venv/bin/tdm-alerte 80` doit afficher `db1` puis `web1`.
+    hint: |
+      [build-system]
+      requires = ["setuptools>=61"]
+      build-backend = "setuptools.build_meta"
+      [project]
+      name = "tdm-outils"
+      version = "0.1.0"
+      [project.scripts]
+      tdm-alerte = "alerte:main"
+      [tool.setuptools]
+      py-modules = ["alerte"]
+    checks:
+      - desc: pyproject.toml déclare tdm-alerte
+        run: grep -Eq 'tdm-alerte *= *"alerte:main"' /root/projet/pyproject.toml
+      - desc: Le paquet tdm-outils est installé dans le venv
+        run: /root/projet/.venv/bin/pip show tdm-outils | grep -q '^Version. 0.1.0'
+      - desc: La commande tdm-alerte fonctionne
+        run: cd /root/projet && test "$(.venv/bin/tdm-alerte 80 | tr '\n' ' ')" = "db1 web1 "

@@ -1,8 +1,8 @@
 title: Serveur web Nginx
 level: intermediaire
 order: 1
-tags: [nginx, web, reverse proxy]
-summary: Installer un site, changer de port et faire du reverse proxy.
+tags: [nginx, web, reverse proxy, load balancing, sécurité]
+summary: Sites, reverse proxy, virtual hosts, logs, performances, sécurité et répartition de charge.
 ports: ["8088:8080"]
 description: |
   Un serveur Ubuntu avec **nginx installé mais non configuré** (le site par défaut a été supprimé).
@@ -10,7 +10,10 @@ description: |
   une fois l'exercice 2 fait, ouvre http://localhost:8088 dans ton navigateur.
 
   Rappels : la configuration se trouve dans `/etc/nginx/`, on teste avec `nginx -t`
-  et on recharge avec `nginx -s reload`.
+  et on recharge avec `nginx -s reload`. `python3` et `openssl` sont installés.
+
+  Le parcours : démarrer nginx, publier un site, reverse proxy, plusieurs sites sur le même port,
+  page d'erreur, journaux personnalisés, compression et cache, durcissement, puis répartition de charge.
 exercises:
   - id: demarrer
     title: Démarrer nginx
@@ -44,5 +47,106 @@ exercises:
     checks:
       - desc: /api/health passe par nginx
         run: curl -fsS http://localhost:8080/api/health | grep -q '"status":"ok"'
+      - desc: La page d'accueil fonctionne toujours
+        run: curl -fsS http://localhost:8080 | grep -q "Bienvenue sur TDM"
+  - id: vhost
+    title: Plusieurs sites sur le même port
+    description: |
+      Ajoute un deuxième site **par nom** (virtual host) : `/etc/nginx/sites-available/api` répond pour
+      `server_name api.tdm.local` sur le port 8080 et sert `/var/www/api/index.html` qui contient `API TDM`.
+      Active-le.
+
+      Attention : le site `tdm` doit rester le site **par défaut** pour tous les autres noms
+      (`listen 8080 default_server;`), sinon nginx prend le premier fichier par ordre alphabétique… c'est-à-dire `api` !
+    hint: "curl -H 'Host: api.tdm.local' http://localhost:8080 permet de tester sans DNS"
+    checks:
+      - desc: Le site api est activé
+        run: test -L /etc/nginx/sites-enabled/api && nginx -t
+      - desc: api.tdm.local affiche API TDM
+        run: |
+          curl -fsS -H 'Host: api.tdm.local' http://localhost:8080/ | grep -q "API TDM"
+      - desc: Les autres noms tombent sur le site tdm
+        run: |
+          curl -fsS -H 'Host: inconnu.example' http://localhost:8080/ | grep -q "Bienvenue sur TDM"
+  - id: erreurs
+    title: Page d'erreur personnalisée
+    description: |
+      Crée la page `/var/www/tdm/404.html` contenant `Page introuvable` et configure le site `tdm` pour
+      l'afficher sur toute erreur **404** (directive `error_page`). Le code HTTP doit rester **404**.
+    hint: "error_page 404 /404.html; dans le bloc server du site tdm"
+    checks:
+      - desc: Le code HTTP est 404
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/nexiste-pas)" = 404
+      - desc: La page personnalisée est affichée
+        run: curl -s http://localhost:8080/nexiste-pas | grep -q "Page introuvable"
+  - id: logs
+    title: Journaux personnalisés
+    description: |
+      1. Définis (dans le contexte `http`, par exemple `/etc/nginx/conf.d/tdm-log.conf`) un format de log
+         nommé `tdm` : `'$remote_addr "$request" $status $request_time'`.
+      2. Fais écrire au site `tdm` ses accès dans `/var/log/nginx/tdm.access.log` avec ce format.
+
+      Recharge, fais une requête, puis observe le fichier avec `tail -f`.
+    hint: "log_format tdm '...'; puis access_log /var/log/nginx/tdm.access.log tdm; dans le server"
+    checks:
+      - desc: Le format tdm est défini
+        run: grep -rqE 'log_format +tdm' /etc/nginx/
+      - desc: Une requête est journalisée au format demandé
+        run: |
+          curl -s -o /dev/null 'http://localhost:8080/?verif-log' && sleep 1 && tail -1 /var/log/nginx/tdm.access.log | grep -Eq '^[0-9.]+ "GET /\?verif-log HTTP/1.1" 200 [0-9.]+$'
+  - id: performances
+    title: Compression et cache navigateur
+    description: |
+      1. Crée une feuille de style `/var/www/tdm/static/style.css` d'au moins 1 Kio
+         (par exemple `for i in $(seq 1 100); do echo "p.c$i { color: red; }"; done > style.css`).
+      2. Active la compression **gzip** pour le CSS, le JavaScript et le JSON (`gzip_types`) : par défaut,
+         seul le HTML est compressé.
+      3. Ajoute un cache navigateur de **7 jours** sur `/static/` (`expires 7d;`).
+    hint: "gzip_types text/css application/javascript application/json; et location /static/ { expires 7d; }"
+    checks:
+      - desc: Le CSS est servi compressé
+        run: |
+          curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip' http://localhost:8080/static/style.css | grep -qi '^content-encoding: gzip'
+      - desc: Cache de 7 jours sur /static/
+        run: |
+          curl -s -o /dev/null -D - http://localhost:8080/static/style.css | grep -qi '^cache-control: max-age=604800'
+  - id: securite
+    title: Durcissement et accès protégé
+    description: |
+      1. Masque la version de nginx dans les en-têtes (`server_tokens off;`).
+      2. Ajoute l'en-tête `X-Content-Type-Options: nosniff` aux réponses du site `tdm`.
+      3. Protège `/admin/` (page `/var/www/tdm/admin/index.html` contenant `Admin TDM`) par une
+         **authentification basique** : utilisateur `admin`, mot de passe `tdm`, fichier `/etc/nginx/.htpasswd`.
+    hint: "printf 'admin:%s\\n' \"$(openssl passwd -apr1 tdm)\" > /etc/nginx/.htpasswd ; auth_basic \"Admin\"; auth_basic_user_file /etc/nginx/.htpasswd;"
+    checks:
+      - desc: La version de nginx est masquée
+        run: |
+          curl -sI http://localhost:8080/ | grep -i '^server:' | grep -qiv 'nginx/'
+      - desc: En-tête X-Content-Type-Options présent
+        run: |
+          curl -sI http://localhost:8080/ | grep -qi '^x-content-type-options: nosniff'
+      - desc: /admin/ refuse l'accès sans mot de passe
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/admin/)" = 401
+      - desc: admin/tdm donne accès à /admin/
+        run: curl -fsS -u admin:tdm http://localhost:8080/admin/ | grep -q "Admin TDM"
+  - id: repartition
+    title: Répartition de charge
+    description: |
+      Lance deux petits serveurs de test en arrière-plan :
+      ```
+      mkdir -p /srv/b1 /srv/b2 && echo "backend 1" > /srv/b1/index.html && echo "backend 2" > /srv/b2/index.html
+      nohup python3 -m http.server 9001 --directory /srv/b1 > /dev/null 2>&1 &
+      nohup python3 -m http.server 9002 --directory /srv/b2 > /dev/null 2>&1 &
+      ```
+      Déclare un `upstream backends` avec ces deux serveurs et fais servir `http://localhost:8080/lb/` en
+      alternance par l'un et l'autre. Ajoute l'en-tête de diagnostic `X-Upstream` qui indique quel serveur
+      a répondu (`$upstream_addr`).
+    hint: "upstream backends { server 127.0.0.1:9001; server 127.0.0.1:9002; } … location /lb/ { proxy_pass http://backends/; add_header X-Upstream $upstream_addr; }"
+    checks:
+      - desc: Les deux backends répondent à tour de rôle
+        run: for i in 1 2 3 4; do curl -fsS http://localhost:8080/lb/; done | grep -o 'backend [12]' | sort -u | wc -l | grep -qx 2
+      - desc: L'en-tête X-Upstream indique le serveur
+        run: |
+          curl -s -o /dev/null -D - http://localhost:8080/lb/ | grep -Eqi '^x-upstream: 127\.0\.0\.1:900[12]'
       - desc: La page d'accueil fonctionne toujours
         run: curl -fsS http://localhost:8080 | grep -q "Bienvenue sur TDM"

@@ -1,0 +1,27 @@
+# Pile de supervision : Prometheus (dans le conteneur « ops », où tu travailles), node-exporter,
+# une application qui expose des métriques, Alertmanager et Grafana.
+services:
+  ops:
+    build: ./ops
+    hostname: ops
+    ports: ["9390:9090"]
+    volumes: [prom-data:/prometheus]
+  node:
+    image: prom/node-exporter:v1.8.2
+    hostname: node
+  app:
+    build: ./app
+    hostname: app
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    hostname: alertmanager
+  grafana:
+    image: grafana/grafana:11.2.2
+    hostname: grafana
+    ports: ["3300:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: tdm
+    volumes: [grafana-data:/var/lib/grafana]
+volumes:
+  prom-data:
+  grafana-data:

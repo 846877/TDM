@@ -1,0 +1,191 @@
+title: Sécurité des conteneurs
+level: expert
+order: 4
+tags: [docker, sécurité, trivy, hadolint, sbom, durcissement, devsecops]
+summary: Auditer et durcir une image et son exécution - lint, secrets, non-root, image minimale, scan de vulnérabilités, SBOM, runtime restreint et audit d'hôte.
+build: .
+privileged: true
+command: []
+shell: sh
+workdir: /root/app
+setup: |
+  for i in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 1; done
+  docker run -d --name outil-debug --privileged alpine:3.20 sleep infinity
+  docker run -d --name sauvegarde -v /var/run/docker.sock:/var/run/docker.sock alpine:3.20 sleep infinity
+  docker run -d --name metrics --pid host --network host alpine:3.20 sleep infinity
+  docker run -d --name web-ok --read-only --cap-drop ALL --security-opt no-new-privileges alpine:3.20 sleep infinity
+description: |
+  Un hôte Docker rien qu'à toi (Docker dans Docker), équipé de **trivy** (scanner de vulnérabilités et
+  générateur de SBOM), **hadolint** (linter de Dockerfile) et **jq**.
+
+  Dans `/root/app`, une équipe a écrit un petit service Python (`app.py`, port 8080) et un `Dockerfile`… qui
+  cumule les mauvaises pratiques. Ton rôle de **DevSecOps** : auditer, corriger, durcir, prouver.
+  Range tes rapports dans `/root/rapports/`.
+
+  L'application lit sa clé d'API dans le fichier désigné par `API_KEY_FILE` (ou, à défaut, dans la variable
+  `API_KEY`) et répond `Service TDM - uid <uid> - cle chargee|absente`.
+
+  > Le premier scan trivy télécharge sa base de vulnérabilités : compte une minute.
+exercises:
+  - id: audit-dockerfile
+    title: Auditer le Dockerfile
+    description: |
+      Passe `/root/app/Dockerfile` au crible de **hadolint** et enregistre le rapport au format JSON dans
+      `/root/rapports/hadolint.json`. Lis chaque règle signalée (DL3007, DL3008…) : que risque-t-on ?
+    hint: "hadolint -f json Dockerfile > /root/rapports/hadolint.json (hadolint sort en erreur quand il trouve des problèmes, c'est normal)"
+    checks:
+      - desc: Le rapport JSON existe et liste au moins 4 problèmes
+        run: jq -e 'length >= 4' /root/rapports/hadolint.json >/dev/null
+      - desc: L'image de base non épinglée (DL3007) est signalée
+        run: jq -e 'any(.[]; .code == "DL3007")' /root/rapports/hadolint.json >/dev/null
+  - id: dockerfile-propre
+    title: Un Dockerfile sans avertissement
+    description: |
+      Corrige le Dockerfile jusqu'à ce que `hadolint --failure-threshold warning Dockerfile` ne signale plus rien :
+      - image de base **épinglée** (par exemple `python:3.12-slim`) ;
+      - `COPY` plutôt que `ADD` ;
+      - `CMD` sous forme JSON (`["python", "app.py"]`) ;
+      - `curl` ne sert à rien : supprime l'installation de paquets.
+
+      Construis l'image sous le nom **`app:1.0`**.
+    hint: "Une ligne CMD [\"python\", \"app.py\"] évite aussi un shell intermédiaire (signaux mal transmis) ; docker build -t app:1.0 ."
+    checks:
+      - desc: hadolint ne signale aucun avertissement
+        run: hadolint --failure-threshold warning /root/app/Dockerfile
+      - desc: L'image de base est épinglée
+        run: grep -iE '^FROM ' /root/app/Dockerfile | grep -qvE ':latest|^FROM [^:]+$'
+      - desc: L'image app:1.0 existe et répond
+        run: docker image inspect app:1.0 >/dev/null && docker run --rm --entrypoint python app:1.0 -c 'import urllib.request' >/dev/null
+  - id: secrets
+    title: Sortir les secrets de l'image
+    description: |
+      Deux secrets fuient dans l'image :
+      - la clé `API_KEY` écrite en dur (visible avec `docker history` ou `docker image inspect`) ;
+      - le fichier `.env` (mot de passe de base de données), copié avec tout le dossier.
+
+      Supprime la clé du Dockerfile, crée un **`.dockerignore`** qui exclut `.env` (et `Dockerfile`, `.dockerignore`),
+      puis reconstruis `app:1.0`. Range la clé dans `/root/secrets/api_key` (contenu `sk-tdm-4f9a7c21e8`) : elle
+      sera fournie à l'exécution.
+    hint: "docker history --no-trunc app:1.0 | grep sk- doit être vide ; docker run --rm app:1.0 ls -a /app"
+    checks:
+      - desc: La clé n'apparaît plus dans le Dockerfile ni dans l'image
+        run: |
+          ! grep -q 'sk-tdm' /root/app/Dockerfile && docker image inspect app:1.0 >/dev/null &&
+          ! docker image inspect app:1.0 | grep -q 'sk-tdm' && ! docker history --no-trunc app:1.0 | grep -q 'sk-tdm'
+      - desc: Le fichier .env n'est plus copié dans l'image
+        run: grep -qE '^/?\.env$' /root/app/.dockerignore && docker run --rm --entrypoint python app:1.0 -c 'import os, sys; sys.exit(os.path.exists(".env") or os.path.exists("/app/.env"))'
+      - desc: La clé est rangée dans /root/secrets/api_key
+        run: test "$(cat /root/secrets/api_key)" = sk-tdm-4f9a7c21e8
+  - id: non-root
+    title: Ne plus tourner en root
+    description: |
+      Par défaut, le processus du conteneur tourne en **root** : en cas d'évasion, c'est root sur l'hôte.
+      Crée dans l'image un utilisateur dédié (UID ≥ 1000) et bascule dessus avec `USER`. Reconstruis `app:1.0`.
+    hint: "Sur une base Debian slim, RUN useradd --uid 10001 --no-create-home appli puis USER appli (USER 10001 évite aussi une ambiguïté pour Kubernetes)"
+    checks:
+      - desc: L'image déclare un utilisateur non root
+        run: |
+          u=$(docker image inspect -f '{{.Config.User}}' app:1.0)
+          test -n "$u" && test "$u" != root && test "$u" != 0
+      - desc: Le processus tourne avec un UID ≥ 1000
+        run: docker image inspect app:1.0 >/dev/null && test "$(docker run --rm --entrypoint python app:1.0 -c 'import os; print(os.getuid())')" -ge 1000
+  - id: image-minimale
+    title: Réduire la surface d'attaque
+    description: |
+      Moins il y a de paquets dans l'image, moins il y a de vulnérabilités. Ramène `app:1.0` sous les **80 Mo**
+      (par exemple avec `python:3.12-alpine`), sans perdre les acquis précédents (non-root, pas de secret,
+      hadolint propre). Compare avec `docker images`.
+    hint: "Sur Alpine : RUN adduser -D -u 10001 appli (busybox) ; vérifie la taille avec docker image inspect -f '{{.Size}}' app:1.0"
+    checks:
+      - desc: app:1.0 pèse moins de 80 Mo
+        run: test "$(docker image inspect -f '{{.Size}}' app:1.0)" -lt 80000000
+      - desc: L'image tourne toujours en non-root
+        run: docker image inspect app:1.0 >/dev/null && test "$(docker run --rm --entrypoint python app:1.0 -c 'import os; print(os.getuid())')" -ge 1000
+  - id: scan-trivy
+    title: Scanner les vulnérabilités
+    description: |
+      1. Scanne `app:1.0` avec **trivy** et enregistre le rapport JSON dans `/root/rapports/trivy.json`.
+      2. Compte les vulnérabilités de sévérité **CRITICAL** du rapport et écris ce nombre (seul) dans
+         `/root/rapports/critiques.txt`.
+
+      Bonus : scanne `python:latest` et compare. Découvre aussi `--severity` et `--exit-code`, qui
+      permettent de bloquer un pipeline CI.
+    hint: "trivy image --format json -o /root/rapports/trivy.json app:1.0 ; jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == \"CRITICAL\")] | length' /root/rapports/trivy.json"
+    checks:
+      - desc: Le rapport trivy porte sur app:1.0
+        run: test "$(jq -r .ArtifactName /root/rapports/trivy.json)" = app:1.0
+      - desc: Le nombre de vulnérabilités critiques est exact
+        run: |
+          n=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' /root/rapports/trivy.json)
+          test -n "$n" && test "$(tr -d '[:space:]' < /root/rapports/critiques.txt)" = "$n"
+        timeout: 30
+  - id: runtime-durci
+    title: Une exécution durcie
+    description: |
+      Une bonne image ne suffit pas : restreins aussi son **exécution**. Lance le conteneur **`app-durcie`**
+      (en arrière-plan, image `app:1.0`, port 8080 publié sur le 8080 de l'hôte Docker) avec :
+      - un système de fichiers racine en **lecture seule** ;
+      - **toutes** les capabilities retirées ;
+      - l'option `no-new-privileges` ;
+      - au plus **100** processus et **128 Mo** de mémoire ;
+      - la clé montée **en lecture seule** sur `/run/secrets/api_key`, avec `API_KEY_FILE=/run/secrets/api_key`.
+
+      `wget -qO- http://localhost:8080` doit répondre `cle chargee`.
+    hint: "docker run -d --name app-durcie --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 100 --memory 128m -v /root/secrets/api_key:/run/secrets/api_key:ro -e API_KEY_FILE=/run/secrets/api_key -p 8080:8080 app:1.0"
+    checks:
+      - desc: Racine en lecture seule, capabilities retirées, no-new-privileges
+        run: |
+          test "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}} {{.HostConfig.SecurityOpt}}' app-durcie)" = 'true [ALL] [no-new-privileges]' ||
+          test "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}} {{.HostConfig.SecurityOpt}}' app-durcie)" = 'true [ALL] [no-new-privileges:true]'
+      - desc: Limites de 100 processus et 128 Mo
+        run: test "$(docker inspect -f '{{.HostConfig.PidsLimit}} {{.HostConfig.Memory}}' app-durcie)" = '100 134217728'
+      - desc: Le service tourne en non-root et a chargé sa clé depuis le fichier
+        run: |
+          r=$(wget -qO- -T 5 http://localhost:8080/)
+          echo "$r" | grep -q 'cle chargee' && ! echo "$r" | grep -q 'uid 0 ' &&
+          docker exec app-durcie printenv API_KEY_FILE | grep -qx /run/secrets/api_key
+  - id: reseau-interne
+    title: Cloisonner le réseau
+    description: |
+      L'application a besoin d'un cache Redis qui ne doit **jamais** être joignable depuis l'extérieur ni sortir
+      sur Internet.
+      1. Crée le réseau **interne** `backend` (sans accès sortant).
+      2. Lance `cache` (`redis:7.2-alpine`) uniquement sur ce réseau, sans publier de port.
+      3. Connecte `app-durcie` à `backend` : elle doit joindre `cache:6379`.
+    hint: "docker network create --internal backend ; docker run -d --name cache --network backend redis:7.2-alpine ; docker network connect backend app-durcie"
+    checks:
+      - desc: backend est un réseau interne
+        run: test "$(docker network inspect -f '{{.Internal}}' backend)" = true
+      - desc: cache n'est que sur backend et ne publie aucun port
+        run: |
+          test "$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' cache)" = 'backend ' &&
+          test -z "$(docker port cache)"
+      - desc: app-durcie joint cache:6379
+        run: docker exec app-durcie python -c "import socket; socket.create_connection(('cache', 6379), 3)"
+  - id: audit-hote
+    title: Auditer les conteneurs de l'hôte
+    description: |
+      D'autres conteneurs tournaient déjà sur cet hôte. Certains donnent, en pratique, **un accès root à
+      l'hôte** : mode privilégié, socket Docker montée, espaces de noms de l'hôte (`--pid host`, `--network host`)…
+
+      Inspecte-les, écris le **nom** de chaque conteneur dangereux (un par ligne) dans
+      `/root/rapports/dangereux.txt`, puis supprime-les. Ne touche pas aux conteneurs sains.
+    hint: "docker inspect -f '{{.Name}} priv={{.HostConfig.Privileged}} pid={{.HostConfig.PidMode}} net={{.HostConfig.NetworkMode}} {{range .Mounts}}{{.Source}} {{end}}' $(docker ps -aq)"
+    checks:
+      - desc: La liste des conteneurs dangereux est exacte
+        run: test "$(grep -v '^[[:space:]]*$' /root/rapports/dangereux.txt | tr -d ' \t' | sort -u | tr '\n' ' ')" = 'metrics outil-debug sauvegarde '
+      - desc: Les conteneurs dangereux ont été supprimés
+        run: test -s /root/rapports/dangereux.txt && ! docker ps -a --format '{{.Names}}' | grep -qxE 'metrics|outil-debug|sauvegarde'
+      - desc: Le conteneur sain web-ok tourne toujours
+        run: test "$(docker inspect -f '{{.State.Running}}' web-ok)" = true
+  - id: sbom
+    title: Produire un SBOM
+    description: |
+      Les clients exigent l'inventaire logiciel (**SBOM**) de chaque livraison. Génère celui de `app:1.0` au format
+      **CycloneDX** dans `/root/rapports/sbom.cdx.json`, puis retrouve dedans la version de Python embarquée.
+    hint: "trivy image --format cyclonedx -o /root/rapports/sbom.cdx.json app:1.0 ; jq '.components[] | select(.name == \"python\")' ..."
+    checks:
+      - desc: Le SBOM est au format CycloneDX et porte sur app:1.0
+        run: jq -e '.bomFormat == "CycloneDX" and .metadata.component.name == "app:1.0"' /root/rapports/sbom.cdx.json >/dev/null
+      - desc: Il inventorie des composants
+        run: jq -e '(.components | length) >= 5' /root/rapports/sbom.cdx.json >/dev/null

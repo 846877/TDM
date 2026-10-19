@@ -1,21 +1,28 @@
 title: Les bases de Linux
 level: debutant
 order: 1
-tags: [linux, shell, permissions]
-summary: Fichiers, droits, utilisateurs et filtres en ligne de commande.
+tags: [linux, shell, permissions, processus]
+summary: Fichiers, droits, utilisateurs, filtres, archives, processus et environnement du shell.
 user: eleve
 workdir: /home/eleve
+setup: |
+  nohup /usr/local/bin/gourmand >/dev/null 2>&1 &
 description: |
   Un conteneur Ubuntu rien que pour toi (utilisateur `eleve`, `sudo` sans mot de passe).
   Réalise les exercices dans le terminal puis clique sur **Vérifier**.
 
-  Commandes utiles : `ls -l`, `mkdir -p`, `chmod`, `chown`, `grep`, `wc -l`, `useradd`.
+  Le lab avance du geste de base (créer des dossiers) jusqu'aux réflexes d'administrateur :
+  analyser des journaux, retrouver des fichiers, gérer les processus et personnaliser son shell.
+
+  Commandes utiles : `ls -l`, `mkdir -p`, `chmod`, `chown`, `grep`, `wc -l`, `useradd`, `find`, `tar`,
+  `ps`, `kill`, `awk`, `sort`, `uniq`.
 exercises:
   - id: arborescence
     title: Créer une arborescence
     description: |
       Dans ton dossier personnel, crée l'arborescence `projets/tdm/src` et `projets/tdm/docs`,
       puis un fichier vide `projets/tdm/README.md`.
+    hint: "mkdir -p crée aussi les dossiers parents ; touch crée un fichier vide"
     checks:
       - desc: Dossiers src et docs
         run: test -d /home/eleve/projets/tdm/src && test -d /home/eleve/projets/tdm/docs
@@ -57,3 +64,88 @@ exercises:
         run: id -nG deployer | grep -qw devops && test -d /home/deployer
       - desc: /opt/app appartient à deployer:devops en 770
         run: test "$(stat -c '%U:%G %a' /opt/app)" = "deployer:devops 770"
+  - id: recherche
+    title: Retrouver des fichiers avec find
+    description: |
+      Le dossier `~/donnees/archives` (et ses sous-dossiers) contient des sauvegardes de tailles variées.
+      Le disque se remplit : écris dans `~/gros-fichiers.txt` le **nom** (sans le chemin) de chaque fichier
+      de **plus de 100 Kio**, un par ligne, **triés par ordre alphabétique**.
+
+      Ensuite, crée un lien symbolique `~/archives` qui pointe vers `~/donnees/archives`.
+    hint: "find ~/donnees/archives -type f -size +100k -printf '%f\\n' | sort ; ln -s cible nom_du_lien"
+    checks:
+      - desc: La liste des gros fichiers est exacte et triée
+        run: |
+          test "$(cat /home/eleve/gros-fichiers.txt)" = "$(find /home/eleve/donnees/archives -type f -size +100k -printf '%f\n' | sort)"
+      - desc: ~/archives est un lien vers ~/donnees/archives
+        run: test -L /home/eleve/archives && test "$(readlink -f /home/eleve/archives)" = /home/eleve/donnees/archives
+  - id: archives
+    title: Sauvegarder avec tar
+    description: |
+      Crée une archive compressée `~/sauvegarde-projets.tar.gz` qui contient tout le dossier `projets`
+      (les chemins dans l'archive doivent commencer par `projets/`).
+
+      Puis, pour t'entraîner à restaurer, extrais-la dans `~/restauration` : on doit y retrouver
+      `~/restauration/projets/tdm/README.md`.
+    hint: "cd ~ && tar -czf sauvegarde-projets.tar.gz projets ; mkdir restauration && tar -xzf sauvegarde-projets.tar.gz -C restauration"
+    checks:
+      - desc: L'archive est bien un gzip
+        run: file /home/eleve/sauvegarde-projets.tar.gz | grep -q gzip
+      - desc: Elle contient projets/tdm/README.md
+        run: tar -tzf /home/eleve/sauvegarde-projets.tar.gz | sed 's#^\./##' | grep -qx 'projets/tdm/README.md'
+      - desc: La restauration a été faite
+        run: test -f /home/eleve/restauration/projets/tdm/README.md
+  - id: environnement
+    title: Personnaliser son shell
+    description: |
+      Rends ces réglages **permanents** pour tes prochaines sessions bash (fichier `~/.bashrc`) :
+      - un alias `lt` qui lance `ls -ltrh` (fichiers triés du plus ancien au plus récent) ;
+      - la variable d'environnement `EDITOR` qui vaut `nano` (exportée) ;
+      - le dossier `~/bin` ajouté au `PATH`.
+
+      Crée ensuite dans `~/bin` un script exécutable `bonjour` qui affiche `Bonjour eleve` :
+      dans un nouveau terminal, la commande `bonjour` doit fonctionner depuis n'importe quel dossier.
+    hint: "echo \"alias lt='ls -ltrh'\" >> ~/.bashrc ; export EDITOR=nano ; export PATH=\"$HOME/bin:$PATH\" ; puis source ~/.bashrc"
+    checks:
+      - desc: L'alias lt existe dans un nouveau shell
+        run: bash -ic 'alias lt' 2>/dev/null | grep -q 'ls -ltrh'
+      - desc: EDITOR vaut nano et est exportée
+        run: test "$(bash -ic 'env' 2>/dev/null | grep '^EDITOR=')" = "EDITOR=nano"
+      - desc: La commande bonjour est trouvée via le PATH
+        run: cd / && bash -ic 'bonjour' 2>/dev/null | grep -qx 'Bonjour eleve'
+  - id: processus
+    title: Gérer les processus
+    description: |
+      Un processus nommé `gourmand` a été lancé en tâche de fond au démarrage du lab.
+      1. Retrouve son **PID** (`ps aux`, `pgrep`) et écris-le dans `~/gourmand.txt` (juste le nombre).
+      2. Arrête-le proprement avec `kill`.
+      3. Pour finir, lance toi-même `sleep 4242` **en arrière-plan** (il doit survivre à la fermeture du
+         terminal : utilise `nohup`).
+    hint: "pgrep -f gourmand > ~/gourmand.txt ; kill <PID> ; nohup sleep 4242 > /dev/null 2>&1 &"
+    checks:
+      - desc: Le PID noté est celui de gourmand
+        run: test "$(tr -d '[:space:]' < /home/eleve/gourmand.txt)" = "$(cat /var/tmp/.gourmand.pid)"
+      - desc: gourmand est arrêté
+        run: "! pgrep -fx '/bin/sh /usr/local/bin/gourmand'"
+      - desc: sleep 4242 tourne en arrière-plan
+        run: pgrep -fx 'sleep 4242'
+  - id: rapport
+    title: Rapport de logs avec awk
+    description: |
+      À partir de `~/donnees/app.log`, produis le fichier `~/rapport.csv` qui compte les lignes **par niveau**
+      de log (3ᵉ colonne : `ERROR`, `INFO`, `WARN`…), au format CSV, avec une ligne d'en-tête :
+
+      ```
+      niveau,nombre
+      ERROR,53
+      ...
+      ```
+
+      Les niveaux sont triés par ordre alphabétique. Bonus : fais-le en **une seule** ligne de commande.
+    hint: "awk '{print $3}' fichier | sort | uniq -c donne « nombre niveau » ; un second awk peut inverser les colonnes et ajouter la virgule"
+    checks:
+      - desc: L'en-tête est niveau,nombre
+        run: test "$(head -1 /home/eleve/rapport.csv)" = "niveau,nombre"
+      - desc: Les comptes par niveau sont exacts
+        run: |
+          test "$(tail -n +2 /home/eleve/rapport.csv | tr -d ' \r')" = "$(awk '{print $3}' /home/eleve/donnees/app.log | sort | uniq -c | awk '{print $2","$1}')"
