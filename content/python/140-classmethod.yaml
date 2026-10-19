@@ -1,0 +1,187 @@
+title: Méthodes de classe et statiques
+level: intermediaire
+order: 40
+tags: [classes, classmethod, staticmethod, POO]
+summary: Constructeurs alternatifs, compteurs de classe et méthodes utilitaires.
+description: |
+  Crée une classe `Utilisateur` :
+
+  - `Utilisateur(login, uid, shell="/bin/bash")` stocke ces trois attributs ;
+  - un attribut **de classe** `nb_crees` compte le nombre d'utilisateurs créés depuis le
+    début (il commence à 0) ;
+  - `Utilisateur.login_valide(login)` est une **méthode statique** : `True` si le login fait
+    de 1 à 32 caractères, commence par une lettre minuscule et ne contient que des
+    minuscules, chiffres, `_` et `-` ;
+  - le constructeur lève `ValueError` si le login n'est pas valide (avant d'incrémenter le
+    compteur) ;
+  - `Utilisateur.depuis_passwd(ligne)` est une **méthode de classe** qui crée un utilisateur
+    à partir d'une ligne au format `/etc/passwd` :
+    `login:x:uid:gid:commentaire:dossier:shell` (l'uid est converti en `int`). Elle doit
+    utiliser `cls(...)` pour que les sous-classes en profitent ;
+  - `est_systeme()` renvoie `True` si l'uid est inférieur à 1000 ;
+  - `__repr__` renvoie `Utilisateur('alice', 1000)` (avec le nom de la classe réelle).
+
+  Crée aussi `Administrateur(Utilisateur)` qui n'ajoute rien, sauf `est_admin()` qui renvoie
+  `True` : `Administrateur.depuis_passwd(...)` doit renvoyer un `Administrateur`.
+
+  ```python
+  u = Utilisateur.depuis_passwd("alice:x:1000:1000:Alice:/home/alice:/bin/zsh")
+  u.shell                         # "/bin/zsh"
+  Utilisateur.login_valide("9x")  # False
+  ```
+starter: |
+  class Utilisateur:
+      pass
+
+
+  class Administrateur(Utilisateur):
+      pass
+tests: |
+  def test_creation():
+      "Création et attributs"
+      u = solution.Utilisateur("bob", 1001)
+      assert (u.login, u.uid, u.shell) == ("bob", 1001, "/bin/bash")
+
+  def test_compteur():
+      "nb_crees compte les créations"
+      avant = solution.Utilisateur.nb_crees
+      solution.Utilisateur("c1", 2000)
+      solution.Utilisateur("c2", 2001)
+      assert solution.Utilisateur.nb_crees == avant + 2
+
+  def test_login_valide():
+      "login_valide (méthode statique)"
+      for ok in ["alice", "a", "svc_backup", "web-01"]:
+          assert solution.Utilisateur.login_valide(ok) is True, ok
+      for ko in ["", "9x", "Alice", "a b", "_x", "é", "a" * 33]:
+          assert solution.Utilisateur.login_valide(ko) is False, repr(ko)
+
+  def test_invalide():
+      "Login invalide refusé, compteur inchangé"
+      avant = solution.Utilisateur.nb_crees
+      try:
+          solution.Utilisateur("Root!", 0)
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("ValueError attendue")
+      assert solution.Utilisateur.nb_crees == avant
+
+  def test_passwd():
+      "depuis_passwd"
+      u = solution.Utilisateur.depuis_passwd("alice:x:1000:1000:Alice:/home/alice:/bin/zsh")
+      assert isinstance(u, solution.Utilisateur)
+      assert (u.login, u.uid, u.shell) == ("alice", 1000, "/bin/zsh")
+      assert u.est_systeme() is False
+      d = solution.Utilisateur.depuis_passwd("daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin")
+      assert d.est_systeme() is True
+
+  def test_repr():
+      "__repr__"
+      assert repr(solution.Utilisateur("alice", 1000)) == "Utilisateur('alice', 1000)"
+
+  def test_sous_classe():
+      "depuis_passwd crée la bonne classe"
+      a = solution.Administrateur.depuis_passwd("root:x:0:0:root:/root:/bin/bash")
+      assert type(a) is solution.Administrateur, f"type obtenu : {type(a).__name__}"
+      assert a.est_admin() is True
+      assert repr(a) == "Administrateur('root', 0)"
+solution: |
+  class Utilisateur:
+      nb_crees = 0
+      CARACTERES = set("abcdefghijklmnopqrstuvwxyz0123456789_-")
+
+      def __init__(self, login, uid, shell="/bin/bash"):
+          if not self.login_valide(login):
+              raise ValueError(f"login invalide : {login!r}")
+          self.login = login
+          self.uid = uid
+          self.shell = shell
+          Utilisateur.nb_crees += 1
+
+      @staticmethod
+      def login_valide(login):
+          return (1 <= len(login) <= 32 and "a" <= login[0] <= "z"
+                  and all(c in Utilisateur.CARACTERES for c in login))
+
+      @classmethod
+      def depuis_passwd(cls, ligne):
+          login, _, uid, _gid, _commentaire, _dossier, shell = ligne.strip().split(":")
+          return cls(login, int(uid), shell)
+
+      def est_systeme(self):
+          return self.uid < 1000
+
+      def __repr__(self):
+          return f"{type(self).__name__}({self.login!r}, {self.uid})"
+
+
+  class Administrateur(Utilisateur):
+      def est_admin(self):
+          return True
+cours: |
+  ## Trois sortes de méthodes
+
+  | Type | Premier paramètre | Usage |
+  |------|-------------------|-------|
+  | méthode d'instance | `self` (l'objet) | agit sur un objet précis |
+  | `@classmethod` | `cls` (la classe) | constructeurs alternatifs, état de classe |
+  | `@staticmethod` | aucun | fonction utilitaire rangée dans la classe |
+
+  ## Les attributs de classe
+
+  Un attribut défini dans le corps de la classe (hors méthode) est **partagé** par toutes les
+  instances :
+
+  ```python
+  class Connexion:
+      ouvertes = 0                    # attribut de classe
+      def __init__(self):
+          Connexion.ouvertes += 1     # on modifie l'attribut DE LA CLASSE
+  ```
+
+  Attention : `self.ouvertes += 1` créerait un attribut **d'instance** qui masquerait celui
+  de la classe, sans modifier le compteur partagé.
+
+  ## `@classmethod` : les constructeurs alternatifs
+
+  `__init__` n'accepte qu'une signature. Pour créer un objet à partir d'autres formats (une
+  ligne de fichier, un dictionnaire JSON, une chaîne), on écrit des méthodes de classe :
+
+  ```python
+  class Hote:
+      def __init__(self, nom, ip):
+          self.nom, self.ip = nom, ip
+
+      @classmethod
+      def depuis_ligne_hosts(cls, ligne):      # "10.0.0.5  web01"
+          ip, nom = ligne.split()[:2]
+          return cls(nom, ip)
+  ```
+
+  On écrit `cls(...)` et **pas** `Hote(...)` : appelée depuis une sous-classe, `cls` est la
+  sous-classe, et l'objet créé a le bon type. La bibliothèque standard en regorge :
+  `dict.fromkeys`, `datetime.fromisoformat`, `int.from_bytes`.
+
+  ## `@staticmethod`
+
+  Une méthode statique ne reçoit ni l'objet ni la classe : c'est une fonction ordinaire,
+  rangée dans la classe parce qu'elle s'y rattache logiquement (une validation, une
+  conversion). On peut l'appeler sur la classe (`Utilisateur.login_valide(x)`) ou depuis une
+  instance (`self.login_valide(x)`).
+
+  ## Valider avant de modifier l'état
+
+  Le compteur ne doit augmenter que pour un objet réellement créé : on valide en premier, on
+  modifie ensuite. Si `__init__` lève une exception, l'objet n'existe pas.
+
+  ## Le format `/etc/passwd`
+
+  Sept champs séparés par `:` : login, mot de passe (`x` = stocké dans `/etc/shadow`), UID,
+  GID, commentaire (GECOS), dossier personnel, shell. Les UID inférieurs à 1000 sont
+  généralement des comptes système (selon la distribution).
+docs:
+  - title: Documentation Python — classmethod
+    url: https://docs.python.org/fr/3/library/functions.html#classmethod
+  - title: Documentation Python — staticmethod
+    url: https://docs.python.org/fr/3/library/functions.html#staticmethod
