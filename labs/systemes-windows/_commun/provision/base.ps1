@@ -28,31 +28,6 @@ try {
 } catch { Write-Host "  clavier : $_" }
 try { powercfg /change standby-timeout-ac 0 | Out-Null; powercfg /hibernate off | Out-Null } catch { }
 
-# --- Réseau -----------------------------------------------------------------------------------
-Step "Cartes réseau (LAN = $LanMac)"
-$lan = Get-NetAdapter -Physical | Where-Object { $_.MacAddress -eq $LanMac.ToUpper() }
-if (-not $lan) { throw "Carte LAN $LanMac introuvable" }
-Get-NetAdapter -Physical | Where-Object { $_.MacAddress -ne $LanMac.ToUpper() -and $_.Name -ne 'NAT' } |
-    Select-Object -First 1 | Rename-NetAdapter -NewName 'NAT'
-if ($lan.Name -ne 'LAN') { $lan | Rename-NetAdapter -NewName 'LAN'; $lan = Get-NetAdapter -Name 'LAN' }
-# Le réseau du lab est un réseau privé (le profil Public bloque le partage de fichiers, le ping...).
-Start-Sleep -Seconds 5
-Get-NetConnectionProfile -InterfaceAlias 'LAN' -ErrorAction SilentlyContinue |
-    Set-NetConnectionProfile -NetworkCategory Private -ErrorAction SilentlyContinue
-if ($LanIp) {
-    Get-NetIPAddress -InterfaceAlias 'LAN' -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-        Where-Object { $_.IPAddress -ne $LanIp } | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
-    if (-not (Get-NetIPAddress -InterfaceAlias 'LAN' -IPAddress $LanIp -ErrorAction SilentlyContinue)) {
-        $params = @{ InterfaceAlias = 'LAN'; IPAddress = $LanIp; PrefixLength = $Prefix }
-        if ($Gateway) { $params.DefaultGateway = $Gateway }
-        New-NetIPAddress @params | Out-Null
-    }
-}
-if ($Dns) { Set-DnsClientServerAddress -InterfaceAlias 'LAN' -ServerAddresses $Dns }
-# Les requêtes DNS du lab passent d'abord par la carte LAN (domaine durand.lan).
-Set-NetIPInterface -InterfaceAlias 'LAN' -InterfaceMetric 10 -ErrorAction SilentlyContinue
-Set-NetIPInterface -InterfaceAlias 'NAT' -InterfaceMetric 50 -ErrorAction SilentlyContinue
-
 # --- OpenSSH Server -----------------------------------------------------------------------------
 Step 'OpenSSH Server'
 if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
@@ -89,4 +64,29 @@ $userSsh = 'C:\Users\vagrant\.ssh'
 New-Item $userSsh -ItemType Directory -Force | Out-Null
 Set-Content -Path (Join-Path $userSsh 'authorized_keys') -Value $key -Encoding Ascii
 Restart-Service sshd
+# --- Réseau -----------------------------------------------------------------------------------
+Step "Cartes réseau (LAN = $LanMac)"
+$lan = Get-NetAdapter -Physical | Where-Object { $_.MacAddress -eq $LanMac.ToUpper() }
+if (-not $lan) { throw "Carte LAN $LanMac introuvable" }
+Get-NetAdapter -Physical | Where-Object { $_.MacAddress -ne $LanMac.ToUpper() -and $_.Name -ne 'NAT' } |
+    Select-Object -First 1 | Rename-NetAdapter -NewName 'NAT'
+if ($lan.Name -ne 'LAN') { $lan | Rename-NetAdapter -NewName 'LAN'; $lan = Get-NetAdapter -Name 'LAN' }
+# Le réseau du lab est un réseau privé (le profil Public bloque le partage de fichiers, le ping...).
+Start-Sleep -Seconds 5
+Get-NetConnectionProfile -InterfaceAlias 'LAN' -ErrorAction SilentlyContinue |
+    Set-NetConnectionProfile -NetworkCategory Private -ErrorAction SilentlyContinue
+if ($LanIp) {
+    Get-NetIPAddress -InterfaceAlias 'LAN' -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.IPAddress -ne $LanIp } | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+    if (-not (Get-NetIPAddress -InterfaceAlias 'LAN' -IPAddress $LanIp -ErrorAction SilentlyContinue)) {
+        $params = @{ InterfaceAlias = 'LAN'; IPAddress = $LanIp; PrefixLength = $Prefix }
+        if ($Gateway) { $params.DefaultGateway = $Gateway }
+        New-NetIPAddress @params | Out-Null
+    }
+}
+if ($Dns) { Set-DnsClientServerAddress -InterfaceAlias 'LAN' -ServerAddresses $Dns }
+# Les requêtes DNS du lab passent d'abord par la carte LAN (domaine durand.lan).
+Set-NetIPInterface -InterfaceAlias 'LAN' -InterfaceMetric 10 -ErrorAction SilentlyContinue
+Set-NetIPInterface -InterfaceAlias 'NAT' -InterfaceMetric 50 -ErrorAction SilentlyContinue
+
 Step 'Prêt : terminal PowerShell par SSH'

@@ -21,6 +21,7 @@ Set-ADUser vagrant -PasswordNeverExpires $true
 try {
     if (-not (Get-DnsServerForwarder).IPAddress) { Add-DnsServerForwarder -IPAddress 10.0.2.3 }
 } catch { Write-Host "  redirecteur : $_" }
+Set-DnsClientServerAddress -InterfaceAlias 'NAT' -ServerAddresses 127.0.0.1
 # Le DC ne doit s'enregistrer dans le DNS qu'avec son adresse LAN (pas celle de la carte NAT).
 Set-DnsClient -InterfaceAlias 'NAT' -RegisterThisConnectionsAddress $false -ErrorAction SilentlyContinue
 Get-DnsServerResourceRecord -ZoneName $Domain -RRType A -ErrorAction SilentlyContinue |
