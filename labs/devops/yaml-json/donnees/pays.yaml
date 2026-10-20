@@ -1,0 +1,9 @@
+# Paramètres régionaux : ce fichier est valide, mais certaines valeurs ne sont pas lues comme prévu.
+pays:
+  - FR
+  - NO
+  - SE
+version_app: 1.10
+code_postal: 01200
+mode_maintenance: off
+fuseau: Europe/Paris
