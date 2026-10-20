@@ -30,3 +30,57 @@ solution: |
   exit
   ip default-gateway 192.168.99.1
   end
+cours: |
+  ## Un switch de niveau 2 a-t-il une adresse IP ?
+
+  Pour commuter des trames, un switch n'a besoin d'aucune adresse IP. Mais pour l'**administrer
+  à distance** (SSH, SNMP, syslog, NTP), il lui en faut une. Elle se place sur une interface
+  virtuelle de VLAN, la **SVI** (*Switched Virtual Interface*) : `interface vlan <n>`.
+
+  On réserve un VLAN de **gestion** dédié (pas le VLAN 1, ni celui des utilisateurs), pour que les
+  postes ne puissent pas joindre l'interface d'administration.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# vlan 199
+  SW1(config-vlan)# name ADMIN-RESEAU
+  SW1(config-vlan)# exit
+  SW1(config)# interface vlan 199
+  SW1(config-if)# ip address 10.199.0.21 255.255.255.0
+  SW1(config-if)# no shutdown
+  SW1(config-if)# exit
+  SW1(config)# ip default-gateway 10.199.0.254
+  SW1# show ip interface brief | include Vlan
+  Vlan199     10.199.0.21   YES manual up        up
+  ```
+
+  ### Quand la SVI est-elle « up » ?
+
+  Une SVI n'est `up/up` que si :
+
+  1. le VLAN **existe** ;
+  2. elle n'est pas `shutdown` (les SVI sont éteintes par défaut) ;
+  3. **au moins un port actif** appartient à ce VLAN (port d'accès ou trunk qui le transporte).
+
+  ### La passerelle par défaut
+
+  Un switch de niveau 2 ne route pas : pour répondre à un administrateur situé dans un autre
+  réseau, il envoie ses paquets à la **passerelle par défaut** (`ip default-gateway`), comme un
+  PC. Sur un switch de niveau 3 avec `ip routing`, on utilise à la place une route par défaut
+  (`ip route 0.0.0.0 0.0.0.0 ...`).
+
+  ### Pièges fréquents
+
+  - Oublier `no shutdown` sur la SVI.
+  - Aucun port dans le VLAN de gestion (souvent : le trunk ne le transporte pas) → `up/down`.
+  - Oublier la passerelle : le switch répond depuis son réseau, mais pas depuis un autre.
+
+  ### Pour le CCNA
+
+  Configurer l'adresse de gestion d'un switch et sa passerelle fait partie des tâches de base.
+docs:
+  - title: "Wikipédia — Réseau local virtuel"
+    url: https://fr.wikipedia.org/wiki/R%C3%A9seau_local_virtuel
+  - title: "Wikipédia (EN) — Default gateway"
+    url: https://en.wikipedia.org/wiki/Default_gateway

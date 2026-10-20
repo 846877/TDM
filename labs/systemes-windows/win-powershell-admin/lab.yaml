@@ -1,0 +1,574 @@
+title: PowerShell pour l'administrateur Windows
+level: debutant
+order: 8
+tags: [windows, powershell, scripts, csv, comptes, module, registre, rapport, automatisation]
+summary: Écrire de vrais scripts d'administration Windows - découverte, pipeline, fonctions et paramètres, import CSV de comptes, gestion d'erreurs, module, registre, rapport HTML.
+vagrant: bundled
+extra_commands: [Get-EspaceDisque]
+description: |
+  **Contexte.** Chez *Ateliers Durand*, le service RH envoie chaque mois un fichier des arrivées et la
+  direction veut un rapport hebdomadaire sur les serveurs. Ton responsable te demande d'arrêter les
+  clics répétitifs et d'**écrire des scripts PowerShell** propres, réutilisables et planifiés.
+
+  **Machine.** Une VM Windows Server 2022 (2 Go de RAM), **Windows PowerShell 5.1**. Terminal en
+  administrateur.
+
+  | Chemin | Contenu |
+  |--------|---------|
+  | `C:\Scripts\Donnees\nouveaux.csv` | arrivées du mois (séparateur `;`, UTF-8, accents) |
+  | `C:\Scripts\Donnees\serveurs.txt` | serveurs à tester (dont un qui n'existe pas) |
+  | `C:\Scripts\Telecharge\outil.ps1` | script envoyé par un prestataire |
+  | `C:\Scripts\Sortie` | tes résultats |
+
+  Écris tes scripts dans `C:\Scripts`. Éditeur : `notepad`, ou **PowerShell ISE** (`powershell_ise`) par
+  le Bureau à distance ; dans le terminal, `Set-Content` avec une chaîne `@' ... '@` fonctionne aussi.
+cours: |
+  ## Des objets, pas du texte
+
+  PowerShell manipule des **objets .NET** : `Get-Service` renvoie des objets `ServiceController` avec des
+  propriétés (`Status`, `StartType`) et des méthodes (`Stop()`). Le **pipeline** `|` passe ces objets
+  d'une commande à l'autre, sans découpage de texte :
+
+  ```powershell
+  Get-Service | Where-Object { $_.StartType -eq 'Automatic' -and $_.Status -ne 'Running' } |
+    Select-Object Name, DisplayName | Export-Csv C:\Scripts\Sortie\ko.csv -Delimiter ';' -NoTypeInformation
+  ```
+
+  Trois commandes pour tout découvrir seul : `Get-Command *LocalUser*` (quelles commandes ?),
+  `Get-Help New-LocalUser -Examples` (comment ?), `Get-Service | Get-Member` (quels types, quelles
+  propriétés ?). Les verbes sont normalisés (`Get-Verb`) : Get, Set, New, Remove, Add, Test, Start...
+
+  ## Scripts, paramètres et fonctions
+
+  ```powershell
+  # C:\Scripts\New-Login.ps1
+  param(
+      [Parameter(Mandatory)][string]$Prenom,
+      [Parameter(Mandatory)][string]$Nom
+  )
+  $texte = ($Prenom.Substring(0, 1) + $Nom).Normalize([Text.NormalizationForm]::FormD)
+  ($texte -replace '\p{Mn}', '' -replace '[^a-zA-Z]', '').ToLower()
+  ```
+
+  Un script se lance par son chemin (`& C:\Scripts\New-Login.ps1 -Prenom Élodie -Nom 'Le Gall'`) ; une
+  **fonction** (`function Get-EspaceDisque { param(...) ... }`) se définit dans un script ou un
+  **module** (`.psm1`) rangé dans `C:\Program Files\WindowsPowerShell\Modules\<Nom>\` pour être chargé
+  automatiquement. Une fonction **renvoie** tout ce qu'elle produit (pas besoin de `return`) : de
+  préférence des objets (`[pscustomobject]@{ ... }`), que l'appelant formatera ou exportera.
+
+  ## Stratégie d'exécution
+
+  La **stratégie d'exécution** (`Get-ExecutionPolicy -List`) n'est pas une sécurité mais un garde-fou :
+  `RemoteSigned` (défaut sur Windows Server) exécute les scripts locaux, mais exige une signature pour
+  ceux qui viennent d'Internet — reconnus par le flux NTFS `Zone.Identifier` ajouté par le navigateur ou
+  la messagerie. Après vérification du contenu, `Unblock-File` retire cette marque.
+
+  ## Gestion d'erreurs
+
+  - Erreur **non bloquante** (la plupart des cmdlets) : un message rouge, puis le script continue.
+  - Erreur **bloquante** : le script s'arrête, sauf dans un `try { } catch { }`.
+  - `-ErrorAction Stop` rend une erreur bloquante, donc attrapable ; `-ErrorAction SilentlyContinue`
+    l'ignore (pratique pour tester une existence).
+
+  ```powershell
+  foreach ($nom in Get-Content C:\Scripts\Donnees\serveurs.txt) {
+      try {
+          $ok = Test-Connection $nom -Count 1 -Quiet -ErrorAction Stop
+      } catch {
+          Write-Warning "$nom : $($_.Exception.Message)" ; $ok = $false
+      }
+      [pscustomobject]@{ Nom = $nom; Joignable = $ok }
+  }
+  ```
+
+  ## Fichiers : encodages et formats
+
+  Windows PowerShell 5.1 écrit en UTF-16 avec `>` et `Out-File`, en ANSI avec `Set-Content`, et lit en
+  ANSI les fichiers **sans BOM**. Toujours préciser `-Encoding UTF8`. `Import-Csv -Delimiter ';'` /
+  `Export-Csv -Delimiter ';' -NoTypeInformation` pour les fichiers échangés avec Excel français,
+  `ConvertTo-Html` pour un rapport lisible, `Export-Clixml` pour sauvegarder des objets à recharger.
+
+  ## Pièges courants
+
+  - Tester un script directement en production : utiliser `-WhatIf` et un jeu d'essai.
+  - Ne pas rendre un script **idempotent** (le relancer doit être sans danger : vérifier l'existence avant
+    de créer).
+  - Afficher avec `Write-Host` ou `Format-Table` dans une fonction : on perd les objets.
+  - Oublier les guillemets simples autour des chaînes contenant `$`.
+docs:
+  - title: Découvrir PowerShell (documentation de PowerShell 5.1)
+    url: https://learn.microsoft.com/fr-fr/powershell/scripting/learn/ps101/00-introduction
+  - title: À propos des stratégies d'exécution
+    url: https://learn.microsoft.com/fr-fr/powershell/module/microsoft.powershell.core/about/about_execution_policies
+  - title: À propos de Try Catch Finally
+    url: https://learn.microsoft.com/fr-fr/powershell/module/microsoft.powershell.core/about/about_try_catch_finally
+exercises:
+  - id: win-ps-decouverte
+    title: Trouver seul la bonne commande
+    description: |
+      Sans chercher sur Internet, avec `Get-Command`, `Get-Help` et `Get-Member`, écris dans
+      `C:\Scripts\Sortie\decouverte.txt` trois lignes au format `clé=valeur` :
+
+      - `comptes=` le **nombre** de commandes du module `Microsoft.PowerShell.LocalAccounts` ;
+      - `type=` le **nom complet du type** des objets renvoyés par `Get-Service` ;
+      - `alias=` la commande dont `gsv` est l'**alias**.
+    hint: (Get-Command -Module Microsoft.PowerShell.LocalAccounts).Count ; Get-Service | Get-Member (TypeName) ; Get-Alias gsv
+    cours: |
+      Les trois commandes de survie :
+
+      ```powershell
+      Get-Command -Module Microsoft.PowerShell.LocalAccounts      # quelles commandes dans ce module ?
+      Get-Command *-LocalUser                                      # par motif
+      Get-Help New-LocalUser -Examples                             # exemples (Update-Help pour l'aide complète)
+      Get-Service | Get-Member                                     # « TypeName: System.ServiceProcess.ServiceController »
+      Get-Alias gsv ; Get-Alias -Definition Get-ChildItem          # alias dans les deux sens
+      ```
+
+      `Get-Member` est l'outil le plus important : il montre le **type** des objets et toutes leurs
+      propriétés et méthodes. Les alias (`ls`, `dir`, `gci` pour `Get-ChildItem`) sont pratiques en
+      interactif, mais dans un script on écrit le nom complet, lisible par tous.
+    ci: true
+    checks:
+      - desc: comptes= est juste
+        run: |
+          $n = (Get-Command -Module Microsoft.PowerShell.LocalAccounts).Count
+          (Get-Content C:\Scripts\Sortie\decouverte.txt | ForEach-Object { $_.Trim() }) -contains "comptes=$n"
+      - desc: type= et alias= sont justes
+        run: |
+          $l = Get-Content C:\Scripts\Sortie\decouverte.txt | ForEach-Object { $_.Trim() }
+          $l -contains 'type=System.ServiceProcess.ServiceController' -and $l -contains 'alias=Get-Service'
+    solution: |
+      $n = (Get-Command -Module Microsoft.PowerShell.LocalAccounts).Count
+      $t = (Get-Service | Get-Member)[0].TypeName
+      $a = (Get-Alias gsv).Definition
+      Set-Content C:\Scripts\Sortie\decouverte.txt "comptes=$n", "type=$t", "alias=$a"
+
+  - id: win-ps-pipeline
+    title: Services automatiques arrêtés
+    description: |
+      Produis `C:\Scripts\Sortie\services-ko.csv` (séparateur `;`, sans ligne `#TYPE`) listant les services
+      en démarrage **Automatique** qui ne sont **pas démarrés**, avec les colonnes `Name` et `DisplayName`,
+      triés par `Name`.
+    hint: Get-Service | Where-Object { $_.StartType -eq 'Automatic' -and $_.Status -ne 'Running' } | Sort-Object Name | Select-Object Name, DisplayName | Export-Csv ... -Delimiter ';' -NoTypeInformation
+    cours: |
+      Le motif filtrer → trier → choisir → exporter revient dans presque tous les scripts d'admin :
+
+      ```powershell
+      Get-Service |
+        Where-Object { $_.StartType -eq 'Automatic' -and $_.Status -ne 'Running' } |
+        Sort-Object Name |
+        Select-Object Name, DisplayName |
+        Export-Csv C:\Scripts\Sortie\services-ko.csv -Delimiter ';' -NoTypeInformation -Encoding UTF8
+      ```
+
+      Dans `Where-Object`, `$_` désigne l'objet courant ; les opérateurs de comparaison sont `-eq`, `-ne`,
+      `-gt`, `-lt`, `-like` (jokers `*`), `-match` (expressions régulières), combinés par `-and`, `-or`,
+      `-not`. La syntaxe courte `Where-Object Status -eq 'Stopped'` marche pour une seule condition.
+
+      Ce rapport est un classique de supervision : un service automatique arrêté après un redémarrage
+      signale souvent un problème (dépendance, compte de service, licence).
+    ci: true
+    checks:
+      - desc: Le CSV contient exactement les services automatiques arrêtés, triés
+        run: |
+          $attendu = @(Get-Service | Where-Object { $_.StartType -eq 'Automatic' -and $_.Status -ne 'Running' } | Sort-Object Name | ForEach-Object Name)
+          $csv = @(Import-Csv C:\Scripts\Sortie\services-ko.csv -Delimiter ';')
+          ($csv.Name -join ',') -eq ($attendu -join ',') -and ($csv[0].PSObject.Properties.Name -join ',') -eq 'Name,DisplayName'
+      - desc: 'Pas de ligne #TYPE'
+        run: |
+          (Test-Path C:\Scripts\Sortie\services-ko.csv) -and -not ((Get-Content C:\Scripts\Sortie\services-ko.csv -TotalCount 1) -match '^#TYPE')
+    solution: |
+      Get-Service | Where-Object { $_.StartType -eq 'Automatic' -and $_.Status -ne 'Running' } | Sort-Object Name |
+        Select-Object Name, DisplayName | Export-Csv C:\Scripts\Sortie\services-ko.csv -Delimiter ';' -NoTypeInformation -Encoding UTF8
+
+  - id: win-ps-login
+    title: Générer un identifiant de connexion
+    description: |
+      Écris le script `C:\Scripts\New-Login.ps1` avec deux paramètres **obligatoires**, `-Prenom` et `-Nom`,
+      qui renvoie l'identifiant selon la règle de l'entreprise : **initiale du prénom + nom**, en
+      **minuscules**, **sans accents**, sans espaces, apostrophes ni tirets, **20 caractères au maximum**.
+
+      Exemples : `Élodie` `Le Gall` → `elegall` ; `Jérôme` `N'Diaye` → `jndiaye`.
+    hint: param([Parameter(Mandatory)][string]$Prenom, [Parameter(Mandatory)][string]$Nom) ; .Normalize([Text.NormalizationForm]::FormD) puis -replace '\p{Mn}','' et -replace '[^a-zA-Z]',''
+    cours: |
+      Un bloc `param()` en tête de script déclare ses paramètres ; `[Parameter(Mandatory)]` force leur saisie,
+      `[string]` leur type.
+
+      Supprimer les accents : on **décompose** le texte (forme Unicode **FormD** : « é » devient « e » + un
+      accent combinant), puis on retire les marques combinantes (catégorie Unicode `\p{Mn}`) :
+
+      ```powershell
+      $t = 'Élodie'.Normalize([Text.NormalizationForm]::FormD) -replace '\p{Mn}', ''    # Elodie
+      $t = $t -replace '[^a-zA-Z]', ''                                                  # garde les lettres
+      $t.ToLower()
+      ```
+
+      Pour couper à 20 caractères sans erreur sur les chaînes courtes : `$l.Substring(0, [math]::Min(20,
+      $l.Length))`. Teste avec plusieurs cas : `& C:\Scripts\New-Login.ps1 -Prenom 'Anaïs' -Nom 'Dupont-Martin'`.
+      Les comptes locaux Windows sont limités à 20 caractères : la règle n'est pas qu'esthétique.
+    ci: true
+    checks:
+      - desc: Élodie Le Gall → elegall, Jérôme N'Diaye → jndiaye
+        run: |
+          (& C:\Scripts\New-Login.ps1 -Prenom 'Élodie' -Nom 'Le Gall') -eq 'elegall' -and (& C:\Scripts\New-Login.ps1 -Prenom 'Jérôme' -Nom "N'Diaye") -eq 'jndiaye'
+      - desc: Anaïs Dupont-Martin → adupontmartin, et 20 caractères maximum
+        run: |
+          (& C:\Scripts\New-Login.ps1 -Prenom 'Anaïs' -Nom 'Dupont-Martin') -eq 'adupontmartin' -and
+            (& C:\Scripts\New-Login.ps1 -Prenom 'Marie' -Nom 'De La Fontaine-Saint-Exupéry') -eq 'mdelafontainesaintex'
+      - desc: Les deux paramètres sont obligatoires
+        run: |
+          $p = (Get-Command C:\Scripts\New-Login.ps1).Parameters
+          $p['Prenom'].Attributes.Mandatory -contains $true -and $p['Nom'].Attributes.Mandatory -contains $true
+    solution: |
+      Set-Content C:\Scripts\New-Login.ps1 -Encoding UTF8 @'
+      param(
+          [Parameter(Mandatory)][string]$Prenom,
+          [Parameter(Mandatory)][string]$Nom
+      )
+      $t = ($Prenom.Substring(0, 1) + $Nom).Normalize([Text.NormalizationForm]::FormD)
+      $t = ($t -replace '\p{Mn}', '' -replace '[^a-zA-Z]', '').ToLower()
+      $t.Substring(0, [math]::Min(20, $t.Length))
+      '@
+
+  - id: win-ps-import
+    title: Créer les comptes des arrivées depuis le CSV des RH
+    description: |
+      Écris `C:\Scripts\Import-Utilisateurs.ps1` (paramètre `-Fichier`) qui, pour chaque ligne de
+      `C:\Scripts\Donnees\nouveaux.csv` :
+
+      - calcule l'identifiant avec `New-Login.ps1` ;
+      - crée le compte local (nom complet `Prénom Nom`, description = `Fonction`, mot de passe
+        `Bienvenue2024!`) s'il n'existe pas déjà ;
+      - crée le groupe local du `Service` s'il n'existe pas, et y ajoute le compte (s'il n'y est pas déjà).
+
+      Le script doit être **idempotent** : le relancer ne doit produire **aucune erreur**. Lance-le.
+    hint: Import-Csv $Fichier -Delimiter ';' -Encoding UTF8 | ForEach-Object { $login = & C:\Scripts\New-Login.ps1 -Prenom $_.Prenom -Nom $_.Nom ; if (-not (Get-LocalUser $login -ErrorAction SilentlyContinue)) { New-LocalUser ... } ... }
+    cours: |
+      `Import-Csv` transforme chaque ligne en objet dont les propriétés sont les colonnes (`$_.Prenom`,
+      `$_.Service`). Avec `-Encoding UTF8`, les accents sont préservés.
+
+      Pour être **idempotent**, on teste avant d'agir :
+
+      ```powershell
+      if (-not (Get-LocalUser $login -ErrorAction SilentlyContinue)) { New-LocalUser $login ... }
+      if (-not (Get-LocalGroup $_.Service -ErrorAction SilentlyContinue)) { New-LocalGroup $_.Service }
+      if (-not (Get-LocalGroupMember $_.Service | Where-Object Name -like "*\$login")) {
+          Add-LocalGroupMember -Group $_.Service -Member $login
+      }
+      ```
+
+      Un script idempotent peut être relancé après une erreur, planifié, ou rejoué sur un autre serveur sans
+      risque. C'est le même principe que les outils de gestion de configuration (DSC, Ansible).
+      `Write-Verbose` (affiché avec `-Verbose` si le script déclare `[CmdletBinding()]`) documente ce qui
+      a été fait.
+    ci: true
+    checks:
+      - desc: Les cinq comptes existent avec nom complet et description
+        run: |
+          $u = Get-LocalUser elegall, fherve, adupontmartin, jndiaye, cberard
+          $u.Count -eq 5 -and (Get-LocalUser elegall).FullName -eq 'Élodie Le Gall' -and (Get-LocalUser fherve).Description -eq "Chef d'équipe"
+      - desc: Chacun est dans le groupe de son service
+        run: |
+          [bool](Get-LocalGroupMember Compta | Where-Object Name -like '*\elegall') -and
+          @(Get-LocalGroupMember Atelier | Where-Object { $_.Name -like '*\fherve' -or $_.Name -like '*\jndiaye' }).Count -eq 2 -and
+          [bool](Get-LocalGroupMember RH | Where-Object Name -like '*\adupontmartin') -and
+          [bool](Get-LocalGroupMember Direction | Where-Object Name -like '*\cberard')
+      - desc: Le script se relance sans aucune erreur (idempotent)
+        timeout: 120
+        run: |
+          & C:\Scripts\Import-Utilisateurs.ps1 -Fichier C:\Scripts\Donnees\nouveaux.csv | Out-Null
+          @(Get-LocalUser elegall, cberard).Count -eq 2
+    solution: |
+      Set-Content C:\Scripts\Import-Utilisateurs.ps1 -Encoding UTF8 @'
+      param([Parameter(Mandatory)][string]$Fichier)
+      $mdp = ConvertTo-SecureString 'Bienvenue2024!' -AsPlainText -Force
+      foreach ($l in Import-Csv $Fichier -Delimiter ';' -Encoding UTF8) {
+          $login = & C:\Scripts\New-Login.ps1 -Prenom $l.Prenom -Nom $l.Nom
+          if (-not (Get-LocalUser $login -ErrorAction SilentlyContinue)) {
+              New-LocalUser $login -FullName "$($l.Prenom) $($l.Nom)" -Description $l.Fonction -Password $mdp | Out-Null
+          }
+          if (-not (Get-LocalGroup $l.Service -ErrorAction SilentlyContinue)) { New-LocalGroup $l.Service | Out-Null }
+          if (-not (Get-LocalGroupMember $l.Service | Where-Object Name -like "*\$login")) {
+              Add-LocalGroupMember -Group $l.Service -Member $login
+          }
+      }
+      '@
+      & C:\Scripts\Import-Utilisateurs.ps1 -Fichier C:\Scripts\Donnees\nouveaux.csv
+
+  - id: win-ps-erreurs
+    title: Tester une liste de serveurs sans planter
+    description: |
+      Écris `C:\Scripts\Test-Serveurs.ps1` qui lit `C:\Scripts\Donnees\serveurs.txt` et produit
+      `C:\Scripts\Sortie\serveurs.csv` (séparateur `;`) avec les colonnes `Nom` et `Joignable` (`True` ou
+      `False`, par un ping). Un serveur inexistant ne doit **ni arrêter le script ni afficher d'erreur** :
+      il est simplement `False`. Lance-le.
+    hint: foreach ($n in Get-Content ...) { try { $ok = Test-Connection $n -Count 1 -Quiet -ErrorAction Stop } catch { $ok = $false } ; [pscustomobject]@{ Nom = $n; Joignable = $ok } } | Export-Csv ...
+    cours: |
+      Sans précaution, un nom introuvable produit une erreur rouge, et selon la commande, le reste de la
+      boucle peut ne pas s'exécuter. Le schéma robuste :
+
+      ```powershell
+      $resultats = foreach ($nom in Get-Content C:\Scripts\Donnees\serveurs.txt) {
+          try   { $ok = [bool](Test-Connection $nom -Count 1 -Quiet -ErrorAction Stop) }
+          catch { $ok = $false }
+          [pscustomobject]@{ Nom = $nom; Joignable = $ok }
+      }
+      $resultats | Export-Csv C:\Scripts\Sortie\serveurs.csv -Delimiter ';' -NoTypeInformation
+      ```
+
+      `-ErrorAction Stop` transforme l'erreur en exception, attrapée par `catch`. Dans le `catch`, `$_`
+      contient l'erreur (`$_.Exception.Message`) : on peut la journaliser avec `Write-Warning` ou dans un
+      fichier. `finally { }` s'exécute dans tous les cas (fermer une connexion, supprimer un fichier
+      temporaire).
+    ci: true
+    checks:
+      - desc: Le script se lance sans erreur et produit le CSV
+        timeout: 120
+        run: |
+          Remove-Item C:\Scripts\Sortie\serveurs.csv -ErrorAction SilentlyContinue
+          & C:\Scripts\Test-Serveurs.ps1 2>&1 | Out-Null
+          @(Import-Csv C:\Scripts\Sortie\serveurs.csv -Delimiter ';').Count -eq 3
+      - desc: localhost est joignable, srv-inexistant.invalid ne l'est pas
+        run: |
+          $c = Import-Csv C:\Scripts\Sortie\serveurs.csv -Delimiter ';'
+          ($c | Where-Object Nom -eq 'localhost').Joignable -eq 'True' -and ($c | Where-Object Nom -eq 'srv-inexistant.invalid').Joignable -eq 'False'
+    solution: |
+      Set-Content C:\Scripts\Test-Serveurs.ps1 -Encoding UTF8 @'
+      $r = foreach ($nom in Get-Content C:\Scripts\Donnees\serveurs.txt) {
+          try { $ok = [bool](Test-Connection $nom -Count 1 -Quiet -ErrorAction Stop) } catch { $ok = $false }
+          [pscustomobject]@{ Nom = $nom; Joignable = $ok }
+      }
+      $r | Export-Csv C:\Scripts\Sortie\serveurs.csv -Delimiter ';' -NoTypeInformation
+      '@
+      & C:\Scripts\Test-Serveurs.ps1
+
+  - id: win-ps-module
+    title: Un module d'outils maison
+    description: |
+      Crée le module **`TDMOutils`** (fichier `C:\Program Files\WindowsPowerShell\Modules\TDMOutils\TDMOutils.psm1`)
+      contenant la fonction **`Get-EspaceDisque`**, qui renvoie pour chaque volume local ayant une lettre un
+      objet avec les propriétés `Lecteur` (ex. `C`), `TailleGo`, `LibreGo` (arrondis à 1 décimale) et
+      `PourcentLibre` (entier).
+
+      La fonction doit être disponible dans **n'importe quelle nouvelle console** sans `Import-Module`.
+    hint: function Get-EspaceDisque { Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' } | ForEach-Object { [pscustomobject]@{ Lecteur = $_.DriveLetter; ... } } }
+    cours: |
+      Un **module** regroupe des fonctions réutilisables. Rangé dans un dossier du `$env:PSModulePath` avec
+      le même nom que le fichier `.psm1`, il est **chargé automatiquement** à la première utilisation d'une
+      de ses fonctions :
+
+      ```
+      C:\Program Files\WindowsPowerShell\Modules\TDMOutils\TDMOutils.psm1
+      ```
+
+      ```powershell
+      function Get-EspaceDisque {
+          Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' } | ForEach-Object {
+              [pscustomobject]@{
+                  Lecteur       = [string]$_.DriveLetter
+                  TailleGo      = [math]::Round($_.Size / 1GB, 1)
+                  LibreGo       = [math]::Round($_.SizeRemaining / 1GB, 1)
+                  PourcentLibre = [int](100 * $_.SizeRemaining / $_.Size)
+              }
+          }
+      }
+      ```
+
+      Une fonction qui renvoie des **objets** se combine ensuite librement :
+      `Get-EspaceDisque | Where-Object PourcentLibre -lt 20`, `| Export-Csv`, `| ConvertTo-Html`. Pour un
+      module partagé, on ajoute un manifeste (`New-ModuleManifest`) et de l'aide en commentaire.
+    ci: true
+    checks:
+      - desc: Get-EspaceDisque est disponible dans une nouvelle console (module auto-chargé)
+        run: |
+          $o = powershell.exe -NoProfile -Command "(Get-Command Get-EspaceDisque).ModuleName"
+          ($o | Select-Object -Last 1) -eq 'TDMOutils'
+      - desc: Elle renvoie C avec des valeurs cohérentes
+        run: |
+          $r = powershell.exe -NoProfile -Command "Get-EspaceDisque | Where-Object Lecteur -eq 'C' | ConvertTo-Json -Compress"
+          $c = ($r -join '') | ConvertFrom-Json
+          $c.TailleGo -gt 10 -and $c.LibreGo -gt 0 -and $c.LibreGo -lt $c.TailleGo -and $c.PourcentLibre -gt 0 -and $c.PourcentLibre -le 100
+    solution: |
+      $d = 'C:\Program Files\WindowsPowerShell\Modules\TDMOutils'
+      New-Item $d -ItemType Directory -Force | Out-Null
+      Set-Content "$d\TDMOutils.psm1" -Encoding UTF8 @'
+      function Get-EspaceDisque {
+          Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' } | ForEach-Object {
+              [pscustomobject]@{
+                  Lecteur       = [string]$_.DriveLetter
+                  TailleGo      = [math]::Round($_.Size / 1GB, 1)
+                  LibreGo       = [math]::Round($_.SizeRemaining / 1GB, 1)
+                  PourcentLibre = [int](100 * $_.SizeRemaining / $_.Size)
+              }
+          }
+      }
+      '@
+
+  - id: win-ps-logiciels
+    title: Inventaire des logiciels installés
+    description: |
+      Le registre contient la liste des logiciels installés (comme *Programmes et fonctionnalités*). Produis
+      `C:\Scripts\Sortie\logiciels.csv` (séparateur `;`) avec `DisplayName`, `DisplayVersion` et `Publisher`
+      de chaque entrée qui a un `DisplayName`, lue dans les **deux** clés (64 et 32 bits) :
+
+      - `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*`
+      - `HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*`
+
+      Trie par `DisplayName` et supprime les doublons exacts.
+    hint: Get-ItemProperty <les deux chemins> | Where-Object DisplayName | Select-Object DisplayName, DisplayVersion, Publisher | Sort-Object DisplayName -Unique ...
+    cours: |
+      Le registre se parcourt comme un disque grâce aux lecteurs `HKLM:` et `HKCU:` :
+
+      ```powershell
+      Get-ChildItem HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall
+      Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\* |
+        Where-Object DisplayName | Select-Object DisplayName, DisplayVersion, Publisher
+      ```
+
+      Sur un Windows 64 bits, les programmes 32 bits s'inscrivent dans la branche `WOW6432Node` : il faut lire
+      les deux. Les installations « par utilisateur » sont dans `HKCU:` (profil de chacun).
+
+      Évite `Get-WmiObject Win32_Product` : il est lent et déclenche une **vérification de réparation** de
+      chaque programme MSI. Ce script d'inventaire, planifié sur tous les serveurs, alimente un outil comme
+      GLPI ou sert à repérer les logiciels obsolètes.
+    ci: true
+    checks:
+      - desc: Le CSV liste les logiciels des deux branches, sans doublon
+        run: |
+          $chemins = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+          $attendu = @(Get-ItemProperty $chemins -ErrorAction SilentlyContinue | Where-Object DisplayName |
+            Select-Object DisplayName, DisplayVersion, Publisher | Sort-Object DisplayName, DisplayVersion, Publisher -Unique)
+          $csv = @(Import-Csv C:\Scripts\Sortie\logiciels.csv -Delimiter ';')
+          $csv.Count -gt 0 -and [math]::Abs($csv.Count - $attendu.Count) -le 2 -and ($csv[0].PSObject.Properties.Name -join ',') -eq 'DisplayName,DisplayVersion,Publisher'
+      - desc: Il est trié par nom
+        run: |
+          $n = @((Import-Csv C:\Scripts\Sortie\logiciels.csv -Delimiter ';').DisplayName)
+          $n.Count -gt 1 -and ($n -join '|') -eq (($n | Sort-Object) -join '|')
+    solution: |
+      Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+        Where-Object DisplayName | Select-Object DisplayName, DisplayVersion, Publisher |
+        Sort-Object DisplayName, DisplayVersion, Publisher -Unique |
+        Export-Csv C:\Scripts\Sortie\logiciels.csv -Delimiter ';' -NoTypeInformation -Encoding UTF8
+
+  - id: win-ps-rapport-html
+    title: Rapport hebdomadaire en HTML
+    description: |
+      Écris `C:\Scripts\Rapport-Serveur.ps1` qui génère `C:\Scripts\Sortie\rapport.html`, une page dont le
+      **titre** (balise `<title>`) est `Rapport SRV01` et qui contient **deux tableaux** : l'espace disque
+      (`Get-EspaceDisque`) et les services automatiques arrêtés. Lance-le.
+    hint: $f1 = Get-EspaceDisque | ConvertTo-Html -Fragment -PreContent '<h2>Disques</h2>' ; ... ; ConvertTo-Html -Title 'Rapport SRV01' -Body $f1, $f2 | Set-Content ... -Encoding UTF8
+    cours: |
+      `ConvertTo-Html` transforme des objets en tableau HTML. Pour plusieurs tableaux dans une page, on
+      produit des **fragments** puis on les assemble :
+
+      ```powershell
+      $disques  = Get-EspaceDisque | ConvertTo-Html -Fragment -PreContent '<h2>Disques</h2>'
+      $services = Get-Service | Where-Object { $_.StartType -eq 'Automatic' -and $_.Status -ne 'Running' } |
+                  Select-Object Name, DisplayName | ConvertTo-Html -Fragment -PreContent '<h2>Services arrêtés</h2>'
+      ConvertTo-Html -Title 'Rapport SRV01' -Body ($disques + $services) -PostContent "Généré le $(Get-Date)" |
+        Set-Content C:\Scripts\Sortie\rapport.html -Encoding UTF8
+      ```
+
+      Un peu de CSS (`-Head '<style>table{border-collapse:collapse} td,th{border:1px solid #999}</style>'`)
+      rend le rapport présentable. Envoyé par courriel (`Send-MailMessage` est obsolète : on passe par un
+      relais SMTP interne ou Graph) ou déposé sur l'intranet, il remplace un tour quotidien des serveurs.
+    ci: true
+    checks:
+      - desc: Le script génère rapport.html avec le bon titre
+        timeout: 120
+        run: |
+          Remove-Item C:\Scripts\Sortie\rapport.html -ErrorAction SilentlyContinue
+          & C:\Scripts\Rapport-Serveur.ps1 | Out-Null
+          (Get-Content C:\Scripts\Sortie\rapport.html -Raw) -match '<title>\s*Rapport SRV01\s*</title>'
+      - desc: La page contient deux tableaux, dont celui des disques
+        run: |
+          $h = Get-Content C:\Scripts\Sortie\rapport.html -Raw
+          ([regex]::Matches($h, '<table')).Count -ge 2 -and $h -match 'PourcentLibre'
+    solution: |
+      Set-Content C:\Scripts\Rapport-Serveur.ps1 -Encoding UTF8 @'
+      $disques = Get-EspaceDisque | ConvertTo-Html -Fragment -PreContent '<h2>Disques</h2>'
+      $services = Get-Service | Where-Object { $_.StartType -eq 'Automatic' -and $_.Status -ne 'Running' } |
+          Select-Object Name, DisplayName | ConvertTo-Html -Fragment -PreContent '<h2>Services arrêtés</h2>'
+      ConvertTo-Html -Title 'Rapport SRV01' -Body (@($disques) + @($services)) -PostContent "Généré le $(Get-Date)" |
+          Set-Content C:\Scripts\Sortie\rapport.html -Encoding UTF8
+      '@
+      & C:\Scripts\Rapport-Serveur.ps1
+
+  - id: win-ps-planifier
+    title: Planifier le rapport chaque lundi
+    description: |
+      Planifie `C:\Scripts\Rapport-Serveur.ps1` avec une tâche nommée **`Rapport-Hebdo`** : **chaque lundi à
+      07:00**, sous le compte **SYSTEM**, avec `powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+      C:\Scripts\Rapport-Serveur.ps1`. Démarre-la une fois pour tester.
+    hint: Register-ScheduledTask Rapport-Hebdo -Action (New-ScheduledTaskAction ...) -Trigger (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 07:00) -User SYSTEM -RunLevel Highest
+    cours: |
+      ```powershell
+      $a = New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Scripts\Rapport-Serveur.ps1'
+      $t = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 07:00
+      Register-ScheduledTask -TaskName Rapport-Hebdo -Action $a -Trigger $t -User SYSTEM -RunLevel Highest
+      Start-ScheduledTask Rapport-Hebdo
+      (Get-ScheduledTaskInfo Rapport-Hebdo).LastTaskResult     # 0 = succès, 267009 = en cours
+      ```
+
+      Sous **SYSTEM**, le script n'a pas le profil de ton utilisateur : chemins absolus, modules installés
+      pour tous (`C:\Program Files\WindowsPowerShell\Modules`, d'où l'intérêt de l'exercice précédent), pas de
+      lecteur réseau. Si le script échoue, ajoute `Start-Transcript C:\Scripts\Sortie\rapport.log` au début :
+      la sortie complète sera enregistrée.
+    ci: true
+    checks:
+      - desc: Rapport-Hebdo se déclenche chaque lundi à 07:00 sous SYSTEM
+        run: |
+          $task = Get-ScheduledTask -TaskName Rapport-Hebdo
+          $t = @($task.Triggers)[0]
+          $t.CimClass.CimClassName -eq 'MSFT_TaskWeeklyTrigger' -and $t.DaysOfWeek -eq 2 -and
+            ([datetime]$t.StartBoundary).ToString('HH:mm') -eq '07:00' -and $task.Principal.UserId -match '^(NT AUTHORITY\\)?SYSTEM$|^S-1-5-18$'
+      - desc: Elle lance Rapport-Serveur.ps1 et sa dernière exécution a réussi
+        timeout: 120
+        run: |
+          $a = @((Get-ScheduledTask -TaskName Rapport-Hebdo).Actions)[0]
+          $i = Get-ScheduledTaskInfo -TaskName Rapport-Hebdo
+          for ($n = 0; $n -lt 30 -and $i.LastTaskResult -eq 267009; $n++) { Start-Sleep 2; $i = Get-ScheduledTaskInfo -TaskName Rapport-Hebdo }
+          $a.Arguments -match 'Rapport-Serveur\.ps1' -and $i.LastRunTime -gt (Get-Date '2000-01-01') -and $i.LastTaskResult -eq 0
+    solution: |
+      $a = New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Scripts\Rapport-Serveur.ps1'
+      $t = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 07:00
+      Register-ScheduledTask -TaskName Rapport-Hebdo -Action $a -Trigger $t -User SYSTEM -RunLevel Highest -Force | Out-Null
+      Start-ScheduledTask -TaskName Rapport-Hebdo
+      Start-Sleep -Seconds 15
+
+  - id: win-ps-execution
+    title: Le script du prestataire refuse de se lancer
+    description: |
+      `C:\Scripts\Telecharge\outil.ps1`, reçu par courriel, a été vérifié (il ne fait qu'afficher un texte).
+
+      1. Règle la stratégie d'exécution de l'**ordinateur** (`LocalMachine`) sur **RemoteSigned** ;
+      2. **débloque** le fichier pour qu'il puisse s'exécuter (retire sa marque « provenant d'Internet »).
+    hint: Set-ExecutionPolicy RemoteSigned -Scope LocalMachine -Force ; Unblock-File C:\Scripts\Telecharge\outil.ps1
+    cours: |
+      Windows marque les fichiers téléchargés (navigateur, messagerie, extraction d'un ZIP marqué) avec un
+      **flux de données alternatif** NTFS nommé `Zone.Identifier` (`ZoneId=3` = Internet). Avec la stratégie
+      **RemoteSigned**, un script marqué doit être signé pour s'exécuter.
+
+      ```powershell
+      Get-ExecutionPolicy -List                         # MachinePolicy, UserPolicy, Process, CurrentUser, LocalMachine
+      Set-ExecutionPolicy RemoteSigned -Scope LocalMachine -Force
+      Get-Item C:\Scripts\Telecharge\outil.ps1 -Stream *          # voir les flux
+      Unblock-File C:\Scripts\Telecharge\outil.ps1                # après avoir LU le script
+      ```
+
+      Graphique : propriétés du fichier › case *Débloquer*. La stratégie d'exécution n'empêche pas un
+      attaquant de lancer du code (`-ExecutionPolicy Bypass`, copier-coller) : c'est une ceinture de
+      sécurité contre les erreurs, à compléter par AppLocker / WDAC et la journalisation PowerShell.
+    ci: true
+    checks:
+      - desc: Stratégie d'exécution de l'ordinateur sur RemoteSigned
+        run: |
+          (Get-ExecutionPolicy -Scope LocalMachine) -eq 'RemoteSigned'
+      - desc: outil.ps1 n'a plus de flux Zone.Identifier
+        run: |
+          (Test-Path C:\Scripts\Telecharge\outil.ps1) -and -not (Get-Item C:\Scripts\Telecharge\outil.ps1 -Stream Zone.Identifier -ErrorAction SilentlyContinue)
+    solution: |
+      # Lancé avec -ExecutionPolicy Bypass (portée Process), Set-ExecutionPolicy signale que la portée
+      # Process l'emporte : le réglage LocalMachine est pourtant bien enregistré.
+      try { Set-ExecutionPolicy RemoteSigned -Scope LocalMachine -Force } catch { Write-Host $_.Exception.Message }
+      Unblock-File C:\Scripts\Telecharge\outil.ps1

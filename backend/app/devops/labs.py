@@ -2,7 +2,10 @@
 
 Chaque lab est un dossier contenant un ``lab.yaml`` (voir ``labs/devops/README.md``).
 Le lab tourne soit dans un conteneur (``image`` ou ``build``), soit via docker compose
-(``compose`` + ``service``).
+(``compose`` + ``service``), soit dans des VM Vagrant (``vagrant``).
+
+Les labs Windows (``labs/systemes-windows``, voir son README) sont des VM Vagrant livrées avec TDM :
+``vagrant: bundled`` y devient ``tdm:<dossier>``, que l'agent Vagrant lance depuis une copie persistante.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ def _slug(text: str) -> str:
 
 
 LAB_CATEGORIES = ("devops", "systemes")
+BUNDLED_PREFIX = "tdm:"  # lab Vagrant embarqué (cf. scripts/vagrant_agent.py)
 
 
 def load_labs(labs_dir: Path | None = None, category: str | None = None) -> list[dict[str, Any]]:
@@ -36,24 +40,27 @@ def load_labs(labs_dir: Path | None = None, category: str | None = None) -> list
     ``category`` filtre sur l'une des deux catégories ; ``labs_dir`` charge un seul dossier.
     """
     if labs_dir is not None:
-        sources = [(labs_dir, "devops")]
+        sources = [(labs_dir, "devops", {})]
     else:
-        sources = [(config.LABS_DIR, "devops"), (config.SYSTEMS_LABS_DIR, "systemes")]
+        sources = [(config.LABS_DIR, "devops", {}), (config.SYSTEMS_LABS_DIR, "systemes", {}),
+                   (config.WINDOWS_LABS_DIR, "systemes", {"os_name": "windows", "bundled": True})]
     labs = []
-    for root, default_category in sources:
+    for root, default_category, defaults in sources:
         if root.is_dir():
-            labs += _load_dir(root, default_category)
+            labs += _load_dir(root, default_category, **defaults)
     if category:
         labs = [lab for lab in labs if lab["category"] == category]
     order = {level: i for i, level in enumerate(LEVELS)}
     return sorted(labs, key=lambda lab: (order[lab["level"]], lab.get("order", 999), lab["id"]))
 
 
-def _load_dir(root: Path, default_category: str) -> list[dict[str, Any]]:
+def _load_dir(root: Path, default_category: str, os_name: str = "linux", bundled: bool = False) -> list[dict[str, Any]]:
     labs = []
     for path in sorted(root.glob("*/lab.yaml")):
         with path.open(encoding="utf-8") as fh:
             data = yaml.safe_load(fh) or {}
+        if bundled and data.get("vagrant", "bundled") == "bundled" and (path.parent / "Vagrantfile").exists():
+            data["vagrant"] = BUNDLED_PREFIX + path.parent.name
         data["id"] = _slug(data.get("id") or path.parent.name)
         data["category"] = default_category
         data["dir"] = str(path.parent)
@@ -71,7 +78,7 @@ def _load_dir(root: Path, default_category: str) -> list[dict[str, Any]]:
                 data["compose"] = "docker-compose.yml"
             else:
                 data["image"] = "ubuntu:24.04"
-        data.setdefault("os", "linux")
+        data.setdefault("os", os_name)
         data.setdefault("shell", "powershell" if data["os"] == "windows" else "bash")
         data.setdefault("exercises", [])
         for index, exercise in enumerate(data["exercises"], start=1):

@@ -64,3 +64,60 @@ solution: |
               self.erreur = valeur
               return True
           return False
+cours: |
+  ## Le protocole des gestionnaires de contexte
+
+  `with expr as x:` fonctionne avec tout objet qui définit deux méthodes :
+
+  - `__enter__(self)` : appelée à l'entrée ; sa valeur de retour est liée à `x` ;
+  - `__exit__(self, exc_type, exc_value, traceback)` : appelée à la sortie, **toujours**,
+    même si une exception a été levée dans le bloc.
+
+  ```python
+  class Chrono:
+      def __enter__(self):
+          import time
+          self.debut = time.perf_counter()
+          return self
+
+      def __exit__(self, exc_type, exc, tb):
+          import time
+          self.duree = time.perf_counter() - self.debut
+          return False      # ne pas avaler d'exception
+
+  with Chrono() as c:
+      sum(range(10**6))
+  print(c.duree)
+  ```
+
+  ## Les arguments de `__exit__`
+
+  Si le bloc s'est terminé normalement, les trois arguments valent `None`. Sinon ils
+  décrivent l'exception : `exc_type` est sa classe, `exc_value` l'instance.
+
+  ## Avaler ou propager
+
+  La **valeur de retour** de `__exit__` décide du sort de l'exception :
+
+  - valeur fausse (`None`, `False`) : l'exception continue de se propager ;
+  - valeur vraie : l'exception est **supprimée** et l'exécution reprend après le `with`.
+
+  Pour tester si l'exception est d'un des types voulus (sous-classes comprises), on utilise
+  `issubclass(exc_type, (TypeA, TypeB))` — en se méfiant du cas `exc_type is None`.
+
+  ## Paramètres variables
+
+  `def __init__(self, *exceptions)` récupère tous les arguments positionnels dans un tuple,
+  ce qui tombe bien : `issubclass` accepte un tuple de classes.
+
+  ## Usages réels
+
+  Fichiers, verrous (`threading.Lock`), connexions, transactions de base de données,
+  changement temporaire de répertoire (`contextlib.chdir`)… Le gestionnaire garantit le
+  nettoyage. `contextlib.contextmanager` permet aussi d'écrire un gestionnaire avec un
+  générateur (code avant `yield` = entrée, après = sortie, dans un `try/finally`).
+docs:
+  - title: Référence — l'instruction with
+    url: https://docs.python.org/fr/3/reference/compound_stmts.html#the-with-statement
+  - title: Module contextlib
+    url: https://docs.python.org/fr/3/library/contextlib.html

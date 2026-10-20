@@ -1,0 +1,202 @@
+title: Journaliser avec logging
+level: avance
+order: 34
+tags: [logging, sysadmin, configuration]
+summary: Configurer loggers, handlers, formats et niveaux comme dans un vrai script.
+description: |
+  Utilise le module `logging`.
+
+  1. `creer_logger(nom, flux, niveau="INFO")` crée (ou reconfigure) le logger `nom` :
+     - son niveau est `niveau` (nom en texte, insensible à la casse) ;
+     - il écrit dans `flux` (un objet fichier, par exemple `io.StringIO`) via un
+       `StreamHandler`, au format `"%(levelname)s %(name)s: %(message)s"` ;
+     - il ne propage pas ses messages au logger racine (`propagate = False`) ;
+     - appelé deux fois avec le même nom, il ne doit **pas** dupliquer les handlers (supprime
+       les anciens) ;
+     - il renvoie le logger.
+  2. `sauvegarder(fichiers, logger)` simule une sauvegarde : `fichiers` est un dictionnaire
+     `{nom: taille_en_octets}`. Pour chaque fichier, dans l'ordre :
+     - taille négative → `logger.error("taille invalide pour %s", nom)` ;
+     - taille 0 → `logger.warning("%s est vide", nom)` ;
+     - sinon → `logger.debug("copie de %s (%d octets)", nom, taille)`.
+
+     À la fin : `logger.info("%d fichier(s) sauvegardé(s), %d erreur(s)", ok, erreurs)` où
+     `ok` compte les fichiers de taille ≥ 0. Renvoie `ok`.
+  3. `compter_niveaux(texte)` reçoit le texte produit (une ligne par message au format
+     ci-dessus) et renvoie un dictionnaire `{niveau: nombre}`.
+
+  Utilise le formatage paresseux (`logger.info("... %s", valeur)`), pas des f-strings, dans
+  les appels de journalisation.
+
+  ```python
+  flux = io.StringIO()
+  log = creer_logger("backup", flux, "debug")
+  sauvegarder({"a.txt": 10, "vide.txt": 0}, log)
+  print(flux.getvalue())
+  # DEBUG backup: copie de a.txt (10 octets)
+  # WARNING backup: vide.txt est vide
+  # INFO backup: 2 fichier(s) sauvegardé(s), 0 erreur(s)
+  ```
+starter: |
+  import logging
+
+
+  def creer_logger(nom, flux, niveau="INFO"):
+      pass
+
+
+  def sauvegarder(fichiers, logger):
+      pass
+
+
+  def compter_niveaux(texte):
+      pass
+tests: |
+  import io
+  import logging
+
+  def test_creer_logger():
+      "creer_logger configure niveau, format et propagation"
+      flux = io.StringIO()
+      log = solution.creer_logger("tdm.a", flux, "warning")
+      assert isinstance(log, logging.Logger) and log.name == "tdm.a"
+      assert log.level == logging.WARNING
+      assert log.propagate is False
+      log.info("ignoré")
+      log.error("problème %s", 42)
+      assert flux.getvalue() == "ERROR tdm.a: problème 42\n", repr(flux.getvalue())
+
+  def test_pas_de_doublon():
+      "Deux appels ne dupliquent pas les messages"
+      f1, f2 = io.StringIO(), io.StringIO()
+      solution.creer_logger("tdm.b", f1)
+      log = solution.creer_logger("tdm.b", f2)
+      log.info("une fois")
+      assert f1.getvalue() == "", "l'ancien handler doit être retiré"
+      assert f2.getvalue() == "INFO tdm.b: une fois\n", repr(f2.getvalue())
+
+  def test_sauvegarder():
+      "sauvegarder en DEBUG"
+      flux = io.StringIO()
+      log = solution.creer_logger("backup", flux, "debug")
+      n = solution.sauvegarder({"a.txt": 10, "vide.txt": 0, "bad": -1, "b.bin": 2048}, log)
+      att = ("DEBUG backup: copie de a.txt (10 octets)\n"
+             "WARNING backup: vide.txt est vide\n"
+             "ERROR backup: taille invalide pour bad\n"
+             "DEBUG backup: copie de b.bin (2048 octets)\n"
+             "INFO backup: 3 fichier(s) sauvegardé(s), 1 erreur(s)\n")
+      assert n == 3
+      assert flux.getvalue() == att, "\n" + flux.getvalue()
+
+  def test_sauvegarder_niveau_info():
+      "En INFO, les messages DEBUG disparaissent"
+      flux = io.StringIO()
+      log = solution.creer_logger("backup2", flux)
+      solution.sauvegarder({"a": 1, "b": 2}, log)
+      assert flux.getvalue() == "INFO backup2: 2 fichier(s) sauvegardé(s), 0 erreur(s)\n", repr(flux.getvalue())
+
+  def test_compter():
+      "compter_niveaux"
+      texte = "DEBUG x: a\nWARNING x: b\nDEBUG x: c\nINFO x: fin\n"
+      assert solution.compter_niveaux(texte) == {"DEBUG": 2, "WARNING": 1, "INFO": 1}
+      assert solution.compter_niveaux("") == {}
+solution: |
+  import logging
+
+
+  def creer_logger(nom, flux, niveau="INFO"):
+      logger = logging.getLogger(nom)
+      for ancien in list(logger.handlers):
+          logger.removeHandler(ancien)
+      handler = logging.StreamHandler(flux)
+      handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+      logger.addHandler(handler)
+      logger.setLevel(niveau.upper())
+      logger.propagate = False
+      return logger
+
+
+  def sauvegarder(fichiers, logger):
+      ok = erreurs = 0
+      for nom, taille in fichiers.items():
+          if taille < 0:
+              logger.error("taille invalide pour %s", nom)
+              erreurs += 1
+              continue
+          if taille == 0:
+              logger.warning("%s est vide", nom)
+          else:
+              logger.debug("copie de %s (%d octets)", nom, taille)
+          ok += 1
+      logger.info("%d fichier(s) sauvegardé(s), %d erreur(s)", ok, erreurs)
+      return ok
+
+
+  def compter_niveaux(texte):
+      compte = {}
+      for ligne in texte.splitlines():
+          if ligne.strip():
+              niveau = ligne.split()[0]
+              compte[niveau] = compte.get(niveau, 0) + 1
+      return compte
+cours: |
+  ## Pourquoi pas `print` ?
+
+  Un script d'administration qui tourne la nuit (cron, tâche planifiée) doit laisser une
+  trace exploitable : quand, quoi, avec quelle gravité. `logging` apporte des **niveaux**,
+  des **destinations** multiples (console, fichier, syslog, e-mail) et un **format** uniforme,
+  le tout réglable sans toucher au code métier.
+
+  ## Les niveaux
+
+  `DEBUG` (10) < `INFO` (20) < `WARNING` (30) < `ERROR` (40) < `CRITICAL` (50). Un logger
+  réglé sur `INFO` ignore les messages `DEBUG`. On laisse les `logger.debug(...)` dans le
+  code : il suffit de baisser le niveau pour enquêter sur un problème.
+
+  ## L'architecture : logger → handler → formatter
+
+  ```python
+  import logging, sys
+  log = logging.getLogger("sauvegarde")          # un logger nommé (singleton par nom)
+  h = logging.StreamHandler(sys.stderr)          # OÙ écrire
+  h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+  log.addHandler(h)
+  log.setLevel(logging.INFO)                     # ou "INFO"
+  ```
+
+  - `getLogger(nom)` renvoie **toujours le même objet** pour un nom donné : reconfigurer sans
+    retirer les anciens handlers produit des messages en double (bug très fréquent).
+  - Les noms forment une hiérarchie (`app`, `app.db`) et, par défaut, les messages
+    **remontent** au logger parent puis à la racine (`propagate`).
+  - Autres handlers : `FileHandler`, `RotatingFileHandler` / `TimedRotatingFileHandler`
+    (rotation des journaux), `SysLogHandler`.
+
+  ## Le formatage paresseux
+
+  ```python
+  log.debug("copie de %s (%d octets)", nom, taille)    # recommandé
+  log.debug(f"copie de {nom}")                        # fonctionne, mais...
+  ```
+
+  Avec `%s` et les arguments séparés, la chaîne n'est construite **que si** le message est
+  réellement émis. Les outils d'agrégation de logs peuvent aussi regrouper les messages par
+  modèle.
+
+  ## Exceptions
+
+  Dans un `except`, `log.exception("échec de la sauvegarde")` journalise au niveau `ERROR`
+  **avec** la trace complète de l'exception.
+
+  ## Configuration rapide
+
+  Pour un petit script, `logging.basicConfig(level=logging.INFO, format="...")` configure la
+  racine en une ligne. Pour une application, `logging.config.dictConfig` charge une
+  configuration complète (depuis un fichier YAML ou JSON par exemple).
+
+  Règle d'usage : une bibliothèque crée ses loggers mais ne les configure jamais ; c'est le
+  programme principal qui décide où et comment écrire.
+docs:
+  - title: HOWTO — journalisation
+    url: https://docs.python.org/fr/3/howto/logging.html
+  - title: Module logging
+    url: https://docs.python.org/fr/3/library/logging.html

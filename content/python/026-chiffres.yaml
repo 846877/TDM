@@ -63,3 +63,51 @@ solution: |
       while n >= 10:
           n = somme_chiffres(n)
       return n
+cours: |
+  ## Extraire les chiffres d'un nombre
+
+  En base 10, deux opérations suffisent à « éplucher » un entier :
+
+  ```python
+  n = 4096
+  n % 10     # 6   : le dernier chiffre
+  n // 10    # 409 : le nombre sans son dernier chiffre
+  ```
+
+  En répétant ces deux opérations jusqu'à ce que le nombre vaille 0, on visite tous ses
+  chiffres, de droite à gauche :
+
+  ```python
+  n = 4096
+  nb_chiffres = 0
+  while n > 0:
+      n //= 10
+      nb_chiffres += 1
+  print(nb_chiffres)   # 4
+  ```
+
+  La même technique avec `% 2` et `// 2` donne les bits d'un nombre (base 2), et avec
+  `% 16` sa représentation hexadécimale : c'est la base de toute conversion de base.
+
+  ## Attention au cas 0
+
+  Avec `while n > 0`, un nombre égal à 0 ne fait **aucun** tour de boucle. Selon ce qu'on
+  calcule, c'est correct (somme des chiffres de 0 = 0) ou non (0 a bien un chiffre). Pense
+  toujours à tester ce cas.
+
+  ## Répéter jusqu'à une condition
+
+  Une boucle peut en contenir une autre, ou appeler une fonction déjà écrite : « tant que le
+  nombre a plus d'un chiffre, remplace-le par la somme de ses chiffres ». Réutiliser ta
+  première fonction dans la seconde évite de dupliquer du code. Un nombre a un seul chiffre
+  quand il est strictement inférieur à 10.
+
+  ## Le saviez-vous ?
+
+  La racine numérique d'un nombre est liée à son reste modulo 9 : c'est le principe de la
+  « preuve par neuf » apprise à l'école. Mais ici, l'objectif est d'écrire la boucle.
+docs:
+  - title: Tutoriel — premiers pas vers la programmation (while)
+    url: https://docs.python.org/fr/3/tutorial/introduction.html#first-steps-towards-programming
+  - title: Wikipédia — Racine numérique
+    url: https://fr.wikipedia.org/wiki/Racine_num%C3%A9rique

@@ -1,0 +1,11 @@
+# Lab « Joindre un poste au domaine » : SRV-DC01 (Windows Server 2022, 2 Go, contrôleur de durand.lan promu
+# automatiquement) et PC01 (Windows 11, 3 Go, hors domaine : l'élève le joint). Prévoir 8 Go de RAM libres.
+# SRV-DC01 est défini en premier : il doit être prêt avant le poste.
+require_relative "../_commun/tdm"
+
+Vagrant.configure("2") do |config|
+  TDM.lab(config, __dir__) do |lab|
+    lab.server "dc01", hostname: "SRV-DC01", ip: "192.168.10.10", domain: :forest, scenario: "scenario-dc01.ps1"
+    lab.client "pc01", hostname: "PC01", ip: "192.168.10.101", primary: true, scenario: "scenario.ps1"
+  end
+end

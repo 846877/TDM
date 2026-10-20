@@ -46,3 +46,49 @@ jobs:
           gh release create windows-preview dist/TDM.exe --prerelease --target "$GITHUB_SHA" \
             --title "TDM pour Windows (préversion)" \
             --notes "Télécharge TDM.exe et double-clique dessus. Construit depuis ${GITHUB_SHA::7}."
+
+  # Labs Windows (labs/systemes-windows) : analyse de tous les scripts PowerShell, puis chaque lab qui a
+  # des exercices « ci: true » est rejoué sur un runner neuf (Windows Server 2022) : vérifications qui
+  # échouent, solution, vérifications qui réussissent. Voir labs/systemes-windows/README.md.
+  labs-windows-statique:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    outputs:
+      labs: ${{ steps.liste.outputs.labs }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pyyaml
+      - name: Outils d'administration (modules AD, DNS, DHCP, GPO, DFS, FSRM, sauvegarde)
+        shell: powershell
+        run: |
+          $features = 'RSAT-AD-PowerShell', 'RSAT-ADDS-Tools', 'AD-Domain-Services', 'RSAT-DNS-Server', 'RSAT-DHCP',
+                      'GPMC', 'RSAT-DFS-Mgmt-Con', 'RSAT-FSRM-Mgmt', 'Windows-Server-Backup',
+                      'FS-Resource-Manager'   # le module FileServerResourceManager vient avec le service de rôle
+          Install-WindowsFeature $features | Format-Table -AutoSize
+      - name: Syntaxe des scripts et existence des commandes
+        run: python scripts/windows_labs_ci.py static --commands
+      - id: liste
+        shell: bash
+        run: echo "labs=$(python scripts/windows_labs_ci.py list)" >> "$GITHUB_OUTPUT"
+
+  labs-windows:
+    needs: labs-windows-statique
+    if: needs.labs-windows-statique.outputs.labs != '[]'
+    name: Lab Windows ${{ matrix.lab }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        lab: ${{ fromJSON(needs.labs-windows-statique.outputs.labs) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pyyaml
+      - name: Exercices rejoués (échec, solution, réussite)
+        run: python scripts/windows_labs_ci.py run --lab ${{ matrix.lab }}

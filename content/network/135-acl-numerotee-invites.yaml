@@ -1,0 +1,110 @@
+title: ACL étendue numérotée pour le Wi-Fi invités
+level: intermediaire
+order: 35
+device: router
+hostname: R-ACCUEIL
+tags: [acl, acl étendue, sécurité, invités]
+summary: Isoler le réseau invités du réseau interne avec l'ACL 110.
+description: |
+  Le Wi-Fi invités (`192.168.50.0/24`) arrive sur `G0/0`. Les invités doivent avoir Internet
+  (web et DNS) mais **jamais** atteindre le réseau interne (`10.0.0.0/8` et `172.16.0.0/12`).
+
+  Écris l'ACL étendue **numérotée** `110`, dans cet ordre :
+
+  1. `permit udp any any eq 67` — laisser passer les demandes DHCP vers le routeur ;
+  2. refuser `192.168.50.0/24` vers `10.0.0.0/8` ;
+  3. refuser `192.168.50.0/24` vers `172.16.0.0/12` ;
+  4. autoriser le DNS (UDP 53) depuis `192.168.50.0/24` vers n'importe où ;
+  5. autoriser HTTP (TCP 80) et HTTPS (TCP 443) depuis `192.168.50.0/24` vers n'importe où.
+
+  Applique-la en **entrée** de `G0/0`. Tout le reste est refusé par le *deny* implicite.
+initial: |
+  interface g0/0
+  ip address 192.168.50.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.1.0.1 255.255.255.0
+  no shutdown
+checks:
+  - desc: DHCP autorisé puis interne refusé, en tête d'ACL
+    expr: acl(110)[:3] == ["permit udp any any eq 67", "deny ip 192.168.50.0 0.0.0.255 10.0.0.0 0.255.255.255", "deny ip 192.168.50.0 0.0.0.255 172.16.0.0 0.15.255.255"] or acl(110)[:3] == ["permit udp any any eq bootps", "deny ip 192.168.50.0 0.0.0.255 10.0.0.0 0.255.255.255", "deny ip 192.168.50.0 0.0.0.255 172.16.0.0 0.15.255.255"]
+    hint: "Le masque générique de 172.16.0.0/12 est 0.15.255.255"
+  - desc: DNS autorisé
+    expr: any(e in acl(110) for e in ["permit udp 192.168.50.0 0.0.0.255 any eq 53", "permit udp 192.168.50.0 0.0.0.255 any eq domain"])
+  - desc: HTTP et HTTPS autorisés
+    expr: any(e in acl(110) for e in ["permit tcp 192.168.50.0 0.0.0.255 any eq 80", "permit tcp 192.168.50.0 0.0.0.255 any eq www"]) and "permit tcp 192.168.50.0 0.0.0.255 any eq 443" in acl(110)
+  - desc: ACL 110 appliquée en entrée de G0/0
+    expr: intf("g0/0").access_groups.get("in") == "110"
+solution: |
+  configure terminal
+  access-list 110 permit udp any any eq 67
+  access-list 110 deny ip 192.168.50.0 0.0.0.255 10.0.0.0 0.255.255.255
+  access-list 110 deny ip 192.168.50.0 0.0.0.255 172.16.0.0 0.15.255.255
+  access-list 110 permit udp 192.168.50.0 0.0.0.255 any eq 53
+  access-list 110 permit tcp 192.168.50.0 0.0.0.255 any eq 80
+  access-list 110 permit tcp 192.168.50.0 0.0.0.255 any eq 443
+  interface g0/0
+  ip access-group 110 in
+  end
+cours: |
+  ## ACL standard ou étendue, nommée ou numérotée
+
+  | Type      | Numéros          | Critères                                     |
+  |-----------|------------------|----------------------------------------------|
+  | standard  | 1-99, 1300-1999  | adresse **source** uniquement                |
+  | étendue   | 100-199, 2000-2699 | protocole, source, destination, ports      |
+
+  Une ACL **numérotée** se saisit ligne par ligne en mode global (`access-list 110 ...`) ; une ACL
+  **nommée** (`ip access-list extended NOM`) offre les mêmes possibilités avec un nom lisible et
+  l'édition par numéro de séquence. Les deux sont au programme.
+
+  ### Syntaxe d'une entrée étendue
+
+  ```
+  access-list 120 {permit|deny} <protocole> <source> <wildcard> [eq port] <destination> <wildcard> [eq port]
+  ```
+
+  Exemple avec d'autres valeurs (réseau visiteurs `172.20.8.0/24`) :
+
+  ```
+  R1(config)# access-list 120 deny ip 172.20.8.0 0.0.0.255 192.168.0.0 0.0.255.255
+  R1(config)# access-list 120 permit udp 172.20.8.0 0.0.0.255 any eq 53
+  R1(config)# access-list 120 permit tcp 172.20.8.0 0.0.0.255 any eq 443
+  R1(config)# interface g0/2
+  R1(config-if)# ip access-group 120 in
+  R1# show access-lists 120
+  Extended IP access list 120
+      10 deny ip 172.20.8.0 0.0.0.255 192.168.0.0 0.0.255.255 (12 matches)
+      20 permit udp 172.20.8.0 0.0.0.255 any eq domain (340 matches)
+  ```
+
+  ### Les règles qui font les bonnes ACL
+
+  - **ordre** : la première entrée correspondante gagne ; les refus spécifiques avant les
+    autorisations générales ;
+  - **deny implicite** à la fin : tout ce qui n'est pas autorisé est jeté ;
+  - une ACL étendue se place **près de la source** (ici, en entrée de l'interface des invités) ;
+  - une ACL en entrée filtre aussi le trafic **destiné au routeur** : DHCP, ping de la passerelle,
+    protocoles de routage. D'où la première ligne qui autorise les requêtes DHCP (UDP 67).
+
+  ### Wildcards des blocs privés
+
+  `10.0.0.0/8` → `0.255.255.255` ; `172.16.0.0/12` → `0.15.255.255` ; `192.168.0.0/16` →
+  `0.0.255.255`. Le masque générique est l'inverse du masque de sous-réseau.
+
+  ### Pièges fréquents
+
+  - Inverser source et destination.
+  - Oublier le DNS : le web « ne marche pas » alors que HTTP est autorisé.
+  - Appliquer l'ACL en sortie de la mauvaise interface.
+  - Modifier une ACL numérotée : `no access-list 110` supprime **toute** la liste.
+
+  ### Pour le CCNA
+
+  Écrire, placer et vérifier des ACL standard et étendues, numérotées et nommées, est l'un des
+  savoir-faire centraux de l'examen.
+docs:
+  - title: Cisco — Configure Commonly Used IP ACLs
+    url: https://www.cisco.com/c/en/us/support/docs/ip/access-lists/26448-ACLsamples.html
+  - title: Wikipédia — Liste de contrôle d'accès
+    url: https://fr.wikipedia.org/wiki/Liste_de_contr%C3%B4le_d%27acc%C3%A8s

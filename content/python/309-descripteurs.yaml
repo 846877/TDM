@@ -219,3 +219,63 @@ solution: |
           valeur = self.fonction(instance)
           instance.__dict__[self.nom] = valeur
           return valeur
+cours: |
+  ## Le protocole des descripteurs
+
+  Un descripteur est un objet, placé comme **attribut de classe**, qui définit au moins une
+  des méthodes `__get__`, `__set__` ou `__delete__`. Quand on accède à `instance.attr`,
+  Python trouve le descripteur dans la classe et lui délègue l'opération.
+
+  ```python
+  class Positif:
+      def __set_name__(self, proprietaire, nom):
+          self.nom = nom                       # appelé à la création de la classe
+
+      def __get__(self, instance, proprietaire):
+          if instance is None:
+              return self                      # accès depuis la classe
+          return instance.__dict__[self.nom]
+
+      def __set__(self, instance, valeur):
+          if valeur <= 0:
+              raise ValueError(f"{self.nom} doit être positif")
+          instance.__dict__[self.nom] = valeur
+
+  class Disque:
+      taille_go = Positif()
+      def __init__(self, taille_go):
+          self.taille_go = taille_go           # passe par Positif.__set__
+  ```
+
+  ## Données ou non-données
+
+  Un descripteur qui définit `__set__` (ou `__delete__`) est un descripteur **de données** :
+  il a priorité sur le `__dict__` de l'instance. Sinon (seulement `__get__`), le `__dict__`
+  de l'instance gagne : c'est ainsi que fonctionnent les méthodes et
+  `functools.cached_property`. Comme notre descripteur de données a priorité, stocker la
+  valeur dans `instance.__dict__` **sous le même nom** ne crée pas de conflit.
+
+  ## Un descripteur, plusieurs instances
+
+  Le descripteur est **partagé** par toutes les instances de la classe : ne stocke jamais la
+  valeur sur `self` (le descripteur), sinon toutes les instances partageraient la même
+  valeur. On la stocke dans l'instance.
+
+  ## `__set_name__`
+
+  Python appelle `__set_name__(classe, nom)` au moment de la création de la classe : le
+  descripteur apprend sous quel nom il a été placé, sans qu'on ait à le répéter.
+
+  ## Héritage entre descripteurs
+
+  Une classe de base peut gérer stockage, lecture et messages d'erreur, et les sous-classes
+  ne définissent qu'une méthode de validation : pas de duplication.
+
+  `property`, `classmethod`, `staticmethod` et les méthodes elles-mêmes sont des
+  descripteurs : comprendre ce protocole, c'est comprendre comment fonctionne l'accès aux
+  attributs en Python.
+docs:
+  - title: HOWTO — guide des descripteurs
+    url: https://docs.python.org/fr/3/howto/descriptor.html
+  - title: Référence — implémentation de descripteurs
+    url: https://docs.python.org/fr/3/reference/datamodel.html#implementing-descriptors

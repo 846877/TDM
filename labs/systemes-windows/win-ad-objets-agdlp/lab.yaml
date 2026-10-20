@@ -1,0 +1,551 @@
+title: Utilisateurs, groupes et modèle AGDLP
+level: intermediaire
+order: 2
+tags: [active directory, utilisateurs, groupes, ou, csv, agdlp, ntfs, délégation, powershell]
+summary: Peupler l'annuaire de durand.lan proprement - OU, comptes unitaires et import CSV, groupes globaux et locaux selon AGDLP, départ d'un salarié, délégation au support.
+vagrant: bundled
+machine: dc01
+description: |
+  **Contexte.** Le domaine `durand.lan` vient d'être créé sur `SRV-DC01`. Le prestataire a déjà créé trois
+  comptes « vite fait » dans le conteneur `Users`, les RH ont envoyé la liste des embauches
+  (`C:\Admin\embauches.csv`), et la comptabilité attend ses droits sur `C:\Partages\Compta`.
+
+  Ta mission : construire une organisation propre et **durable**. Chaque droit sera donné à un groupe, jamais
+  à une personne, en suivant le modèle **AGDLP**.
+
+  **Machine.** `SRV-DC01`, contrôleur de domaine déjà promu. Le terminal est ouvert en administrateur du
+  domaine, le module `ActiveDirectory` est disponible. Mot de passe initial des comptes :
+  `Bienvenue2024!`.
+cours: |
+  ## Les objets de l'annuaire
+
+  Un **utilisateur** AD porte un identifiant d'ouverture de session (`sAMAccountName`, ex. `mdupont`, utilisé
+  sous la forme `DURAND\mdupont`), un **UPN** au format courriel (`mdupont@durand.lan`), un nom affiché et de
+  nombreux attributs utiles (service, fonction, téléphone, responsable). Chaque objet a un **nom unique**
+  (*Distinguished Name*) qui décrit son emplacement :
+  `CN=Marie Dupont,OU=Compta,OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan`.
+
+  Les **unités d'organisation** rangent les objets pour deux raisons : **lier des GPO** et **déléguer**
+  l'administration. On conçoit donc l'arborescence en fonction de l'administration, pas de l'organigramme.
+
+  ## Groupes : type et étendue
+
+  | Type | Usage |
+  |------|-------|
+  | **Sécurité** | reçoit des droits (NTFS, partages, GPO, délégation) et peut servir de liste de diffusion |
+  | **Distribution** | uniquement messagerie, ne reçoit aucun droit |
+
+  | Étendue | Peut contenir | Utilisable pour des droits |
+  |---------|---------------|----------------------------|
+  | **Globale** | comptes et groupes globaux du **même domaine** | dans toute la forêt |
+  | **Locale de domaine** | comptes et groupes globaux/universels de **toute la forêt** | dans **son** domaine |
+  | **Universelle** | comptes et groupes de toute la forêt | dans toute la forêt (stockée au catalogue global) |
+
+  ## Le modèle AGDLP
+
+  **A**ccounts → **G**lobal groups → **D**omain **L**ocal groups → **P**ermissions.
+
+  1. Les **comptes** sont membres de groupes **globaux** qui représentent des **personnes** : un service, une
+     fonction (`GG_Compta`, `GG_Direction`).
+  2. Les groupes **locaux de domaine** représentent un **accès à une ressource** : `DL_Compta_RW` (modifier),
+     `DL_Compta_R` (lire).
+  3. Les groupes globaux sont **membres** des groupes locaux de domaine : `GG_Compta` dans `DL_Compta_RW`,
+     `GG_Direction` dans `DL_Compta_R`.
+  4. Seuls les groupes locaux de domaine reçoivent des **permissions** (ACL NTFS, partages).
+
+  L'avantage est immédiat : une embauche à la comptabilité, c'est **un** ajout dans `GG_Compta` ; un nouveau
+  dossier accessible à la direction, c'est **une** imbrication. On lit l'ACL d'un dossier et on comprend qui
+  y a accès sans avoir à traquer des comptes individuels. Une convention de nommage claire (préfixes `GG_`,
+  `DL_`, suffixes `_R`, `_RW`) fait partie du modèle.
+
+  Rappel : les appartenances aux groupes sont lues **à l'ouverture de session** (jeton Kerberos). Un
+  utilisateur ajouté à un groupe doit se déconnecter et se reconnecter pour en profiter.
+
+  ## Cycle de vie d'un compte
+
+  - **Arrivée** : création dans la bonne OU, attributs renseignés, mot de passe provisoire à changer, groupes
+    du service. On industrialise avec un **import CSV** : `Import-Csv | ForEach-Object { New-ADUser ... }`.
+  - **Vie** : réinitialisation de mot de passe, déverrouillage, changement de service (déplacement d'OU et
+    de groupes), date d'expiration pour les intérimaires.
+  - **Départ** : on **désactive** d'abord (on ne supprime pas : la boîte mail, les fichiers et les audits
+    peuvent encore servir), on retire les groupes, on range le compte dans une OU dédiée, on note la date.
+    La suppression vient plus tard, selon la politique de l'entreprise.
+
+  ## Délégation
+
+  L'**Assistant Délégation de contrôle** (clic droit sur une OU) donne à un groupe un droit précis sur les
+  objets de cette OU : réinitialiser les mots de passe, créer des comptes, modifier l'appartenance aux
+  groupes. Le support n'a ainsi pas besoin d'être administrateur du domaine. En ligne de commande :
+  `dsacls`, ou `Get-Acl`/`Set-Acl` sur le lecteur `AD:`.
+
+  ## Outils PowerShell
+
+  `New-ADOrganizationalUnit`, `New-ADUser`, `Set-ADUser`, `Move-ADObject`, `Disable-ADAccount`,
+  `Set-ADAccountPassword`, `New-ADGroup`, `Add-ADGroupMember`, `Get-ADGroupMember -Recursive`,
+  `Get-ADUser -Filter` / `-SearchBase` et `-Properties` pour lire les attributs non affichés par défaut.
+docs:
+  - title: Groupes de sécurité Active Directory
+    url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/manage/understand-security-groups
+  - title: Module ActiveDirectory (PowerShell)
+    url: https://learn.microsoft.com/fr-fr/powershell/module/activedirectory/
+  - title: Délégation de l'administration (AD DS)
+    url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/plan/delegating-administration-by-using-ou-objects
+exercises:
+  - id: win-ad-ou
+    title: L'arborescence des OU
+    description: |
+      Crée l'arborescence suivante, toutes les OU protégées contre la suppression accidentelle :
+
+      ```
+      Ateliers Durand
+      ├── Utilisateurs
+      │   ├── Direction
+      │   ├── Compta
+      │   └── Atelier
+      ├── Groupes
+      └── Postes
+      ```
+    hint: New-ADOrganizationalUnit 'Ateliers Durand' -Path 'DC=durand,DC=lan' ; puis Utilisateurs, Groupes, Postes dedans ; puis Direction, Compta, Atelier dans Utilisateurs
+    cours: |
+      ```powershell
+      $racine = 'OU=Ateliers Durand,DC=durand,DC=lan'
+      New-ADOrganizationalUnit -Name 'Ateliers Durand' -Path 'DC=durand,DC=lan'
+      'Utilisateurs', 'Groupes', 'Postes' | ForEach-Object { New-ADOrganizationalUnit -Name $_ -Path $racine }
+      'Direction', 'Compta', 'Atelier' | ForEach-Object {
+          New-ADOrganizationalUnit -Name $_ -Path "OU=Utilisateurs,$racine"
+      }
+      Get-ADOrganizationalUnit -Filter * -SearchBase $racine | Select-Object DistinguishedName
+      ```
+
+      On construit le chemin du parent avant de créer l'enfant : le paramètre `-Path` attend le nom unique
+      (DN) complet du conteneur parent. Séparer les comptes des groupes et des ordinateurs permet ensuite de
+      lier des GPO « utilisateur » et « ordinateur » à des endroits différents, et de déléguer la gestion des
+      postes à l'équipe support sans lui confier les comptes de la direction.
+    checks:
+      - desc: Ateliers Durand contient Utilisateurs, Groupes et Postes
+        run: |
+          $ok = foreach ($n in 'Utilisateurs', 'Groupes', 'Postes') { [bool](Get-ADOrganizationalUnit -Identity "OU=$n,OU=Ateliers Durand,DC=durand,DC=lan") }
+          @($ok | Where-Object { $_ }).Count -eq 3
+      - desc: Utilisateurs contient Direction, Compta et Atelier
+        run: |
+          $ok = foreach ($n in 'Direction', 'Compta', 'Atelier') { [bool](Get-ADOrganizationalUnit -Identity "OU=$n,OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan") }
+          @($ok | Where-Object { $_ }).Count -eq 3
+      - desc: Toutes ces OU sont protégées contre la suppression
+        run: |
+          $ous = Get-ADOrganizationalUnit -Filter * -SearchBase 'OU=Ateliers Durand,DC=durand,DC=lan' -Properties ProtectedFromAccidentalDeletion
+          $ous.Count -ge 7 -and @($ous | Where-Object { -not $_.ProtectedFromAccidentalDeletion }).Count -eq 0
+    solution: |
+      $racine = 'OU=Ateliers Durand,DC=durand,DC=lan'
+      New-ADOrganizationalUnit -Name 'Ateliers Durand' -Path 'DC=durand,DC=lan'
+      'Utilisateurs', 'Groupes', 'Postes' | ForEach-Object { New-ADOrganizationalUnit -Name $_ -Path $racine }
+      'Direction', 'Compta', 'Atelier' | ForEach-Object { New-ADOrganizationalUnit -Name $_ -Path "OU=Utilisateurs,$racine" }
+
+  - id: win-ad-utilisateur
+    title: Créer un compte complet
+    description: |
+      Marie Dupont arrive à la comptabilité. Crée son compte dans l'OU `Compta` :
+
+      - identifiant `mdupont`, UPN `mdupont@durand.lan`, prénom `Marie`, nom `Dupont` ;
+      - service `Compta`, fonction `Comptable` ;
+      - mot de passe provisoire `Bienvenue2024!`, **à changer à la première ouverture de session** ;
+      - compte **activé**.
+    hint: New-ADUser -Name 'Marie Dupont' -GivenName Marie -Surname Dupont -SamAccountName mdupont -UserPrincipalName mdupont@durand.lan -Department Compta -Title Comptable -Path 'OU=Compta,...' -AccountPassword (Read-Host -AsSecureString) -ChangePasswordAtLogon $true -Enabled $true
+    cours: |
+      ```powershell
+      $mdp = ConvertTo-SecureString 'Bienvenue2024!' -AsPlainText -Force
+      New-ADUser -Name 'Marie Dupont' -GivenName Marie -Surname Dupont -DisplayName 'Marie Dupont' `
+          -SamAccountName mdupont -UserPrincipalName mdupont@durand.lan `
+          -Department Compta -Title Comptable `
+          -Path 'OU=Compta,OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan' `
+          -AccountPassword $mdp -ChangePasswordAtLogon $true -Enabled $true
+      Get-ADUser mdupont -Properties Department, Title, pwdLastSet
+      ```
+
+      Sans `-AccountPassword`, `New-ADUser` crée un compte **désactivé** (aucun mot de passe ne respecte la
+      stratégie). `-ChangePasswordAtLogon` met `pwdLastSet` à 0 : l'utilisateur devra choisir un mot de passe
+      que l'administrateur ne connaît pas. Les attributs `Department` et `Title` ne sont pas décoratifs :
+      ils servent aux requêtes (tous les comptables), à l'annuaire Outlook et aux groupes dynamiques.
+    checks:
+      - desc: mdupont existe dans l'OU Compta, activé, avec son UPN
+        run: |
+          $u = Get-ADUser mdupont
+          $u.Enabled -and $u.UserPrincipalName -eq 'mdupont@durand.lan' -and $u.DistinguishedName -like '*,OU=Compta,OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan'
+      - desc: Service Compta, fonction Comptable, prénom et nom renseignés
+        run: |
+          $u = Get-ADUser mdupont -Properties Department, Title
+          $u.Department -eq 'Compta' -and $u.Title -eq 'Comptable' -and $u.GivenName -eq 'Marie' -and $u.Surname -eq 'Dupont'
+      - desc: Le mot de passe devra être changé à la première ouverture de session
+        run: |
+          (Get-ADUser mdupont -Properties pwdLastSet).pwdLastSet -eq 0
+    solution: |
+      $mdp = ConvertTo-SecureString 'Bienvenue2024!' -AsPlainText -Force
+      New-ADUser -Name 'Marie Dupont' -GivenName Marie -Surname Dupont -DisplayName 'Marie Dupont' -SamAccountName mdupont -UserPrincipalName mdupont@durand.lan -Department Compta -Title Comptable -Path 'OU=Compta,OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan' -AccountPassword $mdp -ChangePasswordAtLogon $true -Enabled $true
+
+  - id: win-ad-csv
+    title: Importer les embauches depuis un CSV
+    description: |
+      Importe les 8 salariés de `C:\Admin\embauches.csv` (séparateur `;`). Chaque compte :
+
+      - va dans l'OU de son service (`Direction`, `Compta` ou `Atelier`) ;
+      - a pour identifiant la colonne `Login`, pour UPN `<login>@durand.lan`, pour service la colonne
+        `Service` et pour fonction la colonne `Fonction` ;
+      - est activé, avec le mot de passe `Bienvenue2024!` à changer à la première connexion.
+    hint: Import-Csv C:\Admin\embauches.csv -Delimiter ';' -Encoding UTF8 | ForEach-Object { New-ADUser -Name "$($_.Prenom) $($_.Nom)" -SamAccountName $_.Login -Path "OU=$($_.Service),OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan" ... }
+    cours: |
+      ```powershell
+      $mdp = ConvertTo-SecureString 'Bienvenue2024!' -AsPlainText -Force
+      Import-Csv C:\Admin\embauches.csv -Delimiter ';' -Encoding UTF8 | ForEach-Object {
+          New-ADUser -Name "$($_.Prenom) $($_.Nom)" -GivenName $_.Prenom -Surname $_.Nom `
+              -SamAccountName $_.Login -UserPrincipalName "$($_.Login)@durand.lan" `
+              -Department $_.Service -Title $_.Fonction `
+              -Path "OU=$($_.Service),OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan" `
+              -AccountPassword $mdp -ChangePasswordAtLogon $true -Enabled $true
+      }
+      ```
+
+      `Import-Csv` transforme chaque ligne en objet dont les propriétés portent le nom des colonnes. Les
+      accents (Chloé, Gaëlle) exigent le bon encodage : `-Encoding UTF8`. Avant de lancer un import réel, on
+      teste avec `-WhatIf`, puis on vérifie le résultat avec `Get-ADUser -Filter * -SearchBase ...`. Un script
+      robuste vérifie aussi qu'un identifiant n'existe pas déjà (`Get-ADUser -Filter "SamAccountName -eq '...'"`).
+    checks:
+      - desc: Les 8 comptes existent, activés, chacun dans l'OU de son service
+        run: |
+          $ok = Import-Csv C:\Admin\embauches.csv -Delimiter ';' -Encoding UTF8 | ForEach-Object {
+              $u = Get-ADUser -Filter "SamAccountName -eq '$($_.Login)'"
+              [bool]$u -and $u.Enabled -and $u.DistinguishedName -like "*,OU=$($_.Service),OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan"
+          }
+          @($ok | Where-Object { $_ }).Count -eq 8
+      - desc: Service, fonction et UPN sont renseignés (accents compris)
+        run: |
+          $c = Get-ADUser cmoreau -Properties Department, Title
+          $g = Get-ADUser gfournier
+          $c.Department -eq 'Atelier' -and $c.Title -eq "Chef d'atelier" -and $g.GivenName -eq 'Gaëlle' -and $g.UserPrincipalName -eq 'gfournier@durand.lan'
+    solution: |
+      $mdp = ConvertTo-SecureString 'Bienvenue2024!' -AsPlainText -Force
+      Import-Csv C:\Admin\embauches.csv -Delimiter ';' -Encoding UTF8 | ForEach-Object {
+          New-ADUser -Name "$($_.Prenom) $($_.Nom)" -GivenName $_.Prenom -Surname $_.Nom -SamAccountName $_.Login -UserPrincipalName "$($_.Login)@durand.lan" -Department $_.Service -Title $_.Fonction -Path "OU=$($_.Service),OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan" -AccountPassword $mdp -ChangePasswordAtLogon $true -Enabled $true
+      }
+
+  - id: win-ad-deplacer
+    title: Ranger les comptes du conteneur Users
+    description: |
+      Julien Martin (`jmartin`) et Thomas Intérim (`tinterim`) ont été créés dans le conteneur par défaut
+      `CN=Users`. Déplace chacun dans l'OU qui correspond à son attribut **Service**. (Paul Leroy, lui, quitte
+      l'entreprise : il sera traité plus loin.)
+    hint: Get-ADUser jmartin -Properties Department ; Move-ADObject (Get-ADUser jmartin) -TargetPath 'OU=Compta,OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan'
+    cours: |
+      ```powershell
+      Get-ADUser -Filter * -SearchBase 'CN=Users,DC=durand,DC=lan' -Properties Department |
+          Format-Table SamAccountName, Department
+      foreach ($login in 'jmartin', 'tinterim') {
+          $u = Get-ADUser $login -Properties Department
+          Move-ADObject -Identity $u -TargetPath "OU=$($u.Department),OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan"
+      }
+      ```
+
+      Un compte laissé dans `CN=Users` échappe aux GPO liées sur les OU et à la délégation : il est donc mal
+      géré. Déplacer un objet ne change ni son SID ni ses groupes : l'utilisateur ne voit aucune différence.
+      Pour que les **nouveaux** ordinateurs joints arrivent directement dans une OU plutôt que dans
+      `CN=Computers`, il existe `redircmp` (et `redirusr` pour les utilisateurs).
+    checks:
+      - desc: jmartin est dans l'OU Compta
+        run: |
+          (Get-ADUser jmartin).DistinguishedName -like '*,OU=Compta,OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan'
+      - desc: tinterim est dans l'OU Atelier
+        run: |
+          (Get-ADUser tinterim).DistinguishedName -like '*,OU=Atelier,OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan'
+    solution: |
+      foreach ($login in 'jmartin', 'tinterim') {
+          $u = Get-ADUser $login -Properties Department
+          Move-ADObject -Identity $u -TargetPath "OU=$($u.Department),OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan"
+      }
+
+  - id: win-ad-gg
+    title: Groupes globaux par service (le G de AGDLP)
+    description: |
+      Dans l'OU `Groupes`, crée trois groupes de **sécurité** d'étendue **globale** : `GG_Direction`,
+      `GG_Compta` et `GG_Atelier`. Remplis chacun avec **tous les comptes actifs** dont le service correspond
+      (attribut `Department`).
+    hint: New-ADGroup GG_Compta -GroupScope Global -GroupCategory Security -Path 'OU=Groupes,...' ; Add-ADGroupMember GG_Compta -Members (Get-ADUser -Filter "Department -eq 'Compta' -and Enabled -eq 'True'")
+    cours: |
+      ```powershell
+      $groupes = 'OU=Groupes,OU=Ateliers Durand,DC=durand,DC=lan'
+      foreach ($s in 'Direction', 'Compta', 'Atelier') {
+          New-ADGroup -Name "GG_$s" -GroupScope Global -GroupCategory Security -Path $groupes `
+              -Description "Salariés du service $s"
+          Add-ADGroupMember "GG_$s" -Members (Get-ADUser -Filter "Department -eq '$s' -and Enabled -eq 'True'")
+      }
+      Get-ADGroupMember GG_Compta | Select-Object SamAccountName
+      ```
+
+      Le groupe **global** représente des personnes qui ont quelque chose en commun (ici le service). Il ne
+      contient que des comptes et groupes globaux du même domaine, et peut être utilisé partout dans la
+      forêt. On renseigne sa description : dans deux ans, quelqu'un devra comprendre à quoi il sert. Attention
+      au filtre : un compte désactivé n'a rien à faire dans un groupe de service.
+    checks:
+      - desc: GG_Direction, GG_Compta et GG_Atelier sont des groupes de sécurité globaux dans l'OU Groupes
+        run: |
+          $g = foreach ($n in 'GG_Direction', 'GG_Compta', 'GG_Atelier') { Get-ADGroup $n }
+          @($g | Where-Object { $_.GroupScope -eq 'Global' -and $_.GroupCategory -eq 'Security' -and $_.DistinguishedName -like '*,OU=Groupes,OU=Ateliers Durand,DC=durand,DC=lan' }).Count -eq 3
+      - desc: GG_Compta contient mdupont, jmartin, agarcia et eroux
+        run: |
+          $m = (Get-ADGroupMember GG_Compta).SamAccountName
+          @('mdupont', 'jmartin', 'agarcia', 'eroux' | Where-Object { $m -contains $_ }).Count -eq 4
+      - desc: GG_Atelier et GG_Direction contiennent leurs salariés actifs
+        run: |
+          $a = (Get-ADGroupMember GG_Atelier).SamAccountName
+          $d = (Get-ADGroupMember GG_Direction).SamAccountName
+          ($a -contains 'cmoreau') -and ($a -contains 'tinterim') -and ($d -contains 'hgirard') -and ($d -contains 'dpetit')
+    solution: |
+      $groupes = 'OU=Groupes,OU=Ateliers Durand,DC=durand,DC=lan'
+      foreach ($s in 'Direction', 'Compta', 'Atelier') {
+          New-ADGroup -Name "GG_$s" -GroupScope Global -GroupCategory Security -Path $groupes -Description "Salariés du service $s"
+          Add-ADGroupMember "GG_$s" -Members (Get-ADUser -Filter "Department -eq '$s' -and Enabled -eq 'True'")
+      }
+
+  - id: win-ad-dl
+    title: Groupes locaux de ressource (le DL de AGDLP)
+    description: |
+      Crée dans l'OU `Groupes` deux groupes de sécurité **locaux de domaine** pour le dossier de la compta :
+      `DL_Compta_RW` (modification) et `DL_Compta_R` (lecture). Imbrique ensuite `GG_Compta` dans
+      `DL_Compta_RW` et `GG_Direction` dans `DL_Compta_R`.
+    hint: New-ADGroup DL_Compta_RW -GroupScope DomainLocal -GroupCategory Security -Path 'OU=Groupes,...' ; Add-ADGroupMember DL_Compta_RW -Members GG_Compta
+    cours: |
+      ```powershell
+      $groupes = 'OU=Groupes,OU=Ateliers Durand,DC=durand,DC=lan'
+      New-ADGroup DL_Compta_RW -GroupScope DomainLocal -GroupCategory Security -Path $groupes -Description 'Modification sur \\SRV-DC01\Compta'
+      New-ADGroup DL_Compta_R  -GroupScope DomainLocal -GroupCategory Security -Path $groupes -Description 'Lecture sur \\SRV-DC01\Compta'
+      Add-ADGroupMember DL_Compta_RW -Members GG_Compta
+      Add-ADGroupMember DL_Compta_R  -Members GG_Direction
+      Get-ADGroupMember DL_Compta_RW -Recursive | Select-Object SamAccountName
+      ```
+
+      Le groupe **local de domaine** représente un **accès** à une ressource : son nom dit ce qu'il donne. Il
+      accepte des membres de toute la forêt (utile le jour d'une fusion avec une autre entreprise) mais ne
+      s'utilise que dans son domaine. `Get-ADGroupMember -Recursive` déplie les imbrications : c'est la
+      réponse à la question de l'auditeur « qui peut modifier la compta ? ».
+    checks:
+      - desc: DL_Compta_RW et DL_Compta_R sont des groupes de sécurité locaux de domaine
+        run: |
+          $g = foreach ($n in 'DL_Compta_RW', 'DL_Compta_R') { Get-ADGroup $n }
+          @($g | Where-Object { $_.GroupScope -eq 'DomainLocal' -and $_.GroupCategory -eq 'Security' }).Count -eq 2
+      - desc: GG_Compta est membre de DL_Compta_RW, GG_Direction de DL_Compta_R
+        run: |
+          ((Get-ADGroupMember DL_Compta_RW).Name -contains 'GG_Compta') -and ((Get-ADGroupMember DL_Compta_R).Name -contains 'GG_Direction')
+      - desc: Aucun utilisateur n'est membre direct des groupes DL
+        run: |
+          $membres = @(Get-ADGroupMember DL_Compta_RW) + @(Get-ADGroupMember DL_Compta_R)
+          @($membres | Where-Object objectClass -eq 'user').Count -eq 0
+    solution: |
+      $groupes = 'OU=Groupes,OU=Ateliers Durand,DC=durand,DC=lan'
+      New-ADGroup DL_Compta_RW -GroupScope DomainLocal -GroupCategory Security -Path $groupes -Description 'Modification sur \\SRV-DC01\Compta'
+      New-ADGroup DL_Compta_R -GroupScope DomainLocal -GroupCategory Security -Path $groupes -Description 'Lecture sur \\SRV-DC01\Compta'
+      Add-ADGroupMember DL_Compta_RW -Members GG_Compta
+      Add-ADGroupMember DL_Compta_R -Members GG_Direction
+
+  - id: win-ad-permissions
+    title: Les permissions vont aux groupes DL (le P de AGDLP)
+    description: |
+      Sur `C:\Partages\Compta` :
+
+      - NTFS : `DURAND\DL_Compta_RW` en **Modification**, `DURAND\DL_Compta_R` en **Lecture et exécution**
+        (sur le dossier, les sous-dossiers et les fichiers) ;
+      - **coupe l'héritage** en convertissant les droits hérités, puis retire le groupe `Utilisateurs` (BUILTIN\Users) ;
+      - partage SMB `Compta` : **Utilisateurs authentifiés** en contrôle total (le filtrage se fait en NTFS).
+    hint: icacls C:\Partages\Compta /inheritance:d ; icacls C:\Partages\Compta /remove:g *S-1-5-32-545 ; icacls C:\Partages\Compta /grant 'DURAND\DL_Compta_RW:(OI)(CI)M' 'DURAND\DL_Compta_R:(OI)(CI)RX' ; New-SmbShare Compta -Path C:\Partages\Compta -FullAccess 'Authenticated Users'
+    cours: |
+      ```powershell
+      icacls C:\Partages\Compta /inheritance:d
+      icacls C:\Partages\Compta /remove:g '*S-1-5-32-545'
+      icacls C:\Partages\Compta /grant 'DURAND\DL_Compta_RW:(OI)(CI)M' 'DURAND\DL_Compta_R:(OI)(CI)RX'
+      New-SmbShare -Name Compta -Path C:\Partages\Compta -FullAccess '*S-1-5-11'
+      icacls C:\Partages\Compta
+      ```
+
+      Les héritages `(OI)(CI)` propagent le droit aux fichiers et sous-dossiers. `/inheritance:d` coupe
+      l'héritage en **copiant** les droits existants (Administrateurs et SYSTEM restent). Le SID `S-1-5-32-545`
+      désigne le groupe Utilisateurs quelle que soit la langue du système ; `S-1-5-11` désigne les
+      Utilisateurs authentifiés (`New-SmbShare` accepte aussi le nom anglais `Authenticated Users` sur un
+      système anglais). L'ACL finale se lit d'un coup d'œil : deux groupes, deux niveaux d'accès. Aucun nom
+      de personne n'y figure.
+    checks:
+      - desc: DL_Compta_RW a la modification, DL_Compta_R la lecture
+        run: |
+          $acl = (Get-Acl C:\Partages\Compta).Access
+          $rw = $acl | Where-Object { $_.IdentityReference -eq 'DURAND\DL_Compta_RW' -and $_.FileSystemRights -match 'Modify' }
+          $r = $acl | Where-Object { $_.IdentityReference -eq 'DURAND\DL_Compta_R' -and $_.FileSystemRights -match 'ReadAndExecute' -and $_.FileSystemRights -notmatch 'Modify' }
+          [bool]$rw -and [bool]$r
+      - desc: Héritage coupé, plus de droits pour le groupe Utilisateurs, aucun compte individuel
+        run: |
+          $acl = Get-Acl C:\Partages\Compta
+          $users = $acl.Access | Where-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq 'S-1-5-32-545' }
+          $perso = $acl.Access | Where-Object { $_.IdentityReference -match '^DURAND\\' -and $_.IdentityReference -notmatch '^DURAND\\(DL_|Domain Admins|Admins du domaine)' }
+          $acl.AreAccessRulesProtected -and -not $users -and -not $perso
+      - desc: Le partage Compta existe et pointe vers C:\Partages\Compta
+        run: |
+          (Get-SmbShare -Name Compta).Path -eq 'C:\Partages\Compta'
+    solution: |
+      icacls C:\Partages\Compta /inheritance:d | Out-Null
+      icacls C:\Partages\Compta /remove:g '*S-1-5-32-545' | Out-Null
+      icacls C:\Partages\Compta /grant 'DURAND\DL_Compta_RW:(OI)(CI)M' 'DURAND\DL_Compta_R:(OI)(CI)RX' | Out-Null
+      New-SmbShare -Name Compta -Path C:\Partages\Compta -FullAccess '*S-1-5-11' | Out-Null
+
+  - id: win-ad-depart
+    title: Le départ de Paul Leroy
+    description: |
+      Paul Leroy (`pleroy`) a quitté l'entreprise hier. Applique la procédure de départ :
+
+      1. **désactive** son compte (ne le supprime pas) ;
+      2. retire-le de **tous ses groupes** (il ne doit rester que dans *Domain Users*, son groupe principal) ;
+      3. crée l'OU `Désactivés` dans `Ateliers Durand` et déplace-y le compte ;
+      4. mets dans sa description `Parti le <date du jour>` (format libre mais commençant par `Parti le`).
+    hint: Disable-ADAccount pleroy ; Get-ADUser pleroy -Properties MemberOf | Select-Object -ExpandProperty MemberOf | ForEach-Object { Remove-ADGroupMember $_ -Members pleroy -Confirm:$false } ; Move-ADObject ; Set-ADUser pleroy -Description "Parti le ..."
+    cours: |
+      ```powershell
+      Get-ADUser pleroy -Properties MemberOf | Select-Object -ExpandProperty MemberOf
+      Disable-ADAccount pleroy
+      (Get-ADUser pleroy -Properties MemberOf).MemberOf | ForEach-Object { Remove-ADGroupMember $_ -Members pleroy -Confirm:$false }
+      New-ADOrganizationalUnit 'Désactivés' -Path 'OU=Ateliers Durand,DC=durand,DC=lan'
+      Move-ADObject (Get-ADUser pleroy) -TargetPath 'OU=Désactivés,OU=Ateliers Durand,DC=durand,DC=lan'
+      Set-ADUser pleroy -Description "Parti le $(Get-Date -Format 'dd/MM/yyyy')"
+      ```
+
+      On **désactive** plutôt que de supprimer : supprimer efface le SID, et les fichiers, les journaux d'audit
+      ou la boîte mail du salarié deviennent difficiles à rattacher. Retirer les groupes évite qu'une
+      réactivation par erreur lui rende des privilèges (ici, il était même *Opérateur d'impression* et
+      *Utilisateur du Bureau à distance*). L'attribut `MemberOf` ne liste pas le groupe principal
+      (*Domain Users*), qu'on ne peut pas retirer.
+    checks:
+      - desc: Le compte pleroy est désactivé et rangé dans l'OU Désactivés
+        run: |
+          $u = Get-ADUser pleroy
+          -not $u.Enabled -and $u.DistinguishedName -like '*,OU=Désactivés,OU=Ateliers Durand,DC=durand,DC=lan'
+      - desc: Il n'est plus membre d'aucun groupe (hors groupe principal)
+        run: |
+          @((Get-ADUser pleroy -Properties MemberOf).MemberOf).Count -eq 0
+      - desc: Sa description commence par « Parti le »
+        run: |
+          (Get-ADUser pleroy -Properties Description).Description -like 'Parti le*'
+    solution: |
+      Disable-ADAccount pleroy
+      (Get-ADUser pleroy -Properties MemberOf).MemberOf | ForEach-Object { Remove-ADGroupMember $_ -Members pleroy -Confirm:$false }
+      if (-not (Get-ADOrganizationalUnit -Filter "Name -eq 'Désactivés'")) { New-ADOrganizationalUnit 'Désactivés' -Path 'OU=Ateliers Durand,DC=durand,DC=lan' }
+      Move-ADObject (Get-ADUser pleroy) -TargetPath 'OU=Désactivés,OU=Ateliers Durand,DC=durand,DC=lan'
+      Set-ADUser pleroy -Description "Parti le $(Get-Date -Format 'dd/MM/yyyy')"
+
+  - id: win-ad-mdp-expiration
+    title: Mot de passe oublié et contrat d'intérim
+    description: |
+      Deux demandes du jour :
+
+      - Alice Garcia (`agarcia`) a oublié son mot de passe : réinitialise-le à `Provisoire2024!` et oblige-la
+        à le changer à la prochaine ouverture de session ; déverrouille le compte au passage ;
+      - le contrat de Thomas (`tinterim`) se termine le **31 décembre 2026** : son compte doit **expirer**
+        automatiquement à la fin de cette journée.
+    hint: Set-ADAccountPassword agarcia -Reset -NewPassword (ConvertTo-SecureString 'Provisoire2024!' -AsPlainText -Force) ; Set-ADUser agarcia -ChangePasswordAtLogon $true ; Unlock-ADAccount agarcia ; Set-ADAccountExpiration tinterim -DateTime '2027-01-01'
+    cours: |
+      ```powershell
+      Set-ADAccountPassword agarcia -Reset -NewPassword (ConvertTo-SecureString 'Provisoire2024!' -AsPlainText -Force)
+      Set-ADUser agarcia -ChangePasswordAtLogon $true
+      Unlock-ADAccount agarcia
+      Set-ADAccountExpiration tinterim -DateTime '2027-01-01'
+      Get-ADUser tinterim -Properties AccountExpirationDate
+      ```
+
+      La réinitialisation (`-Reset`) ne demande pas l'ancien mot de passe ; elle est réservée aux personnes
+      qui en ont le droit (délégation, exercice suivant). Avant de la faire, le support **vérifie l'identité**
+      du demandeur (rappel sur le poste fixe, question convenue) : c'est une technique d'attaque classique.
+      L'expiration se règle **à minuit** : un compte qui doit fonctionner tout le 31 décembre expire le
+      1er janvier à 0 h, ce qui correspond à la case « Fin de : 31/12/2026 » de la console.
+    checks:
+      - desc: agarcia doit changer son mot de passe et n'est pas verrouillé
+        run: |
+          $u = Get-ADUser agarcia -Properties pwdLastSet, LockedOut
+          $u.pwdLastSet -eq 0 -and -not $u.LockedOut -and $u.Enabled
+      - desc: Le compte tinterim expire au 1er janvier 2027 à 0 h (fin du 31/12/2026)
+        run: |
+          $d = (Get-ADUser tinterim -Properties AccountExpirationDate).AccountExpirationDate
+          [bool]$d -and $d.Date -eq [datetime]'2027-01-01'
+      - desc: Le mot de passe d'agarcia a été réinitialisé après la création du compte
+        run: |
+          $u = Get-ADUser agarcia -Properties whenCreated
+          $meta = Get-ADReplicationAttributeMetadata -Object $u.DistinguishedName -Server localhost -Properties unicodePwd
+          $meta.LastOriginatingChangeTime -gt $u.whenCreated.AddSeconds(20)
+    solution: |
+      Set-ADAccountPassword agarcia -Reset -NewPassword (ConvertTo-SecureString 'Provisoire2024!' -AsPlainText -Force)
+      Set-ADUser agarcia -ChangePasswordAtLogon $true
+      Unlock-ADAccount agarcia
+      Set-ADAccountExpiration tinterim -DateTime '2027-01-01'
+
+  - id: win-ad-delegation
+    title: Déléguer la réinitialisation des mots de passe
+    description: |
+      Le support de proximité ne doit pas être administrateur du domaine. Crée dans l'OU `Groupes` le groupe
+      global `GG_Support` avec pour membre `cmoreau` (référente informatique de l'atelier), puis **délègue** à
+      ce groupe le droit de **réinitialiser les mots de passe** des utilisateurs de l'OU `Utilisateurs` (et de
+      ses sous-OU).
+    hint: dsacls 'OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan' /I:S /G 'DURAND\GG_Support:CA;Reset Password;user'
+    cours: |
+      ```powershell
+      New-ADGroup GG_Support -GroupScope Global -GroupCategory Security -Path 'OU=Groupes,OU=Ateliers Durand,DC=durand,DC=lan'
+      Add-ADGroupMember GG_Support -Members cmoreau
+      $ou = 'OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan'
+      dsacls $ou /I:S /G 'DURAND\GG_Support:CA;Reset Password;user'
+      dsacls $ou /I:S /G 'DURAND\GG_Support:RPWP;pwdLastSet;user' 'DURAND\GG_Support:RPWP;lockoutTime;user'
+      ```
+
+      `dsacls` écrit dans l'ACL de l'OU : `/I:S` applique l'entrée aux sous-objets, `CA` (*control access*)
+      donne un **droit étendu**, ici *Reset Password*, limité aux objets de classe `user`. La seconde ligne
+      permet aussi de cocher « changer à la prochaine ouverture » (`pwdLastSet`) et de déverrouiller
+      (`lockoutTime`) : c'est ce que fait l'Assistant Délégation de contrôle pour la tâche « Réinitialiser les
+      mots de passe ». Pour vérifier : onglet *Sécurité* › *Avancé* de l'OU, ou `(Get-Acl "AD:$ou").Access`.
+    checks:
+      - desc: GG_Support existe et contient cmoreau
+        run: |
+          (Get-ADGroup GG_Support).GroupScope -eq 'Global' -and ((Get-ADGroupMember GG_Support).SamAccountName -contains 'cmoreau')
+      - desc: GG_Support a le droit étendu Reset Password sur l'OU Utilisateurs
+        run: |
+          Import-Module ActiveDirectory
+          $reset = [guid]'00299570-246d-11d0-a768-00aa006e0529'
+          $acl = (Get-Acl 'AD:OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan').Access
+          [bool]($acl | Where-Object { $_.IdentityReference -eq 'DURAND\GG_Support' -and $_.ObjectType -eq $reset -and $_.ActiveDirectoryRights -match 'ExtendedRight' })
+    solution: |
+      New-ADGroup GG_Support -GroupScope Global -GroupCategory Security -Path 'OU=Groupes,OU=Ateliers Durand,DC=durand,DC=lan'
+      Add-ADGroupMember GG_Support -Members cmoreau
+      $ou = 'OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan'
+      dsacls $ou /I:S /G 'DURAND\GG_Support:CA;Reset Password;user' | Out-Null
+      dsacls $ou /I:S /G 'DURAND\GG_Support:RPWP;pwdLastSet;user' 'DURAND\GG_Support:RPWP;lockoutTime;user' | Out-Null
+
+  - id: win-ad-rapport
+    title: Rapport pour la responsable comptable
+    description: |
+      La responsable veut la liste des personnes qui ont **accès en modification** au dossier de la compta.
+      Exporte dans `C:\Admin\acces-compta.csv` les membres **effectifs** (imbrications dépliées) de
+      `DL_Compta_RW`, avec les colonnes `Name`, `SamAccountName` et `Title`, encodé en UTF-8.
+    hint: Get-ADGroupMember DL_Compta_RW -Recursive | Get-ADUser -Properties Title | Select-Object Name, SamAccountName, Title | Export-Csv C:\Admin\acces-compta.csv -NoTypeInformation -Encoding UTF8
+    cours: |
+      ```powershell
+      Get-ADGroupMember DL_Compta_RW -Recursive |
+          Get-ADUser -Properties Title |
+          Select-Object Name, SamAccountName, Title |
+          Export-Csv C:\Admin\acces-compta.csv -NoTypeInformation -Encoding UTF8
+      Import-Csv C:\Admin\acces-compta.csv | Format-Table
+      ```
+
+      `-Recursive` remonte les groupes imbriqués jusqu'aux comptes : c'est indispensable avec AGDLP, puisque
+      le groupe DL ne contient que des groupes. `Get-ADUser` est appelé pour chaque membre afin de lire
+      l'attribut `Title`, absent de la sortie de `Get-ADGroupMember`. Le CSV en UTF-8 avec BOM s'ouvre
+      correctement dans Excel, accents compris. Ce type de revue des accès, faite régulièrement avec les
+      responsables métier, est exigé par la plupart des référentiels de sécurité.
+    checks:
+      - desc: Le CSV existe avec les colonnes Name, SamAccountName et Title
+        run: |
+          $c = @(Import-Csv C:\Admin\acces-compta.csv)
+          $c.Count -gt 0 -and ($c[0].PSObject.Properties.Name -contains 'SamAccountName') -and ($c[0].PSObject.Properties.Name -contains 'Title')
+      - desc: Il liste exactement les membres effectifs de DL_Compta_RW
+        run: |
+          $attendu = @(Get-ADGroupMember DL_Compta_RW -Recursive | Where-Object objectClass -eq 'user').SamAccountName | Sort-Object
+          $lu = @(Import-Csv C:\Admin\acces-compta.csv).SamAccountName | Sort-Object
+          $attendu.Count -ge 4 -and -not (Compare-Object $attendu $lu)
+    solution: |
+      Get-ADGroupMember DL_Compta_RW -Recursive | Get-ADUser -Properties Title | Select-Object Name, SamAccountName, Title | Export-Csv C:\Admin\acces-compta.csv -NoTypeInformation -Encoding UTF8

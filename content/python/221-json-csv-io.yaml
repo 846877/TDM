@@ -136,3 +136,54 @@ solution: |
       for objet in objets:
           ecrivain.writerow({c: "" if objet.get(c) is None else objet[c] for c in colonnes})
       return sortie.getvalue()
+cours: |
+  ## `json` : texte ⇄ objets Python
+
+  ```python
+  import json
+  texte = json.dumps({"hote": "srv1", "actif": True, "ram": None})
+  # '{"hote": "srv1", "actif": true, "ram": null}'
+  json.loads(texte)["actif"]     # True
+  ```
+
+  Correspondances : `dict` ↔ objet, `list` ↔ tableau, `str`, `int`/`float`, `True`/`False`
+  ↔ `true`/`false`, `None` ↔ `null`. Options utiles : `indent=2`, `ensure_ascii=False`
+  (garder les accents), `sort_keys=True`. `json.load` / `json.dump` travaillent sur des
+  fichiers.
+
+  ## `csv` : lire et écrire correctement
+
+  ```python
+  import csv, io
+  lecteur = csv.DictReader(io.StringIO('nom,ville\n"Dupont, J",Lyon\n'))
+  list(lecteur)    # [{'nom': 'Dupont, J', 'ville': 'Lyon'}]
+  ```
+
+  `DictReader` utilise la première ligne comme en-têtes et gère les guillemets.
+  `DictWriter(fichier, fieldnames=[...])` écrit des dictionnaires : `writeheader()` puis
+  `writerow(d)` ou `writerows(liste)`. L'option `lineterminator="\n"` évite les fins de
+  ligne `\r\n` (le défaut du module, conforme à la RFC 4180). `extrasaction="ignore"` et
+  `restval=""` gèrent les clés en trop ou manquantes.
+
+  ## `io.StringIO`
+
+  Ces modules attendent des fichiers ; `StringIO` en simule un en mémoire. En écriture, on
+  récupère le texte avec `getvalue()`. Pour de vrais fichiers CSV, ouvre-les avec
+  `newline=""`.
+
+  ## Conversions de types
+
+  Tout ce qui sort d'un CSV est du **texte**. Appliquer une table `{colonne: fonction}` (par
+  exemple `int`, `float`) est un motif propre et extensible. Traite la cellule vide **avant**
+  d'appeler la fonction : `int("")` lève `ValueError`.
+
+  ## Ordre des colonnes
+
+  L'union des clés dans l'ordre de première apparition s'obtient avec un dictionnaire
+  utilisé comme ensemble ordonné (`dict.fromkeys` ou `setdefault`) : un `set` perdrait
+  l'ordre.
+docs:
+  - title: Module csv (DictReader, DictWriter)
+    url: https://docs.python.org/fr/3/library/csv.html
+  - title: Module json
+    url: https://docs.python.org/fr/3/library/json.html

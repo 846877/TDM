@@ -76,3 +76,51 @@ solution: |
           else:
               resultat.append(c)
       return "".join(resultat)
+cours: |
+  ## De César à Vigenère
+
+  César applique le **même** décalage à toutes les lettres. Vigenère utilise une clé : la
+  première lettre du message est décalée selon la première lettre de la clé, la deuxième
+  selon la deuxième, et ainsi de suite, en recommençant la clé quand elle est épuisée.
+  Une même lettre claire peut donc donner des lettres chiffrées différentes, ce qui résiste
+  à l'analyse de fréquence simple.
+
+  ## Parcourir la clé en boucle
+
+  Avec un compteur `k` des lettres déjà chiffrées, la lettre de clé à utiliser est
+  `cle[k % len(cle)]`. Le point subtil : `k` ne doit avancer **que** lorsqu'on chiffre une
+  lettre, pas sur les espaces ou la ponctuation. C'est pourquoi on ne peut pas simplement
+  utiliser l'indice de `enumerate(texte)`.
+
+  `itertools.cycle(sequence)` répète une séquence à l'infini ; avec `next()`, on peut
+  prendre l'élément suivant uniquement quand on en a besoin :
+
+  ```python
+  from itertools import cycle
+  couleurs = cycle(["rouge", "vert"])
+  next(couleurs), next(couleurs), next(couleurs)   # rouge, vert, rouge
+  ```
+
+  ## Déchiffrer
+
+  Le déchiffrement applique le décalage **opposé**. Plutôt que d'écrire deux fonctions, un
+  signe (`+1` ou `-1`) multiplié au décalage suffit. Grâce au `%` de Python, les décalages
+  négatifs retombent toujours dans 0..25.
+
+  ## Valider la clé en amont
+
+  Vérifie la clé **avant** de commencer : vide, ou contenant autre chose que des lettres
+  ASCII → `ValueError`. `str.isalpha()` accepte les accents ; pour se limiter à l'ASCII,
+  combine-le avec `str.isascii()`. Normalise la clé (minuscules) une fois pour toutes.
+
+  ## Histoire
+
+  Longtemps surnommé « le chiffre indéchiffrable », Vigenère a été cassé au XIXᵉ siècle
+  (Babbage, Kasiski) : la répétition de la clé crée des motifs détectables. Avec une clé
+  aléatoire aussi longue que le message et jamais réutilisée, on obtient le **masque
+  jetable**, théoriquement incassable.
+docs:
+  - title: Wikipédia — Chiffre de Vigenère
+    url: https://fr.wikipedia.org/wiki/Chiffre_de_Vigen%C3%A8re
+  - title: Documentation Python — ord() et chr()
+    url: https://docs.python.org/fr/3/library/functions.html#chr

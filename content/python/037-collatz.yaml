@@ -1,0 +1,156 @@
+title: La conjecture de Syracuse
+level: debutant
+order: 37
+tags: [while, boucles, conditions]
+summary: Répéter tant qu'une condition est vraie avec while.
+description: |
+  On part d'un entier `n > 0` et on répète la règle suivante **tant que** `n` est différent
+  de 1 :
+
+  - si `n` est pair, on le divise par 2 ;
+  - sinon, on le remplace par `3 × n + 1`.
+
+  La conjecture de Syracuse affirme qu'on finit toujours par atteindre 1.
+
+  1. `etapes(n)` renvoie le **nombre d'étapes** nécessaires pour atteindre 1.
+  2. `suite(n)` renvoie la **liste** des valeurs parcourues, `n` et `1` compris.
+  3. `altitude_max(n)` renvoie la plus grande valeur atteinte.
+
+  ```python
+  etapes(6)         # 8
+  suite(6)          # [6, 3, 10, 5, 16, 8, 4, 2, 1]
+  altitude_max(6)   # 16
+  etapes(1)         # 0
+  ```
+
+  Utilise une boucle `while`. Pense à la division **entière** `//` pour que les valeurs
+  restent des entiers.
+starter: |
+  def etapes(n):
+      pass
+
+
+  def suite(n):
+      pass
+
+
+  def altitude_max(n):
+      pass
+tests: |
+  def test_etapes():
+      "etapes(6) == 8"
+      assert solution.etapes(6) == 8, solution.etapes(6)
+
+  def test_etapes_un():
+      "etapes(1) == 0 : déjà arrivé"
+      assert solution.etapes(1) == 0, solution.etapes(1)
+
+  def test_etapes_27():
+      "etapes(27) == 111 (un vol célèbre)"
+      assert solution.etapes(27) == 111, solution.etapes(27)
+
+  def test_suite():
+      "suite(6)"
+      r = solution.suite(6)
+      assert r == [6, 3, 10, 5, 16, 8, 4, 2, 1], f"obtenu {r!r}"
+      assert solution.suite(1) == [1]
+
+  def test_entiers():
+      "Les valeurs restent des entiers"
+      assert all(type(x) is int for x in solution.suite(7)), "utilise // et non /"
+
+  def test_altitude():
+      "altitude_max"
+      assert solution.altitude_max(6) == 16
+      assert solution.altitude_max(27) == 9232, solution.altitude_max(27)
+      assert solution.altitude_max(1) == 1
+solution: |
+  def etapes(n):
+      compteur = 0
+      while n != 1:
+          if n % 2 == 0:
+              n = n // 2
+          else:
+              n = 3 * n + 1
+          compteur += 1
+      return compteur
+
+
+  def suite(n):
+      valeurs = [n]
+      while n != 1:
+          n = n // 2 if n % 2 == 0 else 3 * n + 1
+          valeurs.append(n)
+      return valeurs
+
+
+  def altitude_max(n):
+      plus_haut = n
+      while n != 1:
+          n = n // 2 if n % 2 == 0 else 3 * n + 1
+          if n > plus_haut:
+              plus_haut = n
+      return plus_haut
+cours: |
+  ## `for` ou `while` ?
+
+  - `for` parcourt une séquence **connue** : les éléments d'une liste, les nombres d'un
+    `range`. On sait combien de tours seront faits.
+  - `while condition:` répète **tant que** la condition est vraie. On l'utilise quand le
+    nombre de tours dépend de ce qui se passe pendant la boucle.
+
+  ```python
+  # Combien d'années pour qu'un parc de 100 machines dépasse 200, à +12 %/an ?
+  parc = 100
+  annees = 0
+  while parc <= 200:
+      parc = parc * 1.12
+      annees += 1
+  print(annees)   # 7
+  ```
+
+  ## Anatomie d'une boucle `while` correcte
+
+  1. **Initialisation** : les variables de la condition existent avant la boucle.
+  2. **Condition** : testée **avant** chaque tour, y compris le premier (si elle est fausse
+     d'entrée, le corps n'est jamais exécuté).
+  3. **Progression** : le corps doit modifier une variable de la condition, sinon la boucle
+     est infinie.
+
+  En cas de boucle infinie dans un terminal, `Ctrl+C` l'interrompt ; ici, la moulinette
+  l'arrête au bout de quelques secondes.
+
+  ## Compter, collecter, suivre un maximum
+
+  Trois motifs qui reviennent dans toutes les boucles :
+
+  - un **compteur** initialisé à 0 et incrémenté à chaque tour ;
+  - une **liste** initialisée (ici avec la première valeur) et complétée par `append` ;
+  - un **record** initialisé avec la première valeur et remplacé quand on trouve mieux.
+
+  ## L'expression conditionnelle
+
+  Pour choisir entre deux valeurs en une ligne :
+
+  ```python
+  etat = "pair" if n % 2 == 0 else "impair"
+  ```
+
+  C'est pratique pour des choix simples ; pour plus de deux cas, un `if / elif / else`
+  classique reste plus lisible.
+
+  ## `/` ou `//` ?
+
+  `6 / 2` vaut `3.0` (un `float`) alors que `6 // 2` vaut `3` (un `int`). Mélanger les deux
+  donne des résultats comme `[6, 3.0, 10.0, ...]` : corrects en valeur, mais d'un type
+  inattendu, et les flottants perdent en précision pour les très grands nombres.
+
+  ## Le saviez-vous ?
+
+  La conjecture de Syracuse (ou de Collatz) a été vérifiée par ordinateur pour tous les
+  nombres jusqu'à plus de 10²⁰, mais personne n'a jamais réussi à la démontrer.
+docs:
+  - title: Référence — l'instruction while
+    url: https://docs.python.org/fr/3/reference/compound_stmts.html#the-while-statement
+  - title: Wikipédia — Conjecture de Syracuse
+    url: https://fr.wikipedia.org/wiki/Conjecture_de_Syracuse

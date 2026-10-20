@@ -117,3 +117,52 @@ solution: |
 
   def ecart_jours(debut, fin):
       return _jours_depuis_origine(fin) - _jours_depuis_origine(debut)
+cours: |
+  ## Analyser un format strict
+
+  Pour lire `JJ/MM/AAAA`, on découpe sur `/` et on vérifie :
+
+  1. qu'il y a exactement **trois** parties ;
+  2. que chacune est numérique (`str.isdigit()`) — sinon `int()` lèverait lui-même une
+     `ValueError`, ce qui est acceptable, mais un contrôle explicite permet un message clair ;
+  3. que les valeurs sont **plausibles** (mois de 1 à 12, jour de 1 au nombre de jours du
+     mois, en tenant compte des années bissextiles).
+
+  Le déballage `j, m, a = texte.split("/")` lève déjà `ValueError` s'il n'y a pas trois
+  morceaux : un comportement qui tombe bien.
+
+  ## Valider avec des exceptions
+
+  Une fonction de lecture qui rencontre une donnée invalide **lève** une exception plutôt
+  que de renvoyer `None` : l'appelant ne peut pas l'ignorer par mégarde.
+
+  ```python
+  def lire_port(texte):
+      port = int(texte)            # ValueError si non numérique
+      if not 1 <= port <= 65535:
+          raise ValueError(f"port hors limites : {port}")
+      return port
+  ```
+
+  ## Calculer avec des dates : un nombre de jours absolu
+
+  Calculer directement la différence entre deux dates (jours, mois, années) est un
+  cauchemar de cas particuliers. L'astuce : convertir chaque date en **nombre de jours
+  depuis une origine fixe** (années complètes + mois complets + jours). La différence de deux
+  dates devient une simple soustraction. C'est le principe du « numéro de jour julien » et
+  du *timestamp* Unix (secondes depuis le 1er janvier 1970).
+
+  Le nombre d'années bissextiles avant l'année `a` se calcule sans boucle :
+  `(a - 1) // 4 - (a - 1) // 100 + (a - 1) // 400`.
+
+  ## En vrai
+
+  `datetime.date(2026, 10, 18).toordinal()` fait exactement cela, et
+  `datetime.strptime(texte, "%d/%m/%Y")` analyse le texte. Réimplémenter une fois permet de
+  comprendre les pièges (et de ne plus jamais les sous-estimer) : fuseaux horaires et heures
+  d'été compliquent encore les choses.
+docs:
+  - title: Module datetime (pour la vraie vie)
+    url: https://docs.python.org/fr/3/library/datetime.html
+  - title: Tutoriel — gestion des exceptions
+    url: https://docs.python.org/fr/3/tutorial/errors.html#handling-exceptions

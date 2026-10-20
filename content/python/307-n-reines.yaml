@@ -67,3 +67,57 @@ solution: |
 
   def une_solution(n):
       return _placer(n, 0, set(), set(), set(), [], True)[1]
+cours: |
+  ## Le retour sur trace (*backtracking*)
+
+  Pour explorer un espace de solutions énorme, on construit une solution **pas à pas** ; dès
+  qu'un choix partiel viole une contrainte, on l'abandonne et on revient en arrière
+  (*backtrack*) pour essayer le choix suivant. On élague ainsi des branches entières de
+  l'arbre des possibilités.
+
+  ```python
+  def explorer(partiel):
+      if complet(partiel):
+          traiter(partiel)
+          return
+      for choix in candidats(partiel):
+          if valide(partiel, choix):
+              partiel.append(choix)
+              explorer(partiel)
+              partiel.pop()          # on défait le choix : retour arrière
+  ```
+
+  ## Modéliser intelligemment
+
+  Une bonne modélisation réduit l'espace de recherche :
+
+  - **une reine par ligne** (forcément, sinon deux seraient sur la même ligne) : on place la
+    reine de la ligne 0, puis de la ligne 1, etc. L'état est une liste `colonnes` où
+    `colonnes[ligne]` est la colonne de la reine ;
+  - il reste à vérifier colonnes et diagonales.
+
+  ## Tester les conflits en O(1)
+
+  Sur une même diagonale « descendante », `ligne - colonne` est constant ; sur une
+  diagonale « montante », `ligne + colonne` est constant. Trois **ensembles** (colonnes
+  occupées, diagonales `l - c`, diagonales `l + c`) permettent de tester un placement en
+  temps constant au lieu de comparer avec toutes les reines déjà posées. On ajoute aux
+  ensembles avant l'appel récursif, on retire après.
+
+  ## Performance
+
+  Le nombre de placements bruts est n^n (10 milliards pour n = 10) ; le backtracking avec
+  élagage n'explore que quelques dizaines de milliers de nœuds. Les versions les plus
+  rapides utilisent des **masques de bits** à la place des ensembles.
+
+  Pour `une_solution`, arrête la recherche dès la première solution trouvée (la fonction
+  récursive renvoie un booléen ou la solution). Pour n = 2 et n = 3, il n'existe aucune
+  solution.
+
+  Le backtracking résout aussi le Sudoku, les mots croisés, la coloration de graphes et
+  beaucoup de problèmes de planification.
+docs:
+  - title: Wikipédia — Problème des huit dames
+    url: https://fr.wikipedia.org/wiki/Probl%C3%A8me_des_huit_dames
+  - title: Wikipédia — Retour sur trace (backtracking)
+    url: https://fr.wikipedia.org/wiki/Retour_sur_trace

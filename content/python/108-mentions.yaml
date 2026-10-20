@@ -39,3 +39,53 @@ solution: |
               return "Bien"
           return "Très bien"
       return {nom: mention(note) for nom, note in notes.items()}
+cours: |
+  ## Transformer un dictionnaire
+
+  Construire un nouveau dictionnaire à partir d'un autre est très fréquent : mêmes clés,
+  valeurs transformées.
+
+  ```python
+  tailles_octets = {"a.log": 2048, "b.log": 512}
+  tailles_ko = {}
+  for nom, taille in tailles_octets.items():
+      tailles_ko[nom] = taille / 1024
+  ```
+
+  La version compacte s'appelle une **compréhension de dictionnaire** :
+  `{nom: taille / 1024 for nom, taille in tailles_octets.items()}`.
+
+  ## Séparer règle et parcours
+
+  La transformation « note → mention » est une règle métier indépendante du dictionnaire.
+  Écris-la dans une **fonction séparée** (une fonction auxiliaire, qui peut être définie dans
+  le même fichier) : elle sera plus facile à tester sur les valeurs frontières, et la
+  fonction principale se résume à appliquer cette règle à chaque entrée.
+
+  ## Seuils et intervalles
+
+  Avec une cascade `if / elif` triée par seuils, chaque test ne vérifie qu'une borne. Teste
+  les **frontières** : 9.99, 10, 11.99, 12, 16… Une erreur `>` / `>=` ne se voit que là.
+
+  ## Pour aller plus loin : `bisect`
+
+  Quand il y a beaucoup de seuils, on peut les ranger dans une liste triée et chercher la
+  bonne position par dichotomie avec le module `bisect` :
+
+  ```python
+  from bisect import bisect_right
+  seuils = [0, 50, 80]
+  niveaux = ["bas", "moyen", "haut"]
+  niveaux[bisect_right(seuils, 65) - 1]   # "moyen"
+  ```
+
+  La recherche se fait en O(log k) pour k seuils et ajouter un palier revient à modifier
+  deux listes. C'est exactement l'exemple « notes → lettres » de la documentation de
+  `bisect`.
+
+  **Rappel** : n'oublie pas les accents et majuscules exacts des mentions attendues.
+docs:
+  - title: Tutoriel — compréhensions de dictionnaires
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#dictionaries
+  - title: Module bisect
+    url: https://docs.python.org/fr/3/library/bisect.html

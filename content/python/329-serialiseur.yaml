@@ -229,3 +229,56 @@ solution: |
 
   def deserialiser(texte):
       return _decoder(json.loads(texte))
+cours: |
+  ## Ce que JSON ne sait pas représenter
+
+  JSON connaît : objet (clés **texte** uniquement), tableau, chaîne, nombre, booléen, `null`.
+  Un tuple devient une liste, une clé entière devient une chaîne (`{1: "a"}` → `{"1": "a"}`),
+  et `set`, `bytes`, `datetime`, `Decimal` provoquent une `TypeError`. L'aller-retour n'est
+  donc pas fidèle.
+
+  ## Étiqueter les types
+
+  La solution classique : représenter chaque valeur « spéciale » par un objet JSON étiqueté :
+
+  ```json
+  {"__type__": "tuple", "valeur": [1, 2]}
+  {"__type__": "bytes", "valeur": "aGVsbG8="}
+  ```
+
+  Le désérialiseur lit l'étiquette et reconstruit le bon type. Encodages naturels :
+  `bytes` en base64 (`base64.b64encode(b).decode("ascii")`), `datetime` en ISO 8601
+  (`isoformat()` / `fromisoformat()`, qui préservent le fuseau), `Decimal` en chaîne (pour ne
+  pas perdre de précision), `complex` en paire `[réel, imaginaire]`.
+
+  ## Ambiguïté et échappement
+
+  Que se passe-t-il si les données contiennent **déjà** un dictionnaire avec une clé
+  `"__type__"` ? Pour éviter toute confusion, on encode **tous** les dictionnaires de façon
+  uniforme (par exemple comme liste de paires clé/valeur encodées), ce qui règle aussi le
+  problème des clés non textuelles.
+
+  ## Récursion et ordre des tests
+
+  Un encodeur récursif teste le type de chaque valeur et s'appelle sur les éléments.
+  Attention aux pièges d'héritage : `bool` est un `int`, `datetime` est un `date` ; teste le
+  plus **spécifique** en premier ou compare `type(x) is ...`. Les `float` spéciaux (`nan`,
+  `inf`) ne sont pas du JSON standard.
+
+  ## Classes enregistrées
+
+  Un décorateur `@serialisable` ajoute la classe à un **registre** `nom → classe`. À la
+  désérialisation, on ne recrée **que** des classes présentes dans ce registre : c'est une
+  mesure de sécurité. `dataclasses.fields(obj)` liste les champs à encoder.
+
+  ## Pourquoi pas `pickle` ?
+
+  `pickle` fait tout cela (et plus), mais n'est pas lisible, dépend de Python, et surtout
+  **exécute du code** au chargement : désérialiser un pickle non fiable est une faille
+  critique. Un format explicite à base de JSON avec une liste blanche de types est sûr et
+  interopérable.
+docs:
+  - title: Module json (JSONEncoder, object_hook)
+    url: https://docs.python.org/fr/3/library/json.html
+  - title: Module base64
+    url: https://docs.python.org/fr/3/library/base64.html

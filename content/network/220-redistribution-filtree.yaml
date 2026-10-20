@@ -1,0 +1,123 @@
+title: Redistribution filtrée avec prefix-list et route-map
+level: avance
+order: 20
+device: router
+hostname: R-ASBR
+tags: [redistribution, route-map, prefix-list, ospf, static]
+summary: N'injecter dans OSPF que les routes statiques voulues, avec une métrique choisie.
+description: |
+  `R-ASBR` connaît par des routes statiques les réseaux de la salle serveurs (`172.20.1.0/24`,
+  `172.20.2.0/24`) et un réseau de laboratoire (`192.168.99.0/24`) qui ne doit **jamais** être
+  annoncé. Il faut injecter les réseaux serveurs dans OSPF.
+
+  1. prefix-list `SERVEURS`, séquence `5` : autoriser `172.20.0.0/16` et tous ses sous-réseaux
+     jusqu'au `/24` (`le 24`) ;
+  2. route-map `STATIQUES-OSPF`, séquence `10`, `permit` : correspondance sur la prefix-list,
+     métrique `50` et type externe **E1** (`set metric-type type-1`) ;
+  3. redistribution des statiques dans OSPF `1` avec les sous-réseaux et la route-map.
+
+  Les routes qui ne correspondent à aucune séquence sont refusées par le *deny* implicite de la
+  route-map.
+initial: |
+  interface g0/0
+  ip address 10.0.0.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.9.9.1 255.255.255.252
+  no shutdown
+  router ospf 1
+  router-id 9.9.9.9
+  network 10.0.0.0 0.0.0.255 area 0
+  exit
+  ip route 172.20.1.0 255.255.255.0 10.9.9.2
+  ip route 172.20.2.0 255.255.255.0 10.9.9.2
+  ip route 192.168.99.0 255.255.255.0 10.9.9.2
+checks:
+  - desc: Prefix-list SERVEURS = 172.20.0.0/16 le 24
+    expr: plist("SERVEURS") == ["permit 172.20.0.0/16 le 24"]
+  - desc: Route-map STATIQUES-OSPF 10 en permit sur la prefix-list
+    expr: rmap("STATIQUES-OSPF", 10).action == "permit" and rmap("STATIQUES-OSPF", 10).matches == ["ip address prefix-list SERVEURS"]
+  - desc: Métrique 50 et type E1
+    expr: sorted(rmap("STATIQUES-OSPF", 10).sets) == ["metric 50", "metric-type type-1"]
+  - desc: Statiques redistribuées dans OSPF avec subnets et la route-map
+    expr: d.ospf[1].redist("static") == "static subnets route-map STATIQUES-OSPF"
+solution: |
+  configure terminal
+  ip prefix-list SERVEURS seq 5 permit 172.20.0.0/16 le 24
+  route-map STATIQUES-OSPF permit 10
+  match ip address prefix-list SERVEURS
+  set metric 50
+  set metric-type type-1
+  exit
+  router ospf 1
+  redistribute static subnets route-map STATIQUES-OSPF
+  end
+cours: |
+  ## Redistribuer, c'est traduire
+
+  La **redistribution** copie les routes d'une source (statiques, connectées, autre protocole)
+  dans un protocole de routage. Le routeur qui le fait devient un **ASBR** pour OSPF et les routes
+  apparaissent comme **externes** (`O E1` / `O E2`) chez les autres routeurs.
+
+  Redistribuer **tout** est rarement souhaitable : on veut choisir les préfixes et fixer leurs
+  attributs. On combine pour cela deux outils.
+
+  ### La prefix-list : sélectionner des préfixes
+
+  ```
+  ip prefix-list NOM [seq n] {permit|deny} réseau/longueur [ge min] [le max]
+  ```
+
+  | Entrée                              | Correspond à                                  |
+  |-------------------------------------|-----------------------------------------------|
+  | `permit 10.50.0.0/16`               | exactement 10.50.0.0/16                       |
+  | `permit 10.50.0.0/16 le 24`         | 10.50.0.0/16 et ses sous-réseaux jusqu'au /24 |
+  | `permit 10.50.0.0/16 ge 24 le 24`   | uniquement les /24 contenus dans le /16       |
+  | `permit 0.0.0.0/0 le 32`            | tout                                          |
+
+  Contrairement à une ACL, la prefix-list compare aussi la **longueur** du masque.
+
+  ### La route-map : décider et modifier
+
+  Une route-map est une suite de séquences numérotées, chacune `permit` ou `deny`, avec des
+  `match` (conditions) et des `set` (modifications). Première séquence qui correspond = décision ;
+  sans correspondance, **deny implicite**.
+
+  ```
+  R1(config)# ip prefix-list LABO seq 10 permit 10.50.0.0/16 le 24
+  R1(config)# route-map CONNECTES-OSPF permit 10
+  R1(config-route-map)# match ip address prefix-list LABO
+  R1(config-route-map)# set tag 500
+  R1(config)# router ospf 3
+  R1(config-router)# redistribute connected subnets route-map CONNECTES-OSPF
+  R1# show route-map CONNECTES-OSPF
+  R1# show ip ospf database external
+  ```
+
+  ### E1 ou E2 ?
+
+  - **E2** (par défaut) : la métrique reste celle fixée à la redistribution, quel que soit
+    l'éloignement de l'ASBR ;
+  - **E1** : on ajoute le coût interne jusqu'à l'ASBR ; utile quand plusieurs ASBR annoncent le
+    même préfixe, pour choisir le plus proche.
+
+  Le mot-clé `subnets` est nécessaire en OSPF pour redistribuer autre chose que des réseaux de
+  classe (inutile sur les IOS XE récents, qui l'ajoutent d'office).
+
+  ### Pièges fréquents
+
+  - Oublier `subnets` : seuls les réseaux de classe passent.
+  - Créer la route-map avec une erreur de nom : une route-map **inexistante** référencée dans
+    `redistribute` bloque tout.
+  - Redistribution mutuelle sans filtrage ni marquage : boucles de routage (voir l'exercice
+    expert).
+
+  ### Pour le CCNP ENCOR
+
+  Prefix-lists, route-maps et redistribution conditionnelle sont au cœur du domaine
+  « infrastructure — routage » d'ENCOR.
+docs:
+  - title: Cisco IOS 15.4M&T — références de commandes
+    url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-4m-t/products-command-reference-list.html
+  - title: Cisco — OSPF Design Guide
+    url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/7039-1.html

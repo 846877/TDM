@@ -31,3 +31,57 @@ solution: |
       if not notes:
           return 0
       return round(sum(notes) / len(notes), 2)
+cours: |
+  ## Les listes
+
+  Une liste est une séquence **modifiable** d'éléments, écrite entre crochets :
+
+  ```python
+  temperatures = [12.5, 14, 9.8]
+  temperatures[0]          # 12.5
+  len(temperatures)        # 3
+  temperatures.append(11)  # ajoute à la fin
+  ```
+
+  ## Fonctions utiles
+
+  - `len(liste)` : nombre d'éléments ;
+  - `sum(liste)` : somme des éléments numériques ;
+  - `min(liste)` / `max(liste)` : plus petit / plus grand élément ;
+  - `sorted(liste)` : nouvelle liste triée.
+
+  On peut aussi tout faire « à la main » avec une boucle et un accumulateur, ce qui est utile
+  quand le calcul est plus complexe (moyenne pondérée, filtrage…).
+
+  ## La liste vide : un cas limite essentiel
+
+  Diviser par zéro lève une `ZeroDivisionError` :
+
+  ```python
+  valeurs = []
+  sum(valeurs) / len(valeurs)   # ZeroDivisionError
+  ```
+
+  Il faut donc **tester** ce cas avant le calcul. Une liste vide est « fausse » dans une
+  condition, ce qui permet d'écrire :
+
+  ```python
+  if not valeurs:
+      ...   # la liste est vide
+  ```
+
+  Ce réflexe — se demander « et si l'entrée est vide ? » — est l'un des plus importants en
+  programmation. Les moulinettes testent presque toujours ce genre de cas limite.
+
+  ## Arrondir
+
+  `round(x, 2)` arrondit à deux décimales. On arrondit **le résultat final**, pas les
+  valeurs intermédiaires, pour ne pas accumuler d'erreurs. Pour simplement *afficher* deux
+  décimales sans changer la valeur, on utilise une f-string : `f"{x:.2f}"`.
+
+  Le module `statistics` propose aussi `statistics.mean()`, `median()`, etc.
+docs:
+  - title: Documentation Python — sum() et len()
+    url: https://docs.python.org/fr/3/library/functions.html#sum
+  - title: Tutoriel — les listes
+    url: https://docs.python.org/fr/3/tutorial/introduction.html#lists

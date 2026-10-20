@@ -106,3 +106,63 @@ solution: |
   logging host 192.168.0.6
   end
   copy running-config startup-config
+cours: |
+  ## Le routeur qui relie le siège à Internet
+
+  Le routeur de bordure cumule plusieurs fonctions ; chacune doit être correcte pour que « ça
+  marche » :
+
+  | Fonction                 | Éléments de configuration                               |
+  |--------------------------|---------------------------------------------------------|
+  | adressage                | LAN privé, WAN public fourni par l'opérateur            |
+  | routage                  | route par défaut vers la passerelle de l'opérateur      |
+  | traduction               | `ip nat inside` / `outside`, ACL du NAT, PAT `overload` |
+  | publication              | NAT statique ou redirection de port vers un serveur     |
+  | protection               | ACL d'entrée anti-usurpation, services inutiles coupés, pas de CDP côté opérateur |
+
+  ### Exemple condensé (autres valeurs)
+
+  ```
+  interface gi0/0
+   description LAN-SIEGE
+   ip address 172.16.0.1 255.255.255.0
+   ip nat inside
+  interface gi0/2
+   description OPERATEUR
+   ip address 198.51.100.66 255.255.255.248
+   ip nat outside
+   no cdp enable
+  ip route 0.0.0.0 0.0.0.0 198.51.100.65
+  ip access-list standard LAN-NAT
+   permit 172.16.0.0 0.0.0.255
+  ip nat inside source list LAN-NAT interface gi0/2 overload
+  ip nat inside source static tcp 172.16.0.80 443 198.51.100.67 443
+  ```
+
+  Un `/29` (`255.255.255.248`) de l'opérateur donne 6 adresses utilisables : une pour sa
+  passerelle, une pour notre interface, les autres pour publier des services.
+
+  ### Ordre de mise en service
+
+  1. adresser et activer les interfaces, tester le ping vers la passerelle de l'opérateur ;
+  2. ajouter la route par défaut, tester un ping vers une adresse Internet **depuis le
+     routeur** ;
+  3. configurer le NAT, tester depuis un poste du LAN ;
+  4. publier les services, tester depuis l'extérieur ;
+  5. appliquer les protections, retester, sauvegarder.
+
+  ### Pièges fréquents
+
+  - Tester le NAT depuis le routeur lui-même : son trafic n'est pas traduit.
+  - Masque WAN différent de celui fourni par l'opérateur.
+  - CDP laissé actif vers l'opérateur.
+
+  ### Pour le CCNA
+
+  Ce projet rassemble adressage, routage statique, NAT/PAT et sécurité de base : le cœur des
+  services IP du programme.
+docs:
+  - title: "Cisco — NAT Frequently Asked Questions"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/network-address-translation-nat/26704-nat-faq-00.html
+  - title: "RFC 1918 — Address Allocation for Private Internets"
+    url: https://www.rfc-editor.org/rfc/rfc1918

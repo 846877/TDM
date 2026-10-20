@@ -1,0 +1,455 @@
+title: Dépannage du poste utilisateur
+level: debutant
+order: 10
+tags: [windows 11, support, dépannage, imprimante, proxy, hosts, disque, son, fuseau horaire, clavier, journaux]
+summary: Une matinée de support de proximité - imprimante bloquée, Internet en panne, disque plein, pas de son, mauvaise heure, clavier, réseau, application qui plante.
+vagrant: bundled
+description: |
+  **Contexte.** Le poste `PC01` de la comptabilité d'*Ateliers Durand* revient d'un salon et accumule les
+  problèmes. La file des tickets de la matinée, tous sur ce poste :
+
+  | Ticket | Utilisateur | Symptôme |
+  |--------|-------------|----------|
+  | 2101 | Marie (compta) | « Mes factures ne sortent pas de l'imprimante Compta-Laser » |
+  | 2102 | Marie | « Le site des impôts a une drôle de tête » |
+  | 2103 | Marie | « Plus d'Internet dans le navigateur, mais Teams marche » |
+  | 2104 | Marie | « Disque plein, Windows me harcèle » |
+  | 2105 | Marie | « Plus de son en visio » |
+  | 2106 | Marie | « Mes rendez-vous Outlook sont décalés de 9 heures » |
+  | 2107 | Marie | « Mon clavier tape des Q à la place des A » |
+  | 2108 | Marie | « Le serveur de fichiers a disparu » |
+  | 2109 | Marie | « ComptaPro plante au démarrage » |
+
+  **Machine.** Une VM Windows 11 (3 Go de RAM). Terminal PowerShell en administrateur. Pour chaque ticket :
+  diagnostiquer, corriger, et pouvoir expliquer la cause à l'utilisateur.
+cours: |
+  ## La méthode avant les commandes
+
+  Un bon dépannage suit toujours les mêmes étapes :
+
+  1. **Écouter et reformuler** : quoi exactement, depuis quand, pour qui (un utilisateur, un poste, tout
+     le monde ?), qu'est-ce qui a changé (mise à jour, déplacement, nouveau logiciel) ?
+  2. **Reproduire** et observer : message d'erreur exact, capture d'écran, journal.
+  3. **Isoler** : poste ou réseau ? compte ou machine ? Un autre utilisateur sur le même poste, le même
+     utilisateur sur un autre poste.
+  4. **Corriger** la cause (pas seulement le symptôme), **vérifier** avec l'utilisateur.
+  5. **Documenter** le ticket : cause, solution, temps passé. Le prochain technicien gagnera du temps.
+
+  ## Boîte à outils du support
+
+  | Problème | Où regarder | Commandes |
+  |----------|-------------|-----------|
+  | Impression | file d'attente, spouleur, pilote | `Get-PrintJob`, `Get-Printer`, `Restart-Service Spooler` |
+  | Internet / sites | proxy, DNS, hosts | `netsh winhttp show proxy`, `Resolve-DnsName`, fichier hosts |
+  | Espace disque | gros fichiers, temporaires, corbeille | `Get-ChildItem -Recurse | Sort-Object Length`, `cleanmgr` |
+  | Matériel / son | services, pilotes | `Get-Service Audiosrv`, `devmgmt.msc` |
+  | Heure | fuseau, synchronisation | `Get-TimeZone`, `Set-TimeZone`, `w32tm /resync` |
+  | Clavier | langues et dispositions | `Get-WinUserLanguageList`, Win+Espace |
+  | Réseau | état des cartes, IP | `Get-NetAdapter`, `ipconfig`, `Test-NetConnection` |
+  | Plantages | journal Application, ID 1000/1001 | `Get-WinEvent`, Observateur d'événements, `perfmon /rel` |
+
+  ## Impression : la file bloquée
+
+  Une imprimante en **pause** ou un document corrompu en tête de file bloque tous les suivants. Ordre de
+  dépannage : reprendre l'impression, supprimer les travaux (`Get-PrintJob -PrinterName X | Remove-PrintJob`),
+  et si la file refuse de se vider, arrêter le spouleur, vider `C:\Windows\System32\spool\PRINTERS`,
+  redémarrer le spouleur.
+
+  ## Internet : proxy et hosts
+
+  Deux réglages de proxy cohabitent : celui de l'**utilisateur** (*Paramètres* › *Réseau et Internet* ›
+  *Proxy*, clé `HKCU:\...\Internet Settings`, utilisé par les navigateurs) et celui de **WinHTTP** (`netsh
+  winhttp`, utilisé par des services système et certaines applications). Un proxy laissé par un autre
+  réseau (salon, hôtel) explique bien des « Internet ne marche pas ». Le fichier **hosts**, consulté avant le
+  DNS, est une cible des logiciels malveillants pour détourner des sites (banques, impôts) : toute entrée
+  inconnue est suspecte.
+
+  ## Espace disque
+
+  Avant de supprimer quoi que ce soit, on **mesure** : les plus gros fichiers et dossiers, les dossiers
+  temporaires, la corbeille, `C:\Windows\SoftwareDistribution\Download`, les anciennes installations de
+  Windows. *Paramètres* › *Stockage* et l'**assistant de stockage** font le ménage automatique. On ne
+  supprime jamais un fichier utilisateur sans son accord (ou sans l'avoir déplacé ailleurs).
+
+  ## Langue, clavier, heure
+
+  Le clavier dépend de la **liste des langues de l'utilisateur** : `Set-WinUserLanguageList` (ou *Paramètres*
+  › *Heure et langue*). Win+Espace bascule entre dispositions : un raccourci souvent pressé par erreur.
+  Le **fuseau horaire** décale l'affichage des heures (Outlook, journaux) : `Set-TimeZone -Id 'Romance
+  Standard Time'` pour Paris.
+
+  ## Journaux et fiabilité
+
+  L'événement **1000** (*Application Error*) du journal Application décrit un plantage : application,
+  **module défaillant**, code d'exception (`0xc0000005` = violation d'accès). Le **moniteur de fiabilité**
+  (`perfmon /rel`) les affiche sur une frise chronologique, avec les installations récentes : idéal pour
+  repérer « depuis la mise à jour de mardi ».
+
+  ## Pièges courants
+
+  - Réinstaller avant d'avoir compris : la panne reviendra.
+  - Corriger le proxy dans le navigateur et oublier WinHTTP (ou l'inverse).
+  - Supprimer des fichiers « gros donc inutiles » qui étaient les seules copies d'un utilisateur.
+  - Fermer le ticket sans vérifier avec l'utilisateur.
+docs:
+  - title: Résoudre les problèmes de connexion réseau (Windows)
+    url: https://learn.microsoft.com/fr-fr/troubleshoot/windows-client/networking/tcpip-and-nbt-configuration-parameters
+  - title: Module PrintManagement
+    url: https://learn.microsoft.com/fr-fr/powershell/module/printmanagement/
+  - title: netsh winhttp
+    url: https://learn.microsoft.com/fr-fr/windows/win32/winhttp/netsh-exe-commands
+exercises:
+  - id: win-dep-imprimante
+    title: "Ticket 2101 : les factures ne sortent pas"
+    description: |
+      L'imprimante `Compta-Laser` est **en pause** et trois documents attendent. La compta a déjà relancé
+      les impressions ailleurs : **supprime** les documents en attente et **remets l'imprimante en
+      service** (le spouleur doit tourner).
+    hint: Get-PrintJob -PrinterName Compta-Laser | Remove-PrintJob ; Get-CimInstance Win32_Printer -Filter "Name='Compta-Laser'" | Invoke-CimMethod -MethodName Resume
+    cours: |
+      ```powershell
+      Get-Printer Compta-Laser | Select-Object Name, PrinterStatus, JobCount
+      Get-PrintJob -PrinterName Compta-Laser
+      Get-PrintJob -PrinterName Compta-Laser | Remove-PrintJob
+      Get-CimInstance Win32_Printer -Filter "Name='Compta-Laser'" | Invoke-CimMethod -MethodName Resume
+      ```
+
+      La cmdlet `Set-Printer` ne sait pas reprendre une imprimante en pause : on passe par la classe CIM
+      `Win32_Printer` (méthodes `Pause`, `Resume`, `CancelAllJobs`), ou par l'interface (double-clic sur
+      l'imprimante › menu *Imprimante* › décocher *Suspendre l'impression*).
+
+      Si un travail reste coincé « en cours de suppression » : `Stop-Service Spooler -Force`, supprimer le
+      contenu de `C:\Windows\System32\spool\PRINTERS`, `Start-Service Spooler`. C'est l'intervention la plus
+      fréquente du support... juste après « avez-vous essayé de l'éteindre et de le rallumer ? ».
+    ci: true
+    checks:
+      - desc: Plus aucun document en attente sur Compta-Laser
+        run: |
+          [bool](Get-Printer -Name Compta-Laser) -and @(Get-PrintJob -PrinterName Compta-Laser).Count -eq 0
+      - desc: L'imprimante n'est plus en pause et le spouleur tourne
+        run: |
+          (Get-Service Spooler).Status -eq 'Running' -and (Get-Printer -Name Compta-Laser).PrinterStatus -ne 'Paused'
+    solution: |
+      Get-PrintJob -PrinterName Compta-Laser | Remove-PrintJob
+      Get-CimInstance Win32_Printer -Filter "Name='Compta-Laser'" | Invoke-CimMethod -MethodName Resume | Out-Null
+      Start-Sleep -Seconds 2
+
+  - id: win-dep-hosts
+    title: "Ticket 2102 : un faux site des impôts"
+    description: |
+      `www.impots.gouv.fr` s'ouvre sur une page qui ressemble au vrai site... mais demande les coordonnées
+      bancaires. Trouve ce qui détourne ce nom **sur le poste** et supprime-le, sans toucher au reste du
+      fichier concerné. Note l'adresse IP pirate dans `C:\Admin\ticket-2102.txt`.
+    hint: Get-Content C:\Windows\System32\drivers\etc\hosts ; Resolve-DnsName www.impots.gouv.fr ; (Get-Content hosts) | Where-Object { $_ -notmatch 'impots' } | Set-Content hosts
+    cours: |
+      Quand un seul site pose problème sur un seul poste, on compare la résolution du nom :
+
+      ```powershell
+      Resolve-DnsName www.impots.gouv.fr                 # inclut le fichier hosts
+      Resolve-DnsName www.impots.gouv.fr -DnsOnly        # interroge seulement le serveur DNS
+      Get-Content C:\Windows\System32\drivers\etc\hosts
+      ```
+
+      Une différence entre les deux pointe vers le fichier **hosts**. On retire la ligne fautive en gardant
+      le reste (commentaires, entrées légitimes) :
+
+      ```powershell
+      $h = 'C:\Windows\System32\drivers\etc\hosts'
+      (Get-Content $h) | Where-Object { $_ -notmatch 'impots' } | Set-Content $h -Encoding Ascii
+      Clear-DnsClientCache
+      ```
+
+      Les parenthèses autour de `Get-Content` lisent tout le fichier **avant** de le réécrire. Un hosts
+      modifié est un indicateur de compromission : on prévient la sécurité, on lance une analyse antivirus
+      complète et on fait changer les mots de passe saisis.
+    ci: true
+    checks:
+      - desc: Le fichier hosts ne détourne plus www.impots.gouv.fr (le reste est conservé)
+        run: |
+          $h = Get-Content C:\Windows\System32\drivers\etc\hosts
+          -not ($h | Where-Object { $_ -match 'impots' -and $_ -notmatch '^\s*#' }) -and ($h -join "`n") -match 'localhost'
+      - desc: L'adresse pirate est notée dans le ticket
+        run: |
+          (Get-Content C:\Admin\ticket-2102.txt -Raw) -match '10\.66\.66\.66'
+    solution: |
+      $h = 'C:\Windows\System32\drivers\etc\hosts'
+      (Get-Content $h | Where-Object { $_ -match 'impots' }) -replace '\s.*', '' | Set-Content C:\Admin\ticket-2102.txt
+      (Get-Content $h) | Where-Object { $_ -notmatch 'impots' } | Set-Content $h -Encoding Ascii
+      Clear-DnsClientCache
+
+  - id: win-dep-proxy
+    title: "Ticket 2103 : plus d'Internet dans le navigateur"
+    description: |
+      Depuis le salon, le navigateur ne charge plus rien. Un **proxy** (10.0.0.99:3128, celui du salon) est
+      resté configuré, pour l'utilisateur **et** pour WinHTTP. Désactive le proxy de l'utilisateur et
+      remets WinHTTP en **accès direct**.
+    hint: Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyEnable -Value 0 ; netsh winhttp reset proxy
+    cours: |
+      ```powershell
+      Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' | Select-Object ProxyEnable, ProxyServer, AutoConfigURL
+      netsh winhttp show proxy
+      ```
+
+      - Proxy **utilisateur** : *Paramètres* › *Réseau et Internet* › *Proxy* (ou `inetcpl.cpl` › *Connexions*
+        › *Paramètres réseau*). Valeurs `ProxyEnable` (0/1), `ProxyServer`, `ProxyOverride` (exceptions),
+        `AutoConfigURL` (fichier PAC).
+      - Proxy **WinHTTP** (système) : `netsh winhttp show proxy`, `netsh winhttp reset proxy` (accès direct),
+        `netsh winhttp import proxy source=ie` (recopier celui de l'utilisateur).
+
+      En entreprise, le proxy est souvent imposé par GPO ou découvert automatiquement (WPAD) : avant de le
+      retirer, vérifie que le poste n'est pas censé en avoir un !
+    ci: true
+    checks:
+      - desc: Le proxy de l'utilisateur est désactivé
+        run: |
+          (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings').ProxyEnable -eq 0
+      - desc: WinHTTP est en accès direct
+        run: |
+          $o = (netsh.exe winhttp show proxy) -join ' '
+          $o -match 'Direct access' -and $o -notmatch '10\.0\.0\.99'
+    solution: |
+      Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyEnable -Value 0 -Type DWord
+      netsh.exe winhttp reset proxy | Out-Null
+
+  - id: win-dep-disque
+    title: "Ticket 2104 : disque plein"
+    description: |
+      Cherche le **plus gros fichier** du dossier `C:\Users\Public` (et ses sous-dossiers). Après accord de
+      l'utilisatrice (c'est une vieille vidéo déjà sauvegardée sur le NAS), **supprime-le**, et note son
+      **chemin complet** et sa taille en Mo dans `C:\Admin\ticket-2104.txt`. Ne supprime rien d'autre.
+    hint: Get-ChildItem C:\Users\Public -Recurse -File -ErrorAction SilentlyContinue | Sort-Object Length -Descending | Select-Object -First 5 FullName, Length
+    cours: |
+      Trouver ce qui occupe la place :
+
+      ```powershell
+      Get-ChildItem C:\Users\Public -Recurse -File -ErrorAction SilentlyContinue |
+        Sort-Object Length -Descending | Select-Object -First 10 FullName, @{ n = 'Mo'; e = { [math]::Round($_.Length / 1MB) } }
+      Get-PSDrive C | Select-Object Used, Free
+      ```
+
+      Par dossier : `Get-ChildItem -Directory | ForEach-Object { [pscustomobject]@{ Dossier = $_.Name; Mo =
+      [math]::Round((Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue | Measure-Object
+      Length -Sum).Sum / 1MB) } }`. Outils graphiques : *Paramètres* › *Système* › *Stockage*, `cleanmgr`
+      (nettoyage de disque, avec « Nettoyer les fichiers système »), ou WinDirStat / WizTree.
+
+      Le plus gros n'est pas forcément le coupable « jetable » : un fichier PST Outlook de 10 Go se déplace,
+      il ne se supprime pas. D'où l'accord de l'utilisateur, noté dans le ticket.
+    ci: true
+    checks:
+      - desc: La vidéo de 1,5 Go a été supprimée, le reste du dossier est intact
+        run: |
+          -not (Test-Path 'C:\Users\Public\Videos\Formation\export-camera-2019.mp4') -and (Test-Path 'C:\Users\Public\Videos\Formation\lisezmoi.txt')
+      - desc: Le ticket indique le chemin complet du fichier
+        run: |
+          (Get-Content C:\Admin\ticket-2104.txt -Raw) -match [regex]::Escape('C:\Users\Public\Videos\Formation\export-camera-2019.mp4')
+    solution: |
+      $f = Get-ChildItem C:\Users\Public -Recurse -File -ErrorAction SilentlyContinue | Sort-Object Length -Descending | Select-Object -First 1
+      Set-Content C:\Admin\ticket-2104.txt "$($f.FullName) ($([math]::Round($f.Length / 1MB)) Mo) supprimé avec l'accord de l'utilisatrice"
+      Remove-Item $f.FullName -Force
+
+  - id: win-dep-son
+    title: "Ticket 2105 : plus de son"
+    description: |
+      Plus aucun son, même pas le test de l'icône haut-parleur. Le service **Audio Windows** (`Audiosrv`) a
+      été désactivé. Remets-le en démarrage **automatique** et démarre-le.
+    hint: Set-Service Audiosrv -StartupType Automatic ; Start-Service Audiosrv
+    cours: |
+      Quand tout un type de matériel « disparaît », pense aux **services** avant les pilotes :
+
+      | Symptôme | Service |
+      |----------|---------|
+      | plus de son | `Audiosrv` (Audio Windows) et `AudioEndpointBuilder` |
+      | plus d'impression | `Spooler` |
+      | plus de Wi-Fi | `WlanSvc` (Configuration automatique WLAN) |
+      | plus de mises à jour | `wuauserv`, `BITS` |
+      | recherche Windows en panne | `WSearch` |
+
+      `Get-Service Audiosrv -DependentServices` et `-RequiredServices` montrent les dépendances.
+      L'*utilitaire de résolution des problèmes* audio (*Paramètres* › *Système* › *Son*) relance d'ailleurs
+      ces services. Ensuite seulement : périphérique de sortie par défaut, pilote dans `devmgmt.msc`, câble
+      ou casque Bluetooth.
+    ci: true
+    checks:
+      - desc: Audiosrv est en démarrage automatique et démarré
+        run: |
+          $s = Get-Service Audiosrv
+          $s.StartType -eq 'Automatic' -and $s.Status -eq 'Running'
+    solution: |
+      Set-Service Audiosrv -StartupType Automatic
+      Start-Service Audiosrv
+
+  - id: win-dep-fuseau
+    title: "Ticket 2106 : rendez-vous décalés de 9 heures"
+    description: |
+      Les rendez-vous Outlook sont décalés : le poste est resté à l'heure de la côte ouest des États-Unis.
+      Remets le **fuseau horaire de Paris** (`Romance Standard Time`, UTC+01:00 Bruxelles, Copenhague,
+      Madrid, Paris).
+    hint: Set-TimeZone -Id 'Romance Standard Time'
+    cours: |
+      L'horloge interne d'un PC est en UTC ; le **fuseau horaire** décide de l'heure affichée et de
+      l'heure d'été. Outlook stocke les réunions en UTC et les affiche selon le fuseau : un mauvais fuseau
+      décale tout l'agenda.
+
+      ```powershell
+      Get-TimeZone
+      Get-TimeZone -ListAvailable | Where-Object Id -like '*Romance*'
+      Set-TimeZone -Id 'Romance Standard Time'          # tzutil /s "Romance Standard Time" en historique
+      ```
+
+      Les identifiants sont en anglais quelle que soit la langue (*Romance Standard Time* = Paris). Si
+      l'**heure** elle-même est fausse (et pas seulement le fuseau) : `w32tm /resync` ; dans un domaine, le
+      poste se synchronise sur les contrôleurs de domaine. Le réglage « Définir le fuseau horaire
+      automatiquement » utilise la localisation : pratique pour les nomades, parfois surprenant.
+    ci: true
+    checks:
+      - desc: Le fuseau horaire est celui de Paris
+        run: |
+          (Get-TimeZone).Id -eq 'Romance Standard Time'
+    solution: |
+      Set-TimeZone -Id 'Romance Standard Time'
+
+  - id: win-dep-clavier
+    title: "Ticket 2107 : le clavier tape des Q au lieu des A"
+    description: |
+      Le clavier est passé en **QWERTY** américain. Pour l'utilisateur, rétablis la langue **français
+      (France)** avec la disposition **AZERTY** (`040C:0000040C`) en **première position** (tu peux garder
+      l'anglais en second).
+    hint: $l = New-WinUserLanguageList fr-FR ; $l.Add('en-US') ; Set-WinUserLanguageList $l -Force
+    cours: |
+      Chaque utilisateur a une **liste de langues**, chacune avec ses **méthodes de saisie** (dispositions
+      de clavier). La première est la langue préférée.
+
+      ```powershell
+      Get-WinUserLanguageList
+      $l = New-WinUserLanguageList fr-FR        # français (France), clavier AZERTY 040C:0000040C
+      $l.Add('en-US')
+      Set-WinUserLanguageList $l -Force
+      ```
+
+      Le code `040C:0000040C` se lit « langue 040C (français) : disposition 0000040C (AZERTY France) » ;
+      `0000080C` est le clavier belge, `0000100C` le suisse romand. Raccourcis à connaître : **Win+Espace**
+      (changer de disposition) et **Alt+Maj gauche**, souvent pressés par erreur. Sur l'écran d'ouverture de
+      session, c'est la disposition du système qui compte (*Paramètres* › *Heure et langue* › *Langue* ›
+      *Paramètres administratifs* › *Copier les paramètres*).
+    ci: true
+    checks:
+      - desc: Le français (AZERTY) est la première langue de l'utilisateur
+        run: |
+          $l = Get-WinUserLanguageList
+          $l[0].LanguageTag -eq 'fr-FR' -and $l[0].InputMethodTips -contains '040C:0000040C'
+    solution: |
+      $l = New-WinUserLanguageList fr-FR
+      $l.Add('en-US')
+      Set-WinUserLanguageList $l -Force
+
+  - id: win-dep-reseau
+    title: "Ticket 2108 : le serveur de fichiers a disparu"
+    description: |
+      Plus aucun lecteur réseau, mais « Internet marche ». Regarde l'état des **cartes réseau** : la carte
+      **LAN** (réseau de l'entreprise) a été désactivée. Réactive-la.
+
+      ⚠️ Ne touche pas à la carte **NAT** : c'est par elle que passe ton terminal.
+    hint: Get-NetAdapter ; Enable-NetAdapter -Name LAN
+    cours: |
+      Premier réflexe devant « le réseau ne marche pas » : l'état des cartes.
+
+      ```powershell
+      Get-NetAdapter | Format-Table Name, InterfaceDescription, Status, LinkSpeed, MacAddress
+      Enable-NetAdapter -Name LAN
+      Restart-NetAdapter -Name LAN          # désactiver puis réactiver (« débrancher, rebrancher »)
+      ```
+
+      `Status` : `Up` (connectée), `Disconnected` (câble débranché, Wi-Fi non associé), `Disabled`
+      (désactivée par quelqu'un, ou par le bouton « mode avion »). Une carte désactivée n'apparaît même
+      pas dans `ipconfig`. Graphique : `ncpa.cpl`.
+
+      Ici, deux réseaux coexistent (comme un portable en Wi-Fi + câble, ou en VPN) : l'un fonctionne, l'autre
+      non, d'où le symptôme trompeur « Internet marche ». Vérifie ensuite que la carte a retrouvé son adresse
+      (`Get-NetIPAddress -InterfaceAlias LAN`).
+    checks:
+      - desc: La carte LAN est activée et connectée
+        run: |
+          $a = Get-NetAdapter -Name LAN
+          $a.Status -eq 'Up'
+      - desc: Elle a retrouvé son adresse 192.168.10.101
+        run: |
+          [bool](Get-NetIPAddress -InterfaceAlias LAN -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object IPAddress -eq '192.168.10.101')
+    solution: |
+      Enable-NetAdapter -Name LAN
+      Start-Sleep -Seconds 10
+
+  - id: win-dep-plantage
+    title: "Ticket 2109 : ComptaPro plante au démarrage"
+    description: |
+      ComptaPro se ferme dès son lancement. Cherche dans le journal **Application** les erreurs (ID 1000) de
+      la source `ComptaPro` et trouve le **module défaillant**. Écris son nom (le fichier `.dll`) seul dans
+      `C:\Admin\ticket-2109.txt` : c'est ce que demandera le support de l'éditeur.
+    hint: Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='ComptaPro'; Id=1000} | Select-Object -First 1 -ExpandProperty Message
+    cours: |
+      Quand une application plante, Windows écrit un événement **1000** (*Application Error*) avec le nom
+      de l'exécutable, le **module défaillant** (la DLL où l'erreur s'est produite), sa version et le code
+      d'exception, souvent suivi d'un événement **1001** (*Windows Error Reporting*).
+
+      ```powershell
+      Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000 } -MaxEvents 10 |
+        Format-List TimeCreated, ProviderName, Message
+      ```
+
+      Le module oriente le diagnostic : une DLL de l'application (mise à jour ratée, licence) → éditeur ;
+      une DLL Windows (`ntdll.dll`, `KERNELBASE.dll`) → souvent l'application quand même ; un module
+      d'antivirus ou d'imprimante → conflit. Le **moniteur de fiabilité** (`perfmon /rel`) montre ces
+      plantages sur une frise, à côté des installations.
+    ci: true
+    checks:
+      - desc: Le ticket nomme le module défaillant
+        run: |
+          (Get-Content C:\Admin\ticket-2109.txt -Raw).Trim() -eq 'licence-ng.dll'
+    solution: |
+      $m = (Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'ComptaPro'; Id = 1000 } -MaxEvents 1).Message
+      Set-Content C:\Admin\ticket-2109.txt ([regex]::Match($m, '[\w\-]+\.dll').Value)
+
+  - id: win-dep-dossier-n2
+    title: Préparer un dossier de diagnostic pour le niveau 2
+    description: |
+      Un dernier souci (lenteurs aléatoires) dépasse le support de proximité. Prépare pour le niveau 2 le
+      dossier `C:\Admin\Diag` contenant :
+
+      - `ipconfig.txt` : la sortie de `ipconfig /all` ;
+      - `systeminfo.txt` : la sortie de `systeminfo` ;
+      - `erreurs-systeme.csv` (séparateur `;`) : les événements **critiques et erreurs** (niveaux 1 et 2) du
+        journal **System** des **7 derniers jours**, colonnes `TimeCreated`, `Id`, `ProviderName`, `Message`.
+    hint: Get-WinEvent -FilterHashtable @{LogName='System'; Level=1,2; StartTime=(Get-Date).AddDays(-7)} | Select-Object TimeCreated, Id, ProviderName, Message | Export-Csv ...
+    cours: |
+      Escalader un ticket, c'est donner au niveau suivant **tout** ce qu'il faut pour ne pas refaire le
+      diagnostic : description, actions déjà tentées, et les informations techniques.
+
+      ```powershell
+      New-Item C:\Admin\Diag -ItemType Directory -Force
+      ipconfig /all | Out-File C:\Admin\Diag\ipconfig.txt -Encoding utf8
+      systeminfo   | Out-File C:\Admin\Diag\systeminfo.txt -Encoding utf8
+      Get-WinEvent -FilterHashtable @{ LogName = 'System'; Level = 1, 2; StartTime = (Get-Date).AddDays(-7) } -ErrorAction SilentlyContinue |
+        Select-Object TimeCreated, Id, ProviderName, Message |
+        Export-Csv C:\Admin\Diag\erreurs-systeme.csv -Delimiter ';' -NoTypeInformation -Encoding UTF8
+      Compress-Archive C:\Admin\Diag\* C:\Admin\Diag-PC01.zip
+      ```
+
+      Windows fournit aussi des collectes toutes faites : `msinfo32 /report fichier.txt`, `perfmon /report`
+      (rapport de diagnostic système de 60 secondes), *Enregistreur d'actions* (`psr`) pour que
+      l'utilisateur montre le problème.
+    ci: true
+    checks:
+      - desc: ipconfig.txt et systeminfo.txt sont présents et complets
+        run: |
+          ((Get-Content C:\Admin\Diag\ipconfig.txt -Raw) -match [regex]::Escape($env:COMPUTERNAME)) -and
+          ((Get-Content C:\Admin\Diag\systeminfo.txt -Raw) -match 'OS Name|Nom du syst')
+      - desc: erreurs-systeme.csv a les bonnes colonnes
+        run: |
+          $first = Get-Content C:\Admin\Diag\erreurs-systeme.csv -TotalCount 1 -Encoding UTF8
+          ($first -replace '"', '') -eq 'TimeCreated;Id;ProviderName;Message' -or ((Test-Path C:\Admin\Diag\erreurs-systeme.csv) -and -not (Get-WinEvent -FilterHashtable @{ LogName = 'System'; Level = 1, 2; StartTime = (Get-Date).AddDays(-7) } -MaxEvents 1 -ErrorAction SilentlyContinue))
+    solution: |
+      New-Item C:\Admin\Diag -ItemType Directory -Force | Out-Null
+      ipconfig /all | Out-File C:\Admin\Diag\ipconfig.txt -Encoding utf8
+      systeminfo | Out-File C:\Admin\Diag\systeminfo.txt -Encoding utf8
+      Get-WinEvent -FilterHashtable @{ LogName = 'System'; Level = 1, 2; StartTime = (Get-Date).AddDays(-7) } -ErrorAction SilentlyContinue |
+        Select-Object TimeCreated, Id, ProviderName, Message |
+        Export-Csv C:\Admin\Diag\erreurs-systeme.csv -Delimiter ';' -NoTypeInformation -Encoding UTF8

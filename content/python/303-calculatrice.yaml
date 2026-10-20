@@ -114,3 +114,61 @@ solution: |
       if position != len(jetons):
           raise ValueError("jetons en trop")
       return resultat
+cours: |
+  ## Deux étapes : lexer puis parser
+
+  1. **Analyse lexicale** (*tokenizer*) : découper le texte en **jetons** : nombres,
+     opérateurs, parenthèses. `"12.5*(3-1)"` → `[12.5, "*", "(", 3, "-", 1, ")"]`. Une
+     regex comme `\d+\.?\d*|[-+*/()]` avec `re.findall`, ou une boucle caractère par
+     caractère, fait l'affaire ; tout caractère inattendu est une erreur.
+  2. **Analyse syntaxique** (*parser*) : reconnaître la structure selon une **grammaire**.
+
+  ## Une grammaire qui encode les priorités
+
+  ```
+  expression := terme   (("+" | "-") terme)*
+  terme      := facteur (("*" | "/") facteur)*
+  facteur    := nombre | "(" expression ")" | "-" facteur
+  ```
+
+  Chaque niveau correspond à une priorité : les `*` sont regroupés **dans** les termes, donc
+  calculés avant les `+`. Les parenthèses relancent une expression complète : c'est la
+  récursion.
+
+  ## La descente récursive
+
+  On écrit **une fonction par règle**, qui consomme les jetons et renvoie une valeur :
+
+  ```python
+  def expression(self):
+      valeur = self.terme()
+      while self.courant() in ("+", "-"):
+          op = self.consommer()
+          droite = self.terme()
+          valeur = valeur + droite if op == "+" else valeur - droite
+      return valeur
+  ```
+
+  La boucle `while` (plutôt que la récursion à droite) garantit l'**associativité à
+  gauche** : `8 - 3 - 2` vaut 3, pas 7.
+
+  ## Gérer les erreurs
+
+  - à la fin, tous les jetons doivent avoir été consommés (sinon `"2 3"` passerait) ;
+  - une parenthèse ouvrante doit être suivie de sa fermante ;
+  - un jeton manquant (`"2 +"`) doit lever `ValueError`, pas `IndexError`.
+
+  La division par zéro peut être traduite en `ValueError` ou laissée telle quelle selon
+  l'énoncé.
+
+  ## Pourquoi pas `eval` ?
+
+  `eval` exécute **n'importe quel code Python** : `eval("__import__('os').system('rm -rf
+  ~')")`. Ne jamais l'appliquer à une entrée non fiable. Pour des littéraux, il existe
+  `ast.literal_eval`. Les compilateurs et interpréteurs réels (dont celui de Python) suivent
+  ce même schéma lexer → parser → évaluation.
+docs:
+  - title: Wikipédia — Analyse syntaxique descendante récursive
+    url: https://fr.wikipedia.org/wiki/Analyse_LL
+  - title: Référence — priorité des opérateurs Python
+    url: https://docs.python.org/fr/3/reference/expressions.html#operator-precedence

@@ -1,0 +1,102 @@
+title: Bannières MOTD, login et exec
+level: debutant
+order: 17
+device: router
+hostname: R-ACCUEIL
+tags: [banner, motd, login, exec]
+summary: Afficher le bon message au bon moment de la connexion.
+description: |
+  IOS affiche trois bannières à des moments différents d'une connexion :
+
+  | Bannière        | Affichée...                                   |
+  |-----------------|-----------------------------------------------|
+  | `banner motd`   | à toute connexion, avant l'identification     |
+  | `banner login`  | juste avant la demande d'identifiant          |
+  | `banner exec`   | après une authentification réussie            |
+
+  Configure sur `R-ACCUEIL` :
+
+  1. MOTD : `Maintenance prevue dimanche 22h` ;
+  2. login : un avertissement légal contenant `Acces reserve au personnel autorise` ;
+  3. exec : un message de bienvenue contenant le nom du routeur, `R-ACCUEIL`.
+
+  Le premier caractère après le mot-clé sert de **délimiteur** : `banner login #...#`.
+checks:
+  - desc: Bannière MOTD annonçant la maintenance
+    expr: '"Maintenance" in (d.banner_motd or "")'
+    hint: "banner motd #Maintenance prevue dimanche 22h#"
+  - desc: Bannière login avec l'avertissement légal
+    expr: '"Acces reserve au personnel autorise" in (d.banner_login or "")'
+    hint: "banner login #Acces reserve au personnel autorise#"
+  - desc: Bannière exec mentionnant R-ACCUEIL
+    expr: '"R-ACCUEIL" in (d.banner_exec or "")'
+    hint: "banner exec #Bienvenue sur R-ACCUEIL#"
+solution: |
+  configure terminal
+  banner motd #Maintenance prevue dimanche 22h#
+  banner login #Acces reserve au personnel autorise#
+  banner exec #Bienvenue sur R-ACCUEIL#
+  end
+cours: |
+  ## À quoi servent les bannières ?
+
+  Une bannière est un texte affiché par l'équipement pendant la connexion. Elle a deux usages :
+
+  - **juridique** : en France comme ailleurs, prévenir qu'un système est privé et surveillé
+    facilite les poursuites en cas d'intrusion. Un message du type « Bienvenue » est au contraire
+    à éviter avant l'authentification ;
+  - **opérationnel** : annoncer une maintenance, rappeler le rôle de l'équipement.
+
+  ### L'ordre d'affichage
+
+  ```
+  (connexion SSH/Telnet ou console)
+  -> banner motd     "Maintenance du coeur de reseau samedi 6h"
+  -> banner login    "Systeme prive - acces surveille"
+  Username: / Password:
+  -> banner exec     "Vous etes sur SW-ETAGE3 (salle B12)"
+  SW-ETAGE3#
+  ```
+
+  En SSH, la bannière MOTD peut s'afficher **après** l'authentification selon les versions :
+  pour un avertissement légal fiable, utilise `banner login`.
+
+  ### Syntaxe et délimiteur
+
+  ```
+  SW1(config)# banner login ^
+  Enter TEXT message.  End with the character '^'.
+  Systeme prive - acces surveille
+  ^
+  SW1(config)# banner exec #Vous etes sur SW1 (salle B12)#
+  ```
+
+  Le premier caractère suivant le mot-clé est le **délimiteur** : la bannière s'arrête au
+  prochain exemplaire de ce caractère. Choisis-en un qui n'apparaît pas dans le texte (`#`, `^`,
+  `%`). `no banner login` supprime la bannière.
+
+  Dans la configuration, IOS réécrit toujours le délimiteur en `^C` :
+  `banner login ^CSysteme prive - acces surveille^C`.
+
+  ### Variables utiles
+
+  IOS remplace certains jetons dans le texte : `$(hostname)`, `$(domain)`, `$(line)`.
+  Exemple : `banner exec #Connecte a $(hostname) sur la ligne $(line)#`.
+
+  ### Pièges fréquents
+
+  - Utiliser dans le message le caractère choisi comme délimiteur : la bannière est tronquée et
+    la suite du texte est interprétée comme des commandes.
+  - Écrire « Bienvenue » dans la bannière MOTD : c'est une invitation, pas un avertissement.
+  - Mettre des informations sensibles (modèle, version d'IOS, adresses) dans une bannière
+    visible avant authentification.
+
+  ### Pour le CCNA
+
+  Sache distinguer les trois bannières et le moment où chacune apparaît ; la MOTD est la plus
+  utilisée dans les sujets d'examen et de TP.
+docs:
+  - title: Wikipédia (EN) — Message of the day
+    url: https://en.wikipedia.org/wiki/Message_of_the_day
+  - title: Cisco IOS — documentation de référence des commandes
+    url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-4m-t/products-command-reference-list.html

@@ -61,3 +61,57 @@ solution: |
       for i in range(0, len(numero), 2):
           paires.append(numero[i:i + 2])
       return " ".join(paires)
+cours: |
+  ## Rappels sur le slicing
+
+  ```python
+  s = "ABCDEFGH"
+  s[:3]      # "ABC"     les 3 premiers
+  s[3:]      # "DEFGH"   tout sauf les 3 premiers
+  s[-3:]     # "FGH"     les 3 derniers
+  s[:-3]     # "ABCDE"   tout sauf les 3 derniers
+  s[2:4]     # "CD"
+  ```
+
+  Le slicing est **tolérant** : `s[:100]` ne lève pas d'erreur, il renvoie simplement toute
+  la chaîne. Et `s[-100:]` aussi. C'est différent de l'indexation simple (`s[100]` lève
+  `IndexError`).
+
+  ## Construire une chaîne de longueur calculée
+
+  Pour produire un nombre de caractères dépendant d'une longueur, on combine `len()` et la
+  répétition :
+
+  ```python
+  mot_de_passe = "secret"
+  print("•" * len(mot_de_passe))   # ••••••
+  ```
+
+  Pense au cas où la chaîne est plus courte que la partie à conserver : le nombre de
+  caractères masqués ne doit jamais être négatif (`"x" * -2` donne `""`, ce qui aide).
+
+  ## Découper par blocs réguliers
+
+  `range(debut, fin, pas)` génère les positions de début de chaque bloc :
+
+  ```python
+  adresse_mac = "001A2B3C4D5E"
+  blocs = []
+  for i in range(0, len(adresse_mac), 2):
+      blocs.append(adresse_mac[i:i + 2])
+  print(":".join(blocs))   # 00:1A:2B:3C:4D:5E
+  ```
+
+  Ce motif (tranche `[i:i + taille]` dans une boucle à pas fixe) sert partout : formater des
+  numéros, découper des trames réseau, afficher de l'hexadécimal par octets…
+
+  ## Sécurité
+
+  Masquer un numéro à l'affichage (logs, tickets, captures) est une bonne pratique de
+  confidentialité : on ne garde que ce qui permet d'identifier sans exposer. Mais masquer à
+  l'affichage ne protège pas la donnée stockée : ce n'est pas du chiffrement.
+docs:
+  - title: Opérations communes sur les séquences (tranches)
+    url: https://docs.python.org/fr/3/library/stdtypes.html#common-sequence-operations
+  - title: Méthode str.join
+    url: https://docs.python.org/fr/3/library/stdtypes.html#str.join

@@ -134,3 +134,59 @@ solution: |
       await asyncio.gather(producteur(), *(travailleur() for _ in range(nb_travailleurs)))
       erreurs.sort(key=lambda e: e[0])
       return resultats, erreurs
+cours: |
+  ## Le patron producteur / consommateurs
+
+  Un producteur dépose du travail dans une **file**, plusieurs consommateurs (travailleurs)
+  le retirent et le traitent. La file découple les deux côtés : chacun avance à son rythme.
+  C'est l'architecture des files de messages (RabbitMQ, Celery), des serveurs web et des
+  outils de scan parallèle.
+
+  ## `asyncio.Queue`
+
+  ```python
+  file = asyncio.Queue(maxsize=10)
+  await file.put(element)      # attend s'il n'y a plus de place
+  element = await file.get()   # attend s'il n'y a rien
+  file.task_done()             # signale qu'un élément est traité
+  await file.join()            # attend que tous les éléments soient traités
+  ```
+
+  Une file **bornée** applique une *contre-pression* (*backpressure*) : un producteur trop
+  rapide est ralenti au lieu de remplir la mémoire.
+
+  ## Arrêter les travailleurs proprement
+
+  Un travailleur est typiquement une boucle infinie `while True: ... await file.get()`.
+  Deux façons de l'arrêter :
+
+  1. **Sentinelle** : le producteur dépose, après le travail, un marqueur spécial par
+     travailleur (`None` ou un `object()` unique) ; un travailleur qui le reçoit sort de sa
+     boucle.
+  2. **Annulation** : après `await file.join()`, appeler `tache.cancel()` sur chaque
+     travailleur, puis attendre leur fin (`gather(..., return_exceptions=True)`).
+
+  Dans tous les cas, aucune tâche ne doit rester « orpheline » : une tâche non attendue peut
+  masquer des exceptions et produire des avertissements.
+
+  ## Isoler les erreurs
+
+  Une exception dans `traitement` ne doit pas tuer le travailleur : un `try / except
+  Exception` dans la boucle enregistre l'erreur et passe à l'élément suivant. Un `finally`
+  qui appelle `task_done()` garantit que `join()` ne restera pas bloqué.
+
+  ## Conserver l'ordre
+
+  Les travailleurs terminent dans un ordre imprévisible. En transportant l'**indice** avec
+  chaque élément, on range chaque résultat à sa place dans une liste pré-allouée
+  (`[None] * n`).
+
+  ## `nb_travailleurs`
+
+  Plus de travailleurs = plus de parallélisme d'E/S, jusqu'à saturer la ressource distante.
+  Valide le paramètre avant de lancer quoi que ce soit.
+docs:
+  - title: asyncio — files d'attente (Queue)
+    url: https://docs.python.org/fr/3/library/asyncio-queue.html
+  - title: asyncio — tâches (create_task, gather)
+    url: https://docs.python.org/fr/3/library/asyncio-task.html

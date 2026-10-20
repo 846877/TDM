@@ -1,0 +1,385 @@
+title: Joindre un poste au domaine
+level: intermediaire
+order: 3
+tags: [active directory, jonction, dns, windows 11, canal sécurisé, redircmp, rsat, bureau à distance]
+summary: Faire entrer un Windows 11 dans le domaine durand.lan proprement - DNS, localisation du DC, jonction dans la bonne OU, canal sécurisé, administrateurs locaux et réglages côté annuaire.
+vagrant: bundled
+machine: pc01
+description: |
+  **Contexte.** Le domaine `durand.lan` est en place. Premier poste à migrer : `PC01`, celui de Marie Dupont
+  à la comptabilité, encore en groupe de travail. Le support (`GG_Support`) doit pouvoir l'administrer, et la
+  compta s'y connecter à distance.
+
+  **Machines** (prévoir **8 Go de RAM libres**) :
+
+  | VM | Système | Adresse LAN | Rôle |
+  |----|---------|-------------|------|
+  | `PC01` (terminal) | Windows 11 (3 Go) | 192.168.10.101 | poste à joindre |
+  | `SRV-DC01` | Windows Server 2022 (2 Go) | 192.168.10.10 | contrôleur de domaine et DNS |
+
+  Côté annuaire, les OU `Ateliers Durand\Postes`, `Groupes` et `Utilisateurs`, les groupes `GG_Support` et
+  `GG_Compta` et le compte `mdupont` existent. Le compte d'administration du domaine est `DURAND\vagrant`
+  (mot de passe `vagrant`). Ton terminal est sur PC01 : pour agir sur le contrôleur, utilise
+  `Invoke-Command -ComputerName SRV-DC01 -Credential DURAND\vagrant { ... }` une fois le poste joint.
+cours: |
+  ## Ce que fait vraiment une jonction
+
+  Joindre un poste au domaine, c'est créer une **relation de confiance** entre la machine et le domaine :
+
+  1. le poste **localise un contrôleur** grâce au DNS (enregistrements SRV `_ldap._tcp.dc._msdcs.durand.lan`) ;
+  2. avec un compte autorisé, il crée (ou réutilise) un **compte d'ordinateur** `PC01$` dans l'annuaire, par
+     défaut dans le conteneur `CN=Computers` ;
+  3. le poste et le domaine conviennent d'un **mot de passe machine**, changé automatiquement tous les 30
+     jours : c'est le **canal sécurisé** ;
+  4. le groupe *Admins du domaine* est ajouté aux **Administrateurs locaux** et *Utilisateurs du domaine* aux
+     **Utilisateurs** locaux ;
+  5. au redémarrage, le poste applique les GPO et propose l'ouverture de session avec un compte du domaine.
+
+  Les comptes locaux du poste continuent d'exister (`PC01\vagrant`) : on se connecte avec `DURAND\mdupont`
+  ou `mdupont@durand.lan` pour utiliser le domaine.
+
+  ## Les prérequis, dans l'ordre de dépannage
+
+  | Prérequis | Vérification | Symptôme si absent |
+  |-----------|--------------|--------------------|
+  | Réseau vers le DC | `Test-NetConnection 192.168.10.10 -Port 389` | délai d'attente |
+  | **DNS du poste = DC** | `Get-DnsClientServerAddress` | « Impossible de contacter un contrôleur de domaine » |
+  | Résolution des SRV | `Resolve-DnsName _ldap._tcp.dc._msdcs.durand.lan -Type SRV` | idem |
+  | Localisation du DC | `nltest /dsgetdc:durand.lan` | erreur 1355 |
+  | Heure à moins de 5 min | `w32tm /stripchart /computer:SRV-DC01 /samples:1` | erreur Kerberos |
+  | Édition Pro/Entreprise | `(Get-CimInstance Win32_OperatingSystem).Caption` | pas d'option Domaine en édition Famille |
+  | Compte autorisé | admin du domaine, ou délégation sur l'OU | accès refusé, quota dépassé |
+
+  ## Joindre en PowerShell
+
+  ```powershell
+  Add-Computer -DomainName durand.lan -OUPath 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' `
+      -Credential DURAND\vagrant -Restart
+  ```
+
+  `-OUPath` place directement le compte dans la bonne OU (les GPO des postes s'appliquent dès le premier
+  démarrage) ; `-NewName` renomme en même temps. L'interface graphique (*Paramètres* › *Comptes* › *Accès
+  Professionnel ou scolaire*, ou `sysdm.cpl`) fait la même chose mais sans choix d'OU.
+
+  ## Après la jonction
+
+  - **Canal sécurisé** : `Test-ComputerSecureChannel` (et `-Repair` quand il est rompu, typiquement après
+    restauration d'un vieil instantané de VM), `nltest /sc_query:durand.lan`.
+  - **Administrateurs locaux** : on ajoute le groupe du support plutôt que des personnes, idéalement par GPO
+    (*Groupes restreints* ou préférences) à l'échelle du parc.
+  - **Côté annuaire** : `redircmp` pour que les nouveaux ordinateurs n'atterrissent plus dans `CN=Computers`,
+    `ms-DS-MachineAccountQuota` à 0 pour qu'un simple utilisateur ne puisse pas joindre ses propres machines
+    (10 par défaut), et des attributs utiles sur l'objet ordinateur (description, géré par).
+  - **Outils d'administration** : les **RSAT** s'installent sur Windows 11 comme fonctionnalités à la
+    demande (`Add-WindowsCapability -Online -Name Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0`), ce qui
+    évite d'ouvrir une session sur le contrôleur pour chaque tâche.
+
+  ## Sortir ou rejoindre
+
+  `Remove-Computer -UnjoinDomainCredential DURAND\vagrant -Restart` sort le poste (le compte d'ordinateur est
+  désactivé). Avant de sortir un poste, on vérifie qu'on connaît le mot de passe d'un **compte local
+  administrateur** : sans lui, plus personne ne pourra ouvrir de session.
+docs:
+  - title: Add-Computer
+    url: https://learn.microsoft.com/fr-fr/powershell/module/microsoft.powershell.management/add-computer
+  - title: Résoudre les problèmes de jonction de domaine
+    url: https://learn.microsoft.com/fr-fr/troubleshoot/windows-server/active-directory/active-directory-domain-join-troubleshooting-guidance
+  - title: Rediriger le conteneur des ordinateurs (redircmp)
+    url: https://learn.microsoft.com/fr-fr/troubleshoot/windows-server/active-directory/redirect-users-computers-containers
+exercises:
+  - id: win-jn-dns
+    title: Le poste doit interroger le contrôleur
+    description: |
+      Configure le serveur DNS du poste sur `192.168.10.10` pour la carte `LAN` **et** pour la carte `NAT`
+      (dans ce lab, la carte NAT a une meilleure priorité de résolution : laissée sur le DNS de VirtualBox,
+      elle ferait échouer la localisation du domaine). Vide ensuite le cache DNS.
+    hint: Set-DnsClientServerAddress -InterfaceAlias LAN,NAT -ServerAddresses 192.168.10.10 ; Clear-DnsClientCache
+    cours: |
+      ```powershell
+      Get-DnsClientServerAddress -AddressFamily IPv4
+      Set-DnsClientServerAddress -InterfaceAlias LAN, NAT -ServerAddresses 192.168.10.10
+      Clear-DnsClientCache
+      Resolve-DnsName durand.lan
+      ```
+
+      C'est l'erreur numéro un des jonctions ratées : un poste qui garde le DNS de la box ne trouvera jamais
+      `durand.lan`, qui n'existe que sur le DNS interne. Dans une entreprise, c'est le **serveur DHCP** qui
+      distribue l'adresse des DC comme DNS (option 006). Le DC sait résoudre Internet grâce à ses
+      redirecteurs : le poste ne perd donc rien. Un poste avec plusieurs cartes interroge les DNS de chaque
+      carte selon leur priorité : sur un vrai poste, une seule carte suffit.
+    checks:
+      - desc: Les cartes LAN et NAT utilisent 192.168.10.10 comme DNS
+        run: |
+          $ok = foreach ($c in 'LAN', 'NAT') { (Get-DnsClientServerAddress -InterfaceAlias $c -AddressFamily IPv4).ServerAddresses[0] -eq '192.168.10.10' }
+          @($ok | Where-Object { $_ }).Count -eq 2
+      - desc: Le nom durand.lan se résout en 192.168.10.10
+        run: |
+          [bool](Resolve-DnsName durand.lan -Type A -DnsOnly | Where-Object IPAddress -eq '192.168.10.10')
+    solution: |
+      Set-DnsClientServerAddress -InterfaceAlias LAN, NAT -ServerAddresses 192.168.10.10
+      Clear-DnsClientCache
+
+  - id: win-jn-localiser
+    title: Localiser un contrôleur de domaine
+    description: |
+      Avant de joindre, prouve que le poste **trouve un contrôleur** : enregistre la sortie de
+      `nltest /dsgetdc:durand.lan` dans `C:\Admin\dc.txt`, et le résultat d'un test du port **LDAP** (389) du
+      contrôleur dans `C:\Admin\ldap.txt`.
+    hint: nltest /dsgetdc:durand.lan > C:\Admin\dc.txt ; Test-NetConnection SRV-DC01 -Port 389 | Out-File C:\Admin\ldap.txt
+    cours: |
+      ```powershell
+      Resolve-DnsName _ldap._tcp.dc._msdcs.durand.lan -Type SRV
+      nltest /dsgetdc:durand.lan | Out-File C:\Admin\dc.txt
+      Test-NetConnection SRV-DC01 -Port 389 | Out-File C:\Admin\ldap.txt
+      ```
+
+      `nltest /dsgetdc` reproduit exactement la recherche que fera la jonction : requête SRV, ping LDAP en UDP
+      vers le DC trouvé, réponse avec le nom du DC, son site et ses capacités (`GC`, `PDC`, `KDC`, `TIMESERV`...).
+      L'erreur 1355 (« le domaine spécifié n'existe pas ») vient presque toujours du DNS. Une fois le DC trouvé,
+      il reste à le joindre sur les ports utiles : 53 (DNS), 88 (Kerberos), 135 et la plage dynamique (RPC),
+      389 (LDAP), 445 (SMB, pour SYSVOL). `Test-NetConnection -Port` teste un port TCP à la fois.
+    checks:
+      - desc: C:\Admin\dc.txt montre que SRV-DC01 a été trouvé
+        run: |
+          [bool](Select-String -Path C:\Admin\dc.txt -Pattern 'SRV-DC01' -Quiet)
+      - desc: C:\Admin\ldap.txt montre un test réussi du port 389
+        run: |
+          (Select-String -Path C:\Admin\ldap.txt -Pattern '389' -Quiet) -and (Select-String -Path C:\Admin\ldap.txt -Pattern 'TcpTestSucceeded\s*:\s*True' -Quiet)
+    solution: |
+      nltest /dsgetdc:durand.lan | Out-File C:\Admin\dc.txt
+      Test-NetConnection SRV-DC01 -Port 389 | Out-File C:\Admin\ldap.txt
+
+  - id: win-jn-joindre
+    title: Joindre PC01 dans l'OU Postes
+    description: |
+      Joins `PC01` au domaine `durand.lan` en plaçant directement son compte d'ordinateur dans
+      `OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan`, avec le compte `DURAND\vagrant`, puis redémarre. Le
+      terminal se déconnecte : reconnecte-toi après une à deux minutes.
+    hint: Add-Computer -DomainName durand.lan -OUPath 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' -Credential DURAND\vagrant -Restart
+    cours: |
+      ```powershell
+      $cred = Get-Credential DURAND\vagrant        # mot de passe : vagrant
+      Add-Computer -DomainName durand.lan -OUPath 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' `
+          -Credential $cred -Restart
+      ```
+
+      Dans un terminal SSH sans interface, on peut construire l'identifiant sans invite :
+      `New-Object PSCredential('DURAND\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force))`
+      (à réserver aux labs : un mot de passe ne s'écrit jamais en clair dans un script de production).
+      Si le compte `PC01` existe déjà dans l'annuaire (poste réinstallé), la jonction le **réutilise** quand
+      le compte qui joint en a le droit. Le message « Le changement prendra effet au redémarrage » est
+      normal : tant que le poste n'a pas redémarré, il reste en groupe de travail.
+    checks:
+      - desc: PC01 est membre du domaine durand.lan
+        run: |
+          $cs = Get-CimInstance Win32_ComputerSystem
+          $cs.PartOfDomain -and $cs.Domain -eq 'durand.lan'
+      - desc: Le compte d'ordinateur PC01 est dans l'OU Postes
+        machine: dc01
+        run: |
+          (Get-ADComputer PC01).DistinguishedName -eq 'CN=PC01,OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+    solution: |
+      $cred = New-Object PSCredential('DURAND\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force))
+      Add-Computer -DomainName durand.lan -OUPath 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' -Credential $cred -Restart
+
+  - id: win-jn-canal
+    title: Vérifier le canal sécurisé
+    description: |
+      Après le redémarrage, vérifie la relation de confiance du poste : `Test-ComputerSecureChannel` doit
+      répondre `True`. Enregistre la sortie de `nltest /sc_query:durand.lan` dans `C:\Admin\canal.txt`.
+    hint: Test-ComputerSecureChannel -Verbose ; nltest /sc_query:durand.lan > C:\Admin\canal.txt
+    cours: |
+      ```powershell
+      Test-ComputerSecureChannel -Verbose
+      nltest /sc_query:durand.lan | Out-File C:\Admin\canal.txt
+      # si le canal est rompu :
+      Test-ComputerSecureChannel -Repair -Credential DURAND\vagrant
+      ```
+
+      Le **canal sécurisé** repose sur le mot de passe du compte `PC01$`, que le poste change seul tous les 30
+      jours. Restaurer un vieil instantané de VM, ou un clone de disque, fait revenir un ancien mot de passe :
+      le DC le refuse et l'utilisateur voit « La relation d'approbation entre cette station de travail et le
+      domaine principal a échoué ». Inutile de sortir et rejoindre le domaine : `-Repair` (ou
+      `Reset-ComputerMachinePassword`) renégocie le mot de passe, à condition d'ouvrir une session avec un
+      compte local administrateur.
+    checks:
+      - desc: Le canal sécurisé avec le domaine est opérationnel
+        run: |
+          Test-ComputerSecureChannel
+      - desc: C:\Admin\canal.txt montre une connexion à SRV-DC01
+        run: |
+          [bool](Select-String -Path C:\Admin\canal.txt -Pattern 'SRV-DC01' -Quiet)
+    solution: |
+      nltest /sc_query:durand.lan | Out-File C:\Admin\canal.txt
+
+  - id: win-jn-admins
+    title: Le support administre le poste
+    description: |
+      Ajoute le groupe du domaine `DURAND\GG_Support` au groupe local **Administrateurs** de PC01 (SID
+      `S-1-5-32-544`). N'y ajoute aucun utilisateur individuel.
+    hint: Add-LocalGroupMember -SID S-1-5-32-544 -Member 'DURAND\GG_Support'
+    cours: |
+      ```powershell
+      Get-LocalGroupMember -SID S-1-5-32-544
+      Add-LocalGroupMember -SID S-1-5-32-544 -Member 'DURAND\GG_Support'
+      ```
+
+      Après la jonction, *Admins du domaine* est déjà administrateur local de tous les postes. Mais un
+      technicien de proximité n'a pas à être administrateur du domaine : on lui donne les droits **sur les
+      postes** seulement, via un groupe. Le jour où il change de poste, on le retire de `GG_Support` et il perd
+      l'accès à tout le parc. À l'échelle de centaines de postes, ce réglage se déploie par **GPO** (*Groupes
+      restreints* ou *Préférences* › *Utilisateurs et groupes locaux*) plutôt que poste par poste. On utilise
+      le SID car le nom du groupe dépend de la langue de Windows.
+    checks:
+      - desc: DURAND\GG_Support est membre des Administrateurs locaux
+        run: |
+          [bool](Get-LocalGroupMember -SID S-1-5-32-544 | Where-Object Name -eq 'DURAND\GG_Support')
+      - desc: Aucun utilisateur du domaine n'y figure individuellement (hors vagrant)
+        run: |
+          @(Get-LocalGroupMember -SID S-1-5-32-544 | Where-Object { $_.ObjectClass -eq 'User' -and $_.Name -like 'DURAND\*' -and $_.Name -ne 'DURAND\vagrant' }).Count -eq 0
+    solution: |
+      Add-LocalGroupMember -SID S-1-5-32-544 -Member 'DURAND\GG_Support'
+
+  - id: win-jn-rdp
+    title: Bureau à distance pour la compta
+    description: |
+      Active le **Bureau à distance** sur PC01 (avec authentification NLA et règles de pare-feu) et autorise
+      le groupe `DURAND\GG_Compta` à s'y connecter, via le groupe local *Utilisateurs du Bureau à distance*
+      (SID `S-1-5-32-555`).
+    hint: Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' fDenyTSConnections 0 ; Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752' ; Add-LocalGroupMember -SID S-1-5-32-555 -Member 'DURAND\GG_Compta'
+    cours: |
+      ```powershell
+      Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
+      Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 1
+      Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752'
+      Add-LocalGroupMember -SID S-1-5-32-555 -Member 'DURAND\GG_Compta'
+      ```
+
+      Le groupe de règles `@FirewallAPI.dll,-28752` est le nom indépendant de la langue du groupe « Bureau à
+      distance ». Une fois le poste dans le domaine, les membres de `GG_Compta` peuvent ouvrir une session à
+      distance avec leur compte habituel, et le pare-feu applique le profil **Domaine** (détecté
+      automatiquement quand le poste joint un DC). Attention : Windows 11 n'accepte qu'**une** session
+      interactive à la fois, la session locale est fermée si quelqu'un se connecte à distance.
+    checks:
+      - desc: Le Bureau à distance est activé avec NLA
+        run: |
+          $ts = Get-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server'
+          $rdp = Get-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
+          $ts.fDenyTSConnections -eq 0 -and $rdp.UserAuthentication -eq 1
+      - desc: Les règles de pare-feu du Bureau à distance sont actives
+        run: |
+          @(Get-NetFirewallRule -Group '@FirewallAPI.dll,-28752' | Where-Object Enabled -eq 'True').Count -gt 0
+      - desc: DURAND\GG_Compta est dans Utilisateurs du Bureau à distance
+        run: |
+          [bool](Get-LocalGroupMember -SID S-1-5-32-555 | Where-Object Name -eq 'DURAND\GG_Compta')
+    solution: |
+      Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
+      Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 1
+      Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752'
+      Add-LocalGroupMember -SID S-1-5-32-555 -Member 'DURAND\GG_Compta'
+
+  - id: win-jn-redircmp
+    title: Les prochains postes iront dans l'OU Postes
+    description: |
+      Les techniciens oublieront `-OUPath`. Sur le contrôleur, redirige le **conteneur par défaut des
+      ordinateurs** vers `OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan`. Depuis PC01, passe par
+      `Invoke-Command -ComputerName SRV-DC01 -Credential DURAND\vagrant`.
+    hint: Invoke-Command -ComputerName SRV-DC01 -Credential DURAND\vagrant { redircmp 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' }
+    cours: |
+      ```powershell
+      $cred = Get-Credential DURAND\vagrant
+      Invoke-Command -ComputerName SRV-DC01 -Credential $cred {
+          redircmp 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+          (Get-ADDomain).ComputersContainer
+      }
+      ```
+
+      `redircmp` modifie l'attribut `wellKnownObjects` du domaine : toute jonction **sans** `-OUPath` crée
+      désormais le compte dans l'OU Postes, où s'appliquent les GPO des postes. Son pendant pour les
+      utilisateurs créés sans emplacement est `redirusr`. `Invoke-Command` exécute le bloc sur le serveur via
+      **WinRM** (port 5985) : maintenant que PC01 est dans le domaine, l'authentification Kerberos fonctionne
+      sans configurer `TrustedHosts`.
+    checks:
+      - desc: Le conteneur par défaut des ordinateurs est l'OU Postes
+        machine: dc01
+        run: |
+          (Get-ADDomain).ComputersContainer -eq 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+    solution: |
+      $cred = New-Object PSCredential('DURAND\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force))
+      Invoke-Command -ComputerName SRV-DC01 -Credential $cred { redircmp 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' }
+
+  - id: win-jn-quota
+    title: Fermer la porte aux jonctions sauvages
+    description: |
+      Par défaut, **n'importe quel utilisateur** du domaine peut joindre jusqu'à 10 machines. Ramène
+      l'attribut `ms-DS-MachineAccountQuota` du domaine à **0**, puis **délègue** au groupe `GG_Support` le
+      droit de créer des comptes d'ordinateur dans l'OU `Postes`.
+    hint: Set-ADDomain durand.lan -Replace @{'ms-DS-MachineAccountQuota'=0} ; dsacls 'OU=Postes,...' /G 'DURAND\GG_Support:CCDC;computer'
+    cours: |
+      ```powershell
+      Invoke-Command -ComputerName SRV-DC01 -Credential $cred {
+          Set-ADDomain durand.lan -Replace @{ 'ms-DS-MachineAccountQuota' = 0 }
+          $ou = 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+          dsacls $ou /G 'DURAND\GG_Support:CCDC;computer'
+          dsacls $ou /I:S /G 'DURAND\GG_Support:GA;;computer'
+      }
+      ```
+
+      Le quota de 10 machines est un héritage des années 2000 : il permet à un utilisateur de joindre un PC
+      personnel, ou à un attaquant qui a volé un simple compte de créer un compte d'ordinateur, point de départ
+      de plusieurs attaques connues (délégation contrainte basée sur les ressources). On le met à 0 et on
+      **délègue** explicitement : `CCDC;computer` donne la création et la suppression d'objets ordinateur dans
+      l'OU, la seconde ligne le contrôle total sur ces objets (pour réinitialiser un compte lors d'une
+      réinstallation).
+    checks:
+      - desc: ms-DS-MachineAccountQuota vaut 0
+        machine: dc01
+        run: |
+          (Get-ADObject (Get-ADDomain).DistinguishedName -Properties 'ms-DS-MachineAccountQuota').'ms-DS-MachineAccountQuota' -eq 0
+      - desc: GG_Support peut créer des ordinateurs dans l'OU Postes
+        machine: dc01
+        run: |
+          Import-Module ActiveDirectory
+          $computer = [guid]'bf967a86-0de6-11d0-a285-00aa003049e2'
+          $acl = (Get-Acl 'AD:OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan').Access
+          [bool]($acl | Where-Object { $_.IdentityReference -eq 'DURAND\GG_Support' -and $_.ActiveDirectoryRights -match 'CreateChild' -and $_.ObjectType -eq $computer })
+    solution: |
+      $cred = New-Object PSCredential('DURAND\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force))
+      Invoke-Command -ComputerName SRV-DC01 -Credential $cred {
+          Set-ADDomain durand.lan -Replace @{ 'ms-DS-MachineAccountQuota' = 0 }
+          $ou = 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+          dsacls $ou /G 'DURAND\GG_Support:CCDC;computer' | Out-Null
+          dsacls $ou /I:S /G 'DURAND\GG_Support:GA;;computer' | Out-Null
+      }
+
+  - id: win-jn-fiche
+    title: Documenter l'ordinateur dans l'annuaire
+    description: |
+      Renseigne l'objet ordinateur `PC01` : description `Poste de Marie Dupont - Compta`, attribut **Géré
+      par** (`ManagedBy`) sur `mdupont`, emplacement (`Location`) `Lyon - Bureau 12`. Tu peux installer les
+      RSAT sur PC01 (fonctionnalité à la demande, accès Internet nécessaire) ou passer par `Invoke-Command`.
+    hint: Set-ADComputer PC01 -Description 'Poste de Marie Dupont - Compta' -ManagedBy mdupont -Location 'Lyon - Bureau 12'
+    cours: |
+      ```powershell
+      # Option 1 : outils d'administration sur le poste (Windows Update requis)
+      Add-WindowsCapability -Online -Name Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0
+      # Option 2 : à distance sur le contrôleur
+      Invoke-Command -ComputerName SRV-DC01 -Credential $cred {
+          Set-ADComputer PC01 -Description 'Poste de Marie Dupont - Compta' -ManagedBy mdupont -Location 'Lyon - Bureau 12'
+      }
+      ```
+
+      Un annuaire bien renseigné fait gagner du temps au support : « quel est le poste de Marie ? » devient
+      `Get-ADComputer -Filter "ManagedBy -eq '$((Get-ADUser mdupont).DistinguishedName)'"`. Les RSAT
+      installés sur le poste du technicien (consoles `dsa.msc`, `gpmc.msc`, `dnsmgmt.msc`, module
+      PowerShell) évitent d'ouvrir des sessions sur les contrôleurs de domaine, qui doivent rester des
+      serveurs aussi peu manipulés que possible.
+    checks:
+      - desc: Description, gestionnaire et emplacement de PC01 sont renseignés
+        machine: dc01
+        run: |
+          $c = Get-ADComputer PC01 -Properties Description, ManagedBy, Location
+          $c.Description -eq 'Poste de Marie Dupont - Compta' -and $c.ManagedBy -eq (Get-ADUser mdupont).DistinguishedName -and $c.Location -eq 'Lyon - Bureau 12'
+    solution: |
+      $cred = New-Object PSCredential('DURAND\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force))
+      Invoke-Command -ComputerName SRV-DC01 -Credential $cred { Set-ADComputer PC01 -Description 'Poste de Marie Dupont - Compta' -ManagedBy mdupont -Location 'Lyon - Bureau 12' }

@@ -74,3 +74,60 @@ solution: |
       for vendeur, montant in ventes:
           totaux[vendeur] += montant
       return dict(totaux)
+cours: |
+  ## Le problème de la première insertion
+
+  Pour regrouper des éléments dans des listes, il faut créer la liste la première fois
+  qu'on rencontre une clé :
+
+  ```python
+  par_vlan = {}
+  for hote, vlan in [("pc1", 10), ("pc2", 20), ("pc3", 10)]:
+      if vlan not in par_vlan:
+          par_vlan[vlan] = []
+      par_vlan[vlan].append(hote)
+  ```
+
+  Trois solutions plus concises existent.
+
+  ## `setdefault`
+
+  `d.setdefault(cle, defaut)` renvoie `d[cle]` si la clé existe, sinon l'insère avec
+  `defaut` et le renvoie : `par_vlan.setdefault(vlan, []).append(hote)`.
+
+  ## `defaultdict`
+
+  `defaultdict(fabrique)` appelle `fabrique()` pour créer la valeur de toute clé absente :
+
+  ```python
+  from collections import defaultdict
+  par_vlan = defaultdict(list)    # list() -> []
+  par_vlan[10].append("pc1")
+  totaux = defaultdict(int)       # int() -> 0
+  totaux["Ana"] += 12
+  ```
+
+  On passe la **fonction** (`list`, `int`, `set`), sans parenthèses. `lambda: "?"` marche
+  aussi.
+
+  **Attention** : simplement *lire* une clé absente (`par_vlan[99]`) la crée ! Pour tester
+  sans créer, utilise `in` ou `get`. C'est pour cette raison (et pour une comparaison ou un
+  affichage propres) qu'on reconvertit souvent le résultat en `dict(...)` avant de le
+  renvoyer.
+
+  ## Trier sans tenir compte de la casse
+
+  `sorted(mots, key=str.lower)` compare les versions minuscules tout en renvoyant les mots
+  d'origine. `str.lower` est passé comme fonction, sans l'appeler. Pour un tri
+  international plus correct, `str.casefold` ou le module `locale`.
+
+  ## Agrégations
+
+  Regrouper puis agréger (somme, comptage, max) est l'opération « GROUP BY » des bases de
+  données et des tableaux croisés dynamiques : une compétence centrale pour produire des
+  rapports.
+docs:
+  - title: collections.defaultdict
+    url: https://docs.python.org/fr/3/library/collections.html#collections.defaultdict
+  - title: Méthode dict.setdefault
+    url: https://docs.python.org/fr/3/library/stdtypes.html#dict.setdefault

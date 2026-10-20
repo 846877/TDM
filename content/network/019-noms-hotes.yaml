@@ -1,0 +1,92 @@
+title: Résolution de noms sur le routeur
+level: debutant
+order: 19
+device: router
+hostname: R-BUREAU
+tags: [dns, ip host, name-server]
+summary: Serveurs DNS, nom de domaine et table d'hôtes locale.
+description: |
+  Pour taper `ping NAS` plutôt que `ping 192.168.1.20`, le routeur doit savoir résoudre les noms.
+  Un collègue a désactivé la résolution (`no ip domain-lookup`) : remets tout en ordre.
+
+  1. réactive la résolution DNS : `ip domain-lookup` ;
+  2. domaine `tdm.local` ;
+  3. serveurs DNS `10.0.0.53` et `10.0.0.54` (une seule commande `ip name-server`) ;
+  4. table d'hôtes locale : `NAS` → `192.168.1.20`, `IMPRIMANTE` → `192.168.1.30`.
+
+  Contrôle avec `show hosts`.
+initial: |
+  no ip domain-lookup
+checks:
+  - desc: Résolution DNS réactivée
+    expr: d.domain_lookup
+  - desc: Domaine tdm.local
+    expr: d.domain_name == "tdm.local"
+  - desc: Serveurs DNS 10.0.0.53 et 10.0.0.54
+    expr: d.name_servers == ["10.0.0.53", "10.0.0.54"]
+    hint: "ip name-server 10.0.0.53 10.0.0.54"
+  - desc: Hôtes locaux NAS et IMPRIMANTE
+    expr: d.ip_hosts.get("NAS") == "192.168.1.20" and d.ip_hosts.get("IMPRIMANTE") == "192.168.1.30"
+    hint: "ip host NAS 192.168.1.20"
+solution: |
+  configure terminal
+  ip domain-lookup
+  ip domain-name tdm.local
+  ip name-server 10.0.0.53 10.0.0.54
+  ip host NAS 192.168.1.20
+  ip host IMPRIMANTE 192.168.1.30
+  end
+cours: |
+  ## Comment un routeur résout-il un nom ?
+
+  Quand tu tapes un nom (`ping SRV-FICHIERS`, `telnet SW2`), IOS cherche dans cet ordre :
+
+  1. la **table d'hôtes locale** (`ip host`) ;
+  2. les **serveurs DNS** configurés (`ip name-server`), en ajoutant si besoin le domaine
+     (`ip domain-name`) au nom court : `SRV-FICHIERS` devient `SRV-FICHIERS.tdm.local`.
+
+  Sans serveur configuré, IOS envoie la requête DNS en **broadcast** (255.255.255.255) et attend
+  plusieurs secondes : c'est ce qui fige la console quand on tape une commande inconnue. D'où le
+  réflexe `no ip domain-lookup` sur un équipement de labo... qui désactive aussi toute résolution.
+
+  ### Syntaxe
+
+  ```
+  R1(config)# ip domain-lookup
+  R1(config)# ip domain-name exemple.lan
+  R1(config)# ip name-server 172.16.0.10 172.16.0.11
+  R1(config)# ip host SW-CORE 172.16.1.2
+  R1(config)# ip host SRV-LOG 172.16.0.20
+  R1# show hosts
+  Default domain is exemple.lan
+  Name servers are 172.16.0.10, 172.16.0.11
+  Host        Flags       Address(es)
+  SW-CORE     (perm, OK)  172.16.1.2
+  ```
+
+  - `ip name-server` accepte jusqu'à **six** serveurs ; les commandes successives s'ajoutent.
+  - `ip host` peut recevoir plusieurs adresses ; `no ip host SW-CORE` supprime l'entrée.
+  - `ip domain-name` sert aussi à générer les clés RSA de SSH (`nom.domaine`).
+
+  ### Le bon compromis en production
+
+  Garder la résolution active (utile pour les noms des serveurs NTP, syslog...) mais éviter les
+  blocages : sur les lignes, `transport preferred none` empêche IOS d'interpréter une faute de
+  frappe comme un nom d'hôte auquel se connecter.
+
+  ### Pièges fréquents
+
+  - Serveurs DNS injoignables : chaque commande avec un nom attend un délai de plusieurs secondes.
+  - Confondre `ip domain-name` (domaine de l'équipement) et `ip domain-list` (liste de suffixes
+    de recherche).
+  - Une table `ip host` qui n'est plus à jour : elle est prioritaire sur le DNS.
+
+  ### Pour le CCNA
+
+  Savoir à quoi servent `ip domain-lookup`, `ip name-server` et `ip host`, et pourquoi
+  `no ip domain-lookup` est si fréquent dans les corrigés de TP.
+docs:
+  - title: Wikipédia — Domain Name System
+    url: https://fr.wikipedia.org/wiki/Domain_Name_System
+  - title: RFC 1035 — Domain names, implementation and specification
+    url: https://www.rfc-editor.org/rfc/rfc1035

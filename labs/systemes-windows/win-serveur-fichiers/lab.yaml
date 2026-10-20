@@ -1,0 +1,480 @@
+title: Serveur de fichiers - FSRM, DFS et clichés instantanés
+level: intermediaire
+order: 7
+tags: [windows server, partages, smb, fsrm, quotas, filtrage de fichiers, dfs, abe, clichés instantanés]
+summary: Faire d'un Windows Server un vrai serveur de fichiers - énumération basée sur l'accès, quotas et filtrage FSRM, rapports, espace de noms DFS, durcissement SMB et clichés instantanés.
+vagrant: bundled
+machine: fic01
+description: |
+  **Contexte.** Le serveur `SRV-FIC01` d'*Ateliers Durand* est plein à craquer : vidéos personnelles, un
+  chantier qui a stocké 300 Mo de vidéo de drone, des utilisateurs qui voient des dossiers auxquels ils
+  n'ont pas accès, et un « j'ai écrasé mon fichier, tu peux le récupérer ? » par semaine. Tu vas mettre de
+  l'ordre avec les outils intégrés à Windows Server.
+
+  **Machine.** `SRV-FIC01`, Windows Server 2022 hors domaine. Arborescence `C:\Partages` :
+
+  ```
+  C:\Partages
+  ├── Commun          (partagé, avec un sous-dossier Formation)
+  ├── Direction       (partagé)
+  ├── Projets         (Chantier-Lyon, Chantier-Grenoble)
+  └── Utilisateurs    (un dossier par utilisateur)
+  ```
+cours: |
+  ## Le serveur de fichiers Windows
+
+  Un partage SMB combine deux couches de droits : les **autorisations de partage** (Lecture, Modifier,
+  Contrôle total) et les **autorisations NTFS**. L'accès effectif est le plus restrictif des deux ; la
+  pratique courante est de laisser le partage large (*Utilisateurs authentifiés* : Modifier ou Contrôle
+  total) et de régler finement en NTFS. Au-delà de ces bases, Windows Server propose plusieurs services de
+  rôle regroupés dans **Services de fichiers et de stockage**.
+
+  ## Énumération basée sur l'accès (ABE)
+
+  Sans ABE, un utilisateur voit **tous** les dossiers d'un partage, même ceux qu'il ne peut pas ouvrir :
+  confusion, appels au support, et fuite d'information (les noms de dossiers parlent : « Licenciements
+  2025 »). Avec ABE, l'Explorateur n'affiche que ce que l'utilisateur peut lire. C'est une option du
+  partage (`FolderEnumerationMode AccessBased`).
+
+  ## FSRM : le gestionnaire de ressources du serveur de fichiers
+
+  | Fonction | Ce qu'elle fait |
+  |----------|-----------------|
+  | **Quotas** | limite la taille d'un **dossier** (strict : bloque ; souple : avertit), avec des seuils qui déclenchent courriel, événement, commande ou rapport |
+  | **Modèles de quota** | des quotas réutilisables ; modifier le modèle met à jour les quotas qui en dérivent |
+  | **Quotas automatiques** | appliquent un modèle à chaque sous-dossier, présent et futur (dossiers utilisateurs) |
+  | **Filtrage de fichiers** | bloque des types de fichiers par **extension** (groupes de fichiers), avec exceptions |
+  | **Rapports de stockage** | gros fichiers, doublons, fichiers anciens, par propriétaire, par groupe de fichiers |
+  | **Classification** | étiquette les fichiers selon leur contenu ou leur emplacement |
+
+  Les quotas NTFS classiques (`fsutil quota`) limitent par **utilisateur et par volume** ; FSRM limite par
+  **dossier**, ce qui correspond mieux à « le chantier de Lyon a droit à 2 Go ». Le filtrage ne regarde que
+  l'extension : un fichier renommé passe. Il sert à faire respecter la charte, pas à arrêter un attaquant.
+
+  ## DFS : un espace de noms qui survit aux serveurs
+
+  Un **espace de noms DFS** présente une arborescence virtuelle (`\\durand.lan\Ressources\Projets`) dont
+  chaque dossier pointe vers un ou plusieurs partages réels. Les utilisateurs et les raccourcis ne
+  connaissent que le chemin DFS : on peut déplacer un partage vers un nouveau serveur en changeant la cible,
+  sans toucher aux postes. Un espace **autonome** (`\\SRV-FIC01\...`) fonctionne sans domaine ; un espace
+  **de domaine** (`\\durand.lan\...`) est stocké dans AD et peut avoir plusieurs serveurs d'espace de noms.
+  La **réplication DFS** (DFSR) synchronise le contenu de plusieurs cibles, utile entre sites.
+
+  ## Clichés instantanés des dossiers partagés
+
+  Le service **VSS** prend des instantanés du volume à intervalles réguliers (par défaut 7 h et 12 h en
+  semaine). Les utilisateurs récupèrent eux-mêmes une version précédente d'un fichier : clic droit ›
+  *Propriétés* › *Versions précédentes*. Ce n'est **pas** une sauvegarde : les clichés sont sur le même
+  disque et disparaissent avec lui, et l'espace qui leur est réservé limite leur nombre (64 au maximum par
+  volume).
+
+  ## Durcir SMB
+
+  - **SMB 1** est obsolète et dangereux (WannaCry, NotPetya) : désactivé, et la fonctionnalité `FS-SMB1`
+    désinstallée.
+  - Le **chiffrement SMB 3** protège les données en transit sur un partage sensible (`EncryptData`).
+  - La **signature SMB** empêche les attaques par relais.
+  - La mise en cache **hors connexion** se règle par partage (`CachingMode`) : on la désactive sur les
+    partages applicatifs ou volumineux.
+
+  ## Outils
+
+  `New-SmbShare`, `Set-SmbShare`, `Get-SmbSession`, `Get-SmbOpenFile`, le module `FileServerResourceManager`
+  (`New-FsrmQuotaTemplate`, `New-FsrmQuota`, `New-FsrmFileScreen`...), le module `DFSN`, `vssadmin`, et les
+  consoles `fsrm.msc`, `dfsmgmt.msc` et *Gestion de l'ordinateur* › *Dossiers partagés*.
+docs:
+  - title: Gestionnaire de ressources du serveur de fichiers (FSRM)
+    url: https://learn.microsoft.com/fr-fr/windows-server/storage/fsrm/fsrm-overview
+  - title: Vue d'ensemble des espaces de noms DFS
+    url: https://learn.microsoft.com/fr-fr/windows-server/storage/dfs-namespaces/dfs-overview
+  - title: Désactiver SMBv1 et sécuriser SMB
+    url: https://learn.microsoft.com/fr-fr/windows-server/storage/file-server/troubleshoot/detect-enable-and-disable-smbv1-v2-v3
+exercises:
+  - id: win-fic-roles
+    title: Installer FSRM et les espaces de noms DFS
+    description: |
+      Installe les services de rôle **Gestionnaire de ressources du serveur de fichiers** et **Espaces de
+      noms DFS**, avec leurs outils d'administration.
+    hint: Install-WindowsFeature FS-Resource-Manager, FS-DFS-Namespace -IncludeManagementTools
+    cours: |
+      ```powershell
+      Get-WindowsFeature FS-*
+      Install-WindowsFeature FS-Resource-Manager, FS-DFS-Namespace -IncludeManagementTools
+      Get-Service SrmSvc, Dfs
+      ```
+
+      Le rôle *Services de fichiers et de stockage* est toujours présent (le service *Serveur*, qui publie les
+      partages). FSRM (`FS-Resource-Manager`, service `SrmSvc`) et DFS (`FS-DFS-Namespace`, service `Dfs`)
+      sont des **services de rôle** à ajouter. `-IncludeManagementTools` installe les consoles `fsrm.msc` et
+      `dfsmgmt.msc` ainsi que les modules PowerShell. FSRM installe un pilote de filtre du système de fichiers :
+      sur un serveur en production, on l'installe hors des heures chargées.
+    ci: true
+    checks:
+      - desc: FSRM et les espaces de noms DFS sont installés
+        run: |
+          (Get-WindowsFeature FS-Resource-Manager).Installed -and (Get-WindowsFeature FS-DFS-Namespace).Installed
+      - desc: Les modules d'administration sont présents
+        run: |
+          [bool](Get-Module -ListAvailable FileServerResourceManager) -and [bool](Get-Module -ListAvailable DFSN)
+    solution: |
+      Install-WindowsFeature FS-Resource-Manager, FS-DFS-Namespace -IncludeManagementTools | Out-Null
+
+  - id: win-fic-abe
+    title: Un partage Projets qui ne montre que l'essentiel
+    description: |
+      Partage `C:\Partages\Projets` sous le nom `Projets` : *Utilisateurs authentifiés* en **Modifier**,
+      **énumération basée sur l'accès** activée, **aucune mise en cache hors connexion** (les plans sont trop
+      volumineux).
+    hint: New-SmbShare -Name Projets -Path C:\Partages\Projets -ChangeAccess '*S-1-5-11' -FolderEnumerationMode AccessBased -CachingMode None
+    cours: |
+      ```powershell
+      New-SmbShare -Name Projets -Path C:\Partages\Projets -ChangeAccess '*S-1-5-11' `
+          -FolderEnumerationMode AccessBased -CachingMode None -Description 'Dossiers des chantiers'
+      Get-SmbShare Projets | Format-List Name, Path, FolderEnumerationMode, CachingMode
+      Get-SmbShareAccess Projets
+      ```
+
+      Sur un partage existant : `Set-SmbShare -Name Projets -FolderEnumerationMode AccessBased`. L'ABE n'a
+      d'effet que si les droits NTFS sont différenciés : si tout le monde peut tout lire, tout le monde voit
+      tout. La mise en cache hors connexion (fichiers hors connexion de Windows) copie les fichiers sur les
+      portables : pratique pour des documents bureautiques, source de conflits et de synchronisations
+      interminables pour des fichiers de plusieurs centaines de Mo.
+    ci: true
+    checks:
+      - desc: Le partage Projets pointe vers C:\Partages\Projets avec l'ABE
+        run: |
+          $s = Get-SmbShare -Name Projets
+          $s.Path -eq 'C:\Partages\Projets' -and $s.FolderEnumerationMode -eq 'AccessBased'
+      - desc: Pas de mise en cache hors connexion, Utilisateurs authentifiés en Modifier
+        run: |
+          $acc = Get-SmbShareAccess -Name Projets | Where-Object { $_.AccountName -match 'Authenticated Users|Utilisateurs authentifi' }
+          (Get-SmbShare -Name Projets).CachingMode -eq 'None' -and $acc.AccessRight -contains 'Change'
+    solution: |
+      New-SmbShare -Name Projets -Path C:\Partages\Projets -ChangeAccess '*S-1-5-11' -FolderEnumerationMode AccessBased -CachingMode None -Description 'Dossiers des chantiers' | Out-Null
+
+  - id: win-fic-modele-quota
+    title: Un modèle de quota pour les chantiers
+    description: |
+      Crée le modèle de quota FSRM `Chantier 2 Go` : limite **stricte** de **2 Go**, avec un seuil à **85 %**
+      qui écrit un **avertissement** dans le journal des événements.
+    hint: $a = New-FsrmAction -Type Event -EventType Warning -Body 'Quota [Quota Path] à [Quota Threshold] %' ; New-FsrmQuotaTemplate -Name 'Chantier 2 Go' -Size 2GB -Threshold (New-FsrmQuotaThreshold -Percentage 85 -Action $a)
+    cours: |
+      ```powershell
+      $action = New-FsrmAction -Type Event -EventType Warning `
+          -Body 'Le dossier [Quota Path] a atteint [Quota Threshold] % de son quota ([Quota Used MB] Mo).'
+      $seuil = New-FsrmQuotaThreshold -Percentage 85 -Action $action
+      New-FsrmQuotaTemplate -Name 'Chantier 2 Go' -Size 2GB -Threshold $seuil -Description 'Dossier de chantier'
+      Get-FsrmQuotaTemplate 'Chantier 2 Go'
+      ```
+
+      Un quota **strict** refuse l'écriture au-delà de la limite (l'utilisateur voit « espace disque
+      insuffisant ») ; un quota **souple** (`-SoftLimit`) laisse écrire et ne fait que prévenir, idéal pour
+      surveiller avant d'imposer. Les **seuils** déclenchent jusqu'à quatre actions : courriel (après
+      configuration du serveur SMTP avec `Set-FsrmSetting`), événement, commande, rapport. Les variables
+      entre crochets sont remplacées au moment de l'alerte. Les modèles évitent de reconfigurer chaque
+      dossier : on les modifie à un seul endroit.
+    ci: true
+    checks:
+      - desc: Le modèle Chantier 2 Go est une limite stricte de 2 Go
+        run: |
+          $t = Get-FsrmQuotaTemplate -Name 'Chantier 2 Go'
+          $t.Size -eq 2GB -and -not $t.SoftLimit
+      - desc: Seuil à 85 % avec une action d'événement
+        run: |
+          $s = (Get-FsrmQuotaTemplate -Name 'Chantier 2 Go').Threshold | Where-Object Percentage -eq 85
+          [bool]$s -and ($s.Action.Type -contains 'Event')
+    solution: |
+      $action = New-FsrmAction -Type Event -EventType Warning -Body 'Le dossier [Quota Path] a atteint [Quota Threshold] % de son quota ([Quota Used MB] Mo).'
+      $seuil = New-FsrmQuotaThreshold -Percentage 85 -Action $action
+      New-FsrmQuotaTemplate -Name 'Chantier 2 Go' -Size 2GB -Threshold $seuil -Description 'Dossier de chantier' | Out-Null
+
+  - id: win-fic-quota
+    title: Appliquer le quota aux chantiers
+    description: |
+      Applique le modèle `Chantier 2 Go` aux dossiers `C:\Partages\Projets\Chantier-Lyon` et
+      `C:\Partages\Projets\Chantier-Grenoble`. Note dans `C:\Admin\quota-lyon.txt` l'espace **déjà utilisé**
+      par Chantier-Lyon, en Mo arrondis (un nombre seul).
+    hint: New-FsrmQuota -Path C:\Partages\Projets\Chantier-Lyon -Template 'Chantier 2 Go' ; [math]::Round((Get-FsrmQuota -Path ...).Usage / 1MB)
+    cours: |
+      ```powershell
+      foreach ($c in 'Chantier-Lyon', 'Chantier-Grenoble') {
+          New-FsrmQuota -Path "C:\Partages\Projets\$c" -Template 'Chantier 2 Go'
+      }
+      Get-FsrmQuota | Format-Table Path, Template, @{n='Utilisé (Mo)'; e={[math]::Round($_.Usage / 1MB)}}, Size
+      ```
+
+      À la création, FSRM **analyse** le dossier pour calculer l'espace déjà occupé : sur un gros dossier,
+      l'état reste quelque temps « reconstruction ». Le quota suit ensuite chaque écriture en temps réel.
+      Un quota créé depuis un modèle reste **lié** à ce modèle : `Set-FsrmQuotaTemplate ... -UpdateDerived`
+      propage une modification. Ici, Chantier-Lyon contient déjà environ 325 Mo (plans et vidéo de drone) : le
+      quota ne supprime rien, il empêchera seulement de dépasser 2 Go.
+    ci: true
+    checks:
+      - desc: Les deux chantiers ont un quota issu du modèle Chantier 2 Go
+        run: |
+          $q = foreach ($c in 'Chantier-Lyon', 'Chantier-Grenoble') { Get-FsrmQuota -Path "C:\Partages\Projets\$c" }
+          @($q | Where-Object { $_.Template -eq 'Chantier 2 Go' -and $_.Size -eq 2GB }).Count -eq 2
+      - desc: C:\Admin\quota-lyon.txt indique l'espace utilisé par Chantier-Lyon (à 5 Mo près)
+        run: |
+          $mo = [math]::Round((Get-FsrmQuota -Path C:\Partages\Projets\Chantier-Lyon).Usage / 1MB)
+          $lu = [int]((Get-Content C:\Admin\quota-lyon.txt -TotalCount 1).Trim())
+          $mo -gt 300 -and [math]::Abs($lu - $mo) -le 5
+    solution: |
+      foreach ($c in 'Chantier-Lyon', 'Chantier-Grenoble') { New-FsrmQuota -Path "C:\Partages\Projets\$c" -Template 'Chantier 2 Go' | Out-Null }
+      for ($i = 0; $i -lt 30 -and (Get-FsrmQuota -Path C:\Partages\Projets\Chantier-Lyon).Usage -lt 300MB; $i++) { Start-Sleep -Seconds 2 }
+      [math]::Round((Get-FsrmQuota -Path C:\Partages\Projets\Chantier-Lyon).Usage / 1MB) | Set-Content C:\Admin\quota-lyon.txt
+
+  - id: win-fic-autoquota
+    title: Des quotas automatiques pour les dossiers personnels
+    description: |
+      Chaque dossier de `C:\Partages\Utilisateurs` (y compris ceux qui seront créés demain) doit être limité à
+      **500 Mo**. Crée le modèle `Utilisateur 500 Mo` (limite stricte) et un **quota automatique** sur
+      `C:\Partages\Utilisateurs`.
+    hint: New-FsrmQuotaTemplate -Name 'Utilisateur 500 Mo' -Size 500MB ; New-FsrmAutoQuota -Path C:\Partages\Utilisateurs -Template 'Utilisateur 500 Mo'
+    cours: |
+      ```powershell
+      New-FsrmQuotaTemplate -Name 'Utilisateur 500 Mo' -Size 500MB
+      New-FsrmAutoQuota -Path C:\Partages\Utilisateurs -Template 'Utilisateur 500 Mo'
+      New-Item C:\Partages\Utilisateurs\nouveau -ItemType Directory
+      Get-FsrmQuota -Path C:\Partages\Utilisateurs\*
+      ```
+
+      Un **quota automatique** ne limite pas le dossier parent : il crée un quota sur **chaque sous-dossier**,
+      existant ou futur, dès sa création. C'est la configuration classique des dossiers personnels et des
+      dossiers redirigés (*Mes documents* sur le serveur). Pour un utilisateur qui a besoin de plus, on crée un
+      quota spécifique sur son dossier, qui prend le pas sur le quota automatique.
+    ci: true
+    checks:
+      - desc: Le modèle Utilisateur 500 Mo existe (500 Mo stricts)
+        run: |
+          $t = Get-FsrmQuotaTemplate -Name 'Utilisateur 500 Mo'
+          $t.Size -eq 500MB -and -not $t.SoftLimit
+      - desc: Un quota automatique couvre C:\Partages\Utilisateurs et s'applique aux dossiers existants
+        run: |
+          $a = Get-FsrmAutoQuota -Path C:\Partages\Utilisateurs
+          $q = Get-FsrmQuota -Path C:\Partages\Utilisateurs\mdupont -ErrorAction SilentlyContinue
+          $a.Template -eq 'Utilisateur 500 Mo' -and [bool]$q
+    solution: |
+      New-FsrmQuotaTemplate -Name 'Utilisateur 500 Mo' -Size 500MB | Out-Null
+      New-FsrmAutoQuota -Path C:\Partages\Utilisateurs -Template 'Utilisateur 500 Mo' | Out-Null
+      Start-Sleep -Seconds 5
+
+  - id: win-fic-filtrage
+    title: Pas de multimédia dans le partage commun
+    description: |
+      Crée le groupe de fichiers `Multimedia interdit` (`*.mp3`, `*.mp4`, `*.avi`, `*.mkv`, `*.mov`) et un
+      **filtre actif** (blocage) sur `C:\Partages\Commun` qui l'utilise. Déplace ensuite le fichier
+      `playlist-pause-dej.mp3` déjà présent vers `C:\Admin\Quarantaine`.
+    hint: New-FsrmFileGroup -Name 'Multimedia interdit' -IncludePattern '*.mp3','*.mp4','*.avi','*.mkv','*.mov' ; New-FsrmFileScreen -Path C:\Partages\Commun -IncludeGroup 'Multimedia interdit' -Active
+    cours: |
+      ```powershell
+      New-FsrmFileGroup -Name 'Multimedia interdit' -IncludePattern '*.mp3', '*.mp4', '*.avi', '*.mkv', '*.mov'
+      New-FsrmFileScreen -Path C:\Partages\Commun -IncludeGroup 'Multimedia interdit' -Active
+      New-Item C:\Admin\Quarantaine -ItemType Directory -Force
+      Move-Item C:\Partages\Commun\playlist-pause-dej.mp3 C:\Admin\Quarantaine
+      ```
+
+      Un filtre **actif** refuse la création des fichiers correspondants ; un filtre **passif** les laisse
+      passer mais déclenche les actions (événement, courriel) : pratique pour mesurer avant d'interdire. Le
+      filtre ne touche pas aux fichiers **déjà présents** : on les traite à part (rapport « fichiers par
+      groupe de fichiers », puis déplacement). FSRM fournit des groupes prédéfinis (fichiers audio et vidéo,
+      exécutables...) mais leurs noms dépendent de la langue du serveur : un groupe à soi est plus prévisible.
+    ci: true
+    checks:
+      - desc: Le groupe Multimedia interdit contient les cinq extensions
+        run: |
+          $g = (Get-FsrmFileGroup -Name 'Multimedia interdit').IncludePattern
+          @('*.mp3', '*.mp4', '*.avi', '*.mkv', '*.mov' | Where-Object { $g -contains $_ }).Count -eq 5
+      - desc: Un filtre actif sur C:\Partages\Commun l'utilise
+        run: |
+          $f = Get-FsrmFileScreen -Path C:\Partages\Commun
+          $f.Active -and ($f.IncludeGroup -contains 'Multimedia interdit')
+      - desc: Le mp3 a quitté Commun pour la quarantaine
+        run: |
+          -not (Test-Path C:\Partages\Commun\playlist-pause-dej.mp3) -and (Test-Path C:\Admin\Quarantaine\playlist-pause-dej.mp3)
+    solution: |
+      New-FsrmFileGroup -Name 'Multimedia interdit' -IncludePattern '*.mp3', '*.mp4', '*.avi', '*.mkv', '*.mov' | Out-Null
+      New-FsrmFileScreen -Path C:\Partages\Commun -IncludeGroup 'Multimedia interdit' -Active | Out-Null
+      New-Item C:\Admin\Quarantaine -ItemType Directory -Force | Out-Null
+      Move-Item C:\Partages\Commun\playlist-pause-dej.mp3 C:\Admin\Quarantaine
+
+  - id: win-fic-exception
+    title: Une exception pour les vidéos de formation
+    description: |
+      Le service qualité doit déposer des vidéos `*.mp4` dans `C:\Partages\Commun\Formation`. Crée le groupe
+      de fichiers `Videos de formation` (`*.mp4`) et une **exception de filtre** sur ce sous-dossier. Prouve
+      que ça marche : crée `C:\Partages\Commun\Formation\securite-atelier.mp4` (un fichier vide suffit).
+    hint: New-FsrmFileGroup -Name 'Videos de formation' -IncludePattern '*.mp4' ; New-FsrmFileScreenException -Path C:\Partages\Commun\Formation -IncludeGroup 'Videos de formation' ; New-Item ...\securite-atelier.mp4
+    cours: |
+      ```powershell
+      New-FsrmFileGroup -Name 'Videos de formation' -IncludePattern '*.mp4'
+      New-FsrmFileScreenException -Path C:\Partages\Commun\Formation -IncludeGroup 'Videos de formation'
+      New-Item C:\Partages\Commun\Formation\securite-atelier.mp4 -ItemType File
+      New-Item C:\Partages\Commun\test.mp4 -ItemType File      # refusé : accès refusé
+      ```
+
+      L'**exception** autorise, dans un sous-dossier, des groupes de fichiers bloqués par un filtre parent.
+      Elle ne peut pas être posée sur le dossier même du filtre. Le test sur `C:\Partages\Commun\test.mp4`
+      doit échouer avec « Accès refusé » : le filtrage s'applique **aussi aux administrateurs**, et un
+      événement 8215 apparaît dans le journal *Application* si le filtre a une action d'événement.
+    ci: true
+    checks:
+      - desc: Une exception Videos de formation existe sur Commun\Formation
+        run: |
+          (Get-FsrmFileScreenException -Path C:\Partages\Commun\Formation).IncludeGroup -contains 'Videos de formation'
+      - desc: La vidéo de formation a pu être créée, le filtre de Commun reste actif
+        run: |
+          (Test-Path C:\Partages\Commun\Formation\securite-atelier.mp4) -and (Get-FsrmFileScreen -Path C:\Partages\Commun).Active
+    solution: |
+      New-FsrmFileGroup -Name 'Videos de formation' -IncludePattern '*.mp4' | Out-Null
+      New-FsrmFileScreenException -Path C:\Partages\Commun\Formation -IncludeGroup 'Videos de formation' | Out-Null
+      New-Item C:\Partages\Commun\Formation\securite-atelier.mp4 -ItemType File -Force | Out-Null
+
+  - id: win-fic-rapport
+    title: Un rapport hebdomadaire des gros fichiers
+    description: |
+      Planifie le rapport de stockage FSRM `Gros fichiers` sur `C:\Partages` : type **gros fichiers**, à
+      partir de **100 Mo**, chaque **lundi à 7 h**, au format HTML.
+    hint: $t = New-FsrmScheduledTask -Time (Get-Date '07:00') -Weekly Monday ; New-FsrmStorageReport -Name 'Gros fichiers' -Namespace 'C:\Partages' -ReportType LargeFiles -LargeFileMinimum 100MB -Schedule $t -ReportFormat DHtml
+    cours: |
+      ```powershell
+      $quand = New-FsrmScheduledTask -Time (Get-Date '07:00') -Weekly Monday
+      New-FsrmStorageReport -Name 'Gros fichiers' -Namespace 'C:\Partages' -ReportType LargeFiles `
+          -LargeFileMinimum 100MB -Schedule $quand -ReportFormat DHtml
+      Get-FsrmStorageReport 'Gros fichiers'
+      # tout de suite : Start-FsrmStorageReport 'Gros fichiers' ; puis C:\StorageReports\Scheduled
+      ```
+
+      Les rapports de stockage répondent aux questions qui reviennent sans cesse : qui remplit le disque ?
+      quels fichiers n'ont pas été ouverts depuis deux ans ? combien de doublons ? Un rapport planifié est
+      déposé dans `C:\StorageReports\Scheduled` (réglable avec `Set-FsrmSetting`) et peut être envoyé par
+      courriel. Le format DHTML est lisible dans un navigateur ; CSV et XML se prêtent au traitement
+      automatique. Ici, la vidéo de drone de 260 Mo apparaîtra en tête.
+    ci: true
+    checks:
+      - desc: Le rapport Gros fichiers porte sur C:\Partages, à partir de 100 Mo
+        run: |
+          $r = Get-FsrmStorageReport -Name 'Gros fichiers'
+          ($r.Namespace -contains 'C:\Partages') -and ($r.ReportType -contains 'LargeFiles') -and $r.LargeFileMinimum -eq 100MB
+      - desc: Il est planifié chaque lundi
+        run: |
+          (Get-FsrmStorageReport -Name 'Gros fichiers').Schedule.Weekly -contains 'Monday'
+    solution: |
+      $quand = New-FsrmScheduledTask -Time (Get-Date '07:00') -Weekly Monday
+      New-FsrmStorageReport -Name 'Gros fichiers' -Namespace 'C:\Partages' -ReportType LargeFiles -LargeFileMinimum 100MB -Schedule $quand -ReportFormat DHtml | Out-Null
+
+  - id: win-fic-dfs
+    title: Un espace de noms DFS autonome
+    description: |
+      Crée l'espace de noms **autonome** `\\SRV-FIC01\Ressources` (dossier racine `C:\DFSRoots\Ressources`,
+      partagé sous le nom `Ressources`), puis ajoute-lui deux dossiers : `Projets` → `\\SRV-FIC01\Projets` et
+      `Commun` → `\\SRV-FIC01\Commun`.
+    hint: New-SmbShare Ressources -Path C:\DFSRoots\Ressources -ReadAccess '*S-1-1-0' ; New-DfsnRoot -Path \\SRV-FIC01\Ressources -TargetPath \\SRV-FIC01\Ressources -Type Standalone ; New-DfsnFolder -Path \\SRV-FIC01\Ressources\Projets -TargetPath \\SRV-FIC01\Projets
+    cours: |
+      ```powershell
+      $srv = $env:COMPUTERNAME
+      New-Item C:\DFSRoots\Ressources -ItemType Directory -Force
+      New-SmbShare -Name Ressources -Path C:\DFSRoots\Ressources -ReadAccess '*S-1-1-0'
+      New-DfsnRoot -Path "\\$srv\Ressources" -TargetPath "\\$srv\Ressources" -Type Standalone
+      New-DfsnFolder -Path "\\$srv\Ressources\Projets" -TargetPath "\\$srv\Projets"
+      New-DfsnFolder -Path "\\$srv\Ressources\Commun" -TargetPath "\\$srv\Commun"
+      Get-DfsnFolder -Path "\\$srv\Ressources\*"
+      ```
+
+      Le dossier racine ne contient que des **liens** (points d'analyse) : les fichiers restent dans les
+      partages cibles, avec leurs droits. Les postes ouvrent `\\SRV-FIC01\Ressources\Projets` et sont redirigés
+      de façon transparente. Le jour où `Projets` part sur un nouveau serveur, `New-DfsnFolderTarget` ajoute la
+      nouvelle cible, `Remove-DfsnFolderTarget` retire l'ancienne : aucun lecteur réseau à reconfigurer. En
+      domaine, on préfère un espace `\\durand.lan\Ressources` (type `DomainV2`), qui ne dépend pas d'un serveur
+      unique.
+    ci: true
+    checks:
+      - desc: L'espace de noms autonome Ressources existe
+        run: |
+          $r = Get-DfsnRoot -Path "\\$env:COMPUTERNAME\Ressources"
+          $r.Type -eq 'Standalone' -and $r.State -eq 'Online'
+      - desc: Les dossiers Projets et Commun pointent vers les bons partages
+        run: |
+          $p = Get-DfsnFolderTarget -Path "\\$env:COMPUTERNAME\Ressources\Projets"
+          $c = Get-DfsnFolderTarget -Path "\\$env:COMPUTERNAME\Ressources\Commun"
+          $p.TargetPath -like '*\Projets' -and $c.TargetPath -like '*\Commun'
+    solution: |
+      $srv = $env:COMPUTERNAME
+      New-Item C:\DFSRoots\Ressources -ItemType Directory -Force | Out-Null
+      New-SmbShare -Name Ressources -Path C:\DFSRoots\Ressources -ReadAccess '*S-1-1-0' | Out-Null
+      New-DfsnRoot -Path "\\$srv\Ressources" -TargetPath "\\$srv\Ressources" -Type Standalone | Out-Null
+      New-DfsnFolder -Path "\\$srv\Ressources\Projets" -TargetPath "\\$srv\Projets" | Out-Null
+      New-DfsnFolder -Path "\\$srv\Ressources\Commun" -TargetPath "\\$srv\Commun" | Out-Null
+
+  - id: win-fic-smb
+    title: Durcir SMB
+    description: |
+      Désactive le protocole **SMB 1** sur le serveur et active le **chiffrement SMB** sur le partage
+      `Direction` (données sensibles : paie, contrats).
+    hint: Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force ; Set-SmbShare -Name Direction -EncryptData $true -Force
+    cours: |
+      ```powershell
+      Get-SmbServerConfiguration | Select-Object EnableSMB1Protocol, EnableSMB2Protocol, EncryptData, RequireSecuritySignature
+      Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force
+      Set-SmbShare -Name Direction -EncryptData $true -Force
+      Get-SmbSession | Select-Object ClientComputerName, ClientUserName, Dialect
+      ```
+
+      SMB 1 date des années 1990 : pas de chiffrement, signature faible, et des failles exploitées par des
+      vers dévastateurs. Avant de le couper, on vérifie qu'aucun vieil équipement (copieur qui numérise vers
+      un dossier, NAS ancien) ne l'utilise : `Set-SmbServerConfiguration -AuditSmb1Access $true` journalise
+      ces accès. Le **chiffrement** SMB 3 protège un partage même sur un réseau non sûr ; un client trop ancien
+      (SMB 2) est alors refusé. On peut aussi l'imposer pour tout le serveur avec
+      `Set-SmbServerConfiguration -EncryptData $true`.
+    ci: true
+    checks:
+      - desc: SMB 1 est désactivé
+        run: |
+          -not (Get-SmbServerConfiguration).EnableSMB1Protocol
+      - desc: Le partage Direction exige le chiffrement
+        run: |
+          (Get-SmbShare -Name Direction).EncryptData
+    solution: |
+      Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force
+      Set-SmbShare -Name Direction -EncryptData $true -Force
+
+  - id: win-fic-vss
+    title: Les versions précédentes pour les utilisateurs
+    description: |
+      Active les **clichés instantanés** du volume `C:` : espace réservé limité à **10 %** du volume, un
+      premier cliché créé tout de suite, et une tâche planifiée `Clichés C` qui en crée un chaque jour
+      ouvré à **12 h**.
+    hint: 'vssadmin add shadowstorage /for=C: /on=C: /maxsize=10% ; vssadmin create shadow /for=C: ; Register-ScheduledTask ''Clichés C'' avec vssadmin create shadow /for=C: (ou wmic shadowcopy call create Volume=C:\)'
+    cours: |
+      ```powershell
+      vssadmin add shadowstorage /for=C: /on=C: /maxsize=10%      # ou resize shadowstorage si elle existe
+      vssadmin create shadow /for=C:
+      vssadmin list shadows /for=C:
+      $action = New-ScheduledTaskAction -Execute vssadmin.exe -Argument 'create shadow /for=C:'
+      $quand = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday -At 12:00
+      Register-ScheduledTask 'Clichés C' -Action $action -Trigger $quand -User SYSTEM -RunLevel Highest
+      ```
+
+      L'interface (*Propriétés* du volume › *Clichés instantanés* › *Activer*) fait exactement cela, avec deux
+      créations par jour (7 h et 12 h). Sur un vrai serveur, on place l'espace des clichés sur un **autre
+      volume** que les données, pour ne pas les perdre quand le volume des données se remplit. Les
+      utilisateurs retrouvent ensuite les versions dans l'onglet *Versions précédentes*, depuis le partage.
+    checks:
+      - desc: Au moins un cliché instantané existe pour C
+        run: |
+          @(Get-CimInstance Win32_ShadowCopy | Where-Object VolumeName -eq (Get-Volume -DriveLetter C).UniqueId).Count -ge 1
+      - desc: L'espace réservé est limité à 10 % environ du volume
+        run: |
+          $max = (Get-CimInstance Win32_ShadowStorage | Select-Object -First 1).MaxSpace
+          $taille = (Get-Volume -DriveLetter C).Size
+          [bool]$max -and $max -le $taille * 0.11 -and $max -ge $taille * 0.09
+      - desc: La tâche planifiée Clichés C existe et appelle vssadmin
+        run: |
+          (Get-ScheduledTask -TaskName 'Clichés C').Actions.Execute -match 'vssadmin|wmic'
+    solution: |
+      vssadmin add shadowstorage /for=C: /on=C: /maxsize=10% | Out-Null
+      if ($LASTEXITCODE -ne 0) { vssadmin resize shadowstorage /for=C: /on=C: /maxsize=10% | Out-Null }
+      vssadmin create shadow /for=C: | Out-Null
+      $action = New-ScheduledTaskAction -Execute vssadmin.exe -Argument 'create shadow /for=C:'
+      $quand = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday -At 12:00
+      Register-ScheduledTask 'Clichés C' -Action $action -Trigger $quand -User SYSTEM -RunLevel Highest | Out-Null

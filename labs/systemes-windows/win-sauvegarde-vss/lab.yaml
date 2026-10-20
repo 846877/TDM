@@ -1,0 +1,386 @@
+title: Sauvegarde et restauration sur Windows Server
+level: intermediaire
+order: 8
+tags: [windows server, sauvegarde, restauration, wbadmin, windows server backup, vss, clichés instantanés, robocopy, 3-2-1]
+summary: Protéger les données d'un serveur - Sauvegarde Windows Server (ponctuelle et planifiée), restauration d'un fichier, clichés instantanés VSS, copie miroir robocopy planifiée et contrôles.
+vagrant: bundled
+machine: srv01
+description: |
+  **Contexte.** Le serveur `SRV01` d'*Ateliers Durand* n'a **jamais** été sauvegardé. Ce matin, une macro a
+  écrasé la procédure d'accueil des RH. Heureusement, un cliché instantané a été pris hier soir... Il est
+  temps de mettre en place une vraie politique de sauvegarde.
+
+  **Machine.** `SRV01`, Windows Server 2022 hors domaine.
+
+  - `C:\Donnees` : les données (`Compta`, `RH`, `Atelier`). Leurs empreintes SHA-256 d'origine sont dans
+    `C:\Admin\empreintes.csv`.
+  - `E:` (`SAUVEGARDE`, 6 Go) : un disque dédié aux sauvegardes (un disque virtuel du lab ; en vrai, un
+    disque externe ou un NAS).
+cours: |
+  ## Pourquoi sauvegarder, et contre quoi ?
+
+  | Menace | Exemple | Ce qui protège |
+  |--------|---------|----------------|
+  | Erreur humaine | fichier supprimé ou écrasé | clichés instantanés, sauvegarde récente |
+  | Panne matérielle | disque mort | RAID (disponibilité) **et** sauvegarde (le RAID n'est pas une sauvegarde) |
+  | Rançongiciel | données chiffrées, sauvegardes accessibles chiffrées aussi | copie **hors ligne** ou immuable |
+  | Sinistre | incendie, inondation, vol | copie **hors site** |
+
+  ## La règle 3-2-1
+
+  **3** copies des données (l'original et deux sauvegardes), sur **2** supports différents, dont **1** hors
+  site. On y ajoute souvent **1** copie hors ligne ou immuable et **0** erreur aux tests de restauration
+  (3-2-1-1-0). Une sauvegarde **jamais testée** n'est qu'un espoir.
+
+  ## RPO et RTO
+
+  - **RPO** (*Recovery Point Objective*) : combien de données peut-on perdre ? Une sauvegarde chaque nuit,
+    c'est jusqu'à 24 h de travail perdu.
+  - **RTO** (*Recovery Time Objective*) : en combien de temps faut-il être reparti ? Restaurer 2 To depuis un
+    service en ligne peut prendre des jours.
+
+  Ces deux chiffres, fixés avec la direction, dictent la fréquence, le support et la méthode.
+
+  ## Types de sauvegarde
+
+  | Type | Contenu | Restauration |
+  |------|---------|--------------|
+  | **Complète** | tout | une seule sauvegarde à restaurer |
+  | **Incrémentielle** | ce qui a changé depuis la **dernière sauvegarde** | la complète + toutes les incrémentielles |
+  | **Différentielle** | ce qui a changé depuis la **dernière complète** | la complète + la dernière différentielle |
+
+  ## Les outils intégrés à Windows Server
+
+  - **Sauvegarde Windows Server** (fonctionnalité `Windows-Server-Backup`, console `wbadmin.msc`, commande
+    `wbadmin`, module PowerShell `WindowsServerBackup`) : sauvegarde de fichiers, de volumes, de l'**état
+    système** (registre, annuaire AD sur un DC, base de démarrage) ou **complète** (restauration sur un
+    serveur nu, *bare metal*). Elle s'appuie sur VSS pour copier des fichiers ouverts, et ne garde
+    qu'**une** planification ; sur un disque dédié, elle gère seule la rotation des versions.
+  - **Clichés instantanés (VSS)** : des points dans le temps du volume, sur le même disque. Parfaits contre
+    l'erreur humaine, inutiles si le disque meurt.
+  - **Robocopy** : copie de fichiers robuste (reprise, journal, miroir `/MIR`, conservation des droits
+    `/COPYALL`). Simple et lisible, mais une copie miroir **propage aussi les suppressions** et les fichiers
+    chiffrés par un rançongiciel : ce n'est pas un historique.
+
+  ## VSS en deux mots
+
+  Le service **Volume Shadow Copy** coordonne les **demandeurs** (logiciel de sauvegarde), les **éditeurs**
+  (*writers* : SQL Server, Active Directory, registre... qui mettent leurs données dans un état cohérent) et
+  les **fournisseurs** (qui créent le cliché). Un éditeur en échec (`vssadmin list writers`) est la cause
+  numéro un des sauvegardes qui échouent : on le remet d'aplomb en redémarrant le service concerné.
+
+  ## Restaurer
+
+  On restaure de préférence **à côté** (`C:\Restauration`) puis on remet en place après vérification : on
+  n'écrase pas un fichier qui a peut-être été modifié depuis. On compare les **empreintes** (SHA-256)
+  pour prouver qu'une restauration est intègre.
+
+  ## Les commandes
+
+  ```powershell
+  wbadmin start backup -backupTarget:E: -include:C:\Donnees -quiet
+  wbadmin get versions -backupTarget:E:
+  wbadmin start recovery -version:<id> -itemType:File -items:<chemin> -recoveryTarget:C:\Restauration -backupTarget:E: -quiet
+  Get-WBPolicy ; Get-WBSummary ; Get-WBJob -Previous 5
+  vssadmin list shadows ; vssadmin list writers ; vssadmin list shadowstorage
+  robocopy C:\Donnees E:\Miroir /MIR /R:1 /W:1 /LOG:C:\Admin\robocopy.log
+  ```
+docs:
+  - title: Sauvegarde Windows Server (wbadmin)
+    url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/wbadmin
+  - title: Service VSS (Volume Shadow Copy)
+    url: https://learn.microsoft.com/fr-fr/windows-server/storage/file-server/volume-shadow-copy-service
+  - title: robocopy
+    url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/robocopy
+exercises:
+  - id: win-bkp-cliche
+    title: Récupérer la procédure RH dans le cliché d'hier
+    description: |
+      `C:\Donnees\RH\procedure-accueil.txt` a été écrasé, mais un **cliché instantané** de `C:` a été pris
+      avant. Retrouve-le et remets la version d'origine du fichier en place (son empreinte doit redevenir
+      celle de `C:\Admin\empreintes.csv`).
+    hint: vssadmin list shadows ; $c = Get-CimInstance Win32_ShadowCopy | Select-Object -First 1 ; cmd /c mklink /d C:\Cliche "$($c.DeviceObject)\" ; Copy-Item C:\Cliche\Donnees\RH\procedure-accueil.txt C:\Donnees\RH\ -Force
+    cours: |
+      ```powershell
+      vssadmin list shadows /for=C:
+      $cliche = Get-CimInstance Win32_ShadowCopy | Sort-Object InstallDate | Select-Object -Last 1
+      cmd /c mklink /d C:\Cliche "$($cliche.DeviceObject)\"        # la barre finale est indispensable
+      Get-Content C:\Cliche\Donnees\RH\procedure-accueil.txt
+      Copy-Item C:\Cliche\Donnees\RH\procedure-accueil.txt C:\Donnees\RH\ -Force
+      cmd /c rmdir C:\Cliche
+      ```
+
+      Un cliché est exposé comme un périphérique (`\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1`) : un lien
+      symbolique permet de le parcourir comme un dossier, en **lecture seule**. Sur un partage, l'onglet
+      *Versions précédentes* de l'Explorateur fait la même chose sans ligne de commande, et l'utilisateur
+      peut s'en servir lui-même. On supprime le lien après usage (`rmdir` sur le lien ne touche pas au
+      cliché).
+    ci: true
+    checks:
+      - desc: La procédure d'accueil a retrouvé son contenu d'origine (empreinte SHA-256)
+        run: |
+          $ref = (Import-Csv C:\Admin\empreintes.csv | Where-Object Fichier -like '*procedure-accueil.txt').SHA256
+          (Get-FileHash C:\Donnees\RH\procedure-accueil.txt -Algorithm SHA256).Hash -eq $ref
+    solution: |
+      $cliche = Get-CimInstance Win32_ShadowCopy | Sort-Object InstallDate | Select-Object -Last 1
+      cmd /c mklink /d C:\Cliche "$($cliche.DeviceObject)\" | Out-Null
+      Copy-Item C:\Cliche\Donnees\RH\procedure-accueil.txt C:\Donnees\RH\ -Force
+      cmd /c rmdir C:\Cliche
+
+  - id: win-bkp-ecrivains
+    title: Les éditeurs VSS sont-ils en forme ?
+    description: |
+      Avant la première sauvegarde, vérifie l'état des **éditeurs VSS** : enregistre la sortie de
+      `vssadmin list writers` dans `C:\Admin\vss-editeurs.txt`, et assure-toi qu'aucun n'est en erreur.
+    hint: vssadmin list writers | Out-File C:\Admin\vss-editeurs.txt
+    cours: |
+      ```powershell
+      vssadmin list writers | Out-File C:\Admin\vss-editeurs.txt
+      Select-String 'State|État' C:\Admin\vss-editeurs.txt
+      Select-String 'Last error|Dernière erreur' C:\Admin\vss-editeurs.txt
+      ```
+
+      Chaque éditeur indique un **état** (`[1] Stable` attendu) et sa **dernière erreur** (`No error`). Un
+      éditeur en `Failed` ou avec une erreur `Retryable`/`Non-retryable` fera échouer les sauvegardes qui
+      l'impliquent : on redémarre le service correspondant (par exemple `Winmgmt` pour *WMI Writer*,
+      `CryptSvc` pour *System Writer*) et on recontrôle. Ce réflexe fait partie de tout diagnostic de
+      sauvegarde qui échoue, quel que soit le logiciel utilisé (Veeam, Windows Server Backup...).
+    ci: true
+    checks:
+      - desc: C:\Admin\vss-editeurs.txt liste les éditeurs VSS
+        run: |
+          [bool](Select-String -Path C:\Admin\vss-editeurs.txt -Pattern 'Writer name|Nom de l' -Quiet)
+      - desc: Aucun éditeur VSS n'est en échec
+        run: |
+          $sortie = vssadmin list writers | Out-String
+          $sortie -match 'Writer' -and $sortie -notmatch 'Failed|chec'
+    solution: |
+      vssadmin list writers | Out-File C:\Admin\vss-editeurs.txt
+
+  - id: win-bkp-role
+    title: Installer la Sauvegarde Windows Server
+    description: |
+      Installe la fonctionnalité **Sauvegarde Windows Server** (outils en ligne de commande et module
+      PowerShell inclus).
+    hint: Install-WindowsFeature Windows-Server-Backup
+    cours: |
+      ```powershell
+      Install-WindowsFeature Windows-Server-Backup
+      Get-Command -Module WindowsServerBackup | Measure-Object
+      wbadmin /?
+      ```
+
+      La fonctionnalité apporte la console `wbadmin.msc`, la commande `wbadmin` et le module
+      `WindowsServerBackup` (`New-WBPolicy`, `Start-WBBackup`, `Get-WBSummary`...). Elle n'est pas installée
+      par défaut. Elle convient à un petit parc ou en complément d'une solution d'entreprise : elle ne sait
+      pas sauvegarder vers un service en ligne, ne chiffre pas, et ne garde qu'une planification par serveur.
+    ci: true
+    checks:
+      - desc: La fonctionnalité Windows-Server-Backup est installée
+        run: |
+          (Get-WindowsFeature Windows-Server-Backup).Installed
+    solution: |
+      Install-WindowsFeature Windows-Server-Backup | Out-Null
+
+  - id: win-bkp-ponctuelle
+    title: Une première sauvegarde ponctuelle
+    description: |
+      Lance une sauvegarde **ponctuelle** de `C:\Donnees` vers le disque `E:`, sans question interactive.
+      Vérifie ensuite qu'une version de sauvegarde existe sur `E:`.
+    hint: 'wbadmin start backup -backupTarget:E: -include:C:\Donnees -quiet ; wbadmin get versions -backupTarget:E:'
+    cours: |
+      ```powershell
+      wbadmin start backup -backupTarget:E: -include:C:\Donnees -quiet
+      wbadmin get versions -backupTarget:E:
+      Get-WBBackupSet -BackupTarget (New-WBBackupTarget -VolumePath E:)
+      ```
+
+      La sauvegarde crée un dossier `E:\WindowsImageBackup\SRV01` contenant un disque virtuel (VHDX) et un
+      catalogue. Chaque exécution ajoute une **version**, identifiée par sa date (`10/20/2026-14:05`).
+      `-quiet` évite la question « Voulez-vous démarrer la sauvegarde ? ». Pour sauvegarder de quoi
+      reconstruire le serveur, on ajoute `-allCritical` (volumes nécessaires au démarrage) ou on lance
+      `wbadmin start systemstatebackup` ; ici, le disque de 6 Go ne suffirait pas.
+    ci: true
+    checks:
+      - desc: Au moins une version de sauvegarde sur E contient C:\Donnees
+        run: |
+          $sets = @(Get-WBBackupSet -BackupTarget (New-WBBackupTarget -VolumePath E:) -ErrorAction SilentlyContinue)
+          $sets.Count -ge 1
+      - desc: Le dossier WindowsImageBackup existe sur E
+        run: |
+          Test-Path E:\WindowsImageBackup
+    solution: |
+      wbadmin start backup -backupTarget:E: -include:C:\Donnees -quiet | Out-Null
+
+  - id: win-bkp-restauration
+    title: Restaurer un fichier supprimé
+    description: |
+      Simule l'incident : **supprime** `C:\Donnees\Compta\bilan-2025.xlsx`. Puis restaure-le depuis la
+      sauvegarde **dans `C:\Restauration`**, vérifie son empreinte, et **remets-le** à sa place d'origine.
+    hint: 'Remove-Item ... ; $v = (Get-WBBackupSet -BackupTarget (New-WBBackupTarget -VolumePath E:))[-1].VersionId ; wbadmin start recovery -version:$v -itemType:File -items:C:\Donnees\Compta\bilan-2025.xlsx -recoveryTarget:C:\Restauration -backupTarget:E: -quiet'
+    cours: |
+      ```powershell
+      Remove-Item C:\Donnees\Compta\bilan-2025.xlsx
+      $v = (Get-WBBackupSet -BackupTarget (New-WBBackupTarget -VolumePath E:) | Select-Object -Last 1).VersionId
+      wbadmin start recovery -version:$v -itemType:File -items:C:\Donnees\Compta\bilan-2025.xlsx `
+          -recoveryTarget:C:\Restauration -backupTarget:E: -quiet
+      Get-FileHash C:\Restauration\bilan-2025.xlsx
+      Copy-Item C:\Restauration\bilan-2025.xlsx C:\Donnees\Compta\
+      ```
+
+      Restaurer **à côté** permet de vérifier avant d'écraser quoi que ce soit, et de laisser l'utilisateur
+      choisir entre deux versions. La comparaison avec l'empreinte connue prouve que le fichier restauré est
+      intact. Un test de restauration régulier (un fichier par mois, un serveur complet par an) est la seule
+      preuve que la sauvegarde fonctionne. On le **consigne** : date, élément, durée, résultat.
+    ci: true
+    checks:
+      - desc: Le fichier restauré se trouve dans C:\Restauration
+        run: |
+          [bool](Get-ChildItem C:\Restauration -Recurse -Filter bilan-2025.xlsx -ErrorAction SilentlyContinue)
+      - desc: bilan-2025.xlsx est revenu à sa place, intact
+        run: |
+          $ref = (Import-Csv C:\Admin\empreintes.csv | Where-Object Fichier -like '*bilan-2025.xlsx').SHA256
+          (Get-FileHash C:\Donnees\Compta\bilan-2025.xlsx -Algorithm SHA256).Hash -eq $ref
+    solution: |
+      Remove-Item C:\Donnees\Compta\bilan-2025.xlsx
+      $v = (Get-WBBackupSet -BackupTarget (New-WBBackupTarget -VolumePath E:) | Select-Object -Last 1).VersionId
+      wbadmin start recovery -version:$v -itemType:File -items:C:\Donnees\Compta\bilan-2025.xlsx -recoveryTarget:C:\Restauration -backupTarget:E: -quiet | Out-Null
+      $f = Get-ChildItem C:\Restauration -Recurse -Filter bilan-2025.xlsx | Select-Object -First 1
+      Copy-Item $f.FullName C:\Donnees\Compta\ -Force
+
+  - id: win-bkp-planifiee
+    title: Planifier la sauvegarde chaque soir
+    description: |
+      Crée la **planification** de la Sauvegarde Windows Server : `C:\Donnees` vers le volume `E:`, chaque
+      jour à **21 h**.
+    hint: $p = New-WBPolicy ; Add-WBFileSpec -Policy $p -FileSpec (New-WBFileSpec -FileSpec C:\Donnees) ; Add-WBBackupTarget -Policy $p -Target (New-WBBackupTarget -VolumePath E:) ; Set-WBSchedule -Policy $p -Schedule 21:00 ; Set-WBPolicy -Policy $p -Force
+    cours: |
+      ```powershell
+      $p = New-WBPolicy
+      Add-WBFileSpec -Policy $p -FileSpec (New-WBFileSpec -FileSpec C:\Donnees)
+      Add-WBBackupTarget -Policy $p -Target (New-WBBackupTarget -VolumePath E:)
+      Set-WBSchedule -Policy $p -Schedule 21:00
+      Set-WBPolicy -Policy $p -Force
+      Get-WBPolicy
+      ```
+
+      La Sauvegarde Windows Server n'a qu'**une** planification par serveur, éventuellement plusieurs fois par
+      jour. Vers un **volume** partagé avec d'autres données (comme ici), chaque sauvegarde est complète et
+      seule la dernière version est conservée ; vers un **disque dédié** (`New-WBBackupTarget -Disk`), le
+      disque est formaté et réservé, les sauvegardes deviennent incrémentielles au niveau des blocs et
+      plusieurs versions sont gardées automatiquement. `Get-WBSummary` affiche le résultat de la dernière
+      exécution : c'est lui qu'on surveille.
+    ci: true
+    checks:
+      - desc: Une planification sauvegarde C:\Donnees
+        run: |
+          $p = Get-WBPolicy
+          [bool]$p -and [bool](Get-WBFileSpec -Policy $p | Where-Object { $_.FileSpec -like 'C:\Donnees*' })
+      - desc: Elle s'exécute à 21 h vers E
+        run: |
+          $p = Get-WBPolicy
+          $heures = @(Get-WBSchedule -Policy $p | Where-Object { $_.Hour -eq 21 -and $_.Minute -eq 0 })
+          $heures.Count -ge 1 -and @(Get-WBBackupTarget -Policy $p).Count -ge 1
+    solution: |
+      $p = New-WBPolicy
+      Add-WBFileSpec -Policy $p -FileSpec (New-WBFileSpec -FileSpec C:\Donnees)
+      Add-WBBackupTarget -Policy $p -Target (New-WBBackupTarget -VolumePath E:) | Out-Null
+      Set-WBSchedule -Policy $p -Schedule 21:00 | Out-Null
+      Set-WBPolicy -Policy $p -Force
+
+  - id: win-bkp-miroir
+    title: Une copie miroir avec robocopy
+    description: |
+      En complément, fais une copie **miroir** de `C:\Donnees` vers `E:\Miroir\Donnees` avec robocopy : une
+      seule tentative en cas d'erreur, attente d'une seconde, journal dans `C:\Admin\robocopy.log`.
+    hint: robocopy C:\Donnees E:\Miroir\Donnees /MIR /R:1 /W:1 /LOG:C:\Admin\robocopy.log
+    cours: |
+      ```powershell
+      robocopy C:\Donnees E:\Miroir\Donnees /MIR /R:1 /W:1 /LOG:C:\Admin\robocopy.log
+      $LASTEXITCODE        # 0 à 7 = réussite, 8 et plus = erreurs
+      Get-Content C:\Admin\robocopy.log -Tail 15
+      ```
+
+      `/MIR` = `/E` (sous-dossiers, même vides) + `/PURGE` (supprime de la destination ce qui n'est plus à la
+      source). Par défaut, robocopy réessaie **un million de fois** toutes les 30 secondes un fichier
+      verrouillé : `/R:1 /W:1` évite qu'un fichier ouvert bloque la copie toute la nuit. Son code de retour est
+      un **masque de bits** (1 = fichiers copiés, 2 = fichiers en trop, 4 = différences, 8 = échecs) : un
+      script de sauvegarde qui teste `$LASTEXITCODE -ne 0` signalerait à tort une erreur.
+    ci: true
+    checks:
+      - desc: E:\Miroir\Donnees contient les mêmes fichiers que C:\Donnees
+        run: |
+          $src = @(Get-ChildItem C:\Donnees -Recurse -File | ForEach-Object { $_.FullName.Substring(10) })
+          $dst = @(Get-ChildItem E:\Miroir\Donnees -Recurse -File | ForEach-Object { $_.FullName.Substring(17) })
+          $src.Count -gt 0 -and -not (Compare-Object $src $dst)
+      - desc: Le journal C:\Admin\robocopy.log existe
+        run: |
+          [bool](Select-String -Path C:\Admin\robocopy.log -Pattern 'C:\\Donnees' -Quiet)
+    solution: |
+      robocopy C:\Donnees E:\Miroir\Donnees /MIR /R:1 /W:1 /LOG:C:\Admin\robocopy.log | Out-Null
+
+  - id: win-bkp-tache
+    title: Planifier la copie miroir
+    description: |
+      Crée la tâche planifiée `Miroir quotidien` qui lance la même commande robocopy **chaque jour à 22 h**
+      sous le compte **SYSTEM**, avec les privilèges les plus élevés.
+    hint: $a = New-ScheduledTaskAction -Execute robocopy.exe -Argument 'C:\Donnees E:\Miroir\Donnees /MIR /R:1 /W:1 /LOG:C:\Admin\robocopy.log' ; Register-ScheduledTask 'Miroir quotidien' -Action $a -Trigger (New-ScheduledTaskTrigger -Daily -At 22:00) -User SYSTEM -RunLevel Highest
+    cours: |
+      ```powershell
+      $action = New-ScheduledTaskAction -Execute robocopy.exe `
+          -Argument 'C:\Donnees E:\Miroir\Donnees /MIR /R:1 /W:1 /LOG:C:\Admin\robocopy.log'
+      Register-ScheduledTask 'Miroir quotidien' -Action $action `
+          -Trigger (New-ScheduledTaskTrigger -Daily -At 22:00) -User SYSTEM -RunLevel Highest
+      Start-ScheduledTask 'Miroir quotidien'
+      Get-ScheduledTaskInfo 'Miroir quotidien'      # LastTaskResult : code de robocopy
+      ```
+
+      Le compte **SYSTEM** n'a pas de mot de passe à gérer et lit tous les fichiers locaux ; pour écrire sur un
+      partage réseau, il utilise le compte d'ordinateur (`SRV01$`), ou il faut un compte de service dédié.
+      La tâche s'exécute une heure après la sauvegarde Windows (21 h) pour ne pas se gêner. Le résultat (`LastTaskResult`)
+      reprend le code de retour de robocopy : 1 ou 3 signifie succès.
+    ci: true
+    checks:
+      - desc: La tâche Miroir quotidien lance robocopy en miroir
+        run: |
+          $t = Get-ScheduledTask -TaskName 'Miroir quotidien'
+          $t.Actions.Execute -match 'robocopy' -and $t.Actions.Arguments -match '/MIR'
+      - desc: Elle s'exécute chaque jour à 22 h sous SYSTEM avec les privilèges élevés
+        run: |
+          $t = Get-ScheduledTask -TaskName 'Miroir quotidien'
+          $t.Triggers[0].StartBoundary -match 'T22:00' -and $t.Principal.UserId -match 'SYSTEM' -and $t.Principal.RunLevel -eq 'Highest'
+    solution: |
+      $action = New-ScheduledTaskAction -Execute robocopy.exe -Argument 'C:\Donnees E:\Miroir\Donnees /MIR /R:1 /W:1 /LOG:C:\Admin\robocopy.log'
+      Register-ScheduledTask 'Miroir quotidien' -Action $action -Trigger (New-ScheduledTaskTrigger -Daily -At 22:00) -User SYSTEM -RunLevel Highest | Out-Null
+
+  - id: win-bkp-registre
+    title: Tenir le registre des sauvegardes
+    description: |
+      Pour l'audit, exporte dans `C:\Admin\versions.txt` la liste des versions de sauvegarde présentes sur
+      `E:` (sortie de `wbadmin get versions`), et dans `C:\Admin\dernier-resultat.txt` le résumé de la
+      dernière sauvegarde (`Get-WBSummary`).
+    hint: 'wbadmin get versions -backupTarget:E: | Out-File C:\Admin\versions.txt ; Get-WBSummary | Out-File C:\Admin\dernier-resultat.txt'
+    cours: |
+      ```powershell
+      wbadmin get versions -backupTarget:E: | Out-File C:\Admin\versions.txt
+      Get-WBSummary | Out-File C:\Admin\dernier-resultat.txt
+      Get-WBJob -Previous 3 | Format-Table StartTime, EndTime, HResult, JobState
+      Get-WinEvent -LogName Microsoft-Windows-Backup -MaxEvents 10
+      ```
+
+      `Get-WBSummary` résume l'état : dernière sauvegarde réussie, prochaine planifiée, nombre de versions,
+      code de la dernière exécution (`LastBackupResultHR` : 0 = succès). Le journal
+      *Microsoft-Windows-Backup* contient un événement 4 à chaque réussite et 5 en cas d'échec : c'est ce que
+      surveille un outil de supervision. Un registre de sauvegarde (dates, résultats, tests de restauration)
+      est exigé par la plupart des assureurs cyber et par les audits de sécurité.
+    ci: true
+    checks:
+      - desc: C:\Admin\versions.txt liste au moins une version
+        run: |
+          [bool](Select-String -Path C:\Admin\versions.txt -Pattern 'Version identifier|Identificateur de version|Backup time|Heure de la sauvegarde' -Quiet)
+      - desc: C:\Admin\dernier-resultat.txt contient le résumé Get-WBSummary
+        run: |
+          [bool](Select-String -Path C:\Admin\dernier-resultat.txt -Pattern 'LastSuccessfulBackupTime' -Quiet)
+    solution: |
+      wbadmin get versions -backupTarget:E: | Out-File C:\Admin\versions.txt
+      Get-WBSummary | Format-List * | Out-File C:\Admin\dernier-resultat.txt

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import config
+from . import windows
 
 _KEYS_DIR = Path(tempfile.gettempdir()) / "tdm-vagrant-keys"
 
@@ -87,7 +88,11 @@ def reset(lab: dict[str, Any]) -> str:
 
 
 def ssh_argv(lab: dict[str, Any], command: str | None = None, machine: str | None = None) -> list[str]:
-    """Commande ``ssh`` vers la VM : interactive si ``command`` est None."""
+    """Commande ``ssh`` vers la VM : interactive si ``command`` est None.
+
+    VM Linux : ``command`` est lancée avec ``sh -c``. VM Windows (``os: windows``) : c'est un extrait
+    PowerShell, enveloppé par :func:`windows.check_command` (le shell SSH par défaut y est PowerShell).
+    """
     info = _request("GET", "/ssh", {"lab": lab["vagrant"], "machine": machine or lab.get("machine", "")})
     if info.get("key_path") and agent_host() in ("127.0.0.1", "localhost") and Path(info["key_path"]).exists():
         # Même machine que l'agent : la clé de Vagrant a déjà les bons droits (important sous Windows).
@@ -102,4 +107,6 @@ def ssh_argv(lab: dict[str, Any], command: str | None = None, machine: str | Non
             "-o", "ConnectTimeout=10", f"{info['user']}@{agent_host()}"]
     if command is None:
         return argv[:1] + ["-t"] + argv[1:]
+    if lab.get("os") == "windows":
+        return argv + [windows.check_command(command)]
     return argv + ["sh -c " + shlex.quote(command)]

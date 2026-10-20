@@ -74,3 +74,54 @@ solution: |
 
   def sans_doublons_triee(liste):
       return sorted(set(liste))
+cours: |
+  ## Algèbre des ensembles
+
+  Les ensembles Python implémentent les opérations mathématiques classiques :
+
+  | Opérateur | Méthode | Résultat |
+  |-----------|---------|----------|
+  | `a \| b` | `a.union(b)` | éléments de a **ou** b |
+  | `a & b` | `a.intersection(b)` | éléments de a **et** b |
+  | `a - b` | `a.difference(b)` | dans a mais pas dans b |
+  | `a ^ b` | `a.symmetric_difference(b)` | dans un seul des deux |
+
+  ```python
+  autorises = {"ssh", "http", "https"}
+  ouverts = {"ssh", "telnet", "https"}
+  ouverts - autorises      # {"telnet"} : à fermer !
+  autorises - ouverts      # {"http"}  : service absent
+  ```
+
+  Les méthodes acceptent n'importe quel itérable (`a.union(liste)`), les opérateurs
+  exigent deux ensembles.
+
+  ## Comparaisons
+
+  `a <= b` teste l'inclusion (a est un sous-ensemble de b), `a.isdisjoint(b)` vérifie qu'ils
+  n'ont rien en commun. Deux ensembles sont égaux s'ils ont les mêmes éléments, quel que soit
+  l'ordre d'insertion.
+
+  ## De la liste à l'ensemble, et retour
+
+  `set(liste)` élimine les doublons. Mais un set n'a pas d'ordre : pour un résultat
+  reproductible (affichage, tests), on le trie avec `sorted(ensemble)`, qui renvoie une
+  **liste**.
+
+  ## Performance
+
+  Ces opérations sont en temps linéaire en la taille des ensembles, grâce au hachage. Les
+  remplacer par des boucles imbriquées sur des listes (« pour chaque élément de A, est-il
+  dans B ? ») donne du O(n × m).
+
+  ## `frozenset`
+
+  Un `frozenset` est un ensemble immuable, donc hachable : il peut servir de clé de
+  dictionnaire ou être mis dans un autre ensemble.
+
+  **Rappel** : `{}` est un dictionnaire vide ; l'ensemble vide s'écrit `set()`.
+docs:
+  - title: Tutoriel — les ensembles
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#sets
+  - title: Types d'ensembles (set, frozenset)
+    url: https://docs.python.org/fr/3/library/stdtypes.html#set-types-set-frozenset

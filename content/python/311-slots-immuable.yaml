@@ -159,3 +159,65 @@ solution: |
 
       def _args(self):
           return (self.x, self.y, self.z, self.nom)
+cours: |
+  ## Le coût du `__dict__`
+
+  Par défaut, chaque instance stocke ses attributs dans un dictionnaire `__dict__`. C'est
+  souple (on peut ajouter des attributs à la volée) mais coûteux : un dictionnaire pèse
+  plusieurs centaines d'octets. Pour des millions de petits objets (points, paquets
+  réseau, cellules), cela compte.
+
+  ## `__slots__`
+
+  ```python
+  class Point:
+      __slots__ = ("x", "y")
+      def __init__(self, x, y):
+          self.x = x
+          self.y = y
+
+  p = Point(1, 2)
+  p.z = 3          # AttributeError : pas de slot 'z'
+  hasattr(p, "__dict__")   # False
+  ```
+
+  Chaque nom de `__slots__` devient un descripteur au niveau de la classe, et la valeur est
+  stockée dans un emplacement fixe de l'objet. Gain mémoire typique : 40 à 60 %, et accès un
+  peu plus rapide.
+
+  ## Immuabilité
+
+  Pour interdire toute modification, on redéfinit `__setattr__` et `__delattr__` pour lever
+  `AttributeError`. Mais alors `__init__` ne peut plus affecter normalement : il contourne la
+  redéfinition en appelant l'implémentation de base, `object.__setattr__(self, "x", x)`.
+  C'est exactement ce que fait `@dataclass(frozen=True)`.
+
+  ## Hash et égalité
+
+  Un objet immuable peut être hachable : définis `__hash__` à partir des **mêmes** valeurs
+  que `__eq__` (le plus simple : `hash((self.x, self.y, self.z))`).
+
+  ## Sérialisation : le piège
+
+  Par défaut, `pickle` (et `copy`) recrée un objet vide sans appeler `__init__`, puis
+  **restaure son état** en affectant les attributs… ce que notre `__setattr__` interdit.
+  La solution la plus propre : `__reduce__`, qui indique à pickle **comment reconstruire**
+  l'objet :
+
+  ```python
+  def __reduce__(self):
+      return (Point, (self.x, self.y))   # « rappelle Point(x, y) »
+  ```
+
+  `copy.copy` et `copy.deepcopy` utilisent aussi ce protocole. Alternative : `__getnewargs__`
+  ou `__getstate__` / `__setstate__`.
+
+  ## Mise en garde sur `pickle`
+
+  Ne jamais charger (`pickle.loads`) des données venant d'une source non fiable : un pickle
+  malveillant peut exécuter du code arbitraire. Pour échanger des données, préfère JSON.
+docs:
+  - title: Référence — __slots__
+    url: https://docs.python.org/fr/3/reference/datamodel.html#slots
+  - title: Module pickle (__reduce__, __getstate__)
+    url: https://docs.python.org/fr/3/library/pickle.html

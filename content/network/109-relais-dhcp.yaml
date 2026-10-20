@@ -43,3 +43,58 @@ solution: |
   interface g0/0.20
   ip helper-address 10.10.10.5
   end
+cours: |
+  ## Le problème du broadcast
+
+  Un client DHCP qui démarre n'a pas d'adresse : il envoie un **DHCP Discover** en broadcast
+  (`255.255.255.255`). Or un routeur **ne transmet pas** les broadcasts d'un réseau à l'autre.
+  Si le serveur DHCP est centralisé dans la salle serveurs, les clients des autres VLAN ne
+  l'atteignent jamais.
+
+  ### Le relais DHCP
+
+  Sur l'interface (ou la sous-interface, ou la SVI) qui sert de passerelle aux clients, on
+  configure l'adresse du serveur :
+
+  ```
+  R1(config)# interface gi0/1.40
+  R1(config-subif)# ip helper-address 172.16.100.25
+  R1(config-subif)# interface gi0/1.50
+  R1(config-subif)# ip helper-address 172.16.100.25
+  R1# show ip interface gi0/1.40 | include Helper
+    Helper address is 172.16.100.25
+  ```
+
+  Le routeur :
+
+  1. reçoit le broadcast DHCP du client ;
+  2. le retransmet en **unicast** au serveur, en indiquant son adresse dans le champ `giaddr`
+     (adresse de la passerelle du client) ;
+  3. le serveur choisit le **pool** correspondant à ce `giaddr` et répond au relais, qui
+     renvoie la réponse au client.
+
+  ### À configurer côté serveur
+
+  - un pool (une étendue) **par réseau** relayé, avec la bonne passerelle ;
+  - une **route retour** vers chaque réseau de clients.
+
+  ### Ce que relaie ip helper-address
+
+  Par défaut, `ip helper-address` relaie aussi d'autres broadcasts UDP (TFTP 69, DNS 53, TACACS
+  49, NetBIOS 137/138...). `no ip forward-protocol udp <port>` restreint si nécessaire.
+
+  ### Pièges fréquents
+
+  - Mettre le relais sur l'interface **côté serveur** au lieu du côté clients.
+  - Relayer un VLAN qui ne doit pas recevoir de DHCP (gestion en adresses fixes).
+  - Oublier le pool correspondant sur le serveur : le client reste en APIPA (169.254.x.x).
+
+  ### Pour le CCNA
+
+  Le fonctionnement du relais DHCP et la commande `ip helper-address` sont au programme des
+  services IP.
+docs:
+  - title: "RFC 2131 — Dynamic Host Configuration Protocol"
+    url: https://www.rfc-editor.org/rfc/rfc2131
+  - title: "Wikipédia — Dynamic Host Configuration Protocol"
+    url: https://fr.wikipedia.org/wiki/Dynamic_Host_Configuration_Protocol

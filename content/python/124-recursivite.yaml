@@ -94,3 +94,54 @@ solution: |
           for reste in permutations(texte[:i] + texte[i + 1:]):
               resultat.add(c + reste)
       return sorted(resultat)
+cours: |
+  ## Penser « cas de base + réduction »
+
+  Pour écrire une fonction récursive, on suppose (par un acte de foi) que la fonction
+  **marche déjà** sur un problème plus petit, et on se demande comment en déduire la réponse
+  pour le problème courant.
+
+  ## Diviser pour régner
+
+  Réduire `n` de 1 à chaque appel donne n appels. Réduire `n` **de moitié** donne seulement
+  log₂(n) appels. Pour une puissance, la propriété `xⁿ = (x^(n/2))²` permet de calculer le
+  résultat de la moitié **une seule fois** puis de le mettre au carré. Le cas impair se
+  ramène au cas pair en sortant un facteur `x`. Attention à ne pas écrire deux appels
+  récursifs identiques (`f(n//2) * f(n//2)`), ce qui annulerait tout le gain : stocke le
+  résultat dans une variable.
+
+  Complexité : **O(log n)** multiplications au lieu de O(n). C'est l'algorithme utilisé par
+  `pow(a, b, m)` en cryptographie (RSA), sur des exposants de centaines de chiffres.
+
+  ## Récursion sur des structures hétérogènes
+
+  Quand une structure mélange plusieurs types de conteneurs, la fonction récursive teste le
+  type et agit en conséquence :
+
+  ```python
+  def profondeur(x):
+      if isinstance(x, dict):
+          x = list(x.values())
+      if isinstance(x, list):
+          return 1 + max((profondeur(e) for e in x), default=0)
+      return 0
+  ```
+
+  ## Énumérer des combinaisons
+
+  Pour générer toutes les permutations : on choisit chaque caractère possible comme
+  **premier**, puis on génère récursivement les permutations du **reste**, et on recolle.
+  Le cas de base est la chaîne de longueur 0 ou 1. Il y a n! permutations : 10 caractères
+  donnent déjà 3,6 millions de résultats.
+
+  Pour les doublons (`"aba"`), un `set` élimine les répétitions avant le tri final.
+
+  ## Limite de récursion
+
+  Python lève `RecursionError` au-delà d'environ 1000 appels imbriqués. Les algorithmes en
+  O(log n) n'ont pas ce problème.
+docs:
+  - title: Wikipédia — Exponentiation rapide
+    url: https://fr.wikipedia.org/wiki/Exponentiation_rapide
+  - title: Module sys (getrecursionlimit)
+    url: https://docs.python.org/fr/3/library/sys.html#sys.getrecursionlimit
