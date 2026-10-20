@@ -1,0 +1,3 @@
+Brouillons de travail : inutiles dans l'image.
+- ajouter une page contact
+- changer les couleurs
