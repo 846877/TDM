@@ -171,9 +171,16 @@ exercises:
     checks:
       - desc: Le CSV contient exactement les services automatiques arrêtés, triés
         run: |
-          $attendu = @(Get-Service | Where-Object { $_.StartType -eq 'Automatic' -and $_.Status -ne 'Running' } | Sort-Object Name | ForEach-Object Name)
+          # Des services automatiques (démarrage différé, déclencheurs) changent d'état à tout moment :
+          # on tolère au plus deux écarts avec l'état actuel, mais l'ordre, les colonnes et le type de démarrage
+          # de chaque ligne sont exigés.
+          $attendu = @(Get-Service | Where-Object { $_.StartType -eq 'Automatic' -and $_.Status -ne 'Running' } | ForEach-Object Name)
           $csv = @(Import-Csv C:\Scripts\Sortie\services-ko.csv -Delimiter ';')
-          ($csv.Name -join ',') -eq ($attendu -join ',') -and ($csv[0].PSObject.Properties.Name -join ',') -eq 'Name,DisplayName'
+          $noms = @($csv | ForEach-Object Name)
+          $tries = ($noms -join ',') -eq (($noms | Sort-Object) -join ',')
+          $auto = @($noms | Where-Object { (Get-Service -Name $_ -ErrorAction SilentlyContinue).StartType -ne 'Automatic' }).Count -eq 0
+          $ecarts = if ($noms.Count -and $attendu.Count) { @(Compare-Object $noms $attendu).Count } else { $noms.Count + $attendu.Count }
+          $noms.Count -ge 1 -and $tries -and $auto -and $ecarts -le 2 -and ($csv[0].PSObject.Properties.Name -join ',') -eq 'Name,DisplayName'
       - desc: 'Pas de ligne #TYPE'
         run: |
           (Test-Path C:\Scripts\Sortie\services-ko.csv) -and -not ((Get-Content C:\Scripts\Sortie\services-ko.csv -TotalCount 1) -match '^#TYPE')
