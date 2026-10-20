@@ -1,0 +1,243 @@
+title: Solveur de Sudoku par contraintes
+level: expert
+order: 34
+tags: [backtracking, bits, contraintes, optimisation]
+summary: Résoudre les grilles les plus difficiles avec masques de bits et heuristique MRV.
+description: |
+  Une grille est une liste de 9 listes de 9 entiers, `0` pour une case vide.
+
+  1. `lire(texte)` convertit une chaîne de 81 caractères (chiffres, `.` ou `0` pour les
+     cases vides ; les espaces et retours à la ligne sont ignorés) en grille. Une autre
+     longueur ou un autre caractère lève `ValueError`.
+  2. `valide(grille)` : `True` si la grille est **complète** et respecte les règles (chaque
+     ligne, colonne et bloc 3×3 contient 1 à 9 exactement une fois).
+  3. `resoudre(grille)` renvoie une **nouvelle** grille résolue (sans modifier l'originale),
+     ou `None` si la grille n'a pas de solution (y compris si elle contient déjà une
+     contradiction). Elle doit résoudre les grilles « les plus difficiles du monde » en bien
+     moins d'une seconde : représente les candidats de chaque ligne, colonne et bloc par des
+     **masques de bits** et choisis toujours la case vide qui a **le moins de candidats**.
+  4. `compter_solutions(grille, limite=2)` renvoie le nombre de solutions, en s'arrêtant dès
+     que `limite` est atteint (utile pour vérifier qu'une grille a une solution **unique**).
+
+  ```python
+  g = lire("53..7....6..195....98....6.8...6...34..8.3..17...2...6.6....28....419..5....8..79")
+  valide(resoudre(g))      # True
+  compter_solutions(g)     # 1
+  ```
+starter: |
+  def lire(texte):
+      pass
+
+
+  def valide(grille):
+      pass
+
+
+  def resoudre(grille):
+      pass
+
+
+  def compter_solutions(grille, limite=2):
+      pass
+tests: |
+  import copy
+  import time
+
+  FACILE = "53..7....6..195....98....6.8...6...34..8.3..17...2...6.6....28....419..5....8..79"
+  DIFFICILE = "8..........36......7..9.2...5...7.......457.....1...3...1....68..85...1..9....4.."
+  SOLUTION_DIFFICILE = "812753649943682175675491283154237896369845721287169534521974368438526917796318452"
+
+  def aplatir(g):
+      return "".join(str(c) for ligne in g for c in ligne)
+
+  def test_lire():
+      "lire"
+      g = solution.lire(FACILE)
+      assert len(g) == 9 and all(len(l) == 9 for l in g)
+      assert g[0] == [5, 3, 0, 0, 7, 0, 0, 0, 0]
+      assert solution.lire("\n".join(FACILE[i:i + 9].replace(".", "0") for i in range(0, 81, 9))) == g
+      for mauvais in [FACILE[:-1], FACILE + "1", FACILE[:-1] + "x"]:
+          try:
+              solution.lire(mauvais)
+          except ValueError:
+              continue
+          raise AssertionError("ValueError attendue")
+
+  def test_valide():
+      "valide"
+      g = solution.lire(SOLUTION_DIFFICILE)
+      assert solution.valide(g)
+      faux = copy.deepcopy(g)
+      faux[0][0], faux[0][1] = faux[0][1], faux[0][0]
+      assert not solution.valide(faux)
+      assert not solution.valide(solution.lire(FACILE)), "une grille incomplète n'est pas valide"
+
+  def test_resoudre_facile():
+      "resoudre une grille facile sans la modifier"
+      g = solution.lire(FACILE)
+      avant = copy.deepcopy(g)
+      r = solution.resoudre(g)
+      assert g == avant, "la grille d'origine ne doit pas être modifiée"
+      assert solution.valide(r)
+      assert all(r[l][c] == g[l][c] for l in range(9) for c in range(9) if g[l][c])
+
+  def test_resoudre_difficile():
+      "resoudre la grille d'Arto Inkala rapidement"
+      debut = time.perf_counter()
+      r = solution.resoudre(solution.lire(DIFFICILE))
+      duree = time.perf_counter() - debut
+      assert aplatir(r) == SOLUTION_DIFFICILE
+      assert duree < 1.5, f"trop lent : {duree:.2f} s"
+
+  def test_impossible():
+      "resoudre : grilles impossibles"
+      contradiction = "55" + "." * 79
+      assert solution.resoudre(solution.lire(contradiction)) is None
+      sans_solution = "12345678." + "........9" + "." * 63
+      assert solution.resoudre(solution.lire(sans_solution)) is None
+
+  def test_compter():
+      "compter_solutions"
+      assert solution.compter_solutions(solution.lire(FACILE)) == 1
+      assert solution.compter_solutions(solution.lire(DIFFICILE)) == 1
+      vide = solution.lire("." * 81)
+      assert solution.compter_solutions(vide) == 2
+      assert solution.compter_solutions(vide, limite=5) == 5
+      assert solution.compter_solutions(solution.lire("55" + "." * 79)) == 0
+solution: |
+  TOUS = 0x3FE          # bits 1 à 9
+
+
+  def lire(texte):
+      chiffres = [c for c in texte if not c.isspace()]
+      if len(chiffres) != 81 or any(c not in "0123456789." for c in chiffres):
+          raise ValueError("81 chiffres ou points attendus")
+      valeurs = [0 if c == "." else int(c) for c in chiffres]
+      return [valeurs[i:i + 9] for i in range(0, 81, 9)]
+
+
+  def valide(grille):
+      attendu = set(range(1, 10))
+      lignes = [set(l) for l in grille]
+      colonnes = [{grille[l][c] for l in range(9)} for c in range(9)]
+      blocs = [{grille[l][c] for l in range(b // 3 * 3, b // 3 * 3 + 3) for c in range(b % 3 * 3, b % 3 * 3 + 3)}
+               for b in range(9)]
+      return all(groupe == attendu for groupe in lignes + colonnes + blocs)
+
+
+  def _explorer(grille, limite):
+      g = [ligne[:] for ligne in grille]
+      lig, col, blo = [0] * 9, [0] * 9, [0] * 9
+      vides = []
+      for l in range(9):
+          for c in range(9):
+              v = g[l][c]
+              b = l // 3 * 3 + c // 3
+              if v:
+                  bit = 1 << v
+                  if (lig[l] | col[c] | blo[b]) & bit:
+                      return [], g             # contradiction initiale
+                  lig[l] |= bit
+                  col[c] |= bit
+                  blo[b] |= bit
+              else:
+                  vides.append((l, c, b))
+      solutions = []
+
+      def recherche():
+          if not vides:
+              solutions.append([ligne[:] for ligne in g])
+              return len(solutions) >= limite
+          # MRV : la case la plus contrainte
+          meilleur, meilleurs_cand, nb = None, 0, 10
+          for i, (l, c, b) in enumerate(vides):
+              cand = TOUS & ~(lig[l] | col[c] | blo[b])
+              n = cand.bit_count()
+              if n < nb:
+                  meilleur, meilleurs_cand, nb = i, cand, n
+                  if n <= 1:
+                      break
+          if nb == 0:
+              return False
+          l, c, b = vides[meilleur]
+          vides[meilleur] = vides[-1]
+          vides.pop()
+          cand = meilleurs_cand
+          while cand:
+              bit = cand & -cand
+              cand ^= bit
+              lig[l] |= bit; col[c] |= bit; blo[b] |= bit
+              g[l][c] = bit.bit_length() - 1
+              if recherche():
+                  return True
+              lig[l] ^= bit; col[c] ^= bit; blo[b] ^= bit
+          g[l][c] = 0
+          vides.append((l, c, b))
+          vides[meilleur], vides[-1] = vides[-1], vides[meilleur]
+          return False
+
+      recherche()
+      return solutions, g
+
+
+  def resoudre(grille):
+      solutions, _ = _explorer(grille, 1)
+      return solutions[0] if solutions else None
+
+
+  def compter_solutions(grille, limite=2):
+      solutions, _ = _explorer(grille, limite)
+      return len(solutions)
+cours: |
+  ## Le Sudoku, un problème de satisfaction de contraintes
+
+  81 variables (les cases), un domaine de 1 à 9, et des contraintes « tous différents » sur
+  27 groupes (lignes, colonnes, blocs). Le retour sur trace naïf, qui remplit les cases dans
+  l'ordre, peut explorer des millions de branches sur une grille difficile. Deux idées le
+  rendent quasi instantané.
+
+  ## 1. Représenter les candidats par des bits
+
+  Pour chaque ligne, colonne et bloc, un entier dont le bit `v` vaut 1 si le chiffre `v` est
+  déjà utilisé. Les candidats d'une case se calculent alors en une expression :
+
+  ```python
+  candidats = 0b1111111110 & ~(lignes[l] | colonnes[c] | blocs[b])
+  ```
+
+  Ajouter un chiffre : `|= bit` ; le retirer : `^= bit`. Énumérer les candidats :
+  `bit = cand & -cand` isole le bit le plus faible, `cand ^= bit` l'efface.
+  `int.bit_count()` (3.10+) compte les candidats. Tout cela est bien plus rapide que de
+  parcourir les 20 cases voisines avec des ensembles.
+
+  ## 2. MRV : la variable la plus contrainte d'abord
+
+  L'heuristique *Minimum Remaining Values* choisit la case vide qui a **le moins** de
+  candidats :
+
+  - 0 candidat → impasse, on revient en arrière **immédiatement** (élagage précoce) ;
+  - 1 candidat → coup forcé, aucun branchement ;
+  - sinon on branche là où l'arbre est le plus étroit.
+
+  Ce simple choix réduit l'exploration de plusieurs ordres de grandeur. Les solveurs
+  industriels (SAT, programmation par contraintes) généralisent ces idées : propagation,
+  choix de variable, apprentissage des conflits.
+
+  ## Compter sans tout énumérer
+
+  Une grille bien posée a **une seule** solution. Pour le vérifier, inutile de compter
+  toutes les solutions (une grille vide en a environ 6,67 × 10²¹) : on s'arrête dès la
+  deuxième. Un paramètre `limite` qui coupe la recherche rend cela immédiat.
+
+  ## Pièges
+
+  - Vérifier les contradictions **dans l'énoncé** (deux 5 sur une ligne) avant de chercher.
+  - Copier la grille avant de la modifier, et copier chaque solution trouvée : la grille de
+    travail est défaite pendant le retour.
+  - Retirer une case de la liste des vides par échange avec la dernière (O(1)) puis la
+    remettre exactement en place au retour.
+docs:
+  - title: Opérations bit à bit sur les entiers
+    url: https://docs.python.org/fr/3/library/stdtypes.html
+  - title: Tutoriel — définir des fonctions
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html
