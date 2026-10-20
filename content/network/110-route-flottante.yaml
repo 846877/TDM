@@ -39,3 +39,63 @@ solution: |
   ip route 0.0.0.0 0.0.0.0 192.168.200.1 10
   ip route 10.20.0.0 255.255.0.0 172.31.0.2
   end
+cours: |
+  ## La distance administrative
+
+  Quand plusieurs sources proposent une route vers le **même préfixe**, le routeur installe celle
+  dont la **distance administrative** (AD) est la plus **faible** :
+
+  | Source              | AD  |
+  |---------------------|-----|
+  | connecté            | 0   |
+  | statique            | 1   |
+  | eBGP                | 20  |
+  | EIGRP interne       | 90  |
+  | OSPF                | 110 |
+  | RIP                 | 120 |
+  | EIGRP externe       | 170 |
+  | iBGP                | 200 |
+
+  ### La route flottante
+
+  Une route statique à laquelle on donne une AD **supérieure** à celle de la route principale
+  reste dans la configuration mais **n'entre pas** dans la table de routage. Si la route
+  principale disparaît (interface tombée, voisin perdu), la route flottante « remonte » et prend
+  le relais.
+
+  ```
+  R1(config)# ip route 0.0.0.0 0.0.0.0 198.51.100.1
+  R1(config)# ip route 0.0.0.0 0.0.0.0 10.250.0.1 50
+  R1# show ip route static
+  S*   0.0.0.0/0 [1/0] via 198.51.100.1
+  R1# show running-config | include ip route
+  ip route 0.0.0.0 0.0.0.0 198.51.100.1
+  ip route 0.0.0.0 0.0.0.0 10.250.0.1 50
+  ```
+
+  Après coupure de la fibre : `S* 0.0.0.0/0 [50/0] via 10.250.0.1`.
+
+  ### Limite importante
+
+  Une route statique ne disparaît que si son saut suivant devient **injoignable** (interface
+  locale down). Si la panne est plus loin (l'opérateur est coupé mais le lien Ethernet reste
+  up), la route principale reste et le trafic part dans le vide. Solution : **IP SLA** avec
+  `track` (`ip route ... track 1`), qui retire la route si un test de ping échoue.
+
+  Une route flottante peut aussi secourir une route **dynamique** : AD supérieure à 110 pour
+  secourir OSPF, par exemple.
+
+  ### Pièges fréquents
+
+  - AD de la route de secours inférieure ou égale : partage de charge ou inversion.
+  - Oublier que la 4G a souvent besoin du NAT, elle aussi.
+  - Penser que la bascule est instantanée en cas de panne distante (voir IP SLA).
+
+  ### Pour le CCNA
+
+  Les routes statiques flottantes et la distance administrative sont explicitement au programme.
+docs:
+  - title: "Wikipédia (EN) — Floating static route"
+    url: https://en.wikipedia.org/wiki/Floating_static_route
+  - title: "Wikipédia (EN) — Administrative distance"
+    url: https://en.wikipedia.org/wiki/Administrative_distance

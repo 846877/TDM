@@ -62,3 +62,69 @@ solution: |
   interface g0/2
   ip ospf cost 100
   end
+cours: |
+  ## Trois réglages de production
+
+  ### 1. Passif par défaut
+
+  Plutôt que de lister chaque interface d'utilisateurs en passive, on rend **tout** passif puis
+  on réactive les liens vers les voisins :
+
+  ```
+  R1(config)# router ospf 10
+  R1(config-router)# passive-interface default
+  R1(config-router)# no passive-interface gi0/3
+  ```
+
+  Toute nouvelle interface est ainsi passive par défaut : pas de voisinage accidentel sur un
+  réseau d'utilisateurs.
+
+  ### 2. Une référence de bande passante adaptée
+
+  Le coût OSPF vaut `bande passante de référence / bande passante de l'interface`, avec une
+  référence de **100 Mbit/s** par défaut. Conséquence : FastEthernet, Gigabit et 10 Gigabit ont
+  tous un coût de **1**, et OSPF ne sait plus les distinguer.
+
+  ```
+  R1(config-router)# auto-cost reference-bandwidth 100000   ! 100 Gbit/s, en Mbit/s
+  R1(config)# interface gi0/3
+  R1(config-if)# ip ospf cost 250        ! valeur imposée, prioritaire sur le calcul
+  R1# show ip ospf interface brief
+  ```
+
+  La référence doit être **identique sur tous les routeurs**, sinon les chemins choisis sont
+  incohérents.
+
+  ### 3. Propager la route par défaut
+
+  Le routeur qui possède l'accès Internet annonce une route par défaut aux autres :
+
+  ```
+  R1(config)# ip route 0.0.0.0 0.0.0.0 198.51.100.1
+  R1(config)# router ospf 10
+  R1(config-router)# default-information originate
+  ```
+
+  Elle n'est annoncée que si le routeur a lui-même une route par défaut (sauf avec `always`).
+  Chez les voisins : `O*E2 0.0.0.0/0 [110/1]`.
+
+  ### Le coût pour orienter le trafic
+
+  Augmenter le coût d'un lien (`ip ospf cost`) le rend moins attractif : c'est l'outil simple
+  pour faire d'un lien un lien de **secours**.
+
+  ### Pièges fréquents
+
+  - Oublier `no passive-interface` sur les liens : les voisinages tombent.
+  - Changer la référence sur un seul routeur.
+  - `default-information originate always` sans route par défaut réelle : trou noir.
+
+  ### Pour le CCNA
+
+  Interfaces passives, coût, référence de bande passante et propagation de la route par défaut
+  font partie des réglages OSPF attendus.
+docs:
+  - title: "Cisco — OSPF Design Guide"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/7039-1.html
+  - title: "RFC 2328 — OSPF Version 2"
+    url: https://www.rfc-editor.org/rfc/rfc2328

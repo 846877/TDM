@@ -49,3 +49,61 @@ solution: |
   switchport trunk native vlan 999
   switchport nonegotiate
   end
+cours: |
+  ## Ajouter un VLAN à un trunk en production
+
+  La commande `switchport trunk allowed vlan <liste>` **remplace** entièrement la liste. Sur un
+  trunk qui transporte déjà 10, 20 et 99, taper `allowed vlan 30` coupe instantanément les VLAN
+  10, 20 et 99 de tout un étage. Pour modifier la liste sans la retaper :
+
+  | Commande                                  | Effet                         |
+  |-------------------------------------------|-------------------------------|
+  | `switchport trunk allowed vlan add 45`    | ajoute le 45                  |
+  | `switchport trunk allowed vlan remove 45` | retire le 45                  |
+  | `switchport trunk allowed vlan except 1`  | tous sauf le 1                |
+  | `switchport trunk allowed vlan all`       | revient à tous                |
+
+  Le VLAN doit aussi **exister** sur les deux switchs.
+
+  ### Sécuriser le VLAN natif
+
+  Le VLAN natif circule **sans étiquette**. Laissé sur le VLAN 1 (qui contient souvent des
+  ports d'utilisateurs), il permet l'attaque de **double étiquetage** (*VLAN hopping*) : un
+  attaquant envoie une trame avec deux étiquettes ; le premier switch retire l'étiquette du
+  natif et transmet la trame, qui arrive dans le VLAN de la seconde étiquette. Parade :
+
+  - un VLAN natif **dédié et inutilisé** (aucun port d'accès dedans) ;
+  - le même VLAN natif aux deux extrémités ;
+  - désactiver DTP (`switchport nonegotiate`) pour empêcher un poste de négocier un trunk.
+
+  ### Exemple (autres valeurs)
+
+  ```
+  SW1(config)# vlan 45
+  SW1(config-vlan)# name IMPRESSION
+  SW1(config)# vlan 990
+  SW1(config-vlan)# name NATIF-NON-UTILISE
+  SW1(config)# interface gi0/2
+  SW1(config-if)# switchport trunk allowed vlan add 45
+  SW1(config-if)# switchport trunk native vlan 990
+  SW1(config-if)# switchport nonegotiate
+  SW1# show interfaces gi0/2 trunk
+  ```
+
+  Si le VLAN natif est modifié d'un seul côté, CDP signale `NATIVE_VLAN_MISMATCH` jusqu'à ce que
+  l'autre côté soit aligné.
+
+  ### Pièges fréquents
+
+  - Oublier `add` (coupure).
+  - Changer le natif d'un côté seulement.
+  - Mettre `nonegotiate` sur un port en `dynamic` : refusé, il faut d'abord forcer le mode.
+
+  ### Pour le CCNA
+
+  La sécurité des trunks (VLAN natif, DTP) fait partie du domaine « sécurité » de l'examen.
+docs:
+  - title: "Wikipédia — IEEE 802.1Q"
+    url: https://fr.wikipedia.org/wiki/IEEE_802.1Q
+  - title: "Wikipédia (EN) — VLAN hopping"
+    url: https://en.wikipedia.org/wiki/VLAN_hopping
