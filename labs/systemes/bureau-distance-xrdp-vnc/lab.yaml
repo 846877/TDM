@@ -250,6 +250,8 @@ exercises:
 
       Modifier `startwm.sh` agit pour tous les utilisateurs ; `~/.xsession` permet un choix par utilisateur.
       `ps -u <login>` montre les processus de la session une fois connectée.
+
+      Si la session se ferme aussitôt ouverte, le fichier `~/.xsession-errors` de l'utilisateur donne presque toujours la raison.
     description: |
       À la connexion, xrdp lance `/etc/xrdp/startwm.sh`, qui démarre par défaut la session système. Pour que
       chaque utilisateur obtienne un bureau **XFCE**, crée pour `lgarnier` le fichier `~/.xsession`
@@ -306,6 +308,8 @@ exercises:
       `-f` passe en arrière-plan après l'authentification et `-N` n'exécute aucune commande distante. Le
       client VNC (Remmina, TigerVNC Viewer...) se connecte ensuite sur le port local, et tout le trafic est
       chiffré par SSH.
+
+      Le serveur VNC peut alors n'écouter que sur `localhost` : il devient injoignable directement depuis le réseau, seul le tunnel y mène.
     description: |
       Depuis admin, ouvre en arrière-plan un tunnel SSH (`-f -N -L`) avec le compte `support` (mot de passe
       `Support2024!`) pour que le port **5901 local d'admin** mène au VNC de bureau. Un client VNC

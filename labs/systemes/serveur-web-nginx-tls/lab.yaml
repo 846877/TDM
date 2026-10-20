@@ -281,6 +281,8 @@ exercises:
 
       `$host` reprend le nom demandé et `$request_uri` le chemin avec ses paramètres : l'utilisateur arrive
       exactement sur la page voulue. `curl -sI` affiche seulement les en-têtes de la réponse.
+
+      Utilise un code 301 (permanent) une fois la configuration validée : les navigateurs le mémorisent et ne repasseront plus par HTTP.
     description: |
       Les adresses `http://` des deux sites doivent rediriger de façon **permanente** vers la même page en
       `https://` (chemin et paramètres conservés).
@@ -387,6 +389,8 @@ exercises:
       Le format par défaut (`combined`) contient l'adresse du client, la date, la requête, le code de
       réponse, la taille, le référent et le navigateur. `tail -f` suit le journal en direct ; `awk '{print
       $9}' <journal> | sort | uniq -c` compte les codes de réponse.
+
+      Des journaux séparés permettent aussi de régler la rotation et la durée de conservation site par site.
     description: |
       Le site intranet en HTTPS doit écrire ses accès dans `/var/log/nginx/intranet.access.log` et ses
       erreurs dans `/var/log/nginx/intranet.error.log`. Les requêtes d'admin (10.172.0.5) doivent y

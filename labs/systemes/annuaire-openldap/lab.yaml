@@ -173,6 +173,8 @@ exercises:
       Plusieurs entrées se suivent dans un même fichier, **séparées par une ligne vide**.
       `ldapadd -x -H ldap://<serveur> -D cn=admin,dc=durand,dc=lan -W -f <fichier>` les crée (`-W` demande
       le mot de passe, `-w` le donne en argument). Une entrée ne peut être créée que si son parent existe.
+
+      Range les entrées dans un fichier LDIF plutôt qu'en ligne de commande : il sert de trace et peut être rejoué sur un autre annuaire.
     description: |
       Crée les trois unités d'organisation **`utilisateurs`**, **`groupes`** et **`services`** directement
       sous la racine.
@@ -193,6 +195,8 @@ exercises:
       Le mot de passe se stocke **haché** : `slappasswd -s '<mot de passe>'` (sur srv-ldap) produit une
       valeur `{SSHA}...` à placer dans `userPassword`. `ldapwhoami -x -D <dn> -w <mot de passe>` vérifie
       qu'un compte peut s'authentifier.
+
+      Garde les numéros uid et gid cohérents avec ceux des serveurs, sinon les fichiers existants changeraient de propriétaire apparent.
     description: |
       Dans `ou=utilisateurs`, crée **`amartin`** (Alice Martin, UID `10001`) et **`bleroy`** (Bruno Leroy, UID
       `10002`), tous deux de groupe principal `10000`, avec dossier `/home/<login>`, shell `/bin/bash`, une
@@ -227,6 +231,8 @@ exercises:
       D'autres applications préfèrent les classes `groupOfNames` (attribut `member` avec des DN) : le choix
       dépend des clients qui liront l'annuaire. Le `gidNumber` du groupe principal d'un utilisateur doit
       correspondre à un groupe existant.
+
+      Après l'ajout, `ldapsearch` sur le groupe montre la liste des membres : c'est elle que liront les serveurs pour décider des accès.
     description: |
       Dans `ou=groupes`, crée le groupe **`compta`** (GID `10000`, membres `amartin` et `bleroy`) et le
       groupe **`direction`** (GID `10010`, membre `bleroy`).
@@ -290,6 +296,8 @@ exercises:
 
       `simpleSecurityObject` apporte l'attribut `userPassword` à une entrée qui n'est pas une personne.
       Avec les ACL de l'exercice suivant, ce compte authentifié pourra lire l'annuaire, sans rien modifier.
+
+      Donne-lui un mot de passe long et propre à chaque application, pour pouvoir le changer ou le révoquer sans toucher aux autres.
     description: |
       Crée le compte de service **`cn=lecteur,ou=services,dc=durand,dc=lan`** avec le mot de passe
       `Lecteur2026!` (haché).

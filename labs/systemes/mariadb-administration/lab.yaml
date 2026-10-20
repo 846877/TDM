@@ -152,6 +152,8 @@ exercises:
       `mariadb <base> < fichier.sql`. On vérifie ensuite avec `SHOW TABLES;` et `SELECT COUNT(*) FROM
       <table>;`. Pour explorer, la session interactive `mariadb <base>` accepte toutes les commandes SQL
       (terminées par `;`, `exit` pour quitter).
+
+      Vérifie ensuite le nombre de lignes de chaque table avec `SELECT COUNT(*)` : une importation interrompue peut laisser une base à moitié remplie.
     description: |
       Crée la base **`gestion`** en `utf8mb4` et importes-y le script `/root/gestion.sql` de srv-bdd.
     hint: mariadb -e "CREATE DATABASE gestion CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci" ; mariadb gestion < /root/gestion.sql
@@ -232,6 +234,8 @@ exercises:
       C'est le principe du **moindre privilège** : la comptabilité n'a pas besoin des coordonnées des
       clients pour rapprocher les montants. `SHOW GRANTS FOR '<compte>'@'<hôte>';` vérifie le résultat ;
       teste toujours aussi ce qui doit être **refusé**.
+
+      `SHOW GRANTS FOR` le compte affiche ses droits exacts ; c'est la commande à joindre à toute demande d'accès validée.
     description: |
       Crée le compte **`compta`** (mot de passe `Compta2026!`, depuis `10.174.0.0/24`) qui peut **lire** la
       table `gestion.commandes`, et rien d'autre.
@@ -331,6 +335,8 @@ exercises:
       Les fichiers de `mariadb.conf.d` sont lus dans l'ordre alphabétique ; un fichier dédié est plus simple
       à maintenir que de modifier `50-server.cnf`. `SELECT @@slow_query_log, @@long_query_time;` vérifie
       les valeurs actives après redémarrage. `SELECT SLEEP(2);` produit une requête lente de test.
+
+      Analyse ensuite le journal avec `mariadb-dumpslow`, qui regroupe les requêtes semblables et les classe par temps total.
     description: |
       Active de façon **permanente** le journal des requêtes lentes (plus d'**1 seconde**) dans le fichier
       `/var/log/mysql/requetes-lentes.log`, avec un fichier de configuration

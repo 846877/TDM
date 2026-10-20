@@ -154,6 +154,8 @@ exercises:
       du serveur de sauvegarde (jamais root). `ssh-copy-id` installe la clé ; `-z` compresse le transfert.
 
       Avec `--delete`, une erreur de chemin peut vider la destination : un `--dry-run` d'abord.
+
+      Utilise une clé SSH dédiée à la sauvegarde, limitée dans `authorized_keys`, plutôt que la clé personnelle de l'administrateur.
     description: |
       1. Sur srv-fichiers, génère une clé SSH pour root (`/root/.ssh/id_ed25519`, sans passphrase : elle
          servira à des tâches automatiques) et autorise-la pour le compte `miroir` de srv-sauvegarde.
@@ -291,6 +293,8 @@ exercises:
       Dans une crontab, chaque ligne a 5 champs de date puis la commande : minute, heure, jour du mois, mois,
       jour de la semaine. Les chemins doivent être absolus et les variables d'environnement nécessaires
       définies dans le script (cron fournit un environnement minimal).
+
+      Fais tourner le script une première fois à la main avec la même commande que cron, puis vérifie le journal produit.
     description: |
       1. Vérifie l'intégrité du dépôt (`borg check`) et enregistre la sortie dans `/root/borg-check.log`.
       2. Planifie dans la crontab de root (srv-fichiers) : `sauvegarde-borg.sh` tous les jours à **1 h 00**

@@ -205,6 +205,8 @@ exercises:
 
       Pour tester, la requête doit venir du WAN (machine `externe`) ; depuis le LAN, elle ne passerait pas
       par la même règle (interface d'entrée différente).
+
+      Teste depuis l'extérieur, puis depuis le LAN : les deux chemins passent par des règles différentes et l'un peut marcher sans l'autre.
     description: |
       Le site public est hébergé sur `srv-web` (172.16.10.10:80), en DMZ. Publie-le sur l'adresse publique
       du pare-feu : une requête vers `http://203.0.113.2/` venant du WAN doit être **redirigée (DNAT)** vers
@@ -224,6 +226,8 @@ exercises:
 
       Exposer SSH, même sur un port non standard, attire les scans : le filtrage par adresse source réduit
       fortement la surface d'attaque. En entreprise, on préfère souvent un VPN pour les prestataires.
+
+      Journalise les connexions acceptées par cette règle : en cas d'incident, on saura qui est entré, et quand.
     description: |
       Le prestataire qui maintient le site (adresse `203.0.113.50`, la machine `externe`) doit pouvoir se
       connecter en SSH à srv-web. Redirige le port **2222** de l'adresse publique vers le port **22** de
@@ -329,6 +333,8 @@ exercises:
       existantes) ; un regroupement de commandes `{ cmd1; cmd2; } > fichier` écrit plusieurs sorties dans un
       même fichier. `nft -c -f` valide le fichier sans l'appliquer. Versionne ce fichier : c'est la mémoire de
       ta politique de sécurité.
+
+      Après le redémarrage, compare `nft list ruleset` avec le fichier sauvegardé : toute différence indique une règle oubliée ou un service qui ajoute les siennes.
     description: |
       Les règles chargées en mémoire disparaissent au redémarrage. Enregistre la configuration complète
       dans `/etc/nftables.conf` (chargée au démarrage par le service nftables) : elle doit commencer par

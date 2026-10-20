@@ -158,6 +158,8 @@ exercises:
       lignes `NOM=valeur`, sans `export` ni commande. APT a son propre réglage
       (`/etc/apt/apt.conf.d/95proxy` : `Acquire::http::Proxy "http://proxy:3128";`). Les navigateurs sont
       généralement configurés par stratégie de groupe ou par un fichier **PAC** (`proxy.pac`).
+
+      Vérifie dans le journal d'accès de Squid que les requêtes du poste y apparaissent bien : c'est la preuve qu'elles passent par le proxy.
     description: |
       Sur admin, déclare le proxy pour tous les utilisateurs dans `/etc/environment` : `http_proxy` et
       `https_proxy` vers `http://10.173.0.3:3128`, et `no_proxy` avec au moins `localhost`, `127.0.0.1` et

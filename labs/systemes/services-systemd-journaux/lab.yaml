@@ -187,6 +187,8 @@ exercises:
       démarrage « tire » alors le service. `systemctl enable --now` active et démarre en une commande.
 
       Pour un serveur web, on vérifie ensuite du point de vue de l'utilisateur : `curl http://localhost/`.
+
+      `systemctl is-enabled` et `systemctl is-active` répondent en un mot : pratique dans un script de vérification.
     description: |
       Le serveur web `nginx` doit tourner **maintenant** et **à chaque démarrage**.
     hint: systemctl enable --now nginx ; systemctl is-active nginx ; systemctl is-enabled nginx ; curl -I http://localhost/
@@ -350,6 +352,8 @@ exercises:
 
       `systemctl restart systemd-journald` applique la configuration ; `journalctl --disk-usage` affiche la
       place occupée, `journalctl --list-boots` les démarrages conservés.
+
+      Limite la taille avec `SystemMaxUse` dans `journald.conf` pour que le journal ne remplisse pas le disque.
     description: |
       Configure journald dans `/etc/systemd/journald.conf.d/persistant.conf` pour conserver le journal
       **sur disque** et limiter sa taille à **200 Mo** (`200M`). Applique la configuration : le journal doit

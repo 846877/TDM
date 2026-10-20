@@ -301,6 +301,8 @@ exercises:
 
       La configuration diffère donc entre r1 et r2 (adresses inversées). `tcpdump -ni lan vrrp` montre les
       annonces et leur destination.
+
+      Ouvre aussi le protocole VRRP (numéro 112) dans le pare-feu des deux routeurs, sinon les annonces unicast seront silencieusement jetées.
     description: |
       Dans beaucoup d'environnements (clouds, certains commutateurs filtrants), le multicast VRRP
       (224.0.0.18) ne passe pas. Configure les deux instances en **unicast** : `unicast_src_ip` (adresse du

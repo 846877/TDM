@@ -157,6 +157,8 @@ exercises:
       Pour créer un petit fichier texte sans éditeur, on redirige la sortie de `echo` :
       `echo "texte" > fichier.txt`. `tree <dossier>` affiche ensuite l'arborescence sous forme d'arbre,
       pratique pour vérifier son travail.
+
+      Choisis des noms sans espace ni accent : ils se tapent plus facilement et ne posent pas de problème aux scripts.
     description: |
       Dans ton dossier personnel, crée l'arborescence du projet de migration :
 

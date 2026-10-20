@@ -148,6 +148,8 @@ exercises:
       règle une expiration en jours ou la supprime.
 
       Vérifie aussi l'expiration du **mot de passe**, une autre notion (stratégie de mots de passe).
+
+      Note dans le ticket la cause exacte et la nouvelle date d'expiration : le prochain technicien gagnera du temps si le cas revient.
     description: |
       `kinit jmartin` échoue aussi, avec un autre message. Julien est en CDI : son compte ne doit pas
       avoir de date de fin. Trouve l'attribut en cause (`accountExpires`) et corrige-le.
@@ -192,6 +194,8 @@ exercises:
 
       Un changement de groupe n'est pris en compte qu'au prochain ticket Kerberos de l'utilisateur
       (déconnexion/reconnexion, ou `kdestroy` puis `kinit`).
+
+      Contrôle le résultat avec `samba-tool group listmembers <groupe>` avant de rappeler l'utilisateur, puis demande-lui de rouvrir sa session.
     description: |
       Thomas Bernard (`tbernard`), technicien, voit les dossiers RH mais ne peut pas administrer les postes.
       Vérifie ses groupes (`samba-tool user getgroups tbernard`) : il doit être dans **GG_Informatique**
@@ -239,6 +243,8 @@ exercises:
       - la source `winbind` dans les lignes `passwd:` et `group:` de `/etc/nsswitch.conf`.
 
       `ps aux | grep winbind` et `grep -E '^(passwd|group)' /etc/nsswitch.conf` font le point en deux commandes.
+
+      Une fois corrigé, `getent passwd <utilisateur du domaine>` doit renvoyer une ligne complète : c'est le test qui compte pour les applications. Vérifie aussi que le service redémarre seul au prochain démarrage du serveur.
     description: |
       Sur srv-fichiers, `ls -l /srv/partages` affiche des numéros au lieu des groupes et
       `getent passwd mdupont` ne renvoie rien. Deux éléments manquent pour que Linux voie les comptes du

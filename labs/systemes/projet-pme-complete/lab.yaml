@@ -136,6 +136,8 @@ exercises:
 
       `dnsmasq --test` valide la syntaxe. Sans systemd, on relance par `pkill dnsmasq` puis `dnsmasq`. Les
       baux attribués s'écrivent dans `/var/lib/misc/dnsmasq.leases`.
+
+      Teste avec un vrai client qui demande un bail, puis vérifie qu'il reçoit aussi la passerelle et le DNS.
     description: |
       Configure **dnsmasq sur gw** (fichier `/etc/dnsmasq.d/pme.conf`) pour distribuer, **uniquement sur
       l'interface `lan`** :
@@ -322,6 +324,8 @@ exercises:
       `sshd -t` valide, `sshd -T` affiche la configuration effective (en minuscules). Le signal HUP fait
       relire la configuration sans couper les sessions ouvertes : garde toujours une session ouverte pendant
       le test.
+
+      Garde toujours une session ouverte pendant que tu modifies sshd : si la nouvelle configuration te bloque, tu pourras encore corriger.
     description: |
       Sur srv, durcis sshd dans un fichier `/etc/ssh/sshd_config.d/durcissement.conf` :
       root seulement par clé, **aucune** authentification par mot de passe, 3 essais maximum, pas de
@@ -382,6 +386,8 @@ exercises:
       `nft list ruleset` affiche les règles actives dans un format directement réutilisable dans le fichier.
       Le **dossier d'exploitation** est remis au client : il permet à n'importe quel technicien de reprendre
       l'installation sans toi.
+
+      Une recette se fait avec une liste écrite de tests, cochée un par un : c'est le document que tu remettras au client.
     description: |
       Avant de partir, assure-toi que tout survivrait à un redémarrage de gw : le jeu de règles complet
       (NAT, DNAT, filtrage) est dans `/etc/nftables.conf`, dont la syntaxe est valide. Les vérifications

@@ -271,6 +271,8 @@ exercises:
       - le **fichier** `wg0.conf` : sinon le pair reviendrait au prochain `wg-quick up`.
 
       `wg show` doit ensuite ne plus lister ce pair. Pense à tracer la révocation (date, appareil, motif).
+
+      Supprime aussi la clé publique du pair des fichiers de configuration de tous les sites, pour qu'un redémarrage ne la recharge pas.
     description: |
       Le portable du commercial a été volé. **Révoque** immédiatement le pair nomade sur gw-siege : retire-le
       de l'interface active (`wg set wg0 peer <clé> remove`) **et** de `wg0.conf` (sinon il reviendrait au

@@ -228,6 +228,8 @@ exercises:
 
       `-f` passe en arrière-plan après l'authentification, `-N` n'exécute aucune commande. Le tunnel se
       combine avec un alias utilisant ProxyJump.
+
+      Ajoute `-N` pour un tunnel sans shell distant, et `-f` pour le passer en arrière-plan une fois la connexion établie.
     description: |
       La console d'administration de la base de données n'écoute que sur `127.0.0.1:8080` **de srv-bdd** :
       même depuis le bastion, on ne peut pas l'atteindre. Ouvre en arrière-plan (`-f -N`) un **tunnel
@@ -330,6 +332,8 @@ exercises:
 
       Le message de bienvenue **après** connexion, lui, est `/etc/motd`. Comme toujours : `sshd -t` puis
       rechargement.
+
+      Teste la bannière depuis un poste client en ouvrant une nouvelle connexion : elle doit s'afficher avant la demande d'authentification.
     description: |
       Le service juridique exige qu'un avertissement s'affiche **avant** l'authentification sur le bastion.
       1. Écris dans `/etc/issue.net` du bastion le texte `Acces reserve au personnel autorise - connexions
@@ -390,6 +394,8 @@ exercises:
 
       Pour de gros transferts, `rsync -avP` à travers le même alias permet de reprendre un transfert
       interrompu.
+
+      `scp -J` et `rsync -e 'ssh -J'` utilisent le même mécanisme que la connexion interactive à travers le bastion.
     description: |
       Le DBA a déposé un export dans le dossier personnel de `tech` sur **srv-bdd** : `export-bdd.csv`.
       Rapatrie-le dans `/root/export-bdd.csv` sur admin **en une seule commande** : `scp` (comme `rsync` et

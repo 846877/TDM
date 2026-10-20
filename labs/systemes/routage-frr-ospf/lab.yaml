@@ -312,6 +312,8 @@ exercises:
       Internet tombe, il continue d'attirer le trafic).
 
       Les autres routeurs voient alors `O*E2 0.0.0.0/0` dans leur table.
+
+      Vérifie ensuite qu'un hôte interne joint réellement l'extérieur : une route présente dans la table ne garantit pas le chemin retour.
     description: |
       R2 héberge aussi l'accès Internet de l'entreprise. Fais-lui annoncer une **route par défaut** à tous
       les routeurs OSPF (`default-information originate always`). R1 et R3 doivent apprendre

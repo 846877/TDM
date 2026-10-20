@@ -114,6 +114,8 @@ exercises:
       aussi qu'une archive compressée est lisible.
 
       On retient la sauvegarde **la plus récente entièrement saine** : c'est elle qui fixe le RPO réel.
+
+      Note l'archive corrompue dans le rapport : il faudra comprendre pourquoi elle l'est avant la prochaine sauvegarde.
     description: |
       Sur le NAS, vérifie l'intégrité de chacune des sauvegardes de `/srv/sauvegardes/srv-web/`.
 
@@ -140,6 +142,8 @@ exercises:
 
       Après le transfert, on **revérifie** les empreintes sur le serveur de destination : un transfert peut
       lui aussi abîmer un fichier.
+
+      Contrôle ensuite les empreintes sur le serveur de destination : un transfert interrompu ou un disque fatigué peut abîmer une copie.
     description: |
       Sur `srv-neuf`, copie la sauvegarde retenue dans `/srv/restauration/` (les fichiers directement dans ce
       dossier) avec la clé du kit PRA, puis vérifie les empreintes sur place.
@@ -208,6 +212,8 @@ exercises:
       Le site par défaut d'Ubuntu (`default`) répond à tous les noms inconnus ; ici le site restauré a son
       propre `server_name`, les deux peuvent cohabiter. Le test final se fait **du point de vue de
       l'utilisateur**, depuis un poste, avec le nom du site.
+
+      Lis le journal d'erreurs de nginx si la page ne s'affiche pas : il indique précisément le fichier ou le droit qui manque.
     description: |
       Restaure et active la configuration nginx du site `boutique`, démarre nginx : depuis admin,
       `http://boutique.durand.lan/` doit afficher la boutique.
@@ -228,6 +234,8 @@ exercises:
 
       Vérifie ensuite le contenu (`SELECT COUNT(*)`) et l'accès avec le compte de l'application, comme le
       ferait la boutique. Démarre d'abord MariaDB (`service mariadb start`).
+
+      Contrôle aussi le nombre de lignes des tables principales : il doit correspondre à ce qui existait à la date de la sauvegarde retenue.
     description: |
       Sur srv-neuf, démarre MariaDB, restaure la base `boutique` de la sauvegarde retenue et le compte
       applicatif `boutique`. Ce compte doit pouvoir lire les 40 produits avec le mot de passe de la
@@ -248,6 +256,8 @@ exercises:
       Plutôt que de copier le fichier à la main (propriétaire, groupe `crontab` et droits très précis), on
       l'extrait dans un dossier temporaire puis on l'installe avec `crontab -u <compte> <fichier>`, qui fait
       les vérifications. `crontab -l -u <compte>` contrôle le résultat. Le démon `cron` doit tourner.
+
+      Les tâches planifiées sont souvent oubliées lors d'une restauration : leur absence ne se remarque que des jours plus tard, quand une sauvegarde ou une purge n'a pas tourné. Note dans le rapport de reprise la liste des tâches restaurées.
     description: |
       Restaure la crontab du compte `web` de l'ancien serveur et démarre le service cron sur srv-neuf.
     hint: mkdir -p /tmp/restau ; tar -xzf /srv/restauration/cron.tar.gz -C /tmp/restau ; crontab -u web /tmp/restau/var/spool/cron/crontabs/web ; cron

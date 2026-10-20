@@ -175,6 +175,8 @@ exercises:
 
       Après l'installation, `dpkg -L <paquet>` liste les fichiers installés : on y trouve la commande à
       lancer (souvent dans `/usr/bin`).
+
+      `dpkg -L <paquet>` liste tous les fichiers installés par un paquet, et `dpkg -S <fichier>` retrouve le paquet qui a fourni un fichier.
     description: |
       Le responsable veut l'outil d'**inventaire du parc** publié dans le dépôt interne, mais ne se souvient
       plus de son nom. Trouve-le et installe-le, puis lance-le.
@@ -295,6 +297,8 @@ exercises:
       `/var/log/apt/history.log` garde la trace des commandes passées (date, commande, paquets).
 
       C'est cette distinction qui permet à `apt autoremove` de savoir ce qui peut partir.
+
+      `apt-mark showmanual` liste les paquets installés volontairement : c'est une bonne base pour reconstruire un serveur identique.
     description: |
       L'ancien logiciel de gestion `durand-ancien` a été installé avant ton arrivée. Une bibliothèque a été
       installée **automatiquement** avec lui.

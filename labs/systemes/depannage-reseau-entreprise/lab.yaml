@@ -195,6 +195,8 @@ exercises:
       `/etc/dnsmasq.d/`. `grep -r <nom> /etc/dnsmasq.d/ /etc/hosts` retrouve toutes les définitions.
 
       dnsmasq ne relit sa configuration qu'au redémarrage.
+
+      Teste ensuite depuis un poste client avec `dig` en interrogeant explicitement le serveur DNS, puis sans le préciser, pour vérifier la chaîne complète. Pense aussi au cache : un poste peut garder l'ancienne réponse le temps du TTL.
     description: |
       Directement sur srv-dns, `dig @127.0.0.1 intranet.durand.lan` répond… avec une ancienne adresse.
       Le serveur intranet est désormais **srv-web (10.20.0.10)**. Corrige la zone et redémarre dnsmasq.

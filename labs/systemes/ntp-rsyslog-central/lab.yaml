@@ -183,6 +183,8 @@ exercises:
       `chronyc -n sources` affiche une ligne par source ; le premier caractère indique le mode (`^` serveur)
       et le second l'état : `*` sélectionnée, `+` utilisable, `-` écartée, `?` injoignable, `x` fausse.
       La synchronisation prend quelques secondes à une minute (l'option `iburst` accélère le démarrage).
+
+      Sur chaque client, `chronyc sources` doit afficher le serveur interne précédé de `^*`, signe qu'il est la source retenue.
     description: |
       Sur **srv-web** et **srv-bdd**, configure chrony pour utiliser **uniquement** `srv-log` comme source
       (`server srv-log iburst`) et démarre-le. `chronyc sources` doit afficher srv-log précédé de `^*`
@@ -259,6 +261,8 @@ exercises:
 
       Les fichiers locaux de `/etc/rsyslog.conf` continuent d'être écrits : le transfert s'ajoute, il ne
       remplace pas.
+
+      Vérifie sur le serveur central que les messages arrivent bien avec le nom de la machine d'origine, sinon le tri par hôte sera impossible.
     description: |
       Sur **srv-web** et **srv-bdd**, crée `/etc/rsyslog.d/90-central.conf` pour envoyer **tous** les
       messages à srv-log en **TCP** (`omfwd`), avec une **file d'attente** pour ne rien perdre si srv-log
@@ -291,6 +295,8 @@ exercises:
       - une action `omfile` avec `file="..."` écrit dans un fichier fixe.
 
       Une règle dans un ruleset s'ajoute aux autres : un message peut être écrit à plusieurs endroits.
+
+      Teste la règle avec `logger -p` en choisissant la priorité voulue : c'est plus rapide que d'attendre une vraie panne.
     description: |
       Sur **srv-log**, copie en plus dans `/var/log/central/alertes.log` tous les messages distants de
       gravité **warning ou plus grave** (warning, err, crit, alert, emerg), quel que soit l'hôte. Les
@@ -376,6 +382,8 @@ exercises:
 
       Une machine prend toujours la strate de sa source **plus un**. La strate n'est pas une mesure de
       précision mais de distance à la référence.
+
+      Un serveur interne de strate 3 ou 4 reste parfaitement adapté à un réseau d'entreprise : l'essentiel est que tout le parc suive la même référence.
     description: |
       Sur **srv-web**, affiche l'état détaillé de la synchronisation avec `chronyc tracking` et ajoute à
       `/root/reponses.txt` (sur admin) :
@@ -437,6 +445,8 @@ exercises:
 
       Filtrer le bruit est indispensable pour que les alertes restent lisibles, mais documente chaque filtre :
       un message écarté est invisible pendant une enquête.
+
+      Documente chaque filtre ajouté, avec la raison, pour que l'équipe sache ce qui n'est volontairement plus conservé.
     description: |
       Le message `checkpoint complete` de PostgreSQL arrive toutes les 15 secondes et noie les journaux
       centraux. Sur **srv-log**, au début du `ruleset` des messages distants, **écarte** (`stop`) les messages

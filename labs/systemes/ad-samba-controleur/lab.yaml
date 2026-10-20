@@ -229,6 +229,8 @@ exercises:
 
       `samba-tool user show <login>` affiche tous les attributs : utile pour vérifier le DN et l'option de
       changement obligatoire (`pwdLastSet: 0`).
+
+      Vérifie chaque compte créé avec `samba-tool user show <login>` : on y lit les attributs réels enregistrés dans l'annuaire, pas ceux qu'on croit avoir donnés.
     description: |
       Crée les comptes suivants dans leur OU, avec prénom, nom et adresse mail `<login>@durand.lan` :
 
@@ -334,6 +336,8 @@ exercises:
 
       `smbclient --use-kerberos=required` utilise le ticket au lieu d'un mot de passe : il faut alors utiliser
       le **nom DNS complet** du serveur, car le ticket de service est demandé pour `cifs/dc1.durand.lan`.
+
+      En cas d'échec, compare l'heure du poste et celle du contrôleur : au-delà de cinq minutes d'écart, Kerberos refuse les tickets.
     description: |
       Sur **admin**, complète `/etc/krb5.conf` avec `default_realm = DURAND.LAN` (les KDC sont trouvés par
       les enregistrements SRV du DNS). Obtiens un ticket pour `tbernard` (`kinit tbernard`), affiche-le

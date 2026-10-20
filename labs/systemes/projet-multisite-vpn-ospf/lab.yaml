@@ -278,6 +278,8 @@ exercises:
 
       Vérifie que l'invité joint sa passerelle, et que les pings vers le VLAN 10, le VLAN 20 et l'agence
       échouent.
+
+      Teste l'isolement des deux côtés : un invité ne doit pas joindre le LAN, et le LAN ne doit pas pouvoir initier de connexion vers les invités.
     description: |
       Le VLAN **30** accueille le Wi-Fi des visiteurs (hôte `invite`, 10.1.30.50). Crée `lan.30`
       (`10.1.30.254/24`) sur r-siege. Les invités doivent joindre leur passerelle mais **aucun** réseau

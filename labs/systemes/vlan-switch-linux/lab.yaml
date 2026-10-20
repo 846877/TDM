@@ -296,6 +296,8 @@ exercises:
       Un paquet routé entre deux VLAN traverse le trunk **deux fois** : du switch vers le routeur avec
       l'étiquette du VLAN source, puis du routeur vers le switch avec celle du VLAN de destination. C'est la
       limite du router-on-a-stick : le trunk transporte deux fois le trafic inter-VLAN.
+
+      Filtre la capture avec `vlan` pour ne voir que les trames étiquetées, et `-e` pour afficher les en-têtes Ethernet.
     description: |
       Capture le trafic du port trunk `sw-p8` **avec les en-têtes Ethernet** dans `/root/trunk.pcap`
       pendant que `pc-compta1` pingue `srv-fichiers`. Relis-la avec `tcpdump -enr /root/trunk.pcap` : chaque

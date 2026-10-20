@@ -145,6 +145,8 @@ exercises:
 
       Pour afficher du texte, une chaîne seule sur une ligne est envoyée dans le pipeline de sortie (ou
       `Write-Output`). Les **guillemets doubles** remplacent les variables par leur valeur, les simples non.
+
+      Exécute le script avec plusieurs valeurs de paramètre, et sans paramètre, pour vérifier qu'il se comporte proprement dans tous les cas.
     description: |
       Crée le script `/srv/ps/scripts/bonjour.ps1` qui déclare un paramètre **obligatoire** `-Nom` (bloc
       `param()` avec `[Parameter(Mandatory)]`) et affiche `Bonjour <Nom>`.
@@ -169,6 +171,8 @@ exercises:
       - `Export-Csv <fichier> -Encoding utf8` écrit le résultat, avec une ligne d'en-tête.
 
       Pour vérifier à chaque étape, arrête le pipeline avant l'export et regarde ce qui s'affiche.
+
+      `Import-Csv` crée un objet par ligne dont les propriétés portent le nom des colonnes : `Get-Member` les liste si tu as un doute.
     description: |
       Importe `nouveaux.csv` (attention au séparateur `;`) et exporte dans `/srv/ps/sortie/compta.csv` les
       arrivées du service **Compta** uniquement, avec seulement les colonnes `Prenom` et `Nom`, en UTF-8 et
@@ -192,6 +196,8 @@ exercises:
       - `-replace '[^a-z]', ''` retire tout ce qui n'est pas une lettre de a à z.
 
       L'ordre des opérations compte : réfléchis à quand passer en minuscules.
+
+      Teste ta fonction sur des noms à accents, à espaces ou à tirets : ce sont eux qui font échouer les scripts d'identifiants en production.
     description: |
       La règle de nommage des comptes est : **première lettre du prénom + nom**, en minuscules, **sans
       accents** et sans aucun caractère autre que `a-z` (apostrophes, tirets et espaces supprimés).
@@ -252,6 +258,8 @@ exercises:
 
       `ConvertTo-Html` produit une page HTML avec un tableau des objets reçus ; on l'enregistre avec
       `Set-Content` ou `Out-File`. Le paramètre `-Title` donne un titre à la page.
+
+      Ouvre le fichier produit dans un navigateur pour vérifier le rendu : un rapport illisible ne sera pas lu.
     description: |
       Lis `inventaire.json` (`Get-Content -Raw | ConvertFrom-Json`) et produis le rapport
       `/srv/ps/sortie/disques.html` (avec `ConvertTo-Html`) listant les machines ayant **moins de 20 Go**
@@ -327,6 +335,8 @@ exercises:
       `"Total=$($m.Sum)"` (sans `$( )`, PowerShell n'insérerait que `$m` suivi du texte `.Sum`).
 
       `Set-Content` écrit un tableau de chaînes à raison d'une par ligne.
+
+      `Measure-Object` accepte plusieurs options à la fois (`-Sum -Average -Maximum`) et renvoie un seul objet avec toutes les valeurs.
     description: |
       La direction veut connaître la mémoire du parc. À partir de `inventaire.json`, calcule avec
       `Measure-Object` la **somme** et la **moyenne** de la propriété `RamGo`, et écris dans

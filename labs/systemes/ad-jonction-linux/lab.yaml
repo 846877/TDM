@@ -342,6 +342,8 @@ exercises:
       Le dossier personnel n'existe pas à la première connexion d'un compte du domaine : le module PAM
       `pam_mkhomedir`, activé par `pam-auth-update --enable mkhomedir`, le crée depuis `/etc/skel`.
       Après modification de `sssd.conf`, redémarre SSSD.
+
+      En cas de refus, le journal d'authentification (`/var/log/auth.log`) indique quelle étape a échoué : SSSD, PAM ou la règle d'accès elle-même.
     description: |
       Sur poste01 :
       1. seuls les membres de `GG_Informatique` peuvent ouvrir une session : `access_provider = simple` et

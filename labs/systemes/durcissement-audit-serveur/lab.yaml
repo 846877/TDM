@@ -249,6 +249,8 @@ exercises:
       - **l'expiration** : `/etc/login.defs` (`PASS_MAX_DAYS`, `PASS_WARN_AGE`) ne s'applique qu'aux comptes
         **créés ensuite** ; pour les comptes existants, `chage` modifie chaque compte (`-M`, `-W`) et
         `chage -l` vérifie.
+
+      Ces règles ne s'appliquent qu'aux mots de passe changés après leur mise en place : pour les comptes existants, force un changement à la prochaine connexion avec `chage -d 0`. Pense aussi aux comptes de service, qui ne doivent pas expirer sans prévenir.
     description: |
       Applique la politique du RSSI :
 
@@ -314,6 +316,8 @@ exercises:
       Le rapport lisible par machine est dans `/var/log/lynis-report.dat`, au format `clé=valeur`, ce qui le
       rend facile à exploiter avec `grep`. On priorise selon le **risque réel** pour ce serveur, pas selon
       l'ordre de la liste.
+
+      Garde le rapport de chaque passage : comparer l'indice de durcissement d'une fois sur l'autre montre si le serveur dérive avec le temps.
     description: |
       Lance un audit **Lynis** complet (`lynis audit system`, 1 à 2 minutes) et lis son rapport : indice
       de durcissement (*hardening index*), avertissements (*warnings*) et suggestions. Il est enregistré
