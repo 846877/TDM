@@ -19,5 +19,5 @@ services:
   site2:
     build: ./site2
   squid:
-    image: ubuntu/squid:latest
+    image: ubuntu/squid:6.6-24.04_edge
     hostname: squid

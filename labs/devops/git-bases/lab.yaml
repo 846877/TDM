@@ -3,7 +3,7 @@ level: debutant
 order: 2
 tags: [git, versioning, branches, collaboration]
 summary: Dépôt, commits, branches, conflits, dépôt distant, rebase, annulation et hooks.
-image: alpine/git:latest
+image: alpine/git:2.49.1
 entrypoint: ""
 shell: sh
 workdir: /root

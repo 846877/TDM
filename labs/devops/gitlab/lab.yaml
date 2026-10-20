@@ -3,7 +3,7 @@ level: avance
 order: 2
 tags: [gitlab, git, ci/cd, runner, api]
 summary: Héberger ses dépôts, pipelines GitLab CI, runner, variables, artefacts, règles et merge requests.
-image: gitlab/gitlab-ce:latest
+image: gitlab/gitlab-ce:19.2.6-ce.0
 command: []
 ports: ["8929:80", "2224:22"]
 shell: bash

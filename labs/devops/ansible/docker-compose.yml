@@ -5,7 +5,7 @@ services:
     build: ./control
     hostname: ansible
   client1:
-    image: linuxserver/openssh-server:latest
+    image: linuxserver/openssh-server:10.3_p1-r1-ls238
     hostname: client1
     environment: &client
       USER_NAME: vagrant
@@ -13,6 +13,6 @@ services:
       PASSWORD_ACCESS: "true"
       SUDO_ACCESS: "true"
   client2:
-    image: linuxserver/openssh-server:latest
+    image: linuxserver/openssh-server:10.3_p1-r1-ls238
     hostname: client2
     environment: *client

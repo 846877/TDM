@@ -2,7 +2,7 @@
 # du lab Vagrant `pki`. Le volume `pki` est partagé entre les deux.
 services:
   ca:
-    image: alpine/openssl:latest
+    image: alpine/openssl:3.5.0
     hostname: ca
     entrypoint: ["sleep", "infinity"]
     volumes: [pki:/pki]
