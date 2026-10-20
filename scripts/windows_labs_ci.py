@@ -77,6 +77,20 @@ def powershell() -> str:
     raise SystemExit("PowerShell introuvable (powershell.exe, pwsh ou TDM_POWERSHELL).")
 
 
+def ps_env() -> dict:
+    """Environnement des sous-processus PowerShell.
+
+    Lancé depuis pwsh (shell par défaut des runners GitHub), Windows PowerShell 5.1 hérite d'un PSModulePath
+    qui pointe d'abord vers les modules de PowerShell 7 : Microsoft.PowerShell.Security/Utility version 7
+    refusent alors de se charger et Get-Acl, Get-FileHash, Get-ExecutionPolicy... deviennent « inconnus ».
+    Sans PSModulePath, powershell.exe reconstruit son chemin par défaut.
+    """
+    env = dict(os.environ)
+    if powershell().replace("\\", "/").rsplit("/", 1)[-1].lower() == "powershell.exe":
+        env.pop("PSModulePath", None)
+    return env
+
+
 def windows_labs() -> list[dict]:
     return [lab for lab in labs_mod.load_labs() if lab.get("os") == "windows"]
 
@@ -86,7 +100,7 @@ def _run_ps_file(script: str, *args: str, timeout: float = 600) -> None:
         path = Path(tmp) / "script.ps1"
         path.write_text(script, encoding="utf-8-sig")
         subprocess.run([powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                        "-File", str(path), *args], check=True, timeout=timeout)
+                        "-File", str(path), *args], check=True, timeout=timeout, env=ps_env())
 
 
 def _powershell_json(script: str, payload) -> object:
@@ -148,7 +162,7 @@ def ci_labs() -> list[str]:
 def _ps(code: str, timeout: float) -> tuple[int, str]:
     try:
         result = subprocess.run(windows.encoded_argv(code, powershell()), capture_output=True, text=True,
-                                encoding="utf-8", errors="replace", timeout=timeout)
+                                encoding="utf-8", errors="replace", timeout=timeout, env=ps_env())
     except subprocess.TimeoutExpired:
         return 124, "délai dépassé"
     return result.returncode, (result.stdout + result.stderr).strip()
@@ -187,7 +201,7 @@ def run_lab(lab_id: str) -> int:
     if scenario.exists():
         print(f"== {lab_id} : scenario.ps1", flush=True)
         subprocess.run([powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                        "-File", str(scenario)], check=True, timeout=1800)
+                        "-File", str(scenario)], check=True, timeout=1800, env=ps_env())
     errors = []
     for exercise in lab["exercises"]:
         if not exercise.get("ci"):

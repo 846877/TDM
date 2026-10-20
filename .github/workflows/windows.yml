@@ -65,7 +65,8 @@ jobs:
         shell: powershell
         run: |
           $features = 'RSAT-AD-PowerShell', 'RSAT-ADDS-Tools', 'AD-Domain-Services', 'RSAT-DNS-Server', 'RSAT-DHCP',
-                      'GPMC', 'RSAT-DFS-Mgmt-Con', 'RSAT-FSRM-Mgmt', 'Windows-Server-Backup'
+                      'GPMC', 'RSAT-DFS-Mgmt-Con', 'RSAT-FSRM-Mgmt', 'Windows-Server-Backup',
+                      'FS-Resource-Manager'   # le module FileServerResourceManager vient avec le service de rôle
           Install-WindowsFeature $features | Format-Table -AutoSize
       - name: Syntaxe des scripts et existence des commandes
         run: python scripts/windows_labs_ci.py static --commands

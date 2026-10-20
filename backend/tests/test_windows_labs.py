@@ -260,3 +260,11 @@ def test_agent_lab_embarque(tmp_path, monkeypatch):
     finally:
         server.shutdown()
         target.close()
+
+
+def test_ci_powershell_51_sans_psmodulepath_de_pwsh(monkeypatch):
+    monkeypatch.setenv("PSModulePath", r"C:\Program Files\PowerShell\7\Modules")
+    monkeypatch.setattr(windows_labs_ci, "powershell", lambda: r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
+    assert "PSModulePath" not in windows_labs_ci.ps_env()
+    monkeypatch.setattr(windows_labs_ci, "powershell", lambda: "/usr/bin/pwsh")
+    assert "PSModulePath" in windows_labs_ci.ps_env()
