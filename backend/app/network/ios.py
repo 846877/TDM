@@ -1317,8 +1317,10 @@ def _is_placeholder(word: str) -> bool:
     return word.startswith("<")
 
 
-def match_rules(rules: list[Rule], tokens: list[str]) -> tuple[Rule, list[str]]:
-    """Trouve la règle correspondant aux mots tapés, en acceptant les abréviations."""
+def match_rules(rules: list[Rule], tokens: list[str], negate: bool = False) -> tuple[Rule, list[str]]:
+    """Trouve la règle correspondant aux mots tapés, en acceptant les abréviations.
+
+    Avec ``negate``, la valeur finale peut être omise (« no ip ospf hello-interval »)."""
     candidates = [(rule, []) for rule in rules]
     for position, token in enumerate(tokens):
         low = token.lower()
@@ -1356,6 +1358,12 @@ def match_rules(rules: list[Rule], tokens: list[str]) -> tuple[Rule, list[str]]:
     if optional_rest:
         rule, args = optional_rest[0]
         return rule, args + [""]
+    if negate:
+        valueless = [(r, a) for r, a in candidates
+                     if len(r.pattern) == len(tokens) + 1 and _is_placeholder(r.pattern[-1]) and r.negatable]
+        if valueless:
+            rule, args = valueless[0]
+            return rule, args + [""]
     raise CommandError(INCOMPLETE)
 
 
@@ -1534,7 +1542,7 @@ class Session:
             # Comme IOS, une commande de configuration globale tapée dans un sous-mode
             # y est acceptée (et nous ramène en mode config).
             try:
-                rule, args = match_rules(rules, tokens)
+                rule, args = match_rules(rules, tokens, negate)
             except CommandError as first_error:
                 found = None
                 parent = PARENT_MODES.get(mode)
@@ -1552,7 +1560,7 @@ class Session:
                     self._exit_to_config()
                 rule, args = found
         else:
-            rule, args = match_rules(rules, tokens)
+            rule, args = match_rules(rules, tokens, negate)
         if negate and not rule.negatable:
             raise CommandError(INVALID)
         return rule.handler(args, negate)
@@ -1676,6 +1684,8 @@ class Session:
             R(["erase", "startup-config"], self.cmd_erase, "Effacer la configuration sauvegardée"),
             R(["copy", "running-config", "<dest>"], self.cmd_copy_remote, "Copier la configuration (tftp:, flash:...)"),
             R(["archive", "config"], self.cmd_archive_config, "Archiver la configuration courante"),
+            R(["clear", "ip", "ospf", "process"], self.cmd_clear_ospf, "Redémarrer les processus OSPF"),
+            R(["clear", "ip", "bgp", "<rest>"], self.cmd_clear_bgp, "Réinitialiser des sessions BGP"),
             R(["ping", "vrf", "<name>", "<ip>"], self.cmd_ping_vrf, "Tester la connectivité dans une VRF"),
             R(["reload"], self.cmd_reload, "Redémarrer"),
             R(["ping", "<ip>"], self.cmd_ping, "Tester la connectivité"),
@@ -1767,7 +1777,7 @@ class Session:
             R(["ip", "host", "<name>", "<rest>"], self.cfg_ip_host, "Table d'hôtes locale"),
             R(["ip", "source-route"], lambda a, n: setattr(self.device, "source_route", not n),
               "Routage par la source (à désactiver)"),
-            R(["ip", "ssh", "source-interface", "<if>"], lambda a, n: self._set_source("ssh_source", a, n),
+            R(["ip", "ssh", "source-interface", "<rest>"], lambda a, n: self._set_source("ssh_source", a, n),
               "Interface source SSH"),
             R(["mac", "address-table", "static", "<mac>", "vlan", "<id>", "<rest>"], self.cfg_mac_static,
               "Adresse MAC statique"),
@@ -1775,13 +1785,13 @@ class Session:
             R(["archive"], self.cfg_archive, "Archivage de la configuration"),
             R(["privilege", "<mode>", "level", "<n>", "<rest>"], self.cfg_privilege, "Niveau de privilège d'une commande"),
             R(["logging", "console", "<rest>"], self.cfg_logging_console, "Messages sur la console"),
-            R(["logging", "source-interface", "<if>"], lambda a, n: self._set_source("logging_source", a, n),
+            R(["logging", "source-interface", "<rest>"], lambda a, n: self._set_source("logging_source", a, n),
               "Interface source syslog"),
             R(["ntp", "authenticate"], lambda a, n: setattr(self.device, "ntp_authenticate", not n),
               "Exiger l'authentification NTP"),
             R(["ntp", "authentication-key", "<n>", "md5", "<rest>"], self.cfg_ntp_key, "Clé NTP"),
             R(["ntp", "trusted-key", "<n>"], self.cfg_ntp_trusted, "Clé NTP de confiance"),
-            R(["ntp", "source", "<if>"], lambda a, n: self._set_source("ntp_source", a, n), "Interface source NTP"),
+            R(["ntp", "source", "<rest>"], lambda a, n: self._set_source("ntp_source", a, n), "Interface source NTP"),
             R(["spanning-tree", "mst", "configuration"], self.cfg_mst_configuration, "Région MST"),
             R(["spanning-tree", "mst", "<inst>", "priority", "<n>"], self.cfg_mst_priority, "Priorité d'une instance MST"),
             R(["spanning-tree", "mst", "<inst>", "root", "<kind>"], self.cfg_mst_root, "Racine d'une instance MST"),
@@ -1807,16 +1817,16 @@ class Session:
             R(["aaa", "group", "server", "<type>", "<name>"], self.cfg_aaa_group, "Groupe de serveurs AAA"),
             R(["radius", "server", "<name>"], lambda a, n: self.cfg_aaa_server(a, n, "radius"), "Serveur RADIUS"),
             R(["tacacs", "server", "<name>"], lambda a, n: self.cfg_aaa_server(a, n, "tacacs"), "Serveur TACACS+"),
-            R(["ip", "radius", "source-interface", "<if>"], lambda a, n: self._set_source("radius_source", a, n),
+            R(["ip", "radius", "source-interface", "<rest>"], lambda a, n: self._set_source("radius_source", a, n),
               "Interface source RADIUS"),
-            R(["ip", "tacacs", "source-interface", "<if>"], lambda a, n: self._set_source("tacacs_source", a, n),
+            R(["ip", "tacacs", "source-interface", "<rest>"], lambda a, n: self._set_source("tacacs_source", a, n),
               "Interface source TACACS+"),
             R(["snmp-server", "view", "<name>", "<oid>", "<kind>"], self.cfg_snmp_view, "Vue SNMP"),
             R(["snmp-server", "group", "<name>", "<version>", "<rest>"], self.cfg_snmp_group, "Groupe SNMPv3"),
             R(["snmp-server", "user", "<name>", "<group>", "<version>", "<rest>"], self.cfg_snmp_user,
               "Utilisateur SNMPv3"),
             R(["snmp-server", "enable", "traps", "<rest>"], self.cfg_snmp_traps, "Activer les traps"),
-            R(["snmp-server", "trap-source", "<if>"], lambda a, n: self._set_source("snmp_trap_source", a, n),
+            R(["snmp-server", "trap-source", "<rest>"], lambda a, n: self._set_source("snmp_trap_source", a, n),
               "Interface source des traps"),
             R(["crypto", "isakmp", "policy", "<n>"], self.cfg_isakmp_policy, "Politique IKE phase 1"),
             R(["crypto", "isakmp", "key", "<rest>"], self.cfg_isakmp_key, "Clé pré-partagée IKE"),
@@ -3829,7 +3839,10 @@ class Session:
         return canonical
 
     def _set_source(self, attr, args, negate):
-        setattr(self.device, attr, None if negate else self._iface_arg(args[0]))
+        text = "".join(args[0].split())  # « loopback 0 » comme « loopback0 »
+        if not text and not negate:
+            raise CommandError(INCOMPLETE)
+        setattr(self.device, attr, None if negate else self._iface_arg(text))
 
     def _if_num(self, attr, args, negate, low, high):
         value = None if negate else self._number(args[0], low, high)
@@ -3881,6 +3894,21 @@ class Session:
         self.device.backups.append(dest)
         size = len(self.device.running_config())
         return f"Destination filename [{dest.rsplit('/', 1)[-1].split(':')[-1]}]?\n!!\n{size} bytes copied in 0.412 secs"
+
+    def cmd_clear_ospf(self, args, negate):
+        if not self.device.ospf:
+            return ""
+        return "Reset ALL OSPF processes? [no]: yes"
+
+    def cmd_clear_bgp(self, args, negate):
+        target = args[0].split()
+        if not target:
+            raise CommandError(INCOMPLETE)
+        if self.device.bgp is None:
+            raise CommandError("% BGP not active")
+        if target[0] != "*" and target[0] not in self.device.bgp.neighbors:
+            raise CommandError(INVALID)
+        return ""
 
     def cmd_archive_config(self, args, negate):
         path = self.device.archive.get("path")
