@@ -153,7 +153,7 @@ exercises:
       | Compte | Nom complet | Mot de passe | Groupes |
       |--------|-------------|--------------|---------|
       | `commercial` | Nicolas Petit | `Bienvenue2024!` | *Users* uniquement (**standard**) |
-      | `admin-pc01` | Administrateur de secours | `Secours!2024-PC01` | *Administrators* |
+      | `admin-pc01` | Administrateur de secours | `Depannage!2024-PC01` | *Administrators* |
 
       Le compte de secours ne doit **pas** expirer (`PasswordNeverExpires`).
     hint: New-LocalUser ... ; Add-LocalGroupMember -SID S-1-5-32-545 -Member commercial ; Add-LocalGroupMember -SID S-1-5-32-544 -Member admin-pc01 ; Set-LocalUser admin-pc01 -PasswordNeverExpires $true
@@ -183,13 +183,13 @@ exercises:
           $null -eq (Get-LocalUser admin-pc01).PasswordExpires
       - desc: Les mots de passe sont ceux de la fiche
         run: |
-          Add-Type -AssemblyName System.DirectoryServices.AccountManagement
-          $ctx = New-Object System.DirectoryServices.AccountManagement.PrincipalContext('Machine')
-          $ctx.ValidateCredentials('commercial', 'Bienvenue2024!') -and $ctx.ValidateCredentials('admin-pc01', 'Secours!2024-PC01')
+          Add-Type -Namespace TDM -Name Auth -MemberDefinition '[DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool LogonUser(string u, string d, string p, int t, int f, out IntPtr h); [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h); public static int Code(string u, string p) { IntPtr h; if (LogonUser(u, ".", p, 3, 0, out h)) { CloseHandle(h); return 0; } return Marshal.GetLastWin32Error(); }'
+          # 0 = accepté ; 1385 (type d'ouverture non accordé) et 1907 (changement exigé) = mot de passe correct quand même
+          ([TDM.Auth]::Code('commercial', 'Bienvenue2024!') -in 0, 1385, 1907) -and ([TDM.Auth]::Code('admin-pc01', 'Depannage!2024-PC01') -in 0, 1385, 1907)
     solution: |
       New-LocalUser commercial -FullName 'Nicolas Petit' -Password (ConvertTo-SecureString 'Bienvenue2024!' -AsPlainText -Force) | Out-Null
       Add-LocalGroupMember -SID S-1-5-32-545 -Member commercial
-      New-LocalUser admin-pc01 -FullName 'Administrateur de secours' -Password (ConvertTo-SecureString 'Secours!2024-PC01' -AsPlainText -Force) -PasswordNeverExpires | Out-Null
+      New-LocalUser admin-pc01 -FullName 'Administrateur de secours' -Password (ConvertTo-SecureString 'Depannage!2024-PC01' -AsPlainText -Force) -PasswordNeverExpires | Out-Null
       Add-LocalGroupMember -SID S-1-5-32-544 -Member admin-pc01
 
   - id: win-pc-energie

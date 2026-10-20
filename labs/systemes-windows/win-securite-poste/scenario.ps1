@@ -1,6 +1,6 @@
 ﻿# Mise en situation : un portable revenu d'un prestataire « peu soigneux ». Exclusions Defender suspectes,
 # règle de pare-feu entrante ouverte, profil Public désactivé, invité actif, UAC sans invite, un disque de
-# données V: (« COFFRE ») non chiffré.
+# données V: (« COFFRE ») non chiffré, audit des ouvertures de session coupé.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 New-Item C:\Admin, C:\VHD, C:\ProgramData\Updater -ItemType Directory -Force | Out-Null
@@ -47,3 +47,10 @@ Get-LocalUser | Where-Object { $_.SID.Value -like '*-501' } | Enable-LocalUser
 $uac = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
 Set-ItemProperty $uac -Name ConsentPromptBehaviorAdmin -Value 0
 Set-ItemProperty $uac -Name PromptOnSecureDesktop -Value 0
+
+# Audit : le prestataire a coupé l'audit des ouvertures de session, des verrouillages et de la gestion des
+# comptes (« ça remplissait le journal »). Une image durcie peut déjà les auditer : on part d'un état connu.
+foreach ($sous in '{0CCE9215-69AE-11D9-BED3-505054503030}', '{0CCE9217-69AE-11D9-BED3-505054503030}',
+                  '{0CCE9235-69AE-11D9-BED3-505054503030}') {
+    auditpol.exe /set /subcategory:$sous /success:disable /failure:disable | Out-Null
+}

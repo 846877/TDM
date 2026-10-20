@@ -341,11 +341,11 @@ exercises:
       Un ordinateur personnel (MAC `08-00-27-00-BA-D0`) se branche régulièrement sur le réseau de l'atelier.
       Ajoute-le à la **liste de refus** du serveur DHCP avec la description `PC personnel non autorisé`, et
       **active** la liste de refus.
-    hint: Add-DhcpServerv4Filter -List Deny -MacAddress 08-00-27-00-BA-D0 -Description 'PC personnel non autorisé' ; Set-DhcpServerv4FilterList -DenyFilterEnabled $true
+    hint: Add-DhcpServerv4Filter -List Deny -MacAddress 08-00-27-00-BA-D0 -Description 'PC personnel non autorisé' ; Set-DhcpServerv4FilterList -Deny $true
     cours: |
       ```powershell
       Add-DhcpServerv4Filter -List Deny -MacAddress 08-00-27-00-BA-D0 -Description 'PC personnel non autorisé'
-      Set-DhcpServerv4FilterList -DenyFilterEnabled $true
+      Set-DhcpServerv4FilterList -Deny $true
       Get-DhcpServerv4Filter
       Get-DhcpServerv4FilterList
       ```
@@ -366,7 +366,7 @@ exercises:
           (Get-DhcpServerv4FilterList).Deny
     solution: |
       Add-DhcpServerv4Filter -List Deny -MacAddress 08-00-27-00-BA-D0 -Description 'PC personnel non autorisé'
-      Set-DhcpServerv4FilterList -DenyFilterEnabled $true | Out-Null
+      Set-DhcpServerv4FilterList -Deny $true | Out-Null
 
   - id: win-dhcp-sauvegarde
     title: Sauvegarder et exporter la configuration

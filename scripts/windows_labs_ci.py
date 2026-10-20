@@ -85,9 +85,9 @@ def ps_env() -> dict:
     refusent alors de se charger et Get-Acl, Get-FileHash, Get-ExecutionPolicy... deviennent « inconnus ».
     Sans PSModulePath, powershell.exe reconstruit son chemin par défaut.
     """
-    env = dict(os.environ)
+    env = dict(os.environ)  # sous Windows, les noms y sont en majuscules (PSMODULEPATH)
     if powershell().replace("\\", "/").rsplit("/", 1)[-1].lower() == "powershell.exe":
-        env.pop("PSModulePath", None)
+        env = {k: v for k, v in env.items() if k.lower() != "psmodulepath"}
     return env
 
 
