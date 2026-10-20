@@ -1,0 +1,333 @@
+title: Proxy web Squid et filtrage
+level: intermediaire
+order: 10
+tags: [squid, proxy, filtrage, acl, authentification, cache, journaux]
+summary: Mettre en service un proxy, configurer les postes, filtrer par domaine et par type de fichier, cache, authentification, droits par groupe et analyse des journaux.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Chez *Ateliers Durand*, les postes n'ont **pas d'accès direct** à Internet : tout doit
+  passer par un **proxy web** qui applique la charte informatique (pas de jeux, pas de réseaux sociaux
+  sauf pour la direction, pas de vidéos), identifie les utilisateurs et garde une trace des accès.
+
+  | Machine | Adresse | Rôle |
+  |---|---|---|
+  | `admin` | 10.173.0.5 | poste du LAN, sans route vers Internet — terminal du lab |
+  | `proxy` | 10.173.0.3 (LAN), 10.173.1.3 (Internet) | Squid installé, **non configuré ni démarré** |
+  | `web` | 10.173.1.80 | « Internet » : `actu.example`, `jeux.example`, `social.example` |
+
+  | Compte du proxy (exercice 6) | Mot de passe |
+  |---|---|
+  | `alice` (comptabilité) | `Alice2026!` |
+  | `jmartin` (direction) | `Direction2026!` |
+
+  - `ssh proxy` (root, par clé). Fichier `/etc/squid/squid.conf` ; pas de systemd : `squid -k parse`
+    (vérifier), `squid` (démarrer), `squid -k reconfigure` (recharger), `squid -k shutdown`.
+  - Test depuis admin : `curl -x http://10.173.0.3:3128 http://actu.example/`.
+  - Les vérifications envoient toujours les identifiants d'alice : tant que l'authentification n'est pas
+    en place, Squid les ignore.
+cours: |
+  ## Le proxy web
+
+  Un **proxy** (mandataire) relaie les requêtes web des postes : le navigateur demande la page au proxy,
+  qui la récupère sur Internet et la renvoie. Il permet de :
+
+  - **filtrer** selon la charte (sites, catégories, types de fichiers, horaires) ;
+  - **identifier** les utilisateurs et **journaliser** les accès (obligation de traçabilité) ;
+  - **mettre en cache** les contenus pour économiser la bande passante ;
+  - n'ouvrir vers Internet qu'une seule machine dans le pare-feu.
+
+  ```
+  poste (pas de route vers Internet)          proxy Squid :3128                  Internet
+  curl -x proxy:3128 http://actu.example ───▶ ACL : qui ? vers où ? quoi ? ───▶ actu.example
+                                              journal access.log, cache disque
+  ```
+
+  En entreprise, on le déploie en mode **explicite** (navigateurs configurés, souvent par GPO ou fichier
+  PAC) ou **transparent** (le pare-feu redirige le port 80). Pour HTTPS, le proxy voit seulement le nom
+  du site (méthode `CONNECT`), sauf à déchiffrer le trafic (« SSL bump »), ce qui pose des questions
+  juridiques et techniques.
+
+  ## Les ACL de Squid
+
+  Squid définit des **ACL** (listes de critères nommées), puis des règles `http_access` évaluées **dans
+  l'ordre** : la première qui correspond décide.
+
+  ```
+  acl lan src 10.173.0.0/24                         # adresse du client
+  acl interdits dstdomain "/etc/squid/interdits.txt"  # domaines (un par ligne, .jeux.example = domaine et sous-domaines)
+  acl videos urlpath_regex -i \.(mp4|avi|mkv)$      # chemin de l'URL
+  acl authentifies proxy_auth REQUIRED              # tout utilisateur authentifié
+  acl direction proxy_auth jmartin                  # utilisateurs précis
+
+  http_access allow direction social
+  http_access deny interdits
+  http_access deny videos
+  http_access allow lan authentifies
+  http_access deny all
+  ```
+
+  | Type d'ACL        | Critère                              |
+  |-------------------|--------------------------------------|
+  | `src`             | adresse du client                    |
+  | `dstdomain`       | domaine demandé                      |
+  | `url_regex`, `urlpath_regex` | expression régulière sur l'URL |
+  | `time`            | jours et heures                      |
+  | `proxy_auth`      | utilisateur authentifié              |
+  | `port`, `method`  | port et méthode (`CONNECT`...)       |
+
+  Plusieurs ACL sur une même ligne `http_access` doivent **toutes** être vraies (ET logique).
+
+  ## Mémo
+
+  | Besoin                       | Commande / fichier                                      |
+  |------------------------------|---------------------------------------------------------|
+  | Vérifier la configuration    | `squid -k parse`                                        |
+  | Démarrer / recharger / arrêter | `squid` ; `squid -k reconfigure` ; `squid -k shutdown` |
+  | Créer les dossiers du cache  | `squid -z`                                              |
+  | Journal des accès            | `/var/log/squid/access.log`                             |
+  | Erreurs                      | `/var/log/squid/cache.log`                              |
+  | Utilisateurs (authentification basique) | `htpasswd -c /etc/squid/utilisateurs alice`  |
+  | Tester depuis un poste       | `curl -x http://proxy:3128 -U alice:motdepasse http://site/` |
+
+  Codes à connaître dans le journal : `TCP_MISS` (récupéré sur Internet), `TCP_HIT` / `TCP_MEM_HIT`
+  (servi depuis le cache), `TCP_DENIED/403` (refusé par une règle), `TCP_DENIED/407` (authentification
+  demandée).
+
+  ## Pièges courants
+
+  - Mettre une règle `deny` **après** un `allow` qui l'englobe : elle ne s'applique jamais.
+  - Laisser le proxy ouvert à tous (« open proxy ») : il servira de relais aux attaquants.
+  - Oublier `squid -z` après avoir ajouté un `cache_dir`.
+  - L'authentification basique envoie le mot de passe en base64 : sur le LAN seulement, et de préférence
+    avec Kerberos/NTLM via Active Directory.
+
+  ## Bonnes pratiques en entreprise
+
+  - Charte informatique écrite et connue des salariés **avant** de filtrer et de journaliser (information
+    des représentants du personnel, durée de conservation des journaux limitée).
+  - Listes de catégories maintenues (SquidGuard, listes de l'université Toulouse Capitole) plutôt que
+    des listes faites à la main.
+  - Authentification transparente avec l'annuaire, droits par groupes.
+  - Pare-feu : seul le proxy sort sur les ports 80/443.
+docs:
+  - title: Documentation de Squid (configuration de référence)
+    url: https://www.squid-cache.org/Doc/config/
+  - title: Squid - directive acl
+    url: https://www.squid-cache.org/Doc/config/acl/
+  - title: Squid - directive http_access
+    url: https://www.squid-cache.org/Doc/config/http_access/
+  - title: Ubuntu Server - proxy Squid
+    url: https://documentation.ubuntu.com/server/how-to/web-services/install-a-squid-server/
+exercises:
+  - id: sq-demarrer
+    title: Mettre en service le proxy pour le LAN
+    cours: |
+      Le fichier `/etc/squid/squid.conf` d'Ubuntu est très long (surtout des commentaires). Les lignes utiles
+      s'affichent avec `grep -Ev '^\s*(#|$)' /etc/squid/squid.conf`.
+
+      Par défaut, Squid écoute sur le port **3128** (`http_port 3128`) et n'accepte que la machine elle-même
+      (`http_access allow localhost`), puis refuse tout (`http_access deny all`). Pour autoriser le LAN :
+      une ACL de type `src` et une règle `http_access allow` placée **avant** `deny all` (le fichier indique
+      l'endroit : « INSERT YOUR OWN RULE(S) HERE »).
+
+      `squid -k parse` valide la configuration, `squid` démarre le service. Depuis le poste,
+      `curl -x http://<proxy>:3128 <url>` passe par le proxy.
+    description: |
+      Sur `proxy`, autorise le réseau LAN `10.173.0.0/24` (ACL nommée `lan`) et démarre Squid. Depuis admin,
+      `http://actu.example/` doit s'afficher à travers le proxy.
+    hint: |
+      ssh proxy ; nano /etc/squid/squid.conf → avant « http_access deny all » : acl lan src 10.173.0.0/24 / http_access allow lan ; squid -k parse ; squid
+    checks:
+      - desc: actu.example s'affiche via le proxy
+        run: curl -s --max-time 8 -x http://10.173.0.3:3128 -U 'alice:Alice2026!' http://actu.example/ | grep -q 'Actualités du jour'
+      - desc: Le poste n'a pas d'accès direct (il faut le proxy)
+        run: |
+          ! curl -s --max-time 3 -o /dev/null http://10.173.1.80/
+
+  - id: sq-client-proxy
+    title: Configurer le poste pour utiliser le proxy
+    cours: |
+      Les outils en ligne de commande (curl, wget, apt, pip...) lisent les variables d'environnement
+      `http_proxy`, `https_proxy` et `no_proxy` (liste des destinations à joindre **sans** proxy : machines
+      locales, domaine interne).
+
+      `/etc/environment` est lu à l'ouverture de session pour tous les utilisateurs ; il contient des
+      lignes `NOM=valeur`, sans `export` ni commande. APT a son propre réglage
+      (`/etc/apt/apt.conf.d/95proxy` : `Acquire::http::Proxy "http://proxy:3128";`). Les navigateurs sont
+      généralement configurés par stratégie de groupe ou par un fichier **PAC** (`proxy.pac`).
+    description: |
+      Sur admin, déclare le proxy pour tous les utilisateurs dans `/etc/environment` : `http_proxy` et
+      `https_proxy` vers `http://10.173.0.3:3128`, et `no_proxy` avec au moins `localhost`, `127.0.0.1` et
+      `.durand.lan`. Teste avec un `curl` sans l'option `-x` (après une nouvelle session ou en chargeant le
+      fichier).
+    hint: |
+      nano /etc/environment ; http_proxy=http://10.173.0.3:3128 ; https_proxy=http://10.173.0.3:3128 ; no_proxy=localhost,127.0.0.1,.durand.lan ; set -a ; . /etc/environment ; set +a ; curl -I http://actu.example/
+    checks:
+      - desc: Variables présentes dans /etc/environment
+        run: |
+          f=/etc/environment; grep -Eq '^http_proxy="?http://10.173.0.3:3128/?"?$' $f && grep -Eq '^https_proxy="?http://10.173.0.3:3128/?"?$' $f && grep -E '^no_proxy=' $f | grep -q localhost && grep -E '^no_proxy=' $f | grep -q '127.0.0.1' && grep -E '^no_proxy=' $f | grep -q '\.durand\.lan'
+      - desc: curl passe par le proxy sans option -x
+        run: |
+          c=$(env -i sh -c 'set -a; . /etc/environment; set +a; curl -s -o /dev/null -w "%{http_code}" --max-time 8 http://actu.example/'); test "$c" != 000
+
+  - id: sq-liste-noire
+    title: Bloquer des sites avec une liste de domaines
+    cours: |
+      L'ACL `dstdomain` compare le domaine demandé. Avec un point devant (`.jeux.example`), elle vise le
+      domaine **et** tous ses sous-domaines (`www.jeux.example`). La liste peut être écrite dans un fichier,
+      un domaine par ligne, référencé entre guillemets : `acl interdits dstdomain "/etc/squid/interdits.txt"`.
+
+      La règle `http_access deny interdits` doit être placée **avant** la règle qui autorise le LAN, sinon
+      elle n'est jamais atteinte. Squid répond alors par une page d'erreur et le code **403**.
+      `curl -s -o /dev/null -w '%{http_code}'` affiche seulement le code de réponse.
+    description: |
+      Crée la liste `/etc/squid/interdits.txt` contenant les domaines `jeux.example` et `social.example`
+      (avec leurs sous-domaines) et bloque-les pour tout le monde. `actu.example` doit rester accessible.
+    hint: printf '.jeux.example\n.social.example\n' > /etc/squid/interdits.txt ; acl interdits dstdomain "/etc/squid/interdits.txt" ; http_access deny interdits (avant allow lan) ; squid -k reconfigure
+    checks:
+      - desc: jeux.example et social.example sont refusés (403)
+        run: |
+          for s in jeux social; do c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -x http://10.173.0.3:3128 -U 'alice:Alice2026!' http://$s.example/); test "$c" = 403 || exit 1; done
+      - desc: actu.example reste accessible
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -x http://10.173.0.3:3128 -U 'alice:Alice2026!' http://actu.example/)" = 200
+      - desc: La liste est dans /etc/squid/interdits.txt
+        run: ssh proxy 'grep -q "jeux.example" /etc/squid/interdits.txt && grep -q "social.example" /etc/squid/interdits.txt'
+
+  - id: sq-videos
+    title: Bloquer un type de fichier
+    cours: |
+      Pour filtrer selon le **chemin** de l'URL (et non le domaine), Squid propose `urlpath_regex`
+      (expression régulière sur le chemin) et `url_regex` (sur l'URL entière). L'option `-i` ignore la casse.
+
+      Dans une expression régulière, `\.` désigne un point littéral, `(mp4|avi)` une alternative et `$` la
+      fin de la chaîne : `\.(mp4|avi|mkv)$` désigne les chemins qui se terminent par ces extensions.
+
+      Ce filtrage est simple mais contournable (paramètres, extension modifiée) : les solutions
+      professionnelles filtrent aussi selon le type MIME de la réponse (`rep_mime_type`).
+    description: |
+      La bande passante est saturée par les vidéos. Bloque les fichiers `.mp4`, `.avi` et `.mkv` (quelle que
+      soit la casse), sur tous les sites. Les pages de `actu.example` restent accessibles.
+    hint: acl videos urlpath_regex -i \.(mp4|avi|mkv)$ ; http_access deny videos (avant allow lan) ; squid -k reconfigure
+    checks:
+      - desc: La vidéo est refusée (403), y compris en majuscules
+        run: |
+          for u in bande-annonce.mp4 BANDE-ANNONCE.MP4; do c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -x http://10.173.0.3:3128 -U 'alice:Alice2026!' http://actu.example/video/$u); test "$c" = 403 || exit 1; done
+      - desc: Les pages restent accessibles
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -x http://10.173.0.3:3128 -U 'alice:Alice2026!' http://actu.example/logo.png)" = 200
+
+  - id: sq-cache
+    title: Activer le cache disque
+    cours: |
+      Squid garde déjà des objets en mémoire (`cache_mem`). Un **cache disque** conserve davantage de
+      contenu et survit au redémarrage :
+
+      ```
+      cache_dir ufs /var/spool/squid 200 16 256
+                │    │                 │   └──┴── nombre de sous-dossiers (niveaux 1 et 2)
+                │    └── dossier        └── taille en Mo
+                └── format de stockage
+      ```
+
+      Après l'ajout d'un `cache_dir`, `squid -z` crée l'arborescence (Squid arrêté), puis on redémarre.
+      Le serveur d'origine indique la durée de validité d'un objet (`Cache-Control`, `Expires`). Dans le
+      journal, `TCP_HIT` ou `TCP_MEM_HIT` signifie « servi depuis le cache ».
+    description: |
+      Ajoute un cache disque de **200 Mo** au format `ufs` dans `/var/spool/squid`, initialise-le et
+      redémarre Squid. Une deuxième demande de `http://actu.example/logo.png` doit être servie depuis le
+      cache.
+    hint: cache_dir ufs /var/spool/squid 200 16 256 ; squid -k shutdown ; (attendre) ; squid -z ; squid ; deux curl de logo.png puis grep HIT /var/log/squid/access.log
+    checks:
+      - desc: Cache disque ufs de 200 Mo initialisé
+        run: ssh proxy 'grep -Eq "^\s*cache_dir\s+ufs\s+/var/spool/squid\s+200\s" /etc/squid/squid.conf && test -d /var/spool/squid/00'
+      - desc: Le logo est servi depuis le cache
+        run: |
+          for i in 1 2; do curl -s -o /dev/null --max-time 8 -x http://10.173.0.3:3128 -U 'alice:Alice2026!' http://actu.example/logo.png; done; sleep 1; ssh proxy "tail -n 5 /var/log/squid/access.log | grep 'logo.png' | grep -q 'HIT/200'"
+
+  - id: sq-authentification
+    title: Identifier les utilisateurs
+    cours: |
+      L'authentification **basique** de Squid s'appuie sur un programme d'aide qui vérifie identifiant et
+      mot de passe ; `basic_ncsa_auth` lit un fichier au format `htpasswd` :
+
+      ```
+      auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/utilisateurs
+      auth_param basic realm Proxy Ateliers Durand
+      acl authentifies proxy_auth REQUIRED
+      http_access allow lan authentifies
+      ```
+
+      Le fichier se crée avec `htpasswd -c` (première fois) puis `htpasswd` (comptes suivants) ; Squid
+      (compte `proxy`) doit pouvoir le lire. Sans identifiants, le proxy répond **407** (authentification
+      requise). L'utilisateur apparaît alors dans le journal, ce qui permet la traçabilité.
+    description: |
+      Oblige les postes du LAN à s'authentifier sur le proxy avec les comptes `alice` et `jmartin` (fichier
+      `/etc/squid/utilisateurs`). Sans identifiants ou avec un mauvais mot de passe, l'accès est refusé.
+    hint: |
+      htpasswd -cb /etc/squid/utilisateurs alice 'Alice2026!' ; htpasswd -b /etc/squid/utilisateurs jmartin 'Direction2026!' ; auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/utilisateurs ; acl authentifies proxy_auth REQUIRED ; remplacer http_access allow lan par http_access allow lan authentifies
+    checks:
+      - desc: Sans identifiants, 407
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -x http://10.173.0.3:3128 http://actu.example/)" = 407
+      - desc: alice et jmartin accèdent à actu.example
+        run: |
+          test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -x http://10.173.0.3:3128 -U 'alice:Alice2026!' http://actu.example/)" = 200 && test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -x http://10.173.0.3:3128 -U 'jmartin:Direction2026!' http://actu.example/)" = 200
+      - desc: Mauvais mot de passe refusé
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -x http://10.173.0.3:3128 -U 'alice:mauvais' http://actu.example/)" = 407
+
+  - id: sq-exception-direction
+    title: Une exception pour la direction
+    cours: |
+      Les règles `http_access` sont lues de haut en bas et la **première** qui correspond s'applique. Pour
+      faire une exception à une interdiction, on place une règle `allow` plus précise **avant** la règle
+      `deny` générale.
+
+      Une ACL `proxy_auth` peut lister des utilisateurs : `acl direction proxy_auth jmartin`. Sur une même
+      ligne, les ACL se combinent en ET : `http_access allow direction social` n'autorise que la direction,
+      et seulement vers le réseau social. Il faut donc aussi une ACL qui désigne ce seul domaine.
+
+      Teste les trois cas : l'exception, l'interdiction pour les autres, et le reste de la liste noire pour
+      la direction.
+    description: |
+      La direction utilise `social.example` pour la communication de l'entreprise : autorise-le pour
+      **jmartin** uniquement. Les jeux restent interdits à tous, et le réseau social aux autres utilisateurs.
+    hint: acl direction proxy_auth jmartin ; acl social dstdomain .social.example ; http_access allow direction social (avant http_access deny interdits) ; squid -k reconfigure
+    checks:
+      - desc: jmartin accède à social.example
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -x http://10.173.0.3:3128 -U 'jmartin:Direction2026!' http://social.example/)" = 200
+      - desc: alice reste bloquée sur social.example
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -x http://10.173.0.3:3128 -U 'alice:Alice2026!' http://social.example/)" = 403
+      - desc: Les jeux restent interdits à jmartin
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -x http://10.173.0.3:3128 -U 'jmartin:Direction2026!' http://jeux.example/)" = 403
+
+  - id: sq-analyse-journal
+    title: Analyser le journal du proxy
+    cours: |
+      Le journal natif de Squid (`access.log`) a une ligne par requête, champs séparés par des espaces :
+
+      | Champ | Contenu                                    |
+      |-------|--------------------------------------------|
+      | 1     | date (secondes depuis 1970)                |
+      | 3     | adresse du client                          |
+      | 4     | résultat/code HTTP (`TCP_DENIED/403`)      |
+      | 7     | URL                                        |
+      | 8     | utilisateur (`-` si non authentifié)       |
+
+      `awk '{print $8}' journal | sort | uniq -c | sort -rn` classe les utilisateurs par nombre de requêtes ;
+      `grep -c TCP_DENIED/403` compte les refus. Ces journaux contiennent des données personnelles : accès
+      restreint et durée de conservation limitée.
+    description: |
+      Le responsable veut un bilan de la semaine dernière, à partir de `/var/log/squid/access.log.1` sur
+      `proxy`.
+
+      Réponses (dans `/root/reponses.txt` d'admin) : `utilisateur_actif=` (l'utilisateur qui a fait le plus
+      de requêtes) et `nb_refus=` (le nombre de requêtes refusées par une règle, code 403).
+    hint: ssh proxy "awk '{print \$8}' /var/log/squid/access.log.1 | sort | uniq -c | sort -rn" ; ssh proxy grep -c TCP_DENIED/403 /var/log/squid/access.log.1
+    checks:
+      - desc: Utilisateur le plus actif
+        run: |
+          u=$(ssh proxy "awk '{print \$8}' /var/log/squid/access.log.1 | sort | uniq -c | sort -rn | head -1" | awk '{print $2}'); grep -Eq "^utilisateur_actif *= *$u *\$" /root/reponses.txt
+      - desc: Nombre de refus
+        run: |
+          n=$(ssh proxy grep -c TCP_DENIED/403 /var/log/squid/access.log.1); grep -Eq "^nb_refus *= *$n *\$" /root/reponses.txt

@@ -1,0 +1,36 @@
+# Proxy web d'« Ateliers Durand » : admin (poste du LAN, sans accès direct à Internet), proxy (Squid installé,
+# non configuré) et web (« Internet » : sites actu.example, jeux.example et social.example).
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.173.0.5}
+  proxy:
+    build: {context: ., dockerfile: proxy/Dockerfile}
+    hostname: proxy
+    volumes: [cles:/lab-ssh]
+    extra_hosts:
+      - "actu.example:10.173.1.80"
+      - "jeux.example:10.173.1.80"
+      - "social.example:10.173.1.80"
+    networks:
+      lan: {ipv4_address: 10.173.0.3}
+      internet: {ipv4_address: 10.173.1.3}
+  web:
+    build: {context: ., dockerfile: web/Dockerfile}
+    hostname: web
+    networks:
+      internet: {ipv4_address: 10.173.1.80}
+volumes:
+  cles:
+networks:
+  lan:
+    internal: true
+    ipam:
+      config: [{subnet: 10.173.0.0/24, ip_range: 10.173.0.128/28}]
+  internet:
+    internal: true
+    ipam:
+      config: [{subnet: 10.173.1.0/24, ip_range: 10.173.1.128/28}]
