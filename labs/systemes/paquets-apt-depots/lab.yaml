@@ -205,7 +205,7 @@ exercises:
     hint: apt list -a durand-outils ; apt install durand-outils=1.0 ; apt-mark hold durand-outils
     checks:
       - desc: durand-outils 1.0 est installé
-        run: test "$(dpkg-query -W -f='${Status} ${Version}' durand-outils 2>/dev/null)" = "install ok installed 1.0"
+        run: dpkg-query -W -f='${Status}' durand-outils 2>/dev/null | grep -q 'ok installed' && test "$(dpkg-query -W -f='${Version}' durand-outils)" = "1.0"
       - desc: Sa dépendance durand-commun est installée
         run: dpkg-query -W -f='${Status}' durand-commun 2>/dev/null | grep -q 'ok installed'
       - desc: durand-outils est bloqué (hold)
@@ -348,7 +348,7 @@ exercises:
 
       Dans `control`, chaque champ s'écrit `Nom: valeur` ; `Architecture: all` convient à un paquet sans
       programme compilé. `dpkg-deb --build <dossier> <fichier.deb>` produit le paquet ; l'option
-      `--root-owner-group` donne les fichiers à root. Pour de vrais projets, on utilise les outils
+      `--root-owner-group` donne les fichiers à root ; le dossier `DEBIAN` doit avoir des droits entre `755` et `775`. Pour de vrais projets, on utilise les outils
       `debhelper` et on publie dans un dépôt signé.
     description: |
       Crée le paquet **`durand-charte`** en version **1.0** (architecture `all`) qui installe la charte
@@ -357,7 +357,8 @@ exercises:
     hint: mkdir -p ~/durand-charte/DEBIAN ~/durand-charte/usr/share/durand ; nano ~/durand-charte/DEBIAN/control ; dpkg-deb --root-owner-group --build ~/durand-charte /root/paquets/durand-charte_1.0_all.deb ; apt install /root/paquets/durand-charte_1.0_all.deb
     checks:
       - desc: Le fichier .deb existe et décrit durand-charte 1.0
-        run: test "$(dpkg-deb -f /root/paquets/durand-charte_1.0_all.deb Package Version 2>/dev/null | tr '\n' ' ')" = "Package: durand-charte Version: 1.0 "
+        run: |
+          test "$(dpkg-deb -f /root/paquets/durand-charte_1.0_all.deb Package Version 2>/dev/null | tr '\n' ' ')" = "Package: durand-charte Version: 1.0 "
       - desc: durand-charte 1.0 est installé
         run: test "$(dpkg-query -W -f='${Status} ${Version}' durand-charte 2>/dev/null)" = "install ok installed 1.0"
       - desc: La charte appartient au paquet

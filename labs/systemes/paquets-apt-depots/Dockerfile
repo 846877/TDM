@@ -6,5 +6,6 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY construire-depot.sh /usr/local/sbin/construire-depot.sh
 RUN sh /usr/local/sbin/construire-depot.sh && rm /usr/local/sbin/construire-depot.sh
+RUN echo 'umask 022' >> /etc/bash.bashrc
 WORKDIR /root
 CMD ["sleep", "infinity"]
