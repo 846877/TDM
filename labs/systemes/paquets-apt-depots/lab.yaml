@@ -1,0 +1,364 @@
+title: Paquets logiciels avec APT et dpkg
+level: debutant
+order: 2
+tags: [linux, apt, dpkg, paquets, dépôt, mises à jour]
+summary: Interroger la base des paquets, déclarer un dépôt interne, installer une version précise, bloquer, mettre à jour, purger et construire un paquet.
+build: .
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Le service informatique d'*Ateliers Durand* distribue ses outils maison sous forme de
+  **paquets Debian** dans un dépôt interne. Sur ce serveur, tu dois déclarer ce dépôt, installer les bons
+  outils dans les bonnes versions, appliquer les mises à jour sans casser ce qui marche, faire le ménage
+  et même publier ton propre petit paquet.
+
+  **Machine.** Serveur Ubuntu 24.04, terminal `root`.
+
+  | Élément | Valeur |
+  |---|---|
+  | Dépôt interne | dossier `/srv/depot` (dépôt « plat », non signé) |
+  | Paquet téléchargé à la main | `/root/telechargements/outil-rapport_2.0_all.deb` |
+
+  Réponses à écrire dans `/root/reponses.txt`, au format `cle=valeur`.
+
+  Outils : `apt update`, `apt search`, `apt show`, `apt install`, `apt list --upgradable`, `apt-cache
+  policy`, `apt-mark`, `apt purge`, `apt autoremove`, `dpkg -l`, `dpkg -L`, `dpkg -S`, `dpkg-deb`.
+cours: |
+  ## Pourquoi des paquets ?
+
+  Sous Linux, on n'installe pas un logiciel en téléchargeant un installeur sur un site web : on passe par
+  le **gestionnaire de paquets** de la distribution. Un paquet (`.deb` sous Debian et Ubuntu) contient les
+  fichiers du logiciel, ses **dépendances** (les autres paquets dont il a besoin), des scripts
+  d'installation et ses fichiers de configuration. Le système sait ainsi en permanence quel fichier
+  appartient à quel paquet, ce qui rend les mises à jour et les désinstallations propres.
+
+  ## Deux étages : dpkg et APT
+
+  ```
+   apt install nginx
+        │  1. lit les sources (/etc/apt/sources.list.d/)
+        │  2. résout les dépendances, télécharge les .deb depuis les dépôts
+        ▼
+   dpkg -i *.deb          installe les fichiers, lance les scripts, tient la base /var/lib/dpkg
+  ```
+
+  | Outil  | Rôle                                                   | Exemples                                  |
+  |--------|--------------------------------------------------------|-------------------------------------------|
+  | `dpkg` | bas niveau : un fichier `.deb`, aucune dépendance gérée | `dpkg -l`, `dpkg -L paquet`, `dpkg -S fichier`, `dpkg -i fichier.deb` |
+  | `apt`  | haut niveau : dépôts, dépendances, mises à jour        | `apt install`, `apt remove`, `apt upgrade` |
+
+  ## Les dépôts
+
+  Un **dépôt** est un serveur (ou un dossier) qui publie des paquets et un index. Ubuntu 24.04 décrit ses
+  dépôts officiels dans `/etc/apt/sources.list.d/ubuntu.sources` (format *deb822*). Pour un dépôt
+  supplémentaire, on ajoute un fichier dans le même dossier, au format une ligne :
+
+  ```
+  # /etc/apt/sources.list.d/durand.list
+  deb [trusted=yes] file:/srv/depot ./
+  │   │             │               └── « distribution » : ./ pour un dépôt plat
+  │   │             └── adresse : http://, https:// ou file:
+  │   └── options : trusted=yes accepte un dépôt non signé (interne uniquement)
+  └── type : paquets binaires
+  ```
+
+  `apt update` télécharge les index de **tous** les dépôts ; il faut le relancer après chaque modification
+  des sources. En production, un dépôt est **signé** : on installe sa clé publique et on la référence avec
+  `signed-by=/etc/apt/keyrings/<clé>.gpg` au lieu de `trusted=yes`.
+
+  ## Mémo
+
+  | Besoin                                   | Commande                                         |
+  |------------------------------------------|--------------------------------------------------|
+  | Rafraîchir les index                     | `apt update`                                     |
+  | Chercher, décrire                        | `apt search mot`, `apt show paquet`              |
+  | Versions disponibles et origine          | `apt-cache policy paquet`, `apt list -a paquet`  |
+  | Installer (une version précise)          | `apt install paquet`, `apt install paquet=1.0`   |
+  | Installer un .deb local avec ses dépendances | `apt install ./fichier.deb`                  |
+  | Mises à jour disponibles / les appliquer | `apt list --upgradable`, `apt upgrade`           |
+  | Bloquer / débloquer une version          | `apt-mark hold paquet`, `apt-mark unhold paquet` |
+  | Supprimer / supprimer avec la configuration | `apt remove paquet`, `apt purge paquet`       |
+  | Supprimer les dépendances devenues inutiles | `apt autoremove`                              |
+  | Paquets installés, fichiers d'un paquet  | `dpkg -l`, `dpkg -L paquet`                      |
+  | À quel paquet appartient ce fichier ?    | `dpkg -S /usr/bin/ls`                            |
+  | Historique                               | `/var/log/apt/history.log`, `/var/log/dpkg.log`  |
+
+  ## Installé « manuellement » ou « automatiquement »
+
+  APT distingue les paquets demandés explicitement (**manuels**) de ceux installés pour satisfaire une
+  dépendance (**automatiques**). Quand plus aucun paquet manuel n'a besoin d'un paquet automatique,
+  `apt autoremove` le supprime. `apt-mark showmanual` et `apt-mark showauto` affichent les deux listes.
+
+  ## Pièges courants
+
+  - Oublier `apt update` : APT installe d'anciennes versions ou ne trouve pas le paquet.
+  - `dpkg -i` sur un paquet dont les dépendances manquent : il reste à moitié installé (`iU`).
+    `apt install ./fichier.deb` ou `apt -f install` règlent le problème.
+  - `apt remove` laisse les fichiers de configuration (état `rc` dans `dpkg -l`) : `purge` pour tout
+    retirer.
+  - Bloquer une version (`hold`) et l'oublier : plus aucun correctif de sécurité pour ce paquet.
+  - Ajouter des dépôts tiers non maintenus : conflits de versions lors des mises à jour.
+
+  ## Bonnes pratiques en entreprise
+
+  - Appliquer les mises à jour de sécurité régulièrement (`unattended-upgrades`), d'abord sur un serveur
+    de test.
+  - Un dépôt interne (ou un miroir/proxy de dépôts) pour distribuer les outils maison et maîtriser les
+    versions déployées.
+  - Documenter chaque `hold` (pourquoi, jusqu'à quand) et le lever dès que le correctif existe.
+  - Ne jamais installer un `.deb` d'origine inconnue sur un serveur de production.
+docs:
+  - title: apt(8) - gestionnaire de paquets (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man8/apt.8.html
+  - title: dpkg(1) - gestionnaire de paquets bas niveau (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man1/dpkg.1.html
+  - title: sources.list(5) - déclaration des dépôts (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/sources.list.5.html
+  - title: Ubuntu Server - gestion des paquets
+    url: https://documentation.ubuntu.com/server/how-to/software/package-management/
+exercises:
+  - id: apt-interroger
+    title: Interroger la base des paquets installés
+    cours: |
+      `dpkg` tient la liste de tout ce qui est installé :
+
+      - `dpkg -l` liste les paquets ; la première colonne donne l'état (`ii` = installé, `rc` = supprimé
+        mais configuration conservée) ; `dpkg -l 'motif*'` filtre ;
+      - `dpkg -S <chemin>` indique **quel paquet** a installé un fichier ;
+      - `dpkg-query -W -f='${Version}\n' <paquet>` affiche juste la version ;
+      - `which <commande>` donne le chemin complet d'une commande.
+
+      Ces commandes ne lisent que la base locale (`/var/lib/dpkg`) : pas besoin de réseau ni d'`apt update`.
+    description: |
+      Sans rien installer, réponds :
+
+      - `paquet_ls=` : le paquet qui fournit la commande `ls` ;
+      - `version_bash=` : la version **exacte** du paquet `bash` installé.
+    hint: dpkg -S $(which ls) ; dpkg -l bash  (ou dpkg-query -W -f='${Version}\n' bash)
+    checks:
+      - desc: Paquet qui fournit ls
+        run: grep -Eq '^paquet_ls *= *coreutils *$' /root/reponses.txt
+      - desc: Version de bash
+        run: |
+          test "$(grep -E '^version_bash *=' /root/reponses.txt | tail -n1 | cut -d= -f2 | tr -d ' ')" = "$(dpkg-query -W -f='${Version}' bash)"
+
+  - id: apt-depot-interne
+    title: Déclarer le dépôt interne
+    cours: |
+      APT lit ses sources dans `/etc/apt/sources.list.d/` : un fichier `.list` (une ligne par dépôt) ou
+      `.sources` (format deb822). Pour un dépôt « plat » (tous les paquets et l'index `Packages` dans un
+      seul dossier), la distribution s'écrit `./` et il n'y a pas de composant.
+
+      L'option `[trusted=yes]` dispense de signature : acceptable pour un dossier local de confiance, à
+      proscrire pour un dépôt sur le réseau.
+
+      Après toute modification, `apt update` télécharge les index. `apt-cache policy <paquet>` affiche
+      alors la version installée, la version candidate et le dépôt d'origine de chaque version.
+    description: |
+      Déclare le dépôt `/srv/depot` dans le fichier `/etc/apt/sources.list.d/durand.list`, puis mets à jour
+      les index. Le paquet `durand-outils` doit apparaître comme disponible depuis `file:/srv/depot`.
+    hint: echo "deb [trusted=yes] file:/srv/depot ./" > /etc/apt/sources.list.d/durand.list ; apt update ; apt-cache policy durand-outils
+    checks:
+      - desc: Le fichier durand.list déclare le dépôt
+        run: grep -Eq '^deb +(\[[^]]*trusted=yes[^]]*\] +)?file:/srv/depot +\./' /etc/apt/sources.list.d/durand.list
+      - desc: APT connaît durand-outils depuis le dépôt interne
+        run: apt-cache policy durand-outils 2>/dev/null | grep -q 'file:/srv/depot'
+
+  - id: apt-chercher-installer
+    title: Chercher un paquet et l'installer
+    cours: |
+      Quand on ne connaît pas le nom exact d'un paquet :
+
+      - `apt search <mot>` cherche dans les noms **et** les descriptions de tous les dépôts ;
+      - `apt show <paquet>` affiche la fiche complète (version, dépendances, taille, description) ;
+      - `apt install <paquet>` l'installe avec ses dépendances (`-y` répond oui automatiquement).
+
+      Après l'installation, `dpkg -L <paquet>` liste les fichiers installés : on y trouve la commande à
+      lancer (souvent dans `/usr/bin`).
+    description: |
+      Le responsable veut l'outil d'**inventaire du parc** publié dans le dépôt interne, mais ne se souvient
+      plus de son nom. Trouve-le et installe-le, puis lance-le.
+
+      Réponse : `nb_postes=` (le nombre de postes qu'il affiche).
+    hint: apt search inventaire ; apt install durand-inventaire ; dpkg -L durand-inventaire ; durand-inventaire
+    checks:
+      - desc: Le paquet d'inventaire est installé
+        run: dpkg-query -W -f='${Status}' durand-inventaire 2>/dev/null | grep -q 'install ok installed'
+      - desc: Nombre de postes
+        run: grep -Eq '^nb_postes *= *42 *$' /root/reponses.txt
+
+  - id: apt-version-precise
+    title: Installer une version précise et la bloquer
+    cours: |
+      Un dépôt peut proposer plusieurs versions d'un même paquet : `apt list -a <paquet>` ou
+      `apt-cache policy <paquet>` les affiche. Par défaut, APT installe la plus récente.
+
+      - `apt install <paquet>=<version>` installe une version donnée (les dépendances suivent) ;
+      - `apt-mark hold <paquet>` **bloque** le paquet : les mises à jour le laisseront de côté ;
+        `apt-mark showhold` liste les paquets bloqués, `apt-mark unhold` lève le blocage.
+
+      Un blocage se documente : on le lève dès que l'éditeur a publié une version corrigée.
+    description: |
+      La version **1.1** de `durand-outils` est défectueuse (ticket ouvert chez le développeur). Installe la
+      version **1.0** (sa dépendance s'installera aussi) et **bloque**-la pour qu'aucune mise à jour ne la
+      remplace.
+    hint: apt list -a durand-outils ; apt install durand-outils=1.0 ; apt-mark hold durand-outils
+    checks:
+      - desc: durand-outils 1.0 est installé
+        run: test "$(dpkg-query -W -f='${Status} ${Version}' durand-outils 2>/dev/null)" = "install ok installed 1.0"
+      - desc: Sa dépendance durand-commun est installée
+        run: dpkg-query -W -f='${Status}' durand-commun 2>/dev/null | grep -q 'ok installed'
+      - desc: durand-outils est bloqué (hold)
+        run: apt-mark showhold | grep -qx durand-outils
+
+  - id: apt-contenu-paquet
+    title: Explorer le contenu d'un paquet
+    cours: |
+      `dpkg -L <paquet>` liste tous les fichiers et dossiers installés par un paquet. Par convention :
+
+      | Emplacement        | Contenu                                |
+      |--------------------|----------------------------------------|
+      | `/usr/bin`, `/usr/sbin` | commandes                         |
+      | `/etc/...`         | fichiers de configuration              |
+      | `/usr/share/...`   | données, documentation                 |
+      | `/var/lib/...`     | données variables du logiciel          |
+
+      Les fichiers de `/etc` sont des **conffiles** : lors d'une mise à jour, dpkg ne les écrase pas si tu
+      les as modifiés (il te demande quoi faire). `dpkg -s <paquet>` affiche aussi la liste des conffiles.
+    description: |
+      Explore le paquet `durand-outils` installé à l'exercice précédent.
+
+      Réponses : `fichier_conf=` (le chemin complet de son fichier de configuration) et `code_outils=` (le
+      code affiché par sa commande, par exemple `OUT-1234`).
+    hint: dpkg -L durand-outils ; durand-info
+    checks:
+      - desc: Fichier de configuration
+        run: grep -Eq '^fichier_conf *= */etc/durand/outils\.conf *$' /root/reponses.txt
+      - desc: Code affiché par durand-info
+        run: grep -Eq '^code_outils *= *OUT-7731 *$' /root/reponses.txt
+
+  - id: apt-mises-a-jour
+    title: Appliquer les mises à jour en respectant le blocage
+    cours: |
+      Mettre à jour se fait en deux temps : `apt update` rafraîchit les index, puis `apt upgrade` installe
+      les nouvelles versions des paquets **déjà installés**. `apt list --upgradable` montre d'abord ce qui
+      va changer.
+
+      Un paquet bloqué par `apt-mark hold` apparaît comme « retenu » (*kept back*) et garde sa version.
+      Pour mettre à jour un seul paquet, `apt install --only-upgrade <paquet>`.
+
+      Sur un serveur, on lit toujours la liste avant de valider : une mise à jour du noyau, d'une base de
+      données ou d'un serveur web mérite un créneau de maintenance.
+    description: |
+      Une version **1.1** de `durand-commun` (correctif de sécurité) est disponible. Applique les mises à
+      jour : `durand-commun` doit passer en 1.1, mais `durand-outils` doit rester en 1.0.
+    hint: apt update ; apt list --upgradable ; apt upgrade  (ou apt install --only-upgrade durand-commun)
+    checks:
+      - desc: durand-commun est en version 1.1
+        run: test "$(dpkg-query -W -f='${Version}' durand-commun 2>/dev/null)" = "1.1"
+      - desc: durand-outils est resté en 1.0
+        run: test "$(dpkg-query -W -f='${Version}' durand-outils 2>/dev/null)" = "1.0"
+
+  - id: apt-deb-local
+    title: Installer un paquet .deb téléchargé
+    cours: |
+      Certains éditeurs fournissent un fichier `.deb` à télécharger. Deux façons de l'installer :
+
+      - `dpkg -i fichier.deb` : installe le paquet mais **ne résout pas les dépendances** ; s'il en manque,
+        le paquet reste à moitié configuré (état `iU` dans `dpkg -l`) ;
+      - `apt install ./fichier.deb` (le `./` est indispensable) : APT installe le fichier **et** va chercher
+        ses dépendances dans les dépôts.
+
+      `dpkg -I fichier.deb` (i majuscule) affiche les informations du paquet, dont ses dépendances, avant de
+      l'installer. Si un `dpkg -i` a échoué, `apt -f install` répare.
+    description: |
+      Installe `/root/telechargements/outil-rapport_2.0_all.deb`. Regarde d'abord ses dépendances : l'une
+      d'elles n'est pas installée. À la fin, `outil-rapport` et sa dépendance doivent être correctement
+      installés (état `ii`).
+    hint: dpkg -I /root/telechargements/outil-rapport_2.0_all.deb ; apt install /root/telechargements/outil-rapport_2.0_all.deb
+    checks:
+      - desc: outil-rapport est installé et configuré
+        run: dpkg -l outil-rapport 2>/dev/null | grep -q '^ii'
+      - desc: Sa dépendance durand-pdf est installée
+        run: dpkg -l durand-pdf 2>/dev/null | grep -q '^ii'
+
+  - id: apt-auto-manuel
+    title: Paquets manuels et automatiques
+    cours: |
+      APT retient **pourquoi** chaque paquet est présent :
+
+      - **manuel** : demandé explicitement par un administrateur ;
+      - **automatique** : installé seulement pour satisfaire une dépendance.
+
+      `apt-mark showmanual` et `apt-mark showauto` affichent les deux listes (avec `| grep` pour filtrer).
+      `apt-cache rdepends --installed <paquet>` montre qui dépend d'un paquet. Le journal
+      `/var/log/apt/history.log` garde la trace des commandes passées (date, commande, paquets).
+
+      C'est cette distinction qui permet à `apt autoremove` de savoir ce qui peut partir.
+    description: |
+      L'ancien logiciel de gestion `durand-ancien` a été installé avant ton arrivée. Une bibliothèque a été
+      installée **automatiquement** avec lui.
+
+      Réponse : `dependance_auto=` (le nom de ce paquet automatique).
+    hint: apt-mark showauto | grep durand ; apt-cache depends durand-ancien
+    checks:
+      - desc: Paquet installé automatiquement
+        run: grep -Eq '^dependance_auto *= *durand-lib-ancien *$' /root/reponses.txt
+
+  - id: apt-purger
+    title: Désinstaller proprement
+    cours: |
+      Trois niveaux de nettoyage :
+
+      | Commande             | Effet                                                         |
+      |----------------------|---------------------------------------------------------------|
+      | `apt remove <p>`     | supprime le programme, **garde** ses fichiers de configuration (état `rc`) |
+      | `apt purge <p>`      | supprime aussi la configuration                               |
+      | `apt autoremove`     | supprime les dépendances automatiques devenues inutiles       |
+
+      Garder la configuration est utile si l'on compte réinstaller ; sinon elle encombre et peut contenir
+      des informations sensibles. `dpkg -l | grep '^rc'` liste les paquets supprimés mais non purgés.
+      Relis toujours la liste proposée par `autoremove` avant de valider.
+    description: |
+      L'ancien logiciel n'est plus utilisé. Supprime `durand-ancien` **avec** son fichier de configuration
+      `/etc/durand/ancien.conf`, puis la bibliothèque devenue inutile. Les autres outils Durand doivent
+      rester installés.
+    hint: apt purge durand-ancien ; apt autoremove  (ou apt autoremove --purge)
+    checks:
+      - desc: durand-ancien n'est plus installé et sa configuration a disparu
+        run: |
+          ! dpkg -l durand-ancien 2>/dev/null | grep -Eq '^(ii|rc)' && test ! -e /etc/durand/ancien.conf
+      - desc: La bibliothèque inutile a été supprimée
+        run: |
+          ! dpkg -l durand-lib-ancien 2>/dev/null | grep -q '^ii'
+      - desc: Les autres outils sont toujours là
+        run: dpkg -l durand-outils | grep -q '^hi' && dpkg -l durand-inventaire | grep -q '^ii'
+
+  - id: apt-construire-paquet
+    title: Construire son propre paquet
+    cours: |
+      Un paquet `.deb` se construit à partir d'un dossier qui reproduit l'arborescence cible, plus un dossier
+      `DEBIAN/` contenant au minimum un fichier `control` :
+
+      ```
+      durand-charte/
+      ├── DEBIAN/control          Package, Version, Architecture, Maintainer, Description
+      └── usr/share/durand/charte.txt
+      ```
+
+      Dans `control`, chaque champ s'écrit `Nom: valeur` ; `Architecture: all` convient à un paquet sans
+      programme compilé. `dpkg-deb --build <dossier> <fichier.deb>` produit le paquet ; l'option
+      `--root-owner-group` donne les fichiers à root. Pour de vrais projets, on utilise les outils
+      `debhelper` et on publie dans un dépôt signé.
+    description: |
+      Crée le paquet **`durand-charte`** en version **1.0** (architecture `all`) qui installe la charte
+      informatique dans `/usr/share/durand/charte.txt` (contenu libre, contenant le mot `Charte`). Enregistre
+      le paquet sous `/root/paquets/durand-charte_1.0_all.deb`, puis installe-le.
+    hint: mkdir -p ~/durand-charte/DEBIAN ~/durand-charte/usr/share/durand ; nano ~/durand-charte/DEBIAN/control ; dpkg-deb --root-owner-group --build ~/durand-charte /root/paquets/durand-charte_1.0_all.deb ; apt install /root/paquets/durand-charte_1.0_all.deb
+    checks:
+      - desc: Le fichier .deb existe et décrit durand-charte 1.0
+        run: test "$(dpkg-deb -f /root/paquets/durand-charte_1.0_all.deb Package Version 2>/dev/null | tr '\n' ' ')" = "Package: durand-charte Version: 1.0 "
+      - desc: durand-charte 1.0 est installé
+        run: test "$(dpkg-query -W -f='${Status} ${Version}' durand-charte 2>/dev/null)" = "install ok installed 1.0"
+      - desc: La charte appartient au paquet
+        run: dpkg -S /usr/share/durand/charte.txt 2>/dev/null | grep -q '^durand-charte:' && grep -qi charte /usr/share/durand/charte.txt
