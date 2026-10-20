@@ -1,0 +1,22 @@
+# Base de données d'« Ateliers Durand » : srv-bdd (MariaDB installé, non démarré) et admin (poste
+# d'administration, qui joue aussi le rôle du serveur d'application).
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.174.0.5}
+  srv-bdd:
+    build: {context: ., dockerfile: srv-bdd/Dockerfile}
+    hostname: srv-bdd
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.174.0.10}
+volumes:
+  cles:
+networks:
+  lan:
+    internal: true
+    ipam:
+      config: [{subnet: 10.174.0.0/24, ip_range: 10.174.0.128/28}]
