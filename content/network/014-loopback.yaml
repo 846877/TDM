@@ -38,3 +38,52 @@ solution: |
   interface g0/0
   no shutdown
   end
+cours: |
+  ## Une interface qui ne tombe jamais
+
+  Une interface **loopback** est purement logicielle : aucun câble, aucun port physique. Elle
+  est `up/up` dès sa création et le reste tant que l'équipement fonctionne. C'est pourquoi on
+  l'utilise comme **identité stable** du routeur :
+
+  - adresse d'**administration** (SSH, SNMP) joignable par n'importe quel lien survivant ;
+  - **router-id** OSPF, EIGRP, BGP (choisi automatiquement parmi les loopbacks s'il n'est pas
+    fixé) ;
+  - adresse **source** des journaux, de NTP, de TACACS+ ou des sessions BGP internes ;
+  - test de routage sans matériel en laboratoire.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# interface loopback 7
+  R1(config-if)# description ID-R-AGENCE-NANTES
+  R1(config-if)# ip address 172.31.255.7 255.255.255.255
+  R1# show ip interface brief | include Loopback
+  Loopback7     172.31.255.7   YES manual up    up
+  ```
+
+  - le numéro (0 à 2 147 483 647) est libre ; `Loopback0` est la convention pour l'identité ;
+  - pas de `no shutdown` nécessaire : une loopback est active à sa création ;
+  - masque **/32** (`255.255.255.255`) : une seule adresse, pas de réseau à gaspiller.
+
+  ### Ne pas confondre
+
+  L'adresse `127.0.0.1` (*localhost*) est la boucle locale d'un hôte, jamais routée. Une
+  interface loopback de routeur, elle, porte une adresse **routable**, annoncée dans le
+  protocole de routage pour être jointe depuis le reste du réseau.
+
+  ### Pièges fréquents
+
+  - Oublier d'annoncer la loopback dans OSPF/EIGRP : elle existe mais personne ne la joint.
+  - Utiliser un masque /24 sur une loopback : on bloque inutilement tout un réseau, et OSPF
+    l'annonce de toute façon en /32 (sauf `ip ospf network point-to-point`).
+  - Chevauchement avec un réseau existant : IOS refuse l'adresse.
+
+  ### Pour le CCNA
+
+  Le rôle des loopbacks (router-id, administration) apparaît dans les chapitres OSPF et gestion
+  des équipements.
+docs:
+  - title: "Wikipédia — Loopback"
+    url: https://fr.wikipedia.org/wiki/Loopback
+  - title: "Wikipédia — Cisco IOS"
+    url: https://fr.wikipedia.org/wiki/Cisco_IOS

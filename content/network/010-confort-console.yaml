@@ -30,3 +30,61 @@ solution: |
   logging synchronous
   exec-timeout 15 0
   end
+cours: |
+  ## Trois réglages qui changent la vie
+
+  ### 1. Ne plus chercher les fautes de frappe dans le DNS
+
+  En mode privilégié, un mot inconnu est interprété comme un **nom d'hôte** à joindre en Telnet.
+  IOS tente alors de le résoudre par DNS (diffusion vers `255.255.255.255`) et la console reste
+  bloquée une trentaine de secondes :
+
+  ```
+  R1# shwo run
+  Translating "shwo"...domain server (255.255.255.255)
+  % Unknown command or computer name, or unable to find computer address
+  ```
+
+  `no ip domain-lookup` désactive cette résolution. Si l'équipement doit résoudre des noms
+  (`ping srv-backup`), on configure plutôt un vrai serveur avec `ip name-server`.
+
+  ### 2. Des messages qui ne coupent plus la saisie
+
+  Les messages système (`%LINK-3-UPDOWN`...) s'affichent au milieu de la ligne qu'on est en train
+  de taper. `logging synchronous` sur la ligne réaffiche la saisie en cours après le message.
+
+  ### 3. Déconnexion automatique
+
+  `exec-timeout <minutes> <secondes>` ferme la session après une inactivité. La valeur par défaut
+  est 10 minutes. `exec-timeout 0 0` désactive la déconnexion : pratique en labo, **dangereux en
+  production** (une console restée ouverte est un accès privilégié offert).
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# no ip domain-lookup
+  SW1(config)# line console 0
+  SW1(config-line)# logging synchronous
+  SW1(config-line)# exec-timeout 5 30
+  SW1(config-line)# line vty 0 15
+  SW1(config-line)# logging synchronous
+  SW1(config-line)# exec-timeout 10 0
+  SW1# show running-config | section line
+  ```
+
+  Ces réglages se font **par ligne** : la console et les VTY se configurent séparément.
+
+  ### Pièges fréquents
+
+  - Désactiver le DNS sur un équipement qui doit vraiment résoudre des noms.
+  - Laisser `exec-timeout 0 0` après un dépannage.
+  - Configurer la console en oubliant les VTY (ou l'inverse).
+
+  ### Pour le CCNA
+
+  Ces commandes figurent dans la plupart des configurations de base attendues à l'examen.
+docs:
+  - title: "Wikipédia — Cisco IOS"
+    url: https://fr.wikipedia.org/wiki/Cisco_IOS
+  - title: "Wikipédia — Domain Name System"
+    url: https://fr.wikipedia.org/wiki/Domain_Name_System

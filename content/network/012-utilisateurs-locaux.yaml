@@ -33,3 +33,63 @@ solution: |
   line console 0
   login local
   end
+cours: |
+  ## Un compte par personne
+
+  Un mot de passe de ligne partagé pose trois problèmes : on ne sait pas **qui** s'est connecté,
+  il faut le changer partout quand quelqu'un part, et il circule de main en main. Les **comptes
+  locaux** donnent à chaque administrateur son identifiant et son mot de passe.
+
+  ### Créer des comptes (autres valeurs)
+
+  ```
+  R1(config)# username jmartin privilege 15 secret Jm-2026!net
+  R1(config)# username stagiaire secret St4g-Lecture
+  R1(config)# line console 0
+  R1(config-line)# login local
+  R1(config-line)# line vty 0 4
+  R1(config-line)# login local
+  R1# show running-config | include username
+  username jmartin privilege 15 secret 9 $9$...
+  username stagiaire secret 9 $9$...
+  ```
+
+  - `secret` stocke un **hachage** (comme `enable secret`) ; `password` stocke le mot de passe
+    en clair ou en type 7 : à éviter ;
+  - `login local` : la ligne demande un identifiant et utilise la base locale ;
+  - le mot de passe de ligne (`password` sous `line`) n'est alors plus utilisé.
+
+  ### Les niveaux de privilège
+
+  IOS définit 16 niveaux, de 0 à 15 :
+
+  | Niveau | Accès                                         |
+  |--------|-----------------------------------------------|
+  | 1      | mode utilisateur (`>`), par défaut pour un compte |
+  | 15     | mode privilégié complet (`#`) dès la connexion |
+  | 2-14   | personnalisables avec `privilege exec level ...` |
+
+  Un compte de niveau 15 arrive directement en `#` ; un compte de niveau 1 devra taper `enable`
+  et connaître l'enable secret.
+
+  ### Pour aller plus loin
+
+  Avec des dizaines d'équipements, les comptes locaux deviennent difficiles à maintenir : on
+  centralise avec **AAA** et un serveur RADIUS ou TACACS+, en gardant un compte local de
+  **secours** si le serveur est injoignable.
+
+  ### Pièges fréquents
+
+  - `login local` sans aucun compte créé : plus personne ne peut se connecter (garder une
+    session ouverte pendant le test).
+  - Utiliser `password` au lieu de `secret`.
+  - Partager le compte `admin` entre plusieurs personnes : on retombe dans le problème initial.
+
+  ### Pour le CCNA
+
+  Les comptes locaux et `login local` sont la base de la configuration de SSH et d'AAA.
+docs:
+  - title: "Wikipédia — Cisco IOS"
+    url: https://fr.wikipedia.org/wiki/Cisco_IOS
+  - title: "Cisco IOS 15.4M&T — références de commandes"
+    url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-4m-t/products-command-reference-list.html

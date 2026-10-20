@@ -35,3 +35,61 @@ solution: |
   vlan 30
   name INVITES
   end
+cours: |
+  ## Pourquoi des VLAN ?
+
+  Sans VLAN, tous les ports d'un switch forment un seul **domaine de diffusion** : un broadcast
+  (ARP, DHCP) atteint tous les postes, et tout le monde peut communiquer directement avec tout le
+  monde. Un **VLAN** (*Virtual LAN*) découpe le switch en plusieurs réseaux logiques isolés :
+
+  - **sécurité** : la comptabilité n'est pas sur le même réseau que les invités ;
+  - **performance** : les broadcasts restent dans leur VLAN ;
+  - **souplesse** : un utilisateur change de bureau, on change son VLAN, pas le câblage.
+
+  Pour passer d'un VLAN à l'autre, il faut un **routeur** (ou un switch de niveau 3) : chaque VLAN
+  correspond en général à un sous-réseau IP.
+
+  ### Plages de numéros
+
+  | Plage       | Usage                                                  |
+  |-------------|--------------------------------------------------------|
+  | 1           | VLAN par défaut (ne peut pas être supprimé)            |
+  | 2-1001      | plage normale                                          |
+  | 1002-1005   | réservés (anciennes technologies Token Ring/FDDI)      |
+  | 1006-4094   | plage étendue (VTP transparent ou version 3)           |
+
+  ### Créer et nommer (autres valeurs)
+
+  ```
+  SW1(config)# vlan 40
+  SW1(config-vlan)# name PRODUCTION
+  SW1(config-vlan)# vlan 50
+  SW1(config-vlan)# name LABO
+  SW1(config-vlan)# end
+  SW1# show vlan brief
+  VLAN Name                 Status    Ports
+  1    default              active    Fa0/1, Fa0/2, ...
+  40   PRODUCTION           active
+  50   LABO                 active
+  ```
+
+  Les VLAN sont enregistrés dans le fichier `vlan.dat` (flash), pas seulement dans la
+  configuration courante. Un nom clair facilite le dépannage ; il doit être identique sur tous
+  les switchs.
+
+  ### Pièges fréquents
+
+  - Créer un VLAN ne lui affecte **aucun port** : c'est l'étape suivante (`switchport access
+    vlan`).
+  - Supprimer un VLAN qui contient des ports : ils deviennent inactifs.
+  - Utiliser le VLAN 1 pour les utilisateurs ou la gestion : déconseillé (il sert aussi aux
+    protocoles de contrôle).
+
+  ### Pour le CCNA
+
+  Créer, nommer et vérifier des VLAN fait partie des bases du domaine « accès réseau ».
+docs:
+  - title: "Wikipédia — Réseau local virtuel"
+    url: https://fr.wikipedia.org/wiki/R%C3%A9seau_local_virtuel
+  - title: "Wikipédia — IEEE 802.1Q"
+    url: https://fr.wikipedia.org/wiki/IEEE_802.1Q

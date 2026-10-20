@@ -37,3 +37,59 @@ solution: |
   exit
   service password-encryption
   end
+cours: |
+  ## Les lignes virtuelles (VTY)
+
+  Pour administrer un équipement sans être devant, on s'y connecte à distance par **Telnet** ou
+  **SSH**. Chaque session distante occupe une **ligne virtuelle** (*Virtual TeletYpe*). Un switch
+  Cisco en propose 16 (`vty 0 15`), certains routeurs 5 (`vty 0 4`) : c'est le nombre de sessions
+  simultanées possibles.
+
+  Par défaut, les VTY n'ont pas de mot de passe et **refusent** toute connexion
+  (`Password required, but none set`). Il faut aussi un **enable secret**, sinon on ne peut pas
+  passer en mode privilégié à distance (`% No password set`).
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# enable secret Ena-Distant9
+  SW1(config)# line vty 0 15
+  SW1(config-line)# password Vty-Labo7
+  SW1(config-line)# login
+  SW1(config-line)# transport input telnet
+  SW1(config-line)# exit
+  SW1(config)# service password-encryption
+  SW1# show line summary
+  SW1# show users
+      Line       User       Host(s)              Idle       Location
+  *  0 con 0                idle                 00:00:00
+   1 vty 0                  idle                 00:00:12 192.168.99.50
+  ```
+
+  - `login` : demander le mot de passe de la ligne ;
+  - `transport input` : protocoles acceptés (`telnet`, `ssh`, `all`, `none`) ;
+  - prérequis : une adresse IP joignable sur l'équipement (SVI de gestion ou interface de
+    routeur).
+
+  ### Pourquoi Telnet est déconseillé
+
+  Telnet (TCP 23) transmet **tout en clair**, mot de passe compris : une simple capture
+  Wireshark suffit à le lire. Il n'est acceptable qu'en laboratoire isolé. En production, on
+  utilise **SSH** (exercice « accès SSH sécurisé »), qui chiffre la session.
+
+  ### Pièges fréquents
+
+  - Configurer `vty 0 4` seulement sur un switch : les lignes 5 à 15 restent dans leur état
+    précédent.
+  - Oublier l'enable secret : connexion possible mais bloquée au mode utilisateur.
+  - `login` sans `password` : la ligne refuse toute connexion.
+
+  ### Pour le CCNA
+
+  Configurer les VTY, connaître la différence Telnet/SSH et ses conséquences de sécurité sont au
+  programme.
+docs:
+  - title: "Wikipédia — Telnet"
+    url: https://fr.wikipedia.org/wiki/Telnet
+  - title: "RFC 854 — Telnet Protocol Specification"
+    url: https://www.rfc-editor.org/rfc/rfc854
