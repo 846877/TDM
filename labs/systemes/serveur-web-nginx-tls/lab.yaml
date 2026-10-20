@@ -1,0 +1,400 @@
+title: Serveur web nginx et HTTPS avec une AC interne
+level: intermediaire
+order: 9
+tags: [nginx, https, tls, certificats, pki, reverse proxy, vhosts]
+summary: Hôtes virtuels, autorité de certification interne, certificat serveur, HTTPS, redirection, en-têtes de sécurité, proxy inverse, authentification et journaux.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** *Ateliers Durand* publie son **intranet** et l'**espace RH** sur un serveur nginx interne.
+  La direction exige du **HTTPS** partout, avec des certificats délivrés par une **autorité de
+  certification interne** que les postes reconnaissent. L'application de planning, sur un réseau séparé,
+  doit être accessible à travers le serveur web.
+
+  | Machine | Adresse | Rôle |
+  |---|---|---|
+  | `admin` | 10.172.0.5 | ton poste (curl, openssl) — terminal du lab |
+  | `srv-web` | 10.172.0.10 (LAN), 10.172.1.10 (applis) | nginx installé, **non configuré ni démarré** |
+  | `appli` | 10.172.1.20:8000 | application de planning (injoignable depuis le LAN) |
+
+  - Sur admin, `intranet.durand.lan` et `rh.durand.lan` désignent `10.172.0.10`.
+  - `ssh srv-web` (root, par clé). Pas de systemd : `nginx` démarre, `nginx -t` teste,
+    `nginx -s reload` recharge.
+  - Le port 443 de srv-web est publié sur `https://localhost:9461` (ton navigateur ne connaîtra pas l'AC
+    interne : avertissement normal).
+cours: |
+  ## nginx en bref
+
+  nginx est un serveur web et un **proxy inverse** très répandu. Sa configuration Ubuntu :
+
+  ```
+  /etc/nginx/nginx.conf                 configuration générale (bloc http, journaux, TLS par défaut)
+  /etc/nginx/sites-available/<site>     un fichier par site
+  /etc/nginx/sites-enabled/<site>       lien symbolique = site activé
+  /var/log/nginx/                       access.log, error.log
+  ```
+
+  Un **hôte virtuel** est un bloc `server` : plusieurs sites partagent une adresse IP, nginx choisit selon
+  l'en-tête `Host` envoyé par le navigateur (et selon le nom demandé en TLS, le SNI).
+
+  ```nginx
+  server {
+      listen 443 ssl;
+      server_name intranet.durand.lan;
+      ssl_certificate     /etc/nginx/tls/intranet.crt;
+      ssl_certificate_key /etc/nginx/tls/intranet.key;
+      root /var/www/intranet;
+      add_header Strict-Transport-Security "max-age=31536000" always;
+
+      location /planning/ {
+          proxy_pass http://10.172.1.20:8000/;
+          proxy_set_header Host $host;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      }
+  }
+  server {
+      listen 80;
+      server_name intranet.durand.lan;
+      return 301 https://$host$request_uri;
+  }
+  ```
+
+  ## TLS et certificats
+
+  HTTPS = HTTP dans un tunnel **TLS**, qui apporte confidentialité, intégrité et **authentification du
+  serveur**. Le serveur présente un certificat : une clé publique, des noms (SAN) et la signature d'une
+  autorité de certification (AC). Le client fait confiance au certificat s'il remonte à une AC de son
+  magasin de confiance.
+
+  ```
+  AC Ateliers Durand (ac-durand.crt, auto-signée, installée sur tous les postes)
+     └── signe ──▶ intranet.crt  (SAN : intranet.durand.lan, rh.durand.lan)
+                      └── présenté par nginx ; le client vérifie nom + signature + dates
+  ```
+
+  Pour Internet, on utilise une AC publique (Let's Encrypt, gratuite et automatisée par ACME). Pour des
+  noms internes (`.lan`), une AC interne est la solution classique (souvent l'AC d'Active Directory).
+
+  | Besoin                        | Commande openssl                                                |
+  |-------------------------------|-----------------------------------------------------------------|
+  | Clé + certificat d'AC         | `openssl req -x509 -newkey rsa:4096 -noenc -days 3650 -keyout ac.key -out ac.crt -subj "/CN=..."` |
+  | Clé + demande (CSR)           | `openssl req -newkey rsa:2048 -noenc -keyout srv.key -out srv.csr -subj "/CN=..."` |
+  | Signer avec SAN               | `openssl x509 -req -in srv.csr -CA ac.crt -CAkey ac.key -CAcreateserial -days 397 -extfile <(printf 'subjectAltName=DNS:a,DNS:b') -out srv.crt` |
+  | Lire un certificat            | `openssl x509 -in srv.crt -noout -text` (`-subject -issuer -dates -ext subjectAltName`) |
+  | Vérifier la chaîne            | `openssl verify -CAfile ac.crt srv.crt`                         |
+  | Tester un serveur             | `openssl s_client -connect hôte:443 -servername nom`            |
+  | Faire confiance à une AC (Ubuntu) | copier dans `/usr/local/share/ca-certificates/*.crt` puis `update-ca-certificates` |
+
+  ## En-têtes de sécurité
+
+  | En-tête                       | Effet                                                        |
+  |-------------------------------|--------------------------------------------------------------|
+  | `Strict-Transport-Security`   | le navigateur n'utilisera plus que HTTPS pour ce site (HSTS) |
+  | `X-Content-Type-Options: nosniff` | pas de « devinette » du type de contenu                  |
+  | `X-Frame-Options: SAMEORIGIN` | interdit l'intégration du site dans un cadre d'un autre site |
+  | `server_tokens off`           | n'affiche plus la version de nginx                           |
+
+  ## Pièges courants
+
+  - Oublier le **SAN** : les navigateurs ignorent le CN, un certificat sans SAN est refusé.
+  - Clé privée lisible par tous, ou clé de l'AC laissée sur le serveur web.
+  - `proxy_pass` avec ou sans `/` final : avec `/`, le préfixe `/planning/` est retiré du chemin transmis.
+  - Recharger nginx sans `nginx -t` : une erreur arrête tous les sites.
+  - Certificat expiré : prévoir la supervision des dates et le renouvellement automatique.
+
+  ## Bonnes pratiques en entreprise
+
+  - HTTPS partout, HTTP seulement pour rediriger ; TLS 1.2 et 1.3 uniquement.
+  - Clé de l'AC racine hors ligne ; une AC intermédiaire signe les certificats des serveurs.
+  - Certificats courts et renouvelés automatiquement, supervision des expirations.
+  - Un journal par site, centralisé, pour l'analyse et la sécurité.
+docs:
+  - title: Documentation officielle de nginx
+    url: https://nginx.org/en/docs/
+  - title: nginx - configuration d'un serveur HTTPS
+    url: https://nginx.org/en/docs/http/configuring_https_servers.html
+  - title: openssl-req(1ssl) - certificats et demandes (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man1/openssl-req.1ssl.html
+  - title: Ubuntu Server - installer un certificat d'AC
+    url: https://documentation.ubuntu.com/server/how-to/security/install-a-root-ca-certificate-in-the-trust-store/
+exercises:
+  - id: web-site-intranet
+    title: Publier le site intranet
+    cours: |
+      Sur Ubuntu, chaque site nginx a son fichier dans `/etc/nginx/sites-available/`, activé par un lien
+      symbolique dans `/etc/nginx/sites-enabled/` (`ln -s`). Un bloc minimal :
+
+      ```nginx
+      server {
+          listen 80;
+          server_name <nom du site>;
+          root <dossier des pages>;
+          index index.html;
+      }
+      ```
+
+      `nginx -t` valide toute la configuration ; `nginx` démarre le serveur, `nginx -s reload` recharge
+      sans couper les connexions. Teste depuis le poste client avec `curl http://<nom>/` : c'est le nom
+      demandé qui permet à nginx de choisir le bon site.
+    description: |
+      Sur `srv-web`, publie le site **`intranet.durand.lan`** en HTTP : pages dans `/var/www/intranet`, avec
+      un `index.html` contenant `Intranet Ateliers Durand`. Le site est décrit dans
+      `/etc/nginx/sites-available/intranet` et activé. Démarre nginx.
+    hint: |
+      mkdir -p /var/www/intranet ; echo '<h1>Intranet Ateliers Durand</h1>' > /var/www/intranet/index.html ; nano /etc/nginx/sites-available/intranet ; ln -s /etc/nginx/sites-available/intranet /etc/nginx/sites-enabled/ ; nginx -t && nginx
+    checks:
+      - desc: Le site est activé par un lien symbolique
+        run: ssh srv-web 'test -L /etc/nginx/sites-enabled/intranet && test -f /etc/nginx/sites-available/intranet'
+      - desc: intranet.durand.lan répond depuis admin
+        run: curl -sL --max-time 5 http://intranet.durand.lan/ | grep -q 'Intranet Ateliers Durand'
+
+  - id: web-vhosts
+    title: Deux sites sur la même adresse
+    cours: |
+      Plusieurs blocs `server` peuvent écouter sur le même port : nginx compare l'en-tête `Host` de la
+      requête aux `server_name`. Si aucun ne correspond, il utilise le serveur **par défaut** du port (le
+      premier, ou celui marqué `default_server`).
+
+      Pour ne pas servir n'importe quoi aux requêtes inattendues (scans, noms inconnus), on déclare un
+      serveur par défaut qui ferme la connexion :
+
+      ```nginx
+      server { listen 80 default_server; server_name _; return 444; }
+      ```
+
+      Le code spécial `444` ferme la connexion sans réponse. Le site `default` d'Ubuntu joue déjà ce rôle de
+      serveur par défaut : il faut le désactiver.
+    description: |
+      Ajoute le site **`rh.durand.lan`** (pages dans `/var/www/rh`, `index.html` contenant `Espace RH`).
+      Remplace le site par défaut d'Ubuntu par un serveur par défaut qui **ferme la connexion** (code 444)
+      pour tout nom inconnu.
+    hint: |
+      site rh comme intranet ; rm /etc/nginx/sites-enabled/default ; server { listen 80 default_server; server_name _; return 444; } ; nginx -t && nginx -s reload
+    checks:
+      - desc: rh.durand.lan sert l'espace RH, l'intranet est inchangé
+        run: curl -sL --max-time 5 http://rh.durand.lan/ | grep -q 'Espace RH' && curl -sL --max-time 5 http://intranet.durand.lan/ | grep -q 'Intranet Ateliers Durand'
+      - desc: Un nom inconnu reçoit une connexion fermée (444)
+        run: |
+          curl -s -o /dev/null --max-time 5 -H 'Host: inconnu.example' http://10.172.0.10/; test $? -eq 52
+
+  - id: web-ac-interne
+    title: Créer l'autorité de certification interne
+    cours: |
+      Une **AC** est une paire de clés dont le certificat est **auto-signé** et marqué comme pouvant signer
+      d'autres certificats (`basicConstraints = CA:TRUE`, ajouté par défaut par `openssl req -x509`).
+
+      `openssl req -x509 -newkey rsa:4096 -noenc -days 3650 -keyout <clé> -out <certificat> -subj "/CN=<nom>"`
+      crée les deux d'un coup (`-noenc` : clé non chiffrée, pratique pour un lab ; en production, la clé de
+      l'AC est protégée par une phrase de passe et gardée hors ligne).
+
+      Pour qu'un poste Ubuntu fasse confiance à l'AC : copier son **certificat** (jamais la clé) dans
+      `/usr/local/share/ca-certificates/<nom>.crt`, puis `update-ca-certificates`. `scp srv-web:<fichier> .`
+      copie un fichier depuis le serveur.
+    description: |
+      Sur `srv-web`, crée l'AC dans `/root/ac/` : clé `ac-durand.key` (lisible par root seulement) et
+      certificat `ac-durand.crt` de nom `CN=AC Ateliers Durand`, valable 10 ans. Puis installe ce
+      certificat dans le magasin de confiance d'**admin**, sous le nom `ac-durand.crt`.
+    hint: |
+      ssh srv-web ; mkdir -p /root/ac ; openssl req -x509 -newkey rsa:4096 -noenc -days 3650 -keyout /root/ac/ac-durand.key -out /root/ac/ac-durand.crt -subj "/CN=AC Ateliers Durand" ; chmod 600 /root/ac/ac-durand.key ; sur admin : scp srv-web:/root/ac/ac-durand.crt /usr/local/share/ca-certificates/ ; update-ca-certificates
+    checks:
+      - desc: Clé de l'AC protégée et certificat d'AC valide
+        run: |
+          ssh srv-web "test \$(stat -c %a /root/ac/ac-durand.key) = 600 && openssl x509 -in /root/ac/ac-durand.crt -noout -subject | grep -q 'AC Ateliers Durand' && openssl x509 -in /root/ac/ac-durand.crt -noout -ext basicConstraints | grep -q 'CA:TRUE'"
+      - desc: admin fait confiance à l'AC
+        run: |
+          test -f /usr/local/share/ca-certificates/ac-durand.crt && test -e /etc/ssl/certs/ac-durand.pem && openssl x509 -in /etc/ssl/certs/ac-durand.pem -noout -subject | grep -q 'AC Ateliers Durand'
+
+  - id: web-certificat-serveur
+    title: Émettre le certificat du serveur web
+    cours: |
+      Un certificat de serveur s'obtient en deux temps :
+
+      1. le serveur crée sa **clé privée** et une **demande de signature** (CSR) :
+         `openssl req -newkey rsa:2048 -noenc -keyout <clé> -out <csr> -subj "/CN=<nom>"` ;
+      2. l'AC **signe** la demande : `openssl x509 -req -in <csr> -CA <ac.crt> -CAkey <ac.key>
+         -CAcreateserial -days 397 -out <crt> -extfile <fichier>`, où le fichier contient
+         `subjectAltName=DNS:<nom1>,DNS:<nom2>`.
+
+      Les navigateurs vérifient les noms dans le **SAN**, pas dans le CN. `openssl verify -CAfile <ac.crt>
+      <crt>` contrôle la signature. La clé privée doit rester lisible par root seulement (`600`) : nginx la
+      lit au démarrage, avant de changer d'utilisateur.
+    description: |
+      Crée pour srv-web la clé `/etc/nginx/tls/intranet.key` (droits `600`) et le certificat
+      `/etc/nginx/tls/intranet.crt` signé par l'AC, valable pour **`intranet.durand.lan`** et
+      **`rh.durand.lan`** (SAN).
+    hint: |
+      mkdir -p /etc/nginx/tls ; cd /etc/nginx/tls ; openssl req -newkey rsa:2048 -noenc -keyout intranet.key -out intranet.csr -subj "/CN=intranet.durand.lan" ; echo 'subjectAltName=DNS:intranet.durand.lan,DNS:rh.durand.lan' > san.ext ; openssl x509 -req -in intranet.csr -CA /root/ac/ac-durand.crt -CAkey /root/ac/ac-durand.key -CAcreateserial -days 397 -extfile san.ext -out intranet.crt ; chmod 600 intranet.key
+    checks:
+      - desc: Certificat signé par l'AC interne
+        run: |
+          ssh srv-web 'openssl verify -CAfile /root/ac/ac-durand.crt /etc/nginx/tls/intranet.crt' | grep -q ': OK'
+      - desc: SAN avec les deux noms
+        run: |
+          s=$(ssh srv-web 'openssl x509 -in /etc/nginx/tls/intranet.crt -noout -ext subjectAltName'); echo "$s" | grep -q 'DNS:intranet.durand.lan' && echo "$s" | grep -q 'DNS:rh.durand.lan'
+      - desc: Clé privée en 600, correspondant au certificat
+        run: |
+          ssh srv-web 'test $(stat -c %a /etc/nginx/tls/intranet.key) = 600 && test "$(openssl x509 -in /etc/nginx/tls/intranet.crt -noout -pubkey)" = "$(openssl pkey -in /etc/nginx/tls/intranet.key -pubout)"'
+
+  - id: web-https
+    title: Servir les deux sites en HTTPS
+    cours: |
+      Dans un bloc `server`, HTTPS s'active avec :
+
+      ```nginx
+      listen 443 ssl;
+      ssl_certificate     <certificat>;
+      ssl_certificate_key <clé>;
+      ```
+
+      Le même certificat peut servir plusieurs sites s'il contient tous leurs noms dans son SAN. Le client
+      indique le nom demandé dès le début de la négociation TLS (**SNI**), ce qui permet à nginx de choisir
+      le bon bloc `server` avant même de lire la requête HTTP.
+
+      Côté client, `curl https://<nom>/` vérifie le certificat avec le magasin de confiance du système ;
+      `curl -v` affiche la négociation, `openssl s_client -connect <ip>:443 -servername <nom>` le détail.
+    description: |
+      Ajoute l'écoute **HTTPS** (port 443) aux sites intranet et RH avec le certificat de l'exercice
+      précédent. Depuis admin, `curl https://intranet.durand.lan/` et `curl https://rh.durand.lan/` doivent
+      fonctionner **sans** option `-k` (certificat reconnu).
+    hint: dans chaque server → listen 443 ssl; ssl_certificate /etc/nginx/tls/intranet.crt; ssl_certificate_key /etc/nginx/tls/intranet.key; ; nginx -t && nginx -s reload
+    checks:
+      - desc: Intranet en HTTPS, certificat reconnu
+        run: curl -s --max-time 5 https://intranet.durand.lan/ | grep -q 'Intranet Ateliers Durand'
+      - desc: Espace RH en HTTPS, certificat reconnu
+        run: curl -s --max-time 5 https://rh.durand.lan/ | grep -q 'Espace RH'
+
+  - id: web-redirection-https
+    title: Rediriger HTTP vers HTTPS
+    cours: |
+      Une fois HTTPS en place, HTTP ne sert plus qu'à **rediriger** : le navigateur reçoit un code `301`
+      (redirection permanente) et l'en-tête `Location` vers la même adresse en `https://`.
+
+      ```nginx
+      server {
+          listen 80;
+          server_name <noms>;
+          return 301 https://$host$request_uri;
+      }
+      ```
+
+      `$host` reprend le nom demandé et `$request_uri` le chemin avec ses paramètres : l'utilisateur arrive
+      exactement sur la page voulue. `curl -sI` affiche seulement les en-têtes de la réponse.
+    description: |
+      Les adresses `http://` des deux sites doivent rediriger de façon **permanente** vers la même page en
+      `https://` (chemin et paramètres conservés).
+    hint: 'server { listen 80; server_name intranet.durand.lan rh.durand.lan; return 301 https://$host$request_uri; } (et retirer listen 80 des blocs HTTPS)'
+    checks:
+      - desc: Redirection 301 de l'intranet, chemin conservé
+        run: |
+          h=$(curl -sI --max-time 5 'http://intranet.durand.lan/docs/page.html?x=1'); echo "$h" | head -1 | grep -q ' 301' && echo "$h" | grep -qi '^location: https://intranet.durand.lan/docs/page.html?x=1'
+      - desc: Redirection 301 de l'espace RH
+        run: curl -sI --max-time 5 http://rh.durand.lan/ | grep -qi '^location. https://rh.durand.lan/'
+
+  - id: web-entetes-securite
+    title: Ajouter les en-têtes de sécurité
+    cours: |
+      `add_header <nom> "<valeur>" always;` ajoute un en-tête à toutes les réponses (`always` : y compris les
+      erreurs). Placé dans un bloc `server`, il s'applique à ce site ; attention, un `add_header` dans un
+      bloc `location` **remplace** ceux du niveau supérieur.
+
+      - `Strict-Transport-Security "max-age=31536000"` : pendant un an, le navigateur refusera de venir
+        en HTTP sur ce site (même si l'utilisateur tape `http://`) ;
+      - `X-Content-Type-Options "nosniff"` et `X-Frame-Options "SAMEORIGIN"` limitent certaines attaques ;
+      - `server_tokens off;` (bloc `http` ou `server`) masque la version de nginx.
+
+      `curl -sI https://...` affiche les en-têtes reçus.
+    description: |
+      Sur le site intranet en HTTPS, ajoute **HSTS** (un an, `max-age=31536000`), `X-Content-Type-Options:
+      nosniff` et `X-Frame-Options: SAMEORIGIN`, et masque la version de nginx.
+    hint: add_header Strict-Transport-Security "max-age=31536000" always; add_header X-Content-Type-Options "nosniff" always; add_header X-Frame-Options "SAMEORIGIN" always; server_tokens off;
+    checks:
+      - desc: En-têtes HSTS, nosniff et SAMEORIGIN présents
+        run: |
+          h=$(curl -sI --max-time 5 https://intranet.durand.lan/); echo "$h" | grep -qi '^strict-transport-security. max-age=31536000' && echo "$h" | grep -qi '^x-content-type-options. nosniff' && echo "$h" | grep -qi '^x-frame-options. sameorigin'
+      - desc: La version de nginx n'est plus affichée
+        run: |
+          curl -sI --max-time 5 https://intranet.durand.lan/ | grep -i '^server' | grep -qvi 'nginx/'
+
+  - id: web-reverse-proxy
+    title: Publier l'application de planning (proxy inverse)
+    cours: |
+      En **proxy inverse**, nginx reçoit la requête du client et la retransmet à un serveur interne, puis
+      renvoie la réponse. Le client ne voit que nginx (HTTPS, nom unique), l'application reste sur un
+      réseau protégé.
+
+      ```nginx
+      location /planning/ {
+          proxy_pass http://<serveur>:<port>/;
+      }
+      ```
+
+      Avec un `/` à la fin de `proxy_pass`, le préfixe `/planning/` est **remplacé** par `/`. Par défaut,
+      l'application ne connaît ni le nom demandé ni l'adresse du vrai client : on les transmet avec
+      `proxy_set_header Host $host;`, `X-Forwarded-For $proxy_add_x_forwarded_for;` et
+      `X-Forwarded-Proto $scheme;`.
+    description: |
+      L'application de planning (`10.172.1.20:8000`) n'est pas joignable depuis le LAN. Publie-la sur
+      `https://intranet.durand.lan/planning/` : `/planning/semaine` doit arriver à l'application sous la forme
+      `/semaine`, avec le nom du site, l'adresse du client et le protocole d'origine.
+    hint: location /planning/ { proxy_pass http://10.172.1.20:8000/; proxy_set_header Host $host; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto $scheme; }
+    checks:
+      - desc: Le planning répond, préfixe retiré
+        run: |
+          r=$(curl -s --max-time 5 https://intranet.durand.lan/planning/semaine); echo "$r" | grep -q 'Planning des ateliers' && echo "$r" | grep -qx 'chemin=/semaine'
+      - desc: Nom du site, adresse du client et protocole transmis
+        run: |
+          r=$(curl -s --max-time 5 https://intranet.durand.lan/planning/); echo "$r" | grep -qx 'Host=intranet.durand.lan' && echo "$r" | grep -qx 'X-Forwarded-For=10.172.0.5' && echo "$r" | grep -qx 'X-Forwarded-Proto=https'
+
+  - id: web-acces-restreint
+    title: Protéger l'administration par mot de passe
+    cours: |
+      L'authentification **basique** HTTP demande un identifiant et un mot de passe au navigateur. Avec HTTPS,
+      ils voyagent chiffrés.
+
+      - `htpasswd -c <fichier> <utilisateur>` crée le fichier de mots de passe (`-c` seulement la première
+        fois, `-b` pour donner le mot de passe en argument) ;
+      - dans un bloc `location`, `auth_basic "<message>";` et `auth_basic_user_file <fichier>;`.
+
+      Le fichier doit être lisible par nginx (`www-data`) mais pas par tout le monde (`640 root:www-data`).
+      Sans identifiants, le serveur répond `401 Unauthorized`. `curl -u utilisateur:motdepasse` s'authentifie.
+    description: |
+      Crée la page `https://intranet.durand.lan/admin/` (fichier `/var/www/intranet/admin/index.html`
+      contenant `Administration`) protégée par l'utilisateur **`chef`** / **`Chef2026!`** (fichier
+      `/etc/nginx/.htpasswd`).
+    hint: |
+      mkdir /var/www/intranet/admin ; echo Administration > /var/www/intranet/admin/index.html ; htpasswd -cb /etc/nginx/.htpasswd chef 'Chef2026!' ; chown root:www-data /etc/nginx/.htpasswd ; chmod 640 /etc/nginx/.htpasswd ; location /admin/ { auth_basic "Administration"; auth_basic_user_file /etc/nginx/.htpasswd; }
+    checks:
+      - desc: Sans identifiants, 401
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://intranet.durand.lan/admin/)" = 401
+      - desc: Avec chef, la page s'affiche
+        run: curl -s --max-time 5 -u 'chef:Chef2026!' https://intranet.durand.lan/admin/ | grep -q Administration
+      - desc: Mauvais mot de passe refusé
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -u 'chef:mauvais' https://intranet.durand.lan/admin/)" = 401
+
+  - id: web-journaux
+    title: Un journal par site
+    cours: |
+      Par défaut, tous les sites écrivent dans `/var/log/nginx/access.log` et `error.log`. Un journal par
+      site facilite l'analyse et les statistiques :
+
+      ```nginx
+      access_log /var/log/nginx/<site>.access.log;
+      error_log  /var/log/nginx/<site>.error.log;
+      ```
+
+      Le format par défaut (`combined`) contient l'adresse du client, la date, la requête, le code de
+      réponse, la taille, le référent et le navigateur. `tail -f` suit le journal en direct ; `awk '{print
+      $9}' <journal> | sort | uniq -c` compte les codes de réponse.
+    description: |
+      Le site intranet en HTTPS doit écrire ses accès dans `/var/log/nginx/intranet.access.log` et ses
+      erreurs dans `/var/log/nginx/intranet.error.log`. Les requêtes d'admin (10.172.0.5) doivent y
+      apparaître.
+    hint: dans le server HTTPS de l'intranet → access_log /var/log/nginx/intranet.access.log; error_log /var/log/nginx/intranet.error.log; ; nginx -t && nginx -s reload
+    checks:
+      - desc: Les accès à l'intranet arrivent dans intranet.access.log
+        run: |
+          curl -s -o /dev/null --max-time 5 https://intranet.durand.lan/verif-journal; sleep 1; ssh srv-web "grep -q '^10.172.0.5 .*verif-journal' /var/log/nginx/intranet.access.log"
+      - desc: Journal d'erreurs dédié configuré
+        run: ssh srv-web "nginx -T 2>/dev/null | grep -Eq '^\s*error_log\s+/var/log/nginx/intranet.error.log'"
