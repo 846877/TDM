@@ -39,7 +39,12 @@ from app.devops import windows  # noqa: E402
 ALWAYS_KNOWN = {"winget", "Get-WindowsUpdateLog", "manage-bde", "Get-BitLockerVolume", "Enable-BitLocker",
                 "Add-BitLockerKeyProtector", "Suspend-BitLocker", "Resume-BitLocker", "Backup-BitLockerKeyProtector",
                 "Checkpoint-Computer", "Get-ComputerRestorePoint", "Enable-ComputerRestore",
-                "Disable-ComputerRestore", "Restore-Computer", "rstrui", "wsreset", "sfc", "DISM", "dism"}
+                "Disable-ComputerRestore", "Restore-Computer", "rstrui", "wsreset", "sfc", "DISM", "dism",
+                # outils des contrôleurs de domaine (présents seulement après promotion ou avec certains RSAT)
+                "redircmp", "redirusr", "nltest", "dcdiag", "dsacls",
+                # Microsoft Defender (module absent si Defender est retiré de l'image du runner)
+                "Get-MpPreference", "Set-MpPreference", "Add-MpPreference", "Remove-MpPreference",
+                "Get-MpComputerStatus", "Update-MpSignature", "Start-MpScan", "Get-MpThreatDetection"}
 
 PARSE_SCRIPT = r"""
 param([string]$InFile, [string]$OutFile)

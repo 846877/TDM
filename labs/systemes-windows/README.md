@@ -147,7 +147,19 @@ Conseils :
   `S-1-5-32-555` Remote Desktop Users, `S-1-5-32-580` Remote Management Users) : les noms changent avec la
   langue de Windows (*Administrateurs* sur un Windows français) ;
 - ne pas dépendre du compte qui exécute (`$env:USERNAME` vaut `vagrant` dans la VM mais pas en CI) ;
-- Windows PowerShell **5.1** uniquement (pas de `??`, de ternaire, de `-Parallel`...).
+- Windows PowerShell **5.1** uniquement (pas de `??`, de ternaire, de `-Parallel`...) ;
+- registre : jamais `New-Item -Force` sur une clé qui peut exister (elle est recréée **vide**) ;
+  `if (-not (Test-Path $cle)) { New-Item $cle }` puis `Set-ItemProperty` ;
+- noms de machines : en CI, `$env:COMPUTERNAME` n'est pas celui du lab (`\\$env:COMPUTERNAME\...` dans
+  les vérifications d'un exercice `ci: true`, comme pour DFS) ;
+- les lettres `D:` (disque temporaire des runners GitHub) et `E:` peuvent être prises en CI : un disque
+  virtuel d'un exercice `ci: true` prend de préférence une lettre en fin d'alphabet ;
+- les scripts `.ps1` sont enregistrés en **UTF-8 avec BOM** (sinon PowerShell 5.1 les lit en ANSI et
+  abîme les accents).
+
+Les labs avec contrôleur de domaine (`domain: :forest`) mettent 15 à 20 minutes au premier `vagrant up`
+(promotion puis redémarrage). Les exercices côté contrôleur d'un lab à deux VM se font à distance
+(`Invoke-Command -ComputerName SRV-DC01 -Credential DURAND\vagrant`) ou par une vérification `machine:`.
 
 ### CI (`.github/workflows/windows.yml`)
 
