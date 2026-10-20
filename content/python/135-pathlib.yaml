@@ -9,6 +9,7 @@ description: |
 
   1. `decomposer(chemin)` renvoie le tuple `(dossier_parent, nom, nom_sans_extension,
      extension)` sous forme de chaînes ; l'extension inclut le point (`".log"`), ou `""`.
+     Le dossier parent s'écrit toujours avec des `/`, même sous Windows (méthode `as_posix()`).
      `decomposer("/var/log/nginx/access.log")` → `("/var/log/nginx", "access.log", "access", ".log")`.
   2. `changer_extension(chemin, ext)` renvoie le chemin (chaîne) avec la nouvelle extension :
      `changer_extension("rapport.txt", ".csv")` → `"rapport.csv"`.
@@ -99,7 +100,7 @@ solution: |
 
   def decomposer(chemin):
       p = Path(chemin)
-      return (str(p.parent), p.name, p.stem, p.suffix)
+      return (p.parent.as_posix(), p.name, p.stem, p.suffix)
 
 
   def changer_extension(chemin, ext):
