@@ -10,6 +10,7 @@ services:
   proxy:
     build: {context: ., dockerfile: proxy/Dockerfile}
     hostname: proxy
+    init: true
     volumes: [cles:/lab-ssh]
     extra_hosts:
       - "actu.example:10.173.1.80"

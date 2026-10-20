@@ -231,14 +231,14 @@ exercises:
                 └── format de stockage
       ```
 
-      Après l'ajout d'un `cache_dir`, `squid -z` crée l'arborescence (Squid arrêté), puis on redémarre.
+      Après l'ajout d'un `cache_dir`, on arrête Squid (`squid -k shutdown` laisse jusqu'à 30 secondes aux connexions en cours : attendre que le fichier `/run/squid.pid` ait disparu), `squid -z` crée l'arborescence, puis on redémarre.
       Le serveur d'origine indique la durée de validité d'un objet (`Cache-Control`, `Expires`). Dans le
       journal, `TCP_HIT` ou `TCP_MEM_HIT` signifie « servi depuis le cache ».
     description: |
       Ajoute un cache disque de **200 Mo** au format `ufs` dans `/var/spool/squid`, initialise-le et
       redémarre Squid. Une deuxième demande de `http://actu.example/logo.png` doit être servie depuis le
       cache.
-    hint: cache_dir ufs /var/spool/squid 200 16 256 ; squid -k shutdown ; (attendre) ; squid -z ; squid ; deux curl de logo.png puis grep HIT /var/log/squid/access.log
+    hint: cache_dir ufs /var/spool/squid 200 16 256 ; squid -k shutdown ; attendre la disparition de /run/squid.pid (jusqu à 30 s) ; squid -z ; squid ; deux curl de logo.png puis grep HIT /var/log/squid/access.log
     checks:
       - desc: Cache disque ufs de 200 Mo initialisé
         run: ssh proxy 'grep -Eq "^\s*cache_dir\s+ufs\s+/var/spool/squid\s+200\s" /etc/squid/squid.conf && test -d /var/spool/squid/00'

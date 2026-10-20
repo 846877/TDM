@@ -1,0 +1,382 @@
+title: Annuaire OpenLDAP
+level: avance
+order: 9
+tags: [ldap, openldap, annuaire, ldif, acl, nss, nslcd]
+summary: Démarrer slapd, structurer l'annuaire en OU, créer utilisateurs, groupes et compte de service en LDIF, modifier, protéger par ACL, brancher un poste Linux et sauvegarder.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** *Ateliers Durand* veut un **annuaire central** pour ses comptes Linux et ses applications
+  (intranet, wiki, VPN...), sans attendre le projet Active Directory. Tu mets en place **OpenLDAP** :
+  structure de l'annuaire, comptes, groupes, droits d'accès, raccordement d'un poste Linux et sauvegarde.
+
+  | Machine | Adresse | Rôle |
+  |---|---|---|
+  | `admin` | 10.175.0.5 | outils LDAP (`ldapsearch`, `ldapadd`...) — terminal du lab |
+  | `srv-ldap` | 10.175.0.10 | slapd préconfiguré pour **`dc=durand,dc=lan`** (base vide), **non démarré** |
+  | `poste` | 10.175.0.20 | poste Linux, client `nslcd` installé mais non configuré |
+
+  | Élément | Valeur |
+  |---|---|
+  | Administrateur de l'annuaire | `cn=admin,dc=durand,dc=lan` / `AdminLdap2026!` |
+  | Utilisateurs à créer | `amartin` (Alice Martin, `Alice2026!`, UID 10001), `bleroy` (Bruno Leroy, `Bruno2026!`, UID 10002) |
+
+  - `ssh srv-ldap` et `ssh poste` (root, par clé). Pas de systemd :
+    `slapd -h "ldap:/// ldapi:///" -u openldap -g openldap` démarre l'annuaire, `nslcd` le client du poste.
+  - Sur srv-ldap, root administre la configuration (`cn=config`) sans mot de passe :
+    `ldapmodify -Y EXTERNAL -H ldapi:///`.
+
+  Réponses à écrire dans `/root/reponses.txt` d'admin, au format `cle=valeur`.
+cours: |
+  ## Qu'est-ce qu'un annuaire LDAP ?
+
+  Un **annuaire** est une base optimisée pour la lecture, organisée en **arbre**, qui décrit les personnes,
+  groupes, machines et services d'une organisation. **LDAP** (port 389, 636 en LDAPS) est le protocole pour
+  l'interroger. Active Directory, OpenLDAP, 389 Directory Server ou FreeIPA parlent tous LDAP : les
+  applications (intranet, VPN, wiki, messagerie, supervision) s'y authentifient.
+
+  ```
+  dc=durand,dc=lan                         ← racine (le suffixe, tiré du domaine)
+  ├── cn=admin                             ← administrateur de l'annuaire
+  ├── ou=utilisateurs
+  │   ├── uid=amartin                      ← DN : uid=amartin,ou=utilisateurs,dc=durand,dc=lan
+  │   └── uid=bleroy
+  ├── ou=groupes
+  │   └── cn=compta
+  └── ou=services
+      └── cn=lecteur                       ← compte technique des applications
+  ```
+
+  Chaque **entrée** a un nom unique, le **DN** (*distinguished name*), et des **attributs** définis par ses
+  **classes d'objets** (`objectClass`) : `inetOrgPerson` (personne : `cn`, `sn`, `mail`...),
+  `posixAccount` (compte Unix : `uidNumber`, `gidNumber`, `homeDirectory`, `loginShell`), `posixGroup`
+  (groupe Unix : `gidNumber`, `memberUid`), `organizationalUnit` (dossier).
+
+  ## Le format LDIF
+
+  ```
+  dn: uid=amartin,ou=utilisateurs,dc=durand,dc=lan
+  objectClass: inetOrgPerson
+  objectClass: posixAccount
+  uid: amartin
+  cn: Alice Martin
+  sn: Martin
+  uidNumber: 10001
+  gidNumber: 10000
+  homeDirectory: /home/amartin
+  loginShell: /bin/bash
+  userPassword: {SSHA}...                  ← produit par slappasswd
+  ```
+
+  Pour modifier une entrée existante :
+
+  ```
+  dn: uid=amartin,ou=utilisateurs,dc=durand,dc=lan
+  changetype: modify
+  replace: telephoneNumber
+  telephoneNumber: 04 72 10 20 11
+  ```
+
+  ## Les commandes
+
+  | Besoin                         | Commande                                                     |
+  |--------------------------------|--------------------------------------------------------------|
+  | Chercher                       | `ldapsearch -x -H ldap://srv -b dc=durand,dc=lan '(uid=amartin)' cn mail` |
+  | S'authentifier (bind)          | `-D cn=admin,dc=durand,dc=lan -w motdepasse` (ou `-W` pour le demander) |
+  | Ajouter / modifier / supprimer | `ldapadd -f fichier.ldif`, `ldapmodify -f`, `ldapdelete <dn>` |
+  | Tester un mot de passe         | `ldapwhoami -x -H ldap://srv -D <dn> -w <mdp>`               |
+  | Hacher un mot de passe         | `slappasswd -s 'motdepasse'`                                 |
+  | Configuration (cn=config)      | `ldapmodify -Y EXTERNAL -H ldapi:///` (root sur le serveur)  |
+  | Sauvegarde                     | `slapcat -n 0` (configuration), `slapcat -n 1` (données)     |
+
+  Les filtres de recherche s'écrivent entre parenthèses : `(uid=amartin)`, `(objectClass=posixGroup)`,
+  `(&(objectClass=inetOrgPerson)(mail=*))` (ET), `(|(uid=a*)(uid=b*))` (OU).
+
+  ## Les ACL d'OpenLDAP
+
+  Les droits sont des règles `olcAccess` sur la base, évaluées dans l'ordre :
+
+  ```
+  olcAccess: {0}to attrs=userPassword by self write by anonymous auth by * none
+  olcAccess: {1}to * by users read by * none
+  ```
+
+  `self` = l'entrée elle-même, `users` = tout compte authentifié, `anonymous` = connexion sans
+  identifiant, `auth` = le droit de vérifier un mot de passe sans le lire.
+
+  ## Pièges courants
+
+  - Lignes LDIF avec des espaces en fin de ligne ou une ligne vide au milieu d'une entrée : erreurs
+    obscures (`invalid format`).
+  - Mots de passe en clair dans l'annuaire : toujours `{SSHA}` (ou mieux, `{ARGON2}` si disponible).
+  - Annuaire lisible anonymement : n'importe qui récupère la liste des salariés et des comptes.
+  - LDAP en clair sur le réseau : en production, LDAPS ou StartTLS obligatoire.
+
+  ## Bonnes pratiques en entreprise
+
+  - Arborescence simple (OU par type d'objet plutôt que par service, qui change souvent).
+  - Un compte de service en lecture seule par application, jamais `cn=admin`.
+  - Réplication (au moins deux serveurs), sauvegarde quotidienne avec `slapcat`, restauration testée.
+  - Procédure d'arrivée et de départ : le compte LDAP est la clé de tous les services.
+docs:
+  - title: OpenLDAP - guide de l'administrateur
+    url: https://www.openldap.org/doc/admin26/
+  - title: ldapsearch(1) - interroger un annuaire (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man1/ldapsearch.1.html
+  - title: slapd.access(5) - ACL d'OpenLDAP (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/slapd.access.5.html
+  - title: Ubuntu Server - installer et configurer OpenLDAP
+    url: https://documentation.ubuntu.com/server/how-to/openldap/install-openldap/
+exercises:
+  - id: ldap-demarrer
+    title: Démarrer l'annuaire et trouver sa racine
+    cours: |
+      `slapd` est le démon OpenLDAP. Option `-h` : les adresses d'écoute (`ldap:///` = port 389 sur toutes
+      les interfaces, `ldapi:///` = socket Unix locale pour l'administration), `-u`/`-g` : le compte sous
+      lequel il tourne.
+
+      Le **Root DSE** est une entrée spéciale, au DN vide, qui décrit le serveur. On l'interroge avec une
+      recherche de portée `base` sur une base vide :
+
+      ```
+      ldapsearch -x -H ldap://<serveur> -b "" -s base namingContexts
+      ```
+
+      `namingContexts` donne le **suffixe** de l'annuaire (la racine de l'arbre). `-x` : authentification
+      simple (ici anonyme).
+    description: |
+      Démarre slapd sur `srv-ldap` (LDAP réseau et socket locale), puis, **depuis admin**, interroge le Root
+      DSE pour trouver la racine de l'annuaire.
+
+      Réponse : `racine=` (le DN de la racine).
+    hint: ssh srv-ldap 'slapd -h "ldap:/// ldapi:///" -u openldap -g openldap' ; ldapsearch -x -H ldap://10.175.0.10 -b "" -s base namingContexts
+    checks:
+      - desc: L'annuaire répond depuis admin
+        run: ldapsearch -x -H ldap://10.175.0.10 -b "" -s base namingContexts 2>/dev/null | grep -q 'namingContexts. dc=durand,dc=lan'
+      - desc: Racine de l'annuaire
+        run: grep -Eqi '^racine *= *dc=durand, *dc=lan *$' /root/reponses.txt
+
+  - id: ldap-unites
+    title: Structurer l'annuaire en unités d'organisation
+    cours: |
+      Une **unité d'organisation** (`objectClass: organizationalUnit`) est un dossier de l'arbre. On
+      l'ajoute avec un fichier LDIF :
+
+      ```
+      dn: ou=<nom>,dc=durand,dc=lan
+      objectClass: organizationalUnit
+      ou: <nom>
+      ```
+
+      Plusieurs entrées se suivent dans un même fichier, **séparées par une ligne vide**.
+      `ldapadd -x -H ldap://<serveur> -D cn=admin,dc=durand,dc=lan -W -f <fichier>` les crée (`-W` demande
+      le mot de passe, `-w` le donne en argument). Une entrée ne peut être créée que si son parent existe.
+    description: |
+      Crée les trois unités d'organisation **`utilisateurs`**, **`groupes`** et **`services`** directement
+      sous la racine.
+    hint: fichier ou.ldif avec trois blocs dn/objectClass/ou séparés par une ligne vide ; ldapadd -x -H ldap://10.175.0.10 -D cn=admin,dc=durand,dc=lan -w 'AdminLdap2026!' -f ou.ldif
+    checks:
+      - desc: Les trois OU existent
+        run: |
+          for o in utilisateurs groupes services; do ldapsearch -x -H ldap://10.175.0.10 -D cn=admin,dc=durand,dc=lan -w 'AdminLdap2026!' -b "ou=$o,dc=durand,dc=lan" -s base '(objectClass=organizationalUnit)' dn 2>/dev/null | grep -q "^dn: ou=$o," || exit 1; done
+
+  - id: ldap-utilisateurs
+    title: Créer les comptes utilisateurs
+    cours: |
+      Un compte utilisable à la fois par les applications et par Linux combine deux classes :
+
+      - `inetOrgPerson` : `cn` (nom complet), `sn` (nom de famille, obligatoire), `givenName`, `mail` ;
+      - `posixAccount` : `uid`, `uidNumber`, `gidNumber`, `homeDirectory` (obligatoires), `loginShell`.
+
+      Le mot de passe se stocke **haché** : `slappasswd -s '<mot de passe>'` (sur srv-ldap) produit une
+      valeur `{SSHA}...` à placer dans `userPassword`. `ldapwhoami -x -D <dn> -w <mot de passe>` vérifie
+      qu'un compte peut s'authentifier.
+    description: |
+      Dans `ou=utilisateurs`, crée **`amartin`** (Alice Martin, UID `10001`) et **`bleroy`** (Bruno Leroy, UID
+      `10002`), tous deux de groupe principal `10000`, avec dossier `/home/<login>`, shell `/bin/bash`, une
+      adresse `<login>@durand.lan` et leur mot de passe (voir le contexte) **haché**.
+    hint: |
+      slappasswd -s 'Alice2026!' ; dn: uid=amartin,ou=utilisateurs,dc=durand,dc=lan / objectClass: inetOrgPerson / objectClass: posixAccount / uid, cn, sn, mail, uidNumber: 10001, gidNumber: 10000, homeDirectory, loginShell, userPassword: {SSHA}...
+    checks:
+      - desc: amartin et bleroy s'authentifient
+        run: |
+          ldapwhoami -x -H ldap://10.175.0.10 -D uid=amartin,ou=utilisateurs,dc=durand,dc=lan -w 'Alice2026!' >/dev/null 2>&1 && ldapwhoami -x -H ldap://10.175.0.10 -D uid=bleroy,ou=utilisateurs,dc=durand,dc=lan -w 'Bruno2026!' >/dev/null 2>&1
+      - desc: Attributs Unix corrects
+        run: |
+          r=$(ldapsearch -x -LLL -H ldap://10.175.0.10 -D cn=admin,dc=durand,dc=lan -w 'AdminLdap2026!' -b ou=utilisateurs,dc=durand,dc=lan '(uid=amartin)' uidNumber gidNumber homeDirectory mail); echo "$r" | grep -qx 'uidNumber: 10001' && echo "$r" | grep -qx 'gidNumber: 10000' && echo "$r" | grep -qx 'homeDirectory: /home/amartin' && echo "$r" | grep -qx 'mail: amartin@durand.lan'
+      - desc: Mots de passe stockés hachés
+        run: |
+          for u in amartin bleroy; do v=$(ldapsearch -x -LLL -H ldap://10.175.0.10 -D cn=admin,dc=durand,dc=lan -w 'AdminLdap2026!' -b ou=utilisateurs,dc=durand,dc=lan "(uid=$u)" userPassword | sed -n 's/^userPassword:: //p' | base64 -d 2>/dev/null); echo "$v" | grep -q '^{' || exit 1; done
+
+  - id: ldap-groupes
+    title: Créer les groupes
+    cours: |
+      Un groupe Unix dans l'annuaire est une entrée `posixGroup` : `cn` (nom), `gidNumber` (numéro) et un
+      attribut **`memberUid`** par membre, contenant le **login** (pas le DN complet).
+
+      ```
+      dn: cn=<groupe>,ou=groupes,dc=durand,dc=lan
+      objectClass: posixGroup
+      cn: <groupe>
+      gidNumber: <numéro>
+      memberUid: <login>
+      ```
+
+      D'autres applications préfèrent les classes `groupOfNames` (attribut `member` avec des DN) : le choix
+      dépend des clients qui liront l'annuaire. Le `gidNumber` du groupe principal d'un utilisateur doit
+      correspondre à un groupe existant.
+    description: |
+      Dans `ou=groupes`, crée le groupe **`compta`** (GID `10000`, membres `amartin` et `bleroy`) et le
+      groupe **`direction`** (GID `10010`, membre `bleroy`).
+    hint: |
+      dn: cn=compta,ou=groupes,dc=durand,dc=lan / objectClass: posixGroup / cn: compta / gidNumber: 10000 / memberUid: amartin / memberUid: bleroy
+    checks:
+      - desc: Groupe compta (10000) avec amartin
+        run: |
+          r=$(ldapsearch -x -LLL -H ldap://10.175.0.10 -D cn=admin,dc=durand,dc=lan -w 'AdminLdap2026!' -b ou=groupes,dc=durand,dc=lan '(&(objectClass=posixGroup)(cn=compta))'); echo "$r" | grep -qx 'gidNumber: 10000' && echo "$r" | grep -qx 'memberUid: amartin'
+      - desc: Groupe direction (10010) avec bleroy seul
+        run: |
+          r=$(ldapsearch -x -LLL -H ldap://10.175.0.10 -D cn=admin,dc=durand,dc=lan -w 'AdminLdap2026!' -b ou=groupes,dc=durand,dc=lan '(&(objectClass=posixGroup)(cn=direction))'); echo "$r" | grep -qx 'gidNumber: 10010' && echo "$r" | grep -qx 'memberUid: bleroy' && ! echo "$r" | grep -qx 'memberUid: amartin'
+
+  - id: ldap-modifier
+    title: Modifier des entrées existantes
+    cours: |
+      `ldapmodify` applique des changements décrits en LDIF :
+
+      ```
+      dn: <dn de l'entrée>
+      changetype: modify
+      replace: <attribut>        ← ou add: / delete:
+      <attribut>: <valeur>
+      -
+      add: <autre attribut>
+      <autre attribut>: <valeur>
+      ```
+
+      Le tiret seul sur une ligne sépare plusieurs modifications d'une même entrée. `replace` remplace toutes
+      les valeurs de l'attribut, `add` en ajoute une, `delete` en retire une (ou toutes si aucune valeur
+      n'est donnée). Un attribut doit être autorisé par une des classes de l'entrée (`telephoneNumber` et
+      `title` le sont par `inetOrgPerson`).
+    description: |
+      - Ajoute à `amartin` le téléphone `04 72 10 20 11` et la fonction (`title`) `Comptable`.
+      - Bruno Leroy devient directeur : sa fonction est `Directeur administratif`, et il quitte le groupe
+        `compta` (il reste dans `direction`).
+    hint: |
+      ldapmodify -x -H ldap://10.175.0.10 -D cn=admin,dc=durand,dc=lan -w 'AdminLdap2026!' -f modif.ldif ; pour le groupe → dn: cn=compta,... / changetype: modify / delete: memberUid / memberUid: bleroy
+    checks:
+      - desc: Téléphone et fonction d'amartin
+        run: |
+          r=$(ldapsearch -x -LLL -H ldap://10.175.0.10 -D cn=admin,dc=durand,dc=lan -w 'AdminLdap2026!' -b ou=utilisateurs,dc=durand,dc=lan '(uid=amartin)' telephoneNumber title); echo "$r" | grep -qx 'telephoneNumber: 04 72 10 20 11' && echo "$r" | grep -qx 'title: Comptable'
+      - desc: Fonction de bleroy et départ du groupe compta
+        run: |
+          ldapsearch -x -LLL -H ldap://10.175.0.10 -D cn=admin,dc=durand,dc=lan -w 'AdminLdap2026!' -b ou=utilisateurs,dc=durand,dc=lan '(uid=bleroy)' title | grep -qx 'title: Directeur administratif' && r=$(ldapsearch -x -LLL -H ldap://10.175.0.10 -D cn=admin,dc=durand,dc=lan -w 'AdminLdap2026!' -b ou=groupes,dc=durand,dc=lan '(cn=compta)' memberUid); echo "$r" | grep -qx 'memberUid: amartin' && ! echo "$r" | grep -qx 'memberUid: bleroy'
+
+  - id: ldap-compte-service
+    title: Un compte de service pour les applications
+    cours: |
+      Les applications qui lisent l'annuaire (client Linux, intranet, VPN) ne doivent pas utiliser le compte
+      `cn=admin` : s'il fuite, tout l'annuaire est compromis. On crée un **compte de service** dédié, qui ne
+      représente pas une personne :
+
+      ```
+      dn: cn=lecteur,ou=services,dc=durand,dc=lan
+      objectClass: organizationalRole
+      objectClass: simpleSecurityObject
+      cn: lecteur
+      userPassword: {SSHA}...
+      ```
+
+      `simpleSecurityObject` apporte l'attribut `userPassword` à une entrée qui n'est pas une personne.
+      Avec les ACL de l'exercice suivant, ce compte authentifié pourra lire l'annuaire, sans rien modifier.
+    description: |
+      Crée le compte de service **`cn=lecteur,ou=services,dc=durand,dc=lan`** avec le mot de passe
+      `Lecteur2026!` (haché).
+    hint: slappasswd -s 'Lecteur2026!' ; objectClass organizationalRole + simpleSecurityObject ; ldapadd ...
+    checks:
+      - desc: Le compte lecteur s'authentifie
+        run: ldapwhoami -x -H ldap://10.175.0.10 -D cn=lecteur,ou=services,dc=durand,dc=lan -w 'Lecteur2026!' >/dev/null 2>&1
+
+  - id: ldap-acl
+    title: Interdire la lecture anonyme
+    cours: |
+      Par défaut sur Ubuntu, la dernière règle de la base est `to * by * read` : n'importe qui, **sans
+      s'authentifier**, peut lister tous les comptes de l'annuaire. On la remplace par une règle qui réserve la
+      lecture aux comptes authentifiés (`users`), tout en gardant la règle qui permet aux anonymes de
+      **vérifier** un mot de passe (`by anonymous auth`), indispensable pour se connecter.
+
+      Les ACL vivent dans `cn=config`, sur l'entrée `olcDatabase={1}mdb,cn=config` :
+
+      ```
+      ldapsearch -Y EXTERNAL -H ldapi:/// -b cn=config '(olcDatabase={1}mdb)' olcAccess
+      ```
+
+      On les modifie avec `ldapmodify -Y EXTERNAL -H ldapi:///` (en root sur le serveur), par exemple en
+      supprimant une valeur numérotée (`delete: olcAccess` / `olcAccess: {2}`) puis en ajoutant la nouvelle.
+    description: |
+      Modifie les ACL de la base `dc=durand,dc=lan` : une recherche **anonyme** ne doit plus rien renvoyer,
+      alors qu'un compte authentifié (par exemple `amartin` ou le compte lecteur) lit toujours l'annuaire.
+      Les utilisateurs doivent toujours pouvoir s'authentifier.
+    hint: |
+      ssh srv-ldap ; ldapsearch -Y EXTERNAL -H ldapi:/// -b cn=config '(olcDatabase={1}mdb)' olcAccess ; LDIF : dn: olcDatabase={1}mdb,cn=config / changetype: modify / delete: olcAccess / olcAccess: {2} / - / add: olcAccess / olcAccess: {2}to * by users read by * none
+    checks:
+      - desc: Une recherche anonyme ne renvoie aucune entrée
+        run: |
+          ldapsearch -x -H ldap://10.175.0.10 -b "" -s base >/dev/null 2>&1 && test "$(ldapsearch -x -LLL -H ldap://10.175.0.10 -b dc=durand,dc=lan '(uid=*)' dn 2>/dev/null | grep -c '^dn:')" -eq 0
+      - desc: Le compte lecteur lit les utilisateurs
+        run: test "$(ldapsearch -x -LLL -H ldap://10.175.0.10 -D cn=lecteur,ou=services,dc=durand,dc=lan -w 'Lecteur2026!' -b dc=durand,dc=lan '(uid=*)' dn 2>/dev/null | grep -c '^dn:')" -ge 2
+      - desc: amartin s'authentifie toujours
+        run: ldapwhoami -x -H ldap://10.175.0.10 -D uid=amartin,ou=utilisateurs,dc=durand,dc=lan -w 'Alice2026!' >/dev/null 2>&1
+
+  - id: ldap-client-poste
+    title: Brancher un poste Linux sur l'annuaire
+    cours: |
+      Pour qu'un Linux connaisse les comptes de l'annuaire (`id`, `ls -l`, connexion), deux pièces :
+
+      - **nslcd**, démon qui interroge l'annuaire ; `/etc/nslcd.conf` : `uri ldap://<serveur>/`,
+        `base <racine>`, `binddn <compte de service>`, `bindpw <mot de passe>` (fichier en `600`) ;
+      - **NSS** : la source `ldap` ajoutée aux lignes `passwd:`, `group:` (et `shadow:`) de
+        `/etc/nsswitch.conf`.
+
+      `getent passwd <login>` et `getent group <groupe>` testent le résultat. SSSD (vu dans les labs Active
+      Directory) est l'alternative moderne, avec cache et authentification hors ligne.
+    description: |
+      Sur `poste`, configure nslcd pour lire l'annuaire avec le compte de service `cn=lecteur`, ajoute LDAP
+      comme source des comptes et des groupes, et démarre nslcd. `getent passwd amartin` doit renvoyer
+      l'UID 10001.
+    hint: |
+      ssh poste ; /etc/nslcd.conf → uri ldap://10.175.0.10/ / base dc=durand,dc=lan / binddn cn=lecteur,ou=services,dc=durand,dc=lan / bindpw Lecteur2026! ; chmod 600 /etc/nslcd.conf ; nsswitch.conf → passwd: files ldap / group: files ldap ; nslcd
+    checks:
+      - desc: poste connaît amartin (UID 10001)
+        run: ssh poste 'getent passwd amartin' | grep -q '^amartin:.*:10001:10000:'
+      - desc: poste connaît le groupe direction
+        run: ssh poste 'getent group direction' | grep -q '^direction:.*:10010:.*bleroy'
+      - desc: nslcd utilise le compte de service, fichier protégé
+        run: ssh poste 'grep -Eq "^binddn +cn=lecteur,ou=services,dc=durand,dc=lan" /etc/nslcd.conf && test $(stat -c %a /etc/nslcd.conf) = 600'
+
+  - id: ldap-sauvegarde
+    title: Sauvegarder l'annuaire
+    cours: |
+      `slapcat` exporte le contenu d'une base au format LDIF, directement depuis les fichiers (pas besoin
+      de mot de passe, ni que slapd soit arrêté pour la base MDB) :
+
+      - `slapcat -n 0` : la **configuration** (`cn=config` : schémas, ACL, index) ;
+      - `slapcat -n 1` : les **données** (`dc=durand,dc=lan`).
+
+      Il faut sauvegarder les deux. La restauration se fait serveur arrêté avec `slapadd -n <numéro> -l
+      <fichier>` dans des dossiers vides, puis `chown -R openldap:openldap`. Les mots de passe hachés sont
+      dans la sauvegarde : elle doit être protégée (droits `600`).
+    description: |
+      Sur `srv-ldap`, sauvegarde la configuration dans `/srv/sauvegardes/config.ldif` et les données dans
+      `/srv/sauvegardes/donnees.ldif`, lisibles par root seulement.
+    hint: slapcat -n 0 > /srv/sauvegardes/config.ldif ; slapcat -n 1 > /srv/sauvegardes/donnees.ldif ; chmod 600 /srv/sauvegardes/*.ldif
+    checks:
+      - desc: Sauvegarde de la configuration (avec les ACL)
+        run: |
+          ssh srv-ldap 'grep -q "^dn: olcDatabase={1}mdb,cn=config" /srv/sauvegardes/config.ldif && grep -q "^olcAccess:" /srv/sauvegardes/config.ldif'
+      - desc: Sauvegarde des données (comptes et groupes)
+        run: |
+          ssh srv-ldap 'grep -q "^dn: uid=amartin,ou=utilisateurs,dc=durand,dc=lan" /srv/sauvegardes/donnees.ldif && grep -q "^dn: cn=direction,ou=groupes,dc=durand,dc=lan" /srv/sauvegardes/donnees.ldif'
+      - desc: Fichiers en 600
+        run: ssh srv-ldap 'test $(stat -c %a /srv/sauvegardes/config.ldif) = 600 && test $(stat -c %a /srv/sauvegardes/donnees.ldif) = 600'
