@@ -324,3 +324,66 @@ exercises:
           curl -fsS -u "$(cat /var/jenkins_home/api-token.txt)" http://localhost:8080/me/api/json | grep -q '"id":"admin"'
       - desc: hello-tdm a été construit au moins deux fois
         run: test "$(cat /var/jenkins_home/jobs/hello-tdm/nextBuildNumber)" -ge 3
+  - id: jk-credentials
+    title: Utiliser un secret sans l'exposer
+    description: |
+      1. Dans **Administrer Jenkins > Credentials**, ajoute dans le domaine global un identifiant de type
+         **Secret text** avec l'ID **`api-cle`** (valeur de ton choix, au moins 8 caractères).
+      2. Crée un job **Pipeline** `secrets` qui utilise ce secret avec `withCredentials` :
+         `withCredentials([string(credentialsId: 'api-cle', variable: 'CLE')]) { sh 'test -n "$CLE" && echo "cle chargee"' }`.
+      3. Lance-le avec succès. Ajoute ensuite `sh 'echo $CLE'` et constate que la valeur est **masquée** (`****`) dans le journal.
+    hint: "Credentials > System > Global credentials > Add Credentials > Kind : Secret text, ID : api-cle"
+    cours: |
+      Un pipeline ne doit jamais contenir de secret en clair : il est versionné, affiché, copié. Jenkins
+      fournit un **magasin d'identifiants** (*Credentials*) : mots de passe, jetons (*Secret text*), couples
+      utilisateur/mot de passe, clés SSH, fichiers, certificats. Ils sont chiffrés sur disque
+      (`credentials.xml`, avec les clés de `secrets/`) et désignés par un **ID**.
+
+      `withCredentials([...]) { ... }` expose le secret dans une variable d'environnement **seulement** pendant
+      le bloc, et Jenkins remplace toute occurrence de sa valeur par `****` dans le journal. Dans un pipeline
+      déclaratif, `environment { CLE = credentials('api-cle') }` fait de même pour tout le pipeline.
+
+      Piège classique : interpoler le secret par Groovy (`sh "echo ${CLE}"` entre guillemets doubles) le place
+      dans la ligne de commande, ce qui peut le divulguer. Utilise des guillemets **simples** pour que ce soit
+      le shell qui lise la variable.
+    checks:
+      - desc: L'identifiant api-cle existe et son secret est chiffré
+        run: grep -q '<id>api-cle</id>' /var/jenkins_home/credentials.xml && grep -q '<secret>{' /var/jenkins_home/credentials.xml
+      - desc: Le job secrets utilise withCredentials avec api-cle
+        run: grep -q 'withCredentials' /var/jenkins_home/jobs/secrets/config.xml && grep -q 'api-cle' /var/jenkins_home/jobs/secrets/config.xml
+      - desc: Un build a réussi
+        run: grep -Eq "lastSuccessfulBuild [1-9]" /var/jenkins_home/jobs/secrets/builds/permalinks
+  - id: jk-conditions
+    title: Étapes conditionnelles (when)
+    description: |
+      Crée un job **Pipeline** `conditions` avec :
+      - un paramètre booléen `DEPLOYER` (valeur par défaut `false`) ;
+      - une étape `Build` qui affiche `Build ok` ;
+      - une étape `Deploy` qui affiche `Deploiement effectue` et ne s'exécute **que si** `DEPLOYER` est vrai
+        (directive `when`).
+
+      Lance un build avec `DEPLOYER=false` (l'étape Deploy est sautée), puis un build avec `DEPLOYER=true`.
+    hint: "parameters { booleanParam(name: 'DEPLOYER', defaultValue: false) } ; stage('Deploy') { when { expression { params.DEPLOYER } } steps { echo 'Deploiement effectue' } }"
+    cours: |
+      La directive `when` d'une étape décide si elle s'exécute. Conditions courantes :
+      - `branch 'main'` : seulement sur cette branche (pipelines multibranches) ;
+      - `tag 'v*'` : seulement pour un tag ;
+      - `environment name: 'ENV', value: 'prod'` ;
+      - `expression { params.DEPLOYER }` : n'importe quelle expression Groovy ;
+      - `changeset 'docs/**'` : seulement si certains fichiers ont changé ;
+      - combinaisons avec `allOf`, `anyOf`, `not`.
+
+      Une étape sautée apparaît grisée dans la vue du pipeline et le journal indique
+      `Stage "Deploy" skipped due to when conditional`. C'est le moyen de n'avoir qu'**un** pipeline pour tous
+      les cas, plutôt que des jobs dupliqués.
+
+      `booleanParam` crée une case à cocher. Rappel : les paramètres déclarés dans le script n'apparaissent
+      qu'après un premier build.
+    checks:
+      - desc: Le job déclare le paramètre booléen DEPLOYER et une condition when
+        run: f=/var/jenkins_home/jobs/conditions/config.xml; grep -q 'BooleanParameterDefinition' $f && grep -q '<name>DEPLOYER</name>' $f && grep -q 'when' $f
+      - desc: Un build a sauté l'étape Deploy
+        run: grep -lq 'Stage "Deploy" skipped due to when conditional' /var/jenkins_home/jobs/conditions/builds/*/log
+      - desc: Un build a exécuté le déploiement
+        run: |
+          for f in /var/jenkins_home/jobs/conditions/builds/*/log; do grep -q 'Deploiement effectue' "$f" && grep -q 'Finished: SUCCESS' "$f" && exit 0; done; exit 1

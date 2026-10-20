@@ -339,3 +339,70 @@ exercises:
         run: cd /root/infra && test -z "$(terraform state list)" && test -f terraform.tfstate
       - desc: Plus aucun conteneur web
         run: test -z "$(docker ps -aq --filter name=^web)" && test -z "$(docker ps -aq --filter name=^app)" && test -z "$(docker ps -aq --filter name=^db$)"
+  - id: tf-foreach
+    title: for_each, locals et étiquettes
+    description: |
+      Nouveau projet dans **`/root/infra-avance`** (avec son propre `terraform init`). Déclare :
+      - un `locals` avec la map `sites = { blog = 8101, boutique = 8102 }` et une étiquette commune `projet = "tdm"` ;
+      - une ressource `docker_container` **`site`** créée avec **`for_each`** sur cette map : le conteneur
+        s'appelle `site-<clé>` (image `nginx:alpine`), publie le port 80 sur le port de la map, et porte
+        l'étiquette Docker `projet=tdm` (bloc `labels`) ;
+      - un output `ports` qui associe chaque nom de conteneur à son port (expression `for`).
+
+      Applique, puis ajoute `docs = 8103` à la map et applique à nouveau : seul le nouveau conteneur doit être créé.
+    hint: "for_each = local.sites ; name = \"site-${each.key}\" ; external = each.value ; output \"ports\" { value = { for k, c in docker_container.site : c.name => k } }"
+    cours: |
+      `for_each` crée un exemplaire d'une ressource par élément d'une **map** ou d'un ensemble de chaînes.
+      Dans le bloc, `each.key` et `each.value` désignent l'élément courant ; les exemplaires s'adressent par leur
+      clé : `docker_container.site["blog"]`.
+
+      Par rapport à `count`, l'identité de chaque exemplaire est stable : retirer `blog` de la map ne détruit que
+      `site["blog"]`, alors qu'avec `count` retirer un élément du milieu décale les index et provoque des
+      recréations en cascade.
+
+      `locals { ... }` définit des valeurs calculées, réutilisées avec `local.nom` : on y centralise les
+      étiquettes communes, les noms construits, les maps de configuration. Les **expressions `for`**
+      transforment des collections : `{ for k, v in map : k => v * 2 }` ou `[for s in liste : upper(s)]`.
+
+      Les étiquettes (labels Docker, tags cloud) rendent les ressources retrouvables et attribuables.
+    checks:
+      - desc: Les conteneurs sont créés avec for_each
+        run: cd /root/infra-avance && terraform state list | grep -qx 'docker_container.site\["blog"\]' && terraform state list | grep -qx 'docker_container.site\["boutique"\]'
+      - desc: Les trois sites tournent sur les bons ports
+        run: docker port site-blog 80 | grep -q ':8101$' && docker port site-boutique 80 | grep -q ':8102$' && docker port site-docs 80 | grep -q ':8103$'
+      - desc: Les conteneurs portent l'étiquette projet=tdm
+        run: test "$(docker ps --filter label=projet=tdm --format '{{.Names}}' | grep -c '^site-')" = 3
+      - desc: L'output ports existe
+        run: cd /root/infra-avance && terraform output -json ports | grep -q 8103
+  - id: tf-workspaces
+    title: Plusieurs environnements avec les workspaces
+    description: |
+      Dans `/root/infra-env` (nouveau projet), écris une configuration qui crée un conteneur `nginx:alpine`
+      nommé **`env-<workspace>`**, dont le port publié dépend de l'environnement : **8201** pour `dev`, **8202**
+      pour `prod` (map indexée par `terraform.workspace`).
+
+      Crée les workspaces `dev` et `prod` et applique la configuration dans **chacun** : les deux conteneurs
+      coexistent, chacun avec son propre state.
+    hint: "terraform workspace new dev ; terraform apply ; terraform workspace new prod ; terraform apply ; name = \"env-${terraform.workspace}\" ; lookup(local.ports, terraform.workspace)"
+    cours: |
+      Un **workspace** Terraform est un state séparé pour la même configuration. Le workspace `default` existe
+      toujours ; `terraform workspace new|select|list|show` les gère. Avec le backend local, les states des autres
+      workspaces sont rangés dans `terraform.tfstate.d/<nom>/`.
+
+      Dans le code, `terraform.workspace` contient le nom du workspace courant : on l'utilise pour nommer les
+      ressources et choisir des valeurs dans une map (`local.ports[terraform.workspace]`, ou `lookup()` avec une
+      valeur par défaut).
+
+      Les workspaces conviennent à des environnements **identiques** à quelques paramètres près. Dès que les
+      environnements diffèrent beaucoup ou doivent être isolés (comptes cloud, droits), on préfère des dossiers
+      séparés qui appellent les mêmes modules, avec un backend distinct par environnement. Toujours vérifier
+      `terraform workspace show` avant un `apply` !
+    checks:
+      - desc: Les workspaces dev et prod existent
+        run: cd /root/infra-env && terraform workspace list | grep -qw dev && terraform workspace list | grep -qw prod
+      - desc: Un state par workspace
+        run: test -f /root/infra-env/terraform.tfstate.d/dev/terraform.tfstate && test -f /root/infra-env/terraform.tfstate.d/prod/terraform.tfstate
+      - desc: env-dev sur 8201 et env-prod sur 8202
+        run: docker port env-dev 80 | grep -q ':8201$' && docker port env-prod 80 | grep -q ':8202$'
+      - desc: Le nom dépend de terraform.workspace
+        run: grep -rqs 'terraform.workspace' /root/infra-env/*.tf

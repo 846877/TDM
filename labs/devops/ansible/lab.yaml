@@ -377,3 +377,68 @@ exercises:
       - desc: Le playbook passe sans erreur et sans changement
         run: cd /home/ansible && ansible-playbook -i hosts casse.yml | grep -E 'client[12] .*changed=0.*failed=0' | wc -l | grep -qx 2
         timeout: 120
+  - id: an-conditions
+    title: Variables d'hôte et conditions
+    description: |
+      Les deux clients n'ont pas le même rôle :
+      1. crée `/home/ansible/host_vars/client1.yml` et `host_vars/client2.yml` qui définissent la variable
+         `role_serveur` : `primaire` pour client1, `secondaire` pour client2 ;
+      2. écris `/home/ansible/roles-serveurs.yml` (avec `become: true`) qui :
+         - dépose sur chaque client `/etc/tdm-role` contenant la valeur de `role_serveur` ;
+         - crée le fichier vide `/etc/tdm-primaire` **uniquement** sur le serveur primaire (condition `when`
+           sur la variable, pas sur le nom d'hôte).
+    hint: "copy: content: \"{{ role_serveur }}\\n\" ; file: path=/etc/tdm-primaire state=touch avec when: role_serveur == 'primaire'"
+    cours: |
+      Les variables propres à **un** hôte se rangent dans `host_vars/<nom>.yml`, à côté de l'inventaire ou du
+      playbook ; celles d'un groupe dans `group_vars/<groupe>.yml`. Ansible les charge automatiquement, et une
+      variable d'hôte l'emporte sur une variable de groupe. `ansible-inventory --host client1` montre les
+      variables effectives.
+
+      `when:` conditionne une tâche par une expression **Jinja2 sans accolades** :
+      `when: role_serveur == 'primaire'`, `when: ansible_facts['os_family'] == 'Alpine'`,
+      `when: resultat.rc != 0`. Une tâche sautée apparaît en `skipping` dans la sortie.
+
+      Préférer une variable de rôle à une condition sur le nom d'hôte rend le code réutilisable : demain, le
+      primaire peut changer sans toucher au playbook. Évite les noms de variables réservés par Ansible
+      (`role`, `name`, `hosts`…).
+    checks:
+      - desc: Les fichiers host_vars définissent role_serveur
+        run: |
+          cd /home/ansible && ansible-inventory -i hosts --host client1 | grep -q '"role_serveur": "primaire"' && ansible-inventory -i hosts --host client2 | grep -q '"role_serveur": "secondaire"'
+      - desc: /etc/tdm-role contient le bon rôle sur chaque client
+        run: |
+          for h in client1 client2; do r=$(cd /home/ansible && ansible-inventory -i hosts --host $h | grep -o '"role_serveur": "[a-z]*"' | cut -d'"' -f4); ansible -i /home/ansible/hosts $h -m command -a 'cat /etc/tdm-role' | grep -qx "$r" || exit 1; done
+      - desc: /etc/tdm-primaire n'existe que sur client1
+        run: ansible -i /home/ansible/hosts client1 -m command -a 'test -f /etc/tdm-primaire' | grep -q 'rc=0' && ansible -i /home/ansible/hosts client2 -m command -a 'test -f /etc/tdm-primaire' | grep -q 'rc=1'
+      - desc: La création est conditionnée par when
+        run: grep -Eq '^\s*when:.*role_serveur' /home/ansible/roles-serveurs.yml
+  - id: an-register
+    title: Récupérer des résultats (register, delegate_to)
+    description: |
+      Écris `/home/ansible/rapport.yml` qui collecte une information sur chaque client et la ramène sur le nœud
+      de contrôle :
+      1. une tâche lance `hostname` sur le client et **enregistre** son résultat (`register`) ;
+      2. une seconde tâche écrit cette sortie dans `/home/ansible/rapports/<nom du client>.txt` **sur le nœud de
+         contrôle** (`delegate_to: localhost`).
+
+      Lance-le : `rapports/client1.txt` et `rapports/client2.txt` doivent contenir le nom de chaque machine.
+    hint: "- command: hostname / register: resultat / changed_when: false ; - copy: content: \"{{ resultat.stdout }}\\n\" dest: rapports/{{ inventory_hostname }}.txt / delegate_to: localhost"
+    cours: |
+      `register: nom` enregistre le résultat d'une tâche dans une variable : `nom.stdout`, `nom.stderr`,
+      `nom.rc` (code de retour), `nom.changed`, `nom.stdout_lines`… Les tâches suivantes peuvent l'utiliser dans
+      un template, une condition (`when: nom.rc == 0`) ou l'afficher avec le module `debug`.
+
+      `delegate_to: localhost` exécute une tâche **sur une autre machine** que l'hôte courant (ici le nœud de
+      contrôle), tout en gardant les variables de l'hôte courant : pratique pour écrire des rapports, appeler une
+      API ou retirer un serveur d'un répartiteur avant sa mise à jour. Le dossier de destination doit exister
+      (`file: state=directory`, lui aussi délégué, avec `run_once: true`).
+
+      Une commande qui ne fait que lire ne modifie rien : `changed_when: false` évite qu'elle soit comptée comme
+      un changement, ce qui préserve l'idempotence du récapitulatif.
+    checks:
+      - desc: Les rapports existent sur le nœud de contrôle
+        run: grep -qx client1 /home/ansible/rapports/client1.txt && grep -qx client2 /home/ansible/rapports/client2.txt
+      - desc: Le playbook utilise register et delegate_to
+        run: grep -Eq '^\s*register:' /home/ansible/rapport.yml && grep -Eq '^\s*delegate_to:\s*(localhost|127\.0\.0\.1)' /home/ansible/rapport.yml
+      - desc: Le playbook s'exécute sans erreur
+        run: cd /home/ansible && ansible-playbook -i hosts rapport.yml | grep -E 'client[12] .*failed=0' | wc -l | grep -qx 2
