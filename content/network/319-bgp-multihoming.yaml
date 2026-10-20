@@ -1,0 +1,128 @@
+title: BGP multihoming — principal et secours
+level: expert
+order: 19
+device: router
+hostname: R-BORDURE
+tags: [bgp, multihoming, local-preference, as-path prepend, prefix-list]
+summary: Maîtriser le trafic entrant et sortant avec deux opérateurs.
+description: |
+  `R-BORDURE` (AS `65010`) a deux sessions eBGP déjà établies :
+
+  - `FAI-A` : `203.0.113.1`, AS `64500` — fibre **principale** ;
+  - `FAI-B` : `198.51.100.1`, AS `64600` — lien de **secours**.
+
+  L'entreprise annonce `192.0.2.0/24`. Trois problèmes à corriger :
+
+  1. **Ne pas devenir AS de transit** : prefix-list `ANNONCE` (séquence `5`) qui n'autorise que
+     `192.0.2.0/24`, appliquée **en sortie** vers les deux opérateurs ;
+  2. **Trafic sortant** par FAI-A : route-map `LP-FAI-A` (séquence `10`) qui fixe la
+     `local-preference` à `200`, appliquée **en entrée** depuis FAI-A ;
+  3. **Trafic entrant** par FAI-A : route-map `PREPEND-FAI-B` (séquence `10`) qui ajoute
+     **trois fois** l'AS `65010` au chemin (`set as-path prepend 65010 65010 65010`),
+     appliquée **en sortie** vers FAI-B.
+initial: |
+  interface g0/1
+  ip address 203.0.113.2 255.255.255.252
+  no shutdown
+  interface g0/2
+  ip address 198.51.100.2 255.255.255.252
+  no shutdown
+  ip route 192.0.2.0 255.255.255.0 Null0
+  router bgp 65010
+  bgp router-id 10.255.0.1
+  neighbor 203.0.113.1 remote-as 64500
+  neighbor 203.0.113.1 description FAI-A
+  neighbor 198.51.100.1 remote-as 64600
+  neighbor 198.51.100.1 description FAI-B
+  network 192.0.2.0 mask 255.255.255.0
+checks:
+  - desc: Prefix-list ANNONCE = 192.0.2.0/24 seulement
+    expr: plist("ANNONCE") == ["permit 192.0.2.0/24"]
+  - desc: ANNONCE appliquée en sortie vers les deux opérateurs
+    expr: 'bgp.neighbors["203.0.113.1"].prefix_lists == {"out": "ANNONCE"} and bgp.neighbors["198.51.100.1"].prefix_lists == {"out": "ANNONCE"}'
+  - desc: Local-preference 200 sur les routes de FAI-A
+    expr: 'rmap("LP-FAI-A", 10).sets == ["local-preference 200"] and bgp.neighbors["203.0.113.1"].route_maps == {"in": "LP-FAI-A"}'
+  - desc: AS-path rallongé de 3 vers FAI-B
+    expr: 'rmap("PREPEND-FAI-B", 10).sets == ["as-path prepend 65010 65010 65010"] and bgp.neighbors["198.51.100.1"].route_maps == {"out": "PREPEND-FAI-B"}'
+solution: |
+  configure terminal
+  ip prefix-list ANNONCE seq 5 permit 192.0.2.0/24
+  route-map LP-FAI-A permit 10
+  set local-preference 200
+  route-map PREPEND-FAI-B permit 10
+  set as-path prepend 65010 65010 65010
+  exit
+  router bgp 65010
+  neighbor 203.0.113.1 prefix-list ANNONCE out
+  neighbor 198.51.100.1 prefix-list ANNONCE out
+  neighbor 203.0.113.1 route-map LP-FAI-A in
+  neighbor 198.51.100.1 route-map PREPEND-FAI-B out
+  end
+  clear ip bgp * soft
+cours: |
+  ## Deux sens, deux leviers
+
+  Avec deux opérateurs, il faut décider séparément :
+
+  - le **trafic sortant** (de l'entreprise vers Internet) : c'est **nous** qui choisissons, avec
+    les attributs évalués **localement** — `weight` (propre au routeur, Cisco) et surtout
+    `local-preference` (partagé dans l'AS, défaut 100, **le plus grand gagne**) ;
+  - le **trafic entrant** : ce sont les **autres** AS qui choisissent. On ne peut que les
+    influencer : rallonger l'AS_PATH annoncé sur le lien de secours (**AS-path prepending**),
+    envoyer un MED, ou annoncer des préfixes plus précis sur le lien principal.
+
+  ### Rappel de l'ordre de décision BGP (simplifié)
+
+  1. `weight` le plus élevé ; 2. `local-preference` la plus élevée ; 3. route d'origine locale ;
+  4. **AS_PATH le plus court** ; 5. origine (IGP < EGP < incomplete) ; 6. MED le plus bas ;
+  7. eBGP avant iBGP ; 8. IGP le plus proche du saut suivant ; 9. router-id le plus bas.
+
+  ### Ne pas devenir AS de transit
+
+  Sans filtre, `R-BORDURE` annoncerait à FAI-B les routes apprises de FAI-A : FAI-B pourrait
+  faire passer du trafic Internet **à travers** l'entreprise. On n'annonce donc que ses propres
+  préfixes :
+
+  ```
+  R1(config)# ip prefix-list MES-PREFIXES seq 10 permit 203.0.113.0/24
+  R1(config)# route-map LP-OPERATEUR-1 permit 10
+  R1(config-route-map)# set local-preference 150
+  R1(config)# route-map ALLONGE permit 10
+  R1(config-route-map)# set as-path prepend 64999 64999
+  R1(config)# router bgp 64999
+  R1(config-router)# neighbor 192.0.2.1 prefix-list MES-PREFIXES out
+  R1(config-router)# neighbor 192.0.2.1 route-map LP-OPERATEUR-1 in
+  R1(config-router)# neighbor 198.18.1.1 route-map ALLONGE out
+  R1# clear ip bgp * soft
+  R1# show ip bgp
+     Network          Next Hop      Metric LocPrf Weight Path
+  *> 0.0.0.0          192.0.2.1                150      0 3215 i
+  *                   198.18.1.1                        0 5410 i
+  ```
+
+  Autre solution courante : `ip as-path access-list 1 permit ^$` (routes d'origine locale
+  seulement) avec `neighbor ... filter-list 1 out`.
+
+  ### Appliquer les changements
+
+  Une politique modifiée ne s'applique qu'aux nouvelles mises à jour. `clear ip bgp * soft`
+  redemande / renvoie les routes **sans couper** les sessions (`clear ip bgp *` sans `soft`
+  les réinitialise : à éviter en production).
+
+  ### Pièges fréquents
+
+  - Une route-map sans séquence `permit` finale filtre **tout** (deny implicite) : ici, chaque
+    route-map ne comporte qu'une séquence `permit` sans `match`, qui s'applique à toutes les
+    routes.
+  - Prepend avec un autre numéro d'AS que le sien : l'opérateur rejette les annonces.
+  - Oublier que la local-preference ne sort pas de l'AS.
+
+  ### Pour le CCNP ENCOR
+
+  ENCOR attend la compréhension des attributs BGP, de la sélection du meilleur chemin et des
+  outils de politique (prefix-list, route-map).
+docs:
+  - title: Cisco — Border Gateway Protocol (BGP)
+    url: https://www.cisco.com/c/en/us/support/docs/ip/border-gateway-protocol-bgp/26634-bgp-toc.html
+  - title: RFC 4271 — A Border Gateway Protocol 4 (BGP-4)
+    url: https://www.rfc-editor.org/rfc/rfc4271
