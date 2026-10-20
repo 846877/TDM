@@ -338,7 +338,7 @@ exercises:
           ($c[0].PSObject.Properties.Name -join ',') -eq 'HotFixID,Description,InstalledOn' -and $c.Count -eq @(Get-HotFix).Count
     solution: |
       $k = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
-      New-Item $k -Force | Out-Null
+      if (-not (Test-Path $k)) { New-Item $k -Force | Out-Null }
       Set-ItemProperty $k -Name NoAutoUpdate -Value 0 -Type DWord
       Set-ItemProperty $k -Name AUOptions -Value 3 -Type DWord
       Set-ItemProperty $k -Name NoAutoRebootWithLoggedOnUsers -Value 1 -Type DWord
@@ -402,5 +402,5 @@ exercises:
           (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Server\ServerManager').DoNotOpenServerManagerAtLogon -eq 1
     solution: |
       $k = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Server\ServerManager'
-      New-Item $k -Force | Out-Null
+      if (-not (Test-Path $k)) { New-Item $k -Force | Out-Null }
       Set-ItemProperty $k -Name DoNotOpenServerManagerAtLogon -Value 1 -Type DWord

@@ -1,0 +1,525 @@
+title: Configuration du poste client Windows 11
+level: debutant
+order: 9
+tags: [windows 11, poste client, registre, winget, imprimantes, pilotes, comptes, restauration, énergie, mises à jour]
+summary: Préparer le poste d'un nouveau salarié - fiche du poste, comptes locaux, énergie, registre, logiciels avec winget, imprimante réseau, pilotes, point de restauration.
+vagrant: bundled
+description: |
+  **Contexte.** Un nouveau commercial arrive chez *Ateliers Durand* et récupère le poste `PC01`
+  (Windows 11). Tu dois le préparer selon la fiche de procédure « mise en service d'un poste » : fiche
+  d'inventaire, comptes, réglages, logiciels, imprimante, sauvegarde des pilotes et point de restauration.
+  Le poste n'est pas (encore) dans un domaine.
+
+  **Machine.** Une VM Windows 11 (3 Go de RAM). Terminal PowerShell en administrateur (`vagrant`).
+  L'interface graphique (console VirtualBox ou `mstsc /v:127.0.0.1:33389`) est utile pour certains
+  contrôles : *Paramètres*, *Panneau de configuration*, `regedit`, `printmanagement.msc`, `devmgmt.msc`.
+
+  L'imprimante du rez-de-chaussée a l'adresse `192.168.10.50` (elle n'existe pas dans le lab : Windows
+  crée quand même la file d'attente).
+cours: |
+  ## Le poste de travail, premier terrain du technicien
+
+  En PME, l'essentiel des tickets concerne les **postes clients** : installation, réglages, imprimantes,
+  logiciels, lenteurs. Une procédure écrite de mise en service garantit des postes homogènes et
+  documentés (inventaire GLPI, numéro de série pour la garantie).
+
+  ## Comptes : local, Microsoft, professionnel
+
+  | Type | Exemple | Où vit-il ? |
+  |------|---------|-------------|
+  | Compte **local** | `PC01\accueil` | base SAM du poste |
+  | Compte **Microsoft** | prenom@outlook.fr | cloud grand public (déconseillé en entreprise) |
+  | Compte de **domaine** | `DURAND\mdupont` | Active Directory |
+  | Compte **Entra ID** (professionnel) | m.dupont@durand.fr | Microsoft 365 / Intune |
+
+  Sur un poste d'entreprise : un compte de domaine (ou Entra ID) pour l'utilisateur, **standard** (pas
+  administrateur), et un compte **administrateur local** de secours géré par le service informatique
+  (idéalement par **Windows LAPS**, qui change son mot de passe automatiquement).
+
+  ## Le registre
+
+  Base de configuration hiérarchique : **clés** (dossiers) et **valeurs** (nom, type, donnée).
+
+  - `HKLM` (`HKEY_LOCAL_MACHINE`) : réglages de la machine, pour tous les utilisateurs (admin requis).
+  - `HKCU` (`HKEY_CURRENT_USER`) : réglages de l'utilisateur connecté (son fichier `NTUSER.DAT`).
+  - Types : `REG_SZ` (texte), `REG_DWORD` (nombre 32 bits), `REG_MULTI_SZ`, `REG_BINARY`...
+  - Les clés `...\Policies\...` sont celles que remplissent les **stratégies de groupe**.
+
+  ```powershell
+  Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+  Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name HideFileExt -Value 0
+  reg export "HKLM\SOFTWARE\Policies\Microsoft\Windows" C:\Admin\sauvegarde.reg /y
+  ```
+
+  Règle d'or : **exporter** une clé avant de la modifier (`reg export`, ou *Fichier › Exporter* dans
+  `regedit`) ; un double-clic sur le `.reg` la restaure.
+
+  ## Logiciels : winget
+
+  **winget** (Gestionnaire de package Windows) installe, met à jour et désinstalle des logiciels depuis un
+  dépôt :
+
+  ```
+  winget search 7zip
+  winget install --id 7zip.7zip -e --silent --accept-package-agreements --accept-source-agreements
+  winget upgrade --all
+  winget list
+  ```
+
+  En entreprise, on déploie plutôt par GPO (MSI), Intune, PDQ ou un outil de télédistribution, mais winget
+  est parfait pour un poste isolé ou un script de préparation.
+
+  ## Imprimantes et pilotes
+
+  Une imprimante réseau = un **port** (TCP/IP, l'adresse de l'imprimante, port 9100 « RAW » ou IPP), un
+  **pilote** (le langage : PCL, PostScript, ou pilote du constructeur) et une **file d'attente** (le nom vu
+  par l'utilisateur). Le **spouleur** (`Spooler`) gère le tout.
+
+  ```powershell
+  Add-PrinterPort -Name IP_192.168.10.50 -PrinterHostAddress 192.168.10.50
+  Add-PrinterDriver -Name 'Generic / Text Only'
+  Add-Printer -Name Imprimante-RDC -PortName IP_192.168.10.50 -DriverName 'Generic / Text Only'
+  ```
+
+  Avant une réinstallation, on **sauvegarde les pilotes** tiers (`Export-WindowsDriver -Online`) ; le
+  Gestionnaire de périphériques (`devmgmt.msc`) et `pnputil /enum-drivers` les listent.
+
+  ## Énergie, démarrage, restauration, mises à jour
+
+  - `powercfg` règle les délais d'extinction de l'écran et de mise en veille (`/change monitor-timeout-ac 10`).
+  - Les programmes lancés au démarrage : clés `Run` de `HKLM` et `HKCU`, dossier *Démarrage*, onglet
+    *Démarrage* du Gestionnaire des tâches. Un démarrage lent ? On regarde là d'abord.
+  - La **protection du système** crée des **points de restauration** (clichés des fichiers système et du
+    registre) avant les installations : `Enable-ComputerRestore`, `Checkpoint-Computer`, `rstrui`.
+    Ce n'est **pas** une sauvegarde des documents.
+  - Windows Update : les **heures d'activité** évitent un redémarrage en pleine journée.
+
+  ## Pièges courants
+
+  - Modifier `HKCU` en tant qu'administrateur dans une autre session : on change le profil de
+    l'administrateur, pas celui de l'utilisateur.
+  - Donner les droits administrateur au salarié « pour qu'il installe ses logiciels ».
+  - Oublier que winget et la protection du système dépendent du contexte (session, édition de Windows).
+docs:
+  - title: Utiliser l'outil winget
+    url: https://learn.microsoft.com/fr-fr/windows/package-manager/winget/
+  - title: Module PrintManagement (Add-Printer...)
+    url: https://learn.microsoft.com/fr-fr/powershell/module/printmanagement/
+  - title: Options de ligne de commande de powercfg
+    url: https://learn.microsoft.com/fr-fr/windows-hardware/design/device-experiences/powercfg-command-line-options
+exercises:
+  - id: win-pc-fiche
+    title: Fiche d'inventaire du poste
+    description: |
+      Crée `C:\Admin\fiche-pc01.txt` avec trois lignes `clé=valeur` :
+
+      - `edition=` l'édition de Windows (`ProductName` dans `HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion`) ;
+      - `version=` la version commerciale (`DisplayVersion`, ex. `23H2`) ;
+      - `serie=` le **numéro de série** de la machine (BIOS).
+    hint: Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' (ProductName, DisplayVersion) ; (Get-CimInstance Win32_BIOS).SerialNumber
+    cours: |
+      La clé `HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion` décrit le système : `ProductName`,
+      `EditionID` (Professional, Enterprise...), `DisplayVersion` (23H2, 24H2 : la version de fonctionnalités),
+      `CurrentBuild` et `UBR` (le niveau de mise à jour mensuel). `winver` affiche la même chose.
+
+      Le **numéro de série** est dans le BIOS/UEFI : `(Get-CimInstance Win32_BIOS).SerialNumber` (ou
+      `wmic bios get serialnumber`, commande en voie de disparition). C'est lui que demande le constructeur
+      pour la garantie, et qu'on reporte dans l'inventaire.
+
+      Petite surprise connue : sur Windows 11, `ProductName` indique encore « Windows 10 Pro » (la valeur n'a
+      jamais été mise à jour) ; la vraie version se lit avec `CurrentBuild` ≥ 22000 ou dans
+      `(Get-CimInstance Win32_OperatingSystem).Caption`.
+    ci: true
+    checks:
+      - desc: edition et version sont justes
+        run: |
+          $k = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+          $l = Get-Content C:\Admin\fiche-pc01.txt | ForEach-Object { $_.Trim() }
+          $l -contains "edition=$($k.ProductName)" -and $l -contains "version=$($k.DisplayVersion)"
+      - desc: serie est le numéro de série du BIOS
+        run: |
+          $l = Get-Content C:\Admin\fiche-pc01.txt | ForEach-Object { $_.Trim() }
+          $l -contains ("serie=" + ([string](Get-CimInstance Win32_BIOS).SerialNumber).Trim())
+    solution: |
+      $k = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+      $s = ([string](Get-CimInstance Win32_BIOS).SerialNumber).Trim()
+      Set-Content C:\Admin\fiche-pc01.txt "edition=$($k.ProductName)", "version=$($k.DisplayVersion)", "serie=$s"
+
+  - id: win-pc-comptes
+    title: Compte de l'utilisateur et compte de secours
+    description: |
+      Crée deux comptes **locaux** :
+
+      | Compte | Nom complet | Mot de passe | Groupes |
+      |--------|-------------|--------------|---------|
+      | `commercial` | Nicolas Petit | `Bienvenue2024!` | *Users* uniquement (**standard**) |
+      | `admin-pc01` | Administrateur de secours | `Secours!2024-PC01` | *Administrators* |
+
+      Le compte de secours ne doit **pas** expirer (`PasswordNeverExpires`).
+    hint: New-LocalUser ... ; Add-LocalGroupMember -SID S-1-5-32-545 -Member commercial ; Add-LocalGroupMember -SID S-1-5-32-544 -Member admin-pc01 ; Set-LocalUser admin-pc01 -PasswordNeverExpires $true
+    cours: |
+      Sur un poste, l'utilisateur travaille avec un compte **standard** : il ne peut pas installer de
+      logiciel ni modifier le système, ce qui bloque l'immense majorité des logiciels malveillants.
+      Quand une élévation est nécessaire, le technicien saisit le compte d'administration dans l'invite UAC.
+
+      Le **compte de secours** permet d'intervenir quand le domaine ou le réseau est indisponible. Son mot de
+      passe doit être unique par poste (sinon, un poste compromis les compromet tous) : c'est exactement ce
+      que fait **Windows LAPS** dans un domaine ou avec Intune.
+
+      Graphique : *Paramètres* › *Comptes* › *Autres utilisateurs* › *Ajouter un compte* › « Je ne dispose
+      pas des informations de connexion de cette personne » › « Ajouter un utilisateur sans compte
+      Microsoft » (c'est là que Windows pousse vers un compte Microsoft), ou plus simplement `netplwiz` /
+      `lusrmgr.msc` (éditions Pro et plus).
+    ci: true
+    checks:
+      - desc: commercial existe, est standard (Users) et non administrateur
+        run: |
+          (Get-LocalUser commercial).FullName -eq 'Nicolas Petit' -and
+          [bool](Get-LocalGroupMember -SID S-1-5-32-545 | Where-Object Name -like '*\commercial') -and
+          -not (Get-LocalGroupMember -SID S-1-5-32-544 | Where-Object Name -like '*\commercial')
+      - desc: admin-pc01 est administrateur et son mot de passe n'expire pas
+        run: |
+          [bool](Get-LocalGroupMember -SID S-1-5-32-544 | Where-Object Name -like '*\admin-pc01') -and
+          $null -eq (Get-LocalUser admin-pc01).PasswordExpires
+      - desc: Les mots de passe sont ceux de la fiche
+        run: |
+          Add-Type -AssemblyName System.DirectoryServices.AccountManagement
+          $ctx = New-Object System.DirectoryServices.AccountManagement.PrincipalContext('Machine')
+          $ctx.ValidateCredentials('commercial', 'Bienvenue2024!') -and $ctx.ValidateCredentials('admin-pc01', 'Secours!2024-PC01')
+    solution: |
+      New-LocalUser commercial -FullName 'Nicolas Petit' -Password (ConvertTo-SecureString 'Bienvenue2024!' -AsPlainText -Force) | Out-Null
+      Add-LocalGroupMember -SID S-1-5-32-545 -Member commercial
+      New-LocalUser admin-pc01 -FullName 'Administrateur de secours' -Password (ConvertTo-SecureString 'Secours!2024-PC01' -AsPlainText -Force) -PasswordNeverExpires | Out-Null
+      Add-LocalGroupMember -SID S-1-5-32-544 -Member admin-pc01
+
+  - id: win-pc-energie
+    title: Réglages d'alimentation
+    description: |
+      Sur secteur, l'écran doit s'éteindre après **10 minutes** et le poste ne doit **jamais** se mettre en
+      veille (les commerciaux lancent de longues synchronisations).
+    hint: powercfg /change monitor-timeout-ac 10 ; powercfg /change standby-timeout-ac 0
+    cours: |
+      `powercfg` gère les **modes de gestion de l'alimentation** :
+
+      ```
+      powercfg /list                                  # modes disponibles (* = actif)
+      powercfg /change monitor-timeout-ac 10          # écran, sur secteur, en minutes (dc = sur batterie)
+      powercfg /change standby-timeout-ac 0           # veille : 0 = jamais
+      powercfg /query SCHEME_CURRENT SUB_VIDEO VIDEOIDLE   # valeur en secondes, en hexadécimal
+      powercfg /batteryreport                         # rapport sur l'usure de la batterie (portables)
+      ```
+
+      `/change` modifie le mode **actif**. Sur un parc, ces réglages se déploient par GPO
+      (*Configuration ordinateur* › *Modèles d'administration* › *Système* › *Gestion de l'alimentation*).
+      `powercfg /requests` dit pourquoi un poste refuse de se mettre en veille, et `powercfg /energy` produit
+      un diagnostic complet.
+    ci: true
+    checks:
+      - desc: L'écran s'éteint après 10 minutes sur secteur
+        run: |
+          $q = (powercfg.exe /query SCHEME_CURRENT SUB_VIDEO VIDEOIDLE) -join "`n"
+          $q -match 'Current AC Power Setting Index:\s*0x0*258\b'
+      - desc: Jamais de mise en veille sur secteur
+        run: |
+          $q = (powercfg.exe /query SCHEME_CURRENT SUB_SLEEP STANDBYIDLE) -join "`n"
+          $q -match 'Current AC Power Setting Index:\s*0x0+\b' -and ((powercfg.exe /query SCHEME_CURRENT SUB_VIDEO VIDEOIDLE) -join "`n") -match 'Current AC Power Setting Index:\s*0x0*258\b'
+    solution: |
+      powercfg.exe /change monitor-timeout-ac 10
+      powercfg.exe /change standby-timeout-ac 0
+
+  - id: win-pc-explorateur
+    title: Afficher les extensions de fichiers
+    description: |
+      Pour repérer les pièces jointes piégées (`facture.pdf.exe`), affiche pour **ton** utilisateur les
+      **extensions des fichiers connus** et les **fichiers cachés** dans l'explorateur (valeurs `HideFileExt`
+      et `Hidden` de `HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced`).
+    hint: Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name HideFileExt -Value 0 ; ... -Name Hidden -Value 1
+    cours: |
+      Par défaut, l'explorateur masque les extensions connues : `facture.pdf.exe` s'affiche `facture.pdf`,
+      avec une icône de PDF si l'attaquant l'a choisie. Afficher les extensions est une mesure de
+      sensibilisation simple et efficace.
+
+      Ces réglages sont **par utilisateur**, dans `HKCU` :
+
+      | Valeur | Donnée | Effet |
+      |--------|--------|-------|
+      | `HideFileExt` | 0 | afficher les extensions |
+      | `Hidden` | 1 | afficher les fichiers cachés (2 = les masquer) |
+      | `ShowSuperHidden` | 1 | afficher aussi les fichiers système protégés (déconseillé) |
+
+      Graphique : explorateur › *Afficher* › *Afficher* › *Extensions de noms de fichiers* et *Éléments
+      masqués*. L'explorateur relit ces valeurs à son redémarrage (ou à la prochaine ouverture de session).
+      Pour tous les utilisateurs d'un parc : une GPO (préférences de registre).
+    ci: true
+    checks:
+      - desc: Les extensions sont affichées
+        run: |
+          (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced').HideFileExt -eq 0
+      - desc: Les fichiers cachés sont affichés
+        run: |
+          (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced').Hidden -eq 1
+    solution: |
+      $k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+      Set-ItemProperty $k -Name HideFileExt -Value 0 -Type DWord
+      Set-ItemProperty $k -Name Hidden -Value 1 -Type DWord
+
+  - id: win-pc-registre-sauvegarde
+    title: Exporter une clé avant de la modifier
+    description: |
+      Le responsable veut supprimer les « expériences grand public » (applications suggérées installées
+      automatiquement, publicités dans le menu Démarrer).
+
+      1. **Exporte** d'abord la clé `HKLM\SOFTWARE\Policies\Microsoft\Windows` dans
+         `C:\Admin\policies-avant.reg` ;
+      2. puis crée la valeur DWORD `DisableWindowsConsumerFeatures` = 1 dans
+         `HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent`.
+    hint: reg export "HKLM\SOFTWARE\Policies\Microsoft\Windows" C:\Admin\policies-avant.reg /y ; New-Item 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent' -Force ; Set-ItemProperty ...
+    cours: |
+      `reg export` enregistre une clé et toutes ses sous-clés dans un fichier `.reg` (texte UTF-16 qui
+      commence par `Windows Registry Editor Version 5.00`). `reg import fichier.reg` (ou un double-clic) le
+      réapplique : c'est le filet de sécurité de toute modification du registre.
+
+      ```
+      reg export "HKLM\SOFTWARE\Policies\Microsoft\Windows" C:\Admin\policies-avant.reg /y
+      ```
+
+      Côté PowerShell, une clé inexistante se crée avec `New-Item` (`-Force` crée aussi les parents, mais
+      **vide** une clé qui existe déjà : toujours tester avec `Test-Path` avant), puis
+      `Set-ItemProperty -Type DWord` (ou `New-ItemProperty -PropertyType DWord`) pose la valeur. La valeur
+      `DisableWindowsConsumerFeatures` est celle qu'écrit la stratégie *Désactiver les expériences
+      utilisateur Microsoft* (prise en compte par les éditions Entreprise et Éducation).
+    ci: true
+    checks:
+      - desc: La sauvegarde .reg existe et a été faite avant la modification
+        run: |
+          $f = Get-Item C:\Admin\policies-avant.reg
+          $t = [IO.File]::ReadAllText($f.FullName, [Text.Encoding]::Unicode)
+          $t -match 'Windows Registry Editor Version 5\.00' -and $t -match 'Policies\\Microsoft\\Windows\]' -and $t -notmatch 'DisableWindowsConsumerFeatures'
+      - desc: DisableWindowsConsumerFeatures vaut 1
+        run: |
+          (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent').DisableWindowsConsumerFeatures -eq 1
+    solution: |
+      reg.exe export 'HKLM\SOFTWARE\Policies\Microsoft\Windows' C:\Admin\policies-avant.reg /y | Out-Null
+      if (-not (Test-Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent')) { New-Item 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent' | Out-Null }
+      Set-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent' -Name DisableWindowsConsumerFeatures -Value 1 -Type DWord
+
+  - id: win-pc-demarrage
+    title: Le poste met cinq minutes à démarrer
+    description: |
+      L'ancien utilisateur se plaignait de lenteurs au démarrage. Deux programmes douteux se lancent
+      automatiquement : `UpdaterPro` (pour tous les utilisateurs) et `PubCleaner` (pour ton utilisateur).
+      Retire-les du démarrage **sans toucher** aux autres entrées.
+    hint: Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run ; Remove-ItemProperty ... -Name UpdaterPro ; idem dans HKCU pour PubCleaner
+    cours: |
+      Les programmes lancés à l'ouverture de session se cachent à plusieurs endroits :
+
+      - `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` (tous les utilisateurs) et
+        `HKLM:\SOFTWARE\WOW6432Node\...\Run` (programmes 32 bits) ;
+      - `HKCU:\Software\Microsoft\Windows\CurrentVersion\Run` (utilisateur courant) ;
+      - les dossiers *Démarrage* (`shell:startup`, `shell:common startup`) ;
+      - les tâches planifiées et les services.
+
+      ```powershell
+      Get-CimInstance Win32_StartupCommand | Select-Object Name, Command, Location, User
+      Remove-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name UpdaterPro
+      ```
+
+      Le Gestionnaire des tâches (onglet *Applications de démarrage*) affiche ces entrées avec leur
+      « impact » et permet de les **désactiver** sans les supprimer. Pour un inventaire exhaustif,
+      l'outil **Autoruns** (Sysinternals) est la référence.
+    ci: true
+    checks:
+      - desc: UpdaterPro ne démarre plus avec Windows
+        run: |
+          -not (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name UpdaterPro -ErrorAction SilentlyContinue) -and
+          (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run')
+      - desc: PubCleaner ne démarre plus avec ta session
+        run: |
+          -not (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name PubCleaner -ErrorAction SilentlyContinue) -and
+          (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run')
+      - desc: Le ménage a été fait (les deux entrées ont été trouvées et retirées)
+        run: |
+          $hklm = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
+          $hkcu = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
+          -not ($hklm.PSObject.Properties.Name -contains 'UpdaterPro') -and -not ($hkcu -and $hkcu.PSObject.Properties.Name -contains 'PubCleaner') -and (Test-Path C:\ProgramData\UpdaterPro)
+    solution: |
+      Remove-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name UpdaterPro
+      Remove-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name PubCleaner
+
+  - id: win-pc-imprimante
+    title: Installer l'imprimante du rez-de-chaussée
+    description: |
+      Ajoute l'imprimante réseau du rez-de-chaussée :
+
+      - port TCP/IP **`IP_192.168.10.50`** vers l'adresse `192.168.10.50` ;
+      - pilote **`Generic / Text Only`** (en attendant le pilote du constructeur) ;
+      - file d'attente nommée **`Imprimante-RDC`**, avec le commentaire `Couloir RDC` et l'emplacement `Rez-de-chaussée`.
+    hint: Add-PrinterPort -Name IP_192.168.10.50 -PrinterHostAddress 192.168.10.50 ; Add-PrinterDriver -Name 'Generic / Text Only' ; Add-Printer -Name Imprimante-RDC -PortName IP_192.168.10.50 -DriverName 'Generic / Text Only' -Comment ... -Location ...
+    cours: |
+      Trois objets, dans cet ordre :
+
+      ```powershell
+      Add-PrinterPort -Name IP_192.168.10.50 -PrinterHostAddress 192.168.10.50     # port RAW 9100 par défaut
+      Add-PrinterDriver -Name 'Generic / Text Only'                                  # pilote présent dans Windows
+      Add-Printer -Name Imprimante-RDC -PortName IP_192.168.10.50 -DriverName 'Generic / Text Only' `
+                  -Comment 'Couloir RDC' -Location 'Rez-de-chaussée'
+      Get-Printer ; Get-PrinterPort ; Get-PrinterDriver
+      ```
+
+      `Add-PrinterDriver` installe un pilote **déjà présent dans le magasin de pilotes** de Windows ; pour un
+      pilote constructeur, on l'ajoute d'abord au magasin (`pnputil /add-driver fichier.inf`). Graphique :
+      *Paramètres* › *Bluetooth et appareils* › *Imprimantes et scanners*, ou `printmanagement.msc` (gestion
+      de l'impression, éditions Pro). En entreprise, les imprimantes sont publiées par un **serveur
+      d'impression** et déployées par GPO : les postes n'ont plus à connaître les adresses IP.
+    ci: true
+    checks:
+      - desc: Le port IP_192.168.10.50 pointe vers 192.168.10.50
+        run: |
+          (Get-PrinterPort -Name IP_192.168.10.50).PrinterHostAddress -eq '192.168.10.50'
+      - desc: La file Imprimante-RDC utilise ce port et le pilote Generic / Text Only
+        run: |
+          $p = Get-Printer -Name Imprimante-RDC
+          $p.PortName -eq 'IP_192.168.10.50' -and $p.DriverName -eq 'Generic / Text Only'
+      - desc: Commentaire et emplacement renseignés
+        run: |
+          $p = Get-Printer -Name Imprimante-RDC
+          $p.Comment -eq 'Couloir RDC' -and $p.Location -eq 'Rez-de-chaussée'
+    solution: |
+      Add-PrinterPort -Name IP_192.168.10.50 -PrinterHostAddress 192.168.10.50
+      Add-PrinterDriver -Name 'Generic / Text Only'
+      Add-Printer -Name Imprimante-RDC -PortName IP_192.168.10.50 -DriverName 'Generic / Text Only' -Comment 'Couloir RDC' -Location 'Rez-de-chaussée'
+
+  - id: win-pc-pilotes
+    title: Sauvegarder les pilotes avant une réinstallation
+    description: |
+      Le poste sera peut-être réinstallé. Exporte tous les **pilotes tiers** (non fournis par Windows) dans
+      `C:\Admin\Pilotes`, puis enregistre la liste des périphériques en **erreur** (statut différent de `OK`)
+      dans `C:\Admin\peripheriques-ko.txt` (le fichier peut être vide s'il n'y en a aucun).
+    hint: Export-WindowsDriver -Online -Destination C:\Admin\Pilotes ; Get-PnpDevice | Where-Object Status -ne 'OK' | Select-Object Status, Class, FriendlyName | Out-File C:\Admin\peripheriques-ko.txt
+    cours: |
+      Retrouver le pilote d'une carte réseau sur un poste réinstallé... sans réseau, c'est le cauchemar
+      classique. Avant de réinstaller, on exporte les pilotes **tiers** du magasin de pilotes :
+
+      ```powershell
+      Export-WindowsDriver -Online -Destination C:\Admin\Pilotes      # un dossier par pilote (.inf, .sys, .cat)
+      pnputil /enum-drivers                                           # liste des pilotes tiers (oemXX.inf)
+      pnputil /add-driver C:\Admin\Pilotes\*.inf /subdirs /install    # réinjection après réinstallation
+      ```
+
+      Le **Gestionnaire de périphériques** (`devmgmt.msc`) signale les périphériques sans pilote ou en erreur
+      (point d'exclamation jaune) ; en PowerShell : `Get-PnpDevice | Where-Object Status -ne 'OK'`. Dans ce
+      lab, les pilotes tiers sont ceux des *Additions invité VirtualBox*.
+    checks:
+      - desc: C:\Admin\Pilotes contient des pilotes exportés (.inf)
+        run: |
+          @(Get-ChildItem C:\Admin\Pilotes -Recurse -Filter *.inf -ErrorAction SilentlyContinue).Count -ge 1
+      - desc: La liste des périphériques en erreur a été produite
+        run: |
+          (Test-Path C:\Admin\peripheriques-ko.txt) -and @(Get-ChildItem C:\Admin\Pilotes -Directory).Count -ge 1
+    solution: |
+      New-Item C:\Admin\Pilotes -ItemType Directory -Force | Out-Null
+      Export-WindowsDriver -Online -Destination C:\Admin\Pilotes | Out-Null
+      Get-PnpDevice | Where-Object Status -ne 'OK' | Select-Object Status, Class, FriendlyName | Out-File C:\Admin\peripheriques-ko.txt
+
+  - id: win-pc-winget
+    title: Installer les logiciels avec winget
+    description: |
+      Installe **7-Zip** avec **winget** (identifiant exact `7zip.7zip`), en mode silencieux.
+
+      Si winget ne répond pas dans le terminal (il dépend de la session de l'utilisateur), lance la même
+      commande depuis la session graphique de PC01 (console VirtualBox ou Bureau à distance).
+    hint: winget install --id 7zip.7zip -e --silent --accept-package-agreements --accept-source-agreements
+    cours: |
+      winget cherche les logiciels dans le dépôt communautaire *winget-pkgs* (manifestes vérifiés pointant
+      vers les installeurs officiels) et dans le Microsoft Store :
+
+      ```
+      winget search 7zip                    # trouver l'identifiant
+      winget show --id 7zip.7zip            # éditeur, version, URL de l'installeur
+      winget install --id 7zip.7zip -e --silent --accept-package-agreements --accept-source-agreements
+      winget list 7zip ; winget upgrade --all ; winget uninstall --id 7zip.7zip
+      ```
+
+      `-e` (*exact*) évite d'installer un homonyme ; `--silent` supprime les fenêtres. `winget export` /
+      `winget import` rejouent une liste de logiciels sur un autre poste : la base d'un script de
+      préparation. winget est livré avec *App Installer* : sur certaines sessions (services, SSH), il faut
+      parfois appeler directement `winget.exe` depuis `%LOCALAPPDATA%\Microsoft\WindowsApps`.
+    checks:
+      - desc: 7-Zip est installé
+        timeout: 120
+        run: |
+          (Test-Path 'C:\Program Files\7-Zip\7z.exe') -or
+          [bool](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object DisplayName -like '7-Zip*')
+    solution: |
+      winget install --id 7zip.7zip -e --silent --accept-package-agreements --accept-source-agreements
+
+  - id: win-pc-restauration
+    title: Point de restauration avant le logiciel de compta
+    description: |
+      Avant d'installer le logiciel de comptabilité (réputé capricieux) :
+
+      1. active la **protection du système** sur `C:` ;
+      2. limite l'espace qu'elle peut utiliser à **5 %** du disque ;
+      3. crée un **point de restauration** nommé `Avant logiciel compta`.
+    hint: 'Enable-ComputerRestore -Drive ''C:\'' ; vssadmin resize shadowstorage /for=C: /on=C: /maxsize=5% ; Checkpoint-Computer -Description ''Avant logiciel compta'' -RestorePointType APPLICATION_INSTALL'
+    cours: |
+      La **protection du système** (*Propriétés système* › *Protection du système*, ou `SystemPropertiesProtection`)
+      crée des **points de restauration** : clichés VSS des fichiers système, programmes et registre. En cas
+      de problème après une installation ou un pilote, `rstrui` ramène le système à cet état **sans toucher
+      aux documents**.
+
+      ```powershell
+      Enable-ComputerRestore -Drive 'C:\'
+      vssadmin resize shadowstorage /for=C: /on=C: /maxsize=5%
+      Checkpoint-Computer -Description 'Avant logiciel compta' -RestorePointType APPLICATION_INSTALL
+      Get-ComputerRestorePoint
+      ```
+
+      Windows refuse de créer plus d'un point par 24 heures via `Checkpoint-Computer` (sauf réglage
+      `SystemRestorePointCreationFrequency`). Ce n'est **pas une sauvegarde** : un disque qui meurt emporte
+      les points de restauration avec lui. Les documents se sauvegardent ailleurs (OneDrive, serveur,
+      Historique des fichiers).
+    checks:
+      - desc: Un point de restauration « Avant logiciel compta » existe
+        run: |
+          [bool](Get-ComputerRestorePoint | Where-Object Description -eq 'Avant logiciel compta')
+      - desc: L'espace des clichés sur C est limité à 5 %
+        run: |
+          $s = Get-CimInstance Win32_ShadowStorage
+          $v = Get-CimInstance Win32_Volume -Filter "DriveLetter='C:'"
+          [bool]$s -and [math]::Abs(($s | Select-Object -First 1).MaxSpace - 0.05 * $v.Capacity) -lt 0.01 * $v.Capacity
+    solution: |
+      Enable-ComputerRestore -Drive 'C:\'
+      vssadmin.exe resize shadowstorage /for=C: /on=C: /maxsize=5% | Out-Null
+      Checkpoint-Computer -Description 'Avant logiciel compta' -RestorePointType APPLICATION_INSTALL
+
+  - id: win-pc-heures-activite
+    title: Pas de redémarrage pendant les heures de bureau
+    description: |
+      Windows Update a redémarré le poste en pleine démonstration client. Règle les **heures d'activité** de
+      **8 h à 19 h** (valeurs `ActiveHoursStart` = 8 et `ActiveHoursEnd` = 19 de
+      `HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings`), en désactivant leur ajustement automatique
+      (`SmartActiveHoursState` = 0).
+    hint: Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings' -Name ActiveHoursStart -Value 8 -Type DWord (idem ActiveHoursEnd 19, SmartActiveHoursState 0)
+    cours: |
+      Les **heures d'activité** indiquent à Windows Update quand l'utilisateur travaille : aucun redémarrage
+      automatique n'aura lieu dans cette plage (18 heures maximum). Graphique : *Paramètres* › *Windows Update*
+      › *Options avancées* › *Heures d'activité* (choisir « Manuellement »).
+
+      Les valeurs sont stockées dans `HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings` ; en entreprise, on
+      les impose par GPO (*Désactiver le redémarrage automatique pendant les heures d'activité*), et on pilote
+      les mises à jour avec Windows Update for Business, WSUS ou Intune : anneaux de déploiement (un groupe
+      pilote d'abord), échéances d'installation, report des mises à jour de fonctionnalités.
+
+      `Get-HotFix` liste les correctifs installés ; *Paramètres* › *Windows Update* › *Historique* montre
+      aussi les échecs (code d'erreur à chercher).
+    checks:
+      - desc: Heures d'activité de 8 h à 19 h, réglées manuellement
+        run: |
+          $p = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'
+          $p.ActiveHoursStart -eq 8 -and $p.ActiveHoursEnd -eq 19 -and $p.SmartActiveHoursState -eq 0
+    solution: |
+      $k = 'HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'
+      Set-ItemProperty $k -Name ActiveHoursStart -Value 8 -Type DWord
+      Set-ItemProperty $k -Name ActiveHoursEnd -Value 19 -Type DWord
+      Set-ItemProperty $k -Name SmartActiveHoursState -Value 0 -Type DWord

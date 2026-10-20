@@ -48,7 +48,7 @@ if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
 Set-Service sshd -StartupType Automatic
 Start-Service sshd   # le premier démarrage crée C:\ProgramData\ssh et les clés d'hôte
 $shell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-New-Item 'HKLM:\SOFTWARE\OpenSSH' -Force | Out-Null
+if (-not (Test-Path 'HKLM:\SOFTWARE\OpenSSH')) { New-Item 'HKLM:\SOFTWARE\OpenSSH' | Out-Null }
 New-ItemProperty 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value $shell -PropertyType String -Force | Out-Null
 if (-not (Get-NetFirewallRule -Name 'TDM-SSH' -ErrorAction SilentlyContinue)) {
     New-NetFirewallRule -Name 'TDM-SSH' -DisplayName 'TDM - OpenSSH (terminal de la plateforme)' -Direction Inbound `
