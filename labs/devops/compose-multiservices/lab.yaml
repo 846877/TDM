@@ -352,3 +352,93 @@ exercises:
       - desc: Tous les réplicas sont en version 2.0
         run: |
           test -n "$(docker compose -f /root/app/compose.yaml ps -q web)" || exit 1; for c in $(docker compose -f /root/app/compose.yaml ps -q web); do docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$c" | grep -qx 'APP_VERSION=2.0' || exit 1; done
+  - id: cm-profils
+    title: Un service à la demande avec les profils
+    description: |
+      Ajoute à `compose.yaml` un service **`sauvegarde`** (image `redis:7.4-alpine`, commande au choix, par
+      exemple `redis-cli -h redis -a "$$REDIS_PASSWORD" --rdb /sauvegardes/dump.rdb`) rattaché au **profil
+      `outils`**. Il ne doit **pas** démarrer avec un simple `docker compose up -d`, seulement avec
+      `docker compose --profile outils run --rm sauvegarde`.
+    hint: "profiles: [outils] sous le service ; vérifie avec docker compose config --profiles"
+    cours: |
+      Un fichier Compose décrit souvent plus que ce qu'on veut lancer en permanence : outils de débogage,
+      tâches de sauvegarde, migrations de base, interface d'administration. Les **profils** évitent de
+      multiplier les fichiers : un service qui porte `profiles: [nom]` est ignoré tant que ce profil n'est
+      pas activé.
+
+      On active un profil avec l'option `--profile nom` (répétable) ou la variable `COMPOSE_PROFILES`. Un
+      service sans `profiles` fait partie de tous les lancements. Désigner explicitement un service, comme
+      avec `docker compose run`, active aussi ses profils.
+
+      `docker compose run --rm service` lance un conteneur **ponctuel** : il exécute sa commande puis
+      disparaît, ce qui convient aux tâches de maintenance. `docker compose config --profiles` liste les
+      profils déclarés, et `docker compose config --services` les services retenus pour la configuration
+      courante.
+    checks:
+      - desc: Le profil outils est déclaré
+        run: cd /root/app && docker compose config --profiles | grep -qx outils
+      - desc: sauvegarde fait partie du profil outils
+        run: cd /root/app && docker compose --profile outils config --services | grep -qx sauvegarde
+      - desc: sauvegarde n'est pas retenu sans le profil
+        run: cd /root/app && docker compose config --services >/dev/null && ! docker compose config --services | grep -qx sauvegarde
+  - id: cm-limites
+    title: Limiter les journaux et la mémoire
+    description: |
+      Un conteneur bavard peut remplir le disque, un conteneur gourmand peut épuiser la mémoire de l'hôte.
+      Pour le service `web` :
+      1. limite les journaux du pilote `json-file` à **3 fichiers de 10 Mo** (`max-size: 10m`, `max-file: "3"`) ;
+      2. limite la mémoire à **256 Mo**.
+
+      Applique avec `docker compose up -d`.
+    hint: "logging: driver: json-file, options: max-size et max-file ; mem_limit: 256m (ou deploy.resources.limits.memory)"
+    cours: |
+      Par défaut, Docker écrit la sortie des conteneurs dans des fichiers JSON **sans limite de taille**. Sur
+      un serveur qui tourne depuis des mois, c'est une cause classique de disque plein. La clé `logging` d'un
+      service choisit le pilote (`json-file`, `local`, `journald`, `syslog`…) et ses options ; pour
+      `json-file`, `max-size` et `max-file` organisent une rotation. On peut aussi fixer ces valeurs pour tout
+      l'hôte dans `/etc/docker/daemon.json`.
+
+      Côté ressources, sans limite, un conteneur peut consommer toute la mémoire et tout le processeur. En
+      Compose, `mem_limit` et `cpus`, ou la forme `deploy.resources.limits` (`memory`, `cpus`), créent les
+      limites des cgroups. Si le conteneur dépasse sa limite de mémoire, le noyau le tue (*OOM killed*).
+
+      `docker inspect` montre le résultat dans `HostConfig.LogConfig` et `HostConfig.Memory` (en octets) ;
+      `docker stats` affiche la consommation en direct.
+    checks:
+      - desc: Les conteneurs web gardent au plus 3 fichiers de 10 Mo
+        run: |
+          ids=$(docker compose -f /root/app/compose.yaml ps -q web) && test -n "$ids" && for c in $ids; do docker inspect -f '{{.HostConfig.LogConfig.Type}} {{index .HostConfig.LogConfig.Config "max-size"}} {{index .HostConfig.LogConfig.Config "max-file"}}' "$c" | grep -qx 'json-file 10m 3' || exit 1; done
+      - desc: Les conteneurs web sont limités à 256 Mo
+        run: |
+          ids=$(docker compose -f /root/app/compose.yaml ps -q web) && test -n "$ids" && for c in $ids; do test "$(docker inspect -f '{{.HostConfig.Memory}}' "$c")" = 268435456 || exit 1; done
+      - desc: Le site répond toujours
+        run: wget -qO- http://localhost:8080/ | grep -q visites
+  - id: cm-override
+    title: Fichier de surcharge
+    description: |
+      Sans toucher à `compose.yaml`, crée **`/root/app/compose.override.yaml`** qui ajoute au service `redis`
+      une politique de redémarrage **`unless-stopped`**. Lance `docker compose up -d` depuis `/root/app` (sans
+      `-f`) : Compose fusionne automatiquement les deux fichiers.
+    hint: "services: redis: restart: unless-stopped dans compose.override.yaml ; docker compose config affiche la fusion"
+    cours: |
+      Lancé sans option `-f`, Compose lit `compose.yaml` **puis** `compose.override.yaml` s'il existe, et
+      fusionne les deux : les valeurs simples de la surcharge remplacent celles de la base, les listes comme
+      `ports` s'additionnent, les dictionnaires comme `environment` se combinent.
+
+      Le schéma courant : `compose.yaml` décrit l'application commune, `compose.override.yaml` les réglages du
+      poste de développement, et un fichier `compose.prod.yaml` est passé explicitement en production :
+      `docker compose -f compose.yaml -f compose.prod.yaml up -d`. Avec des `-f`, le fichier de surcharge
+      automatique n'est plus lu.
+
+      `docker compose config` affiche le résultat de la fusion : c'est le meilleur moyen de vérifier ce qui sera
+      réellement appliqué. La politique de redémarrage `unless-stopped` relance le conteneur après un arrêt
+      imprévu ou un redémarrage du démon, sauf si on l'a arrêté soi-même.
+    checks:
+      - desc: compose.override.yaml existe et compose.yaml ne contient pas la politique
+        run: test -f /root/app/compose.override.yaml && ! grep -q unless-stopped /root/app/compose.yaml
+      - desc: La configuration fusionnée applique unless-stopped à redis
+        run: |
+          cd /root/app && docker compose config | awk '/^  redis:/{r=1;next} /^  [a-z]/{r=0} r' | grep -q 'restart: unless-stopped'
+      - desc: Le conteneur redis tourne avec cette politique
+        run: |
+          c=$(cd /root/app && docker compose ps -q redis) && test -n "$c" && test "$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$c")" = unless-stopped
