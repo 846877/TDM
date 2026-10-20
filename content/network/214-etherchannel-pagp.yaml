@@ -45,3 +45,61 @@ solution: |
   switchport mode access
   switchport access vlan 20
   end
+cours: |
+  ## PAgP et EtherChannel statique
+
+  LACP est le protocole d'agrégation standard, mais on rencontre encore :
+
+  - **PAgP** (*Port Aggregation Protocol*), propriétaire Cisco, sur d'anciens switchs ;
+  - l'agrégation **statique** (`mode on`), sans aucun protocole, pour certains serveurs ou
+    équipements qui ne négocient pas.
+
+  | Côté A \ Côté B | desirable | auto    | on       |
+  |-----------------|-----------|---------|----------|
+  | **desirable**   | canal     | canal   | ✗        |
+  | **auto**        | canal     | ✗       | ✗        |
+  | **on**          | ✗         | ✗       | canal    |
+
+  `desirable` propose activement, `auto` attend une proposition (comme `active`/`passive` en
+  LACP). `on` ne forme un canal qu'avec `on` en face.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# interface range gi0/3 - 4
+  SW1(config-if-range)# channel-group 6 mode desirable
+  SW1(config-if-range)# interface port-channel 6
+  SW1(config-if)# switchport mode trunk
+  SW1(config-if)# switchport trunk allowed vlan 40,50,990
+  SW1(config)# interface range fa0/45 - 46
+  SW1(config-if-range)# channel-group 7 mode on
+  SW1(config-if-range)# interface port-channel 7
+  SW1(config-if)# switchport mode access
+  SW1(config-if)# switchport access vlan 50
+  SW1# show etherchannel summary
+  6      Po6(SU)     PAgP     Gi0/3(P) Gi0/4(P)
+  7      Po7(SU)       -      Fa0/45(P) Fa0/46(P)
+  ```
+
+  ### Pourquoi le mode on est risqué
+
+  Sans protocole, aucune vérification n'est faite : si l'autre côté n'est **pas** configuré en
+  agrégation (ou si un câble est mal branché), les deux liens se comportent comme des liens
+  indépendants... et peuvent créer une **boucle** ou dupliquer des trames. LACP ou PAgP
+  détectent ces erreurs et suspendent les ports incompatibles. On réserve donc `on` aux cas où
+  l'équipement d'en face ne négocie pas.
+
+  ### Pièges fréquents
+
+  - Mélanger LACP et PAgP dans un même groupe (refusé).
+  - `auto` des deux côtés.
+  - Membres aux configurations différentes (ports suspendus).
+
+  ### Pour le CCNA
+
+  Le CCNA demande de connaître les modes LACP, PAgP et statique et leurs combinaisons valides.
+docs:
+  - title: "Wikipédia — Agrégation de liens"
+    url: https://fr.wikipedia.org/wiki/Agr%C3%A9gation_de_liens
+  - title: "Cisco Catalyst 2960-X — guides de configuration"
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html

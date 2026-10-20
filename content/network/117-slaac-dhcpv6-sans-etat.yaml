@@ -1,0 +1,104 @@
+title: SLAAC et DHCPv6 sans état
+level: intermediaire
+order: 17
+device: router
+hostname: R-LAN6
+tags: [ipv6, slaac, dhcpv6, nd]
+summary: Les postes calculent leur adresse seuls et demandent le DNS au routeur.
+description: |
+  Le LAN `2001:db8:10:1::/64` est derrière `G0/0` (adresse `2001:db8:10:1::1/64` déjà configurée).
+  Les postes doivent :
+
+  - se fabriquer **eux-mêmes** leur adresse à partir du préfixe annoncé (**SLAAC**) ;
+  - obtenir l'adresse du **DNS** et le domaine par **DHCPv6 sans état**.
+
+  1. active le routage IPv6 (sans lui, le routeur n'envoie pas d'annonces de routeur) ;
+  2. crée le pool DHCPv6 `SANS-ETAT` : DNS `2001:db8:10:ff::53`, domaine `tdm.local` ;
+  3. sur `G0/0` : positionne le drapeau **O** des annonces (`ipv6 nd other-config-flag`) et
+     associe le pool (`ipv6 dhcp server SANS-ETAT`).
+
+  Contrôle avec `show ipv6 dhcp pool`.
+initial: |
+  interface g0/0
+  ipv6 address 2001:db8:10:1::1/64
+  no shutdown
+checks:
+  - desc: Routage IPv6 activé
+    expr: d.ipv6_routing
+  - desc: Pool SANS-ETAT avec le DNS 2001:db8:10:ff::53 et le domaine tdm.local
+    expr: d.dhcpv6_pools["SANS-ETAT"]["dns"] == ["2001:db8:10:ff::53"] and d.dhcpv6_pools["SANS-ETAT"]["domain"] == "tdm.local"
+  - desc: Pool sans préfixe d'adresses (sans état)
+    expr: '"SANS-ETAT" in d.dhcpv6_pools and not d.dhcpv6_pools["SANS-ETAT"]["address_prefix"]'
+  - desc: Drapeau O et serveur DHCPv6 sur G0/0
+    expr: intf("g0/0").ipv6_nd_other and intf("g0/0").ipv6_dhcp_server == "SANS-ETAT" and not intf("g0/0").ipv6_nd_managed
+solution: |
+  configure terminal
+  ipv6 unicast-routing
+  ipv6 dhcp pool SANS-ETAT
+  dns-server 2001:db8:10:ff::53
+  domain-name tdm.local
+  exit
+  interface g0/0
+  ipv6 nd other-config-flag
+  ipv6 dhcp server SANS-ETAT
+  end
+cours: |
+  ## Trois façons d'adresser un poste en IPv6
+
+  En IPv6, le routeur envoie régulièrement des **annonces de routeur** (RA, ICMPv6 type 134) sur
+  chaque LAN. Elles contiennent le préfixe, la passerelle (l'adresse link-local du routeur) et
+  deux drapeaux qui disent aux postes comment s'adresser :
+
+  | Méthode                 | Drapeau M | Drapeau O | Adresse        | DNS               |
+  |-------------------------|-----------|-----------|----------------|-------------------|
+  | SLAAC seul              | 0         | 0         | calculée       | option RDNSS de la RA (si gérée) |
+  | SLAAC + DHCPv6 sans état | 0        | **1**     | calculée       | serveur DHCPv6    |
+  | DHCPv6 avec état        | **1**     | 0/1       | serveur DHCPv6 | serveur DHCPv6    |
+
+  ### SLAAC
+
+  Avec le préfixe /64 reçu, le poste fabrique les 64 bits restants : soit en **EUI-64** (à partir
+  de sa MAC), soit de façon **aléatoire** (extensions de confidentialité, par défaut sous Windows,
+  macOS et la plupart des Linux). Il vérifie ensuite que l'adresse est libre (**DAD**).
+
+  ### DHCPv6 sans état
+
+  Le serveur ne distribue **aucune adresse** et ne garde **aucun** suivi : il répond seulement aux
+  demandes d'options (DNS, domaine, serveur NTP...). Il n'y a pas de bail à gérer.
+
+  ```
+  R1(config)# ipv6 unicast-routing
+  R1(config)# ipv6 dhcp pool INFOS-LAN
+  R1(config-dhcpv6)# dns-server 2001:db8:99::53
+  R1(config-dhcpv6)# domain-name exemple.lan
+  R1(config)# interface g0/2
+  R1(config-if)# ipv6 nd other-config-flag
+  R1(config-if)# ipv6 dhcp server INFOS-LAN
+  R1# show ipv6 interface g0/2 | include hosts
+    Hosts use stateless autoconfig for addresses.
+    Hosts use DHCP to obtain other configuration.
+  ```
+
+  Côté poste Windows : `ipconfig /all` montre l'adresse « temporaire », la passerelle `fe80::...`
+  et les serveurs DNS reçus.
+
+  ### Pièges fréquents
+
+  - Oublier `ipv6 unicast-routing` : le routeur n'envoie pas de RA, les postes n'ont que leur
+    link-local.
+  - Un préfixe différent de /64 sur le LAN : SLAAC ne fonctionne pas.
+  - Des RA pirates émises par un poste (partage de connexion Windows) : la parade est **RA Guard**
+    sur les switchs.
+  - Sous Android, DHCPv6 n'est pas pris en charge : il faut annoncer le DNS dans la RA (RDNSS).
+
+  ### Pour le CCNA
+
+  Comprendre les rôles des RA, des drapeaux M et O, et distinguer SLAAC, DHCPv6 sans état et avec
+  état est explicitement au programme.
+docs:
+  - title: RFC 4862 — IPv6 Stateless Address Autoconfiguration
+    url: https://www.rfc-editor.org/rfc/rfc4862
+  - title: RFC 8415 — Dynamic Host Configuration Protocol for IPv6 (DHCPv6)
+    url: https://www.rfc-editor.org/rfc/rfc8415
+  - title: Wikipédia (EN) — Neighbor Discovery Protocol
+    url: https://en.wikipedia.org/wiki/Neighbor_Discovery_Protocol

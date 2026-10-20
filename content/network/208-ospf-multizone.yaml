@@ -55,3 +55,62 @@ solution: |
   interface g0/2
   ip ospf 1 area 10
   end
+cours: |
+  ## Pourquoi découper en zones ?
+
+  Dans une zone OSPF, chaque routeur connaît **tous** les liens et recalcule SPF au moindre
+  changement. Au-delà de quelques dizaines de routeurs, la base de données et les calculs
+  grossissent. On découpe donc le réseau en **zones** reliées à la **zone 0** (*backbone*) :
+
+  - les détails d'une zone restent dans la zone ;
+  - les autres zones ne reçoivent qu'un **résumé** (LSA de type 3) ;
+  - un incident local ne déclenche pas de recalcul global.
+
+  Le routeur à cheval sur la zone 0 et une autre zone est un **ABR** (*Area Border Router*).
+
+  ### Activer OSPF par interface
+
+  Au lieu de `network`, on peut déclarer la zone directement sur l'interface — plus lisible et
+  moins sujet aux erreurs de wildcard :
+
+  ```
+  R1(config)# router ospf 10
+  R1(config-router)# router-id 7.7.7.7
+  R1(config-router)# area 20 stub
+  R1(config)# interface gi0/1
+  R1(config-if)# ip ospf 10 area 0
+  R1(config)# interface gi0/2
+  R1(config-if)# ip ospf 10 area 20
+  R1# show ip ospf interface brief
+  Interface  PID  Area  IP Address/Mask  Cost  State Nbrs F/C
+  Gi0/1      10   0     10.0.0.1/30      1     P2P   1/1
+  Gi0/2      10   20    172.16.20.1/24   1     DR    1/1
+  ```
+
+  ### Les zones stub
+
+  | Type                        | Reçoit                                     |
+  |-----------------------------|--------------------------------------------|
+  | normale                     | tout                                       |
+  | **stub**                    | pas de routes externes (type 5) ; route par défaut à la place |
+  | totally stubby (`stub no-summary` sur l'ABR) | seulement la route par défaut |
+  | NSSA                        | stub, mais peut contenir un ASBR           |
+
+  Une zone sans issue (une agence, un bâtiment) n'a pas besoin des milliers de routes externes :
+  la route par défaut suffit. **Tous** les routeurs de la zone doivent la déclarer stub.
+
+  ### Pièges fréquents
+
+  - Une zone non reliée à la zone 0 (il faudrait un *virtual link*).
+  - `area X stub` sur un seul routeur de la zone : pas d'adjacence.
+  - Mélanger `network` et `ip ospf ... area` de façon contradictoire.
+
+  ### Pour le CCNA / CCNP ENCOR
+
+  Le CCNA reste en zone unique ; ENCOR attend la maîtrise du multizone, des ABR et des types de
+  zones.
+docs:
+  - title: "Cisco — OSPF Design Guide"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/7039-1.html
+  - title: "Wikipédia — Open Shortest Path First"
+    url: https://fr.wikipedia.org/wiki/Open_Shortest_Path_First

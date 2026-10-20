@@ -24,3 +24,65 @@ solution: |
   configure terminal
   hostname SW1
   end
+cours: |
+  ## L'interface en ligne de commande d'IOS
+
+  Les switchs et routeurs Cisco se configurent principalement en ligne de commande (CLI), par le
+  port **console** (câble série) au premier démarrage, puis à distance par SSH. IOS organise les
+  commandes en **modes** hiérarchiques : chaque mode n'accepte que certaines commandes, et
+  l'invite indique toujours où l'on se trouve.
+
+  | Invite                 | Mode                    | Entrer               | Sortir           |
+  |------------------------|-------------------------|----------------------|------------------|
+  | `R1>`                  | utilisateur (lecture limitée) | connexion      | `exit`           |
+  | `R1#`                  | privilégié (tout voir, sauvegarder, redémarrer) | `enable` | `disable` |
+  | `R1(config)#`          | configuration globale   | `configure terminal` | `exit` / `end`   |
+  | `R1(config-if)#`       | configuration d'interface | `interface gi0/1`  | `exit` (remonte d'un niveau) |
+  | `R1(config-line)#`     | configuration de ligne  | `line vty 0 15`      | `exit`           |
+
+  `end` (ou `Ctrl+Z`) ramène directement au mode privilégié depuis n'importe quel sous-mode.
+
+  ### Exemple (autres valeurs)
+
+  ```
+  Router> enable
+  Router# configure terminal
+  Enter configuration commands, one per line.  End with CNTL/Z.
+  Router(config)# hostname R-LYON
+  R-LYON(config)# end
+  R-LYON# show running-config | include hostname
+  hostname R-LYON
+  ```
+
+  Le changement est **immédiat** : l'invite affiche le nouveau nom dès la validation.
+
+  ### Aides à la saisie
+
+  - **abréviations** : `conf t`, `sh run`, `int g0/1` — il suffit d'assez de lettres pour lever
+    l'ambiguïté ;
+  - `?` liste les commandes ou la suite possible (`show ?`, `ip ?`) ;
+  - `Tab` complète un mot ; flèche haut rappelle l'historique ;
+  - `do show ...` exécute une commande du mode privilégié sans quitter la configuration ;
+  - `no <commande>` annule une commande de configuration.
+
+  ### Pourquoi nommer chaque équipement ?
+
+  Le nom apparaît dans l'invite (on sait sur quel équipement on tape), dans les journaux, dans
+  CDP/LLDP chez les voisins, et il est requis pour générer les clés SSH. On suit une convention
+  (site, rôle, numéro) : `SW-ET2-01`, `R-AGENCE7`.
+
+  ### Pièges fréquents
+
+  - Taper une commande de configuration en mode privilégié : `% Invalid input detected`.
+  - Oublier que la configuration n'est pas sauvegardée tant qu'on n'a pas fait
+    `copy running-config startup-config`.
+  - Un nom avec des espaces : refusé.
+
+  ### Pour le CCNA
+
+  Naviguer entre les modes et lire l'invite est le tout premier savoir-faire attendu.
+docs:
+  - title: "Wikipédia — Cisco IOS"
+    url: https://fr.wikipedia.org/wiki/Cisco_IOS
+  - title: "Cisco IOS 15.4M&T — références de commandes"
+    url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-4m-t/products-command-reference-list.html

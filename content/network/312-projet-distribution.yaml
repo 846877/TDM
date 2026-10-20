@@ -120,3 +120,70 @@ solution: |
   network 192.168.99.0 0.0.0.255 area 0
   end
   copy running-config startup-config
+cours: |
+  ## Le rôle de la couche distribution
+
+  Dans le modèle hiérarchique à trois couches (accès, distribution, cœur), le switch de
+  **distribution** d'un bâtiment :
+
+  - agrège les switchs d'**accès** des étages (trunks, souvent en EtherChannel) ;
+  - est la **passerelle** des VLAN (SVI) et route entre eux ;
+  - est le **pont racine** STP de ces VLAN ;
+  - remonte vers le cœur par des liens **routés**.
+
+  ### Les briques à assembler (autres valeurs)
+
+  ```
+  ! VLAN et spanning tree
+  vlan 40
+   name BUREAUX
+  spanning-tree mode rapid-pvst
+  spanning-tree vlan 40,50,199 root primary
+  ! agrégation vers l'accès
+  interface range gi1/0/1 - 2
+   channel-group 3 mode active
+  interface port-channel 3
+   switchport mode trunk
+   switchport trunk native vlan 990
+   switchport trunk allowed vlan 40,50,199
+  ! passerelles
+  ip routing
+  interface vlan 40
+   ip address 172.16.40.254 255.255.255.0
+   ip helper-address 172.16.100.25
+   no shutdown
+  ! remontée vers le cœur
+  interface gi1/0/48
+   no switchport
+   ip address 10.255.1.2 255.255.255.252
+  ip route 0.0.0.0 0.0.0.0 10.255.1.1
+  ```
+
+  ### Cohérence d'ensemble
+
+  - la racine STP et la passerelle des VLAN sur le **même** équipement : chemin optimal ;
+  - le relais DHCP (`ip helper-address`) sur **chaque** SVI d'utilisateurs ;
+  - VLAN natif identique et VLAN autorisés cohérents des deux côtés de chaque trunk ;
+  - avec deux switchs de distribution : HSRP pour la passerelle, racine primaire/secondaire
+    réparties.
+
+  ### Vérifier
+
+  `show etherchannel summary`, `show interfaces trunk`, `show spanning-tree root`,
+  `show ip interface brief`, `show ip route`, et un ping inter-VLAN.
+
+  ### Pièges fréquents
+
+  - Oublier `ip routing` : les SVI répondent mais ne routent pas.
+  - SVI d'un VLAN non transporté par le trunk : `up/down`.
+  - Configurer le trunk sur les membres au lieu du port-channel.
+
+  ### Pour le CCNA / CCNP ENCOR
+
+  Ce projet combine les briques du CCNA (VLAN, trunk, EtherChannel, STP, SVI, DHCP) et la
+  conception hiérarchique étudiée dans ENCOR.
+docs:
+  - title: "Cisco Catalyst 2960-X — guides de configuration"
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html
+  - title: "Wikipédia — Spanning Tree Protocol"
+    url: https://fr.wikipedia.org/wiki/Spanning_Tree_Protocol

@@ -46,3 +46,65 @@ solution: |
   switchport trunk native vlan 99
   switchport trunk allowed vlan 10,20,99
   end
+cours: |
+  ## Pourquoi agréger des liens ?
+
+  Deux câbles entre deux switchs : sans précaution, le spanning tree en **bloque** un pour éviter
+  une boucle, et la moitié de la capacité est perdue. Un **EtherChannel** regroupe jusqu'à 8
+  liens en une interface logique (`Port-channel`) : STP ne voit qu'un lien, le trafic est réparti
+  sur tous les câbles et la coupure de l'un d'eux est transparente.
+
+  ### Les protocoles de négociation
+
+  | Protocole | Norme          | Modes                         |
+  |-----------|----------------|-------------------------------|
+  | **LACP**  | IEEE 802.3ad / 802.1AX | `active` / `passive`  |
+  | PAgP      | Cisco          | `desirable` / `auto`          |
+  | aucun     | —              | `on` (forcé)                  |
+
+  LACP est le choix par défaut : standard, interopérable avec les serveurs et les autres
+  constructeurs. `active` des deux côtés est la configuration la plus robuste ; deux côtés
+  `passive` ne forment jamais le canal.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# interface range gi1/0/47 - 48
+  SW1(config-if-range)# channel-group 4 mode active
+  Creating a port-channel interface Port-channel 4
+  SW1(config-if-range)# interface port-channel 4
+  SW1(config-if)# switchport mode trunk
+  SW1(config-if)# switchport trunk native vlan 990
+  SW1(config-if)# switchport trunk allowed vlan 40,50,990
+  SW1# show etherchannel summary
+  Flags:  D - down   P - bundled in port-channel   S - Layer2   U - in use
+  Group  Port-channel  Protocol    Ports
+  4      Po4(SU)       LACP        Gi1/0/47(P) Gi1/0/48(P)
+  ```
+
+  La configuration de trunk se fait sur le **port-channel** ; elle est recopiée sur les membres.
+
+  ### Conditions de compatibilité
+
+  Tous les membres doivent avoir la même vitesse, le même duplex, le même mode (access/trunk),
+  les mêmes VLAN autorisés et natif. Un membre différent est suspendu (drapeau `s`).
+
+  ### Répartition de charge
+
+  Un flux suit toujours le même lien (hachage des adresses MAC ou IP) : deux liens à 1 Gbit/s ne
+  donnent pas 2 Gbit/s à un seul transfert, mais à l'ensemble des flux.
+
+  ### Pièges fréquents
+
+  - Configurer les membres différemment (ports suspendus).
+  - `passive` des deux côtés.
+  - Mode `on` d'un côté et LACP de l'autre : boucle possible.
+
+  ### Pour le CCNA
+
+  EtherChannel (LACP, PAgP, statique) et sa vérification sont au programme.
+docs:
+  - title: "Wikipédia — Agrégation de liens"
+    url: https://fr.wikipedia.org/wiki/Agr%C3%A9gation_de_liens
+  - title: "Cisco Catalyst 2960-X — guides de configuration"
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html

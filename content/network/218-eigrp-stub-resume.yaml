@@ -1,0 +1,117 @@
+title: EIGRP en agence — stub et résumé
+level: avance
+order: 18
+device: router
+hostname: R-AGENCE7
+tags: [eigrp, stub, résumé, passive-interface]
+summary: Rendre une agence EIGRP stable et légère pour le siège.
+description: |
+  `R-AGENCE7` est relié au siège par `S0/0/0`. Il a trois LAN : `10.7.0.0/24` (`G0/0`),
+  `10.7.1.0/24` (`G0/1`) et `10.7.2.0/24` (`G0/2`). EIGRP AS `100` est configuré au minimum.
+
+  Lors de la dernière panne, le siège a envoyé des requêtes EIGRP vers toutes les agences et le
+  réseau a mis plusieurs minutes à converger. Corrige :
+
+  1. l'agence est **stub** (elle n'annonce que ses réseaux connectés et résumés) ;
+  2. annonce au siège **un seul** résumé `10.7.0.0/22` sur `S0/0/0` ;
+  3. pas de messages EIGRP sur les LAN : toutes les interfaces passives **sauf** `S0/0/0` ;
+  4. désactive le résumé automatique par classe.
+initial: |
+  interface g0/0
+  ip address 10.7.0.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.7.1.1 255.255.255.0
+  no shutdown
+  interface g0/2
+  ip address 10.7.2.1 255.255.255.0
+  no shutdown
+  interface s0/0/0
+  ip address 10.0.0.30 255.255.255.252
+  no shutdown
+  router eigrp 100
+  network 10.7.0.0 0.0.3.255
+  network 10.0.0.28 0.0.0.3
+checks:
+  - desc: Agence en EIGRP stub
+    expr: d.eigrp[100].stub == "connected summary"
+  - desc: Résumé 10.7.0.0/22 annoncé sur S0/0/0
+    expr: intf("s0/0/0").eigrp_summaries == [(100, "10.7.0.0", "255.255.252.0")]
+  - desc: LAN passifs, S0/0/0 active
+    expr: all(d.eigrp[100].is_passive(n) for n in ["g0/0", "g0/1", "g0/2"]) and not d.eigrp[100].is_passive("s0/0/0")
+  - desc: Résumé automatique désactivé
+    expr: not d.eigrp[100].auto_summary
+solution: |
+  configure terminal
+  router eigrp 100
+  eigrp stub
+  passive-interface default
+  no passive-interface s0/0/0
+  no auto-summary
+  exit
+  interface s0/0/0
+  ip summary-address eigrp 100 10.7.0.0 255.255.252.0
+  end
+cours: |
+  ## Le problème des requêtes EIGRP
+
+  Quand EIGRP perd une route sans successeur de secours (*feasible successor*), il passe la route
+  en état **actif** et envoie des **requêtes** (*queries*) à tous ses voisins, qui les propagent à
+  leur tour. Dans un réseau en étoile avec des dizaines d'agences, une seule panne peut déclencher
+  une avalanche de requêtes ; si une réponse tarde, la route reste bloquée (*stuck in active*) et
+  des voisinages sont réinitialisés.
+
+  Deux outils limitent la portée des requêtes : le **stub** et le **résumé**.
+
+  ### EIGRP stub
+
+  Un routeur stub annonce à ses voisins qu'il n'est **pas un chemin de transit** : le siège ne lui
+  envoie plus de requêtes.
+
+  ```
+  R1(config)# router eigrp 200
+  R1(config-router)# eigrp stub                ! = connected summary
+  R1(config-router)# eigrp stub receive-only   ! n'annonce rien
+  R1# show ip eigrp neighbors detail
+     Stub Peer Advertising (CONNECTED SUMMARY ) Routes
+  ```
+
+  Options : `connected`, `summary`, `static`, `redistributed`, `receive-only`.
+
+  ### Résumé manuel par interface
+
+  ```
+  R1(config)# interface s0/1/0
+  R1(config-if)# ip summary-address eigrp 200 172.18.0.0 255.255.248.0
+  R1# show ip route | include Null0
+  D     172.18.0.0/21 is a summary, 00:00:12, Null0
+  ```
+
+  Le résumé est annoncé **à la place** des réseaux précis, et une route de rejet vers `Null0` est
+  créée automatiquement pour éviter les boucles. Une requête pour un sous-réseau précis s'arrête au
+  premier routeur qui ne connaît que le résumé.
+
+  `no auto-summary` est indispensable dès que les réseaux d'une même classe sont dispersés (valeur
+  par défaut sur les IOS récents, mais pas sur les anciens).
+
+  ### Interfaces passives
+
+  `passive-interface default` puis `no passive-interface <lien>` : on n'active les hellos que là où
+  un voisin est attendu. Les LAN restent annoncés, mais aucun équipement n'y devient voisin.
+
+  ### Pièges fréquents
+
+  - Configurer `eigrp stub` sur le **siège** : il n'annonce plus les routes apprises aux autres
+    agences.
+  - Un résumé qui englobe des réseaux situés derrière un autre routeur.
+  - Mettre la liaison vers le siège en passive : le voisinage tombe.
+
+  ### Pour le CCNP ENCOR
+
+  ENCOR couvre la métrique EIGRP, les successeurs, le stub, le résumé et le partage de charge
+  inégal (`variance`).
+docs:
+  - title: Cisco — Enhanced Interior Gateway Routing Protocol (EIGRP)
+    url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/16406-eigrp-toc.html
+  - title: RFC 7868 — Cisco's Enhanced Interior Gateway Routing Protocol
+    url: https://www.rfc-editor.org/rfc/rfc7868

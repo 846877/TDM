@@ -37,3 +37,61 @@ solution: |
   exit
   ip route 0.0.0.0 0.0.0.0 10.0.0.1
   end
+cours: |
+  ## Port de switch ou interface de routeur ?
+
+  Sur un switch multicouche, chaque port physique peut être :
+
+  - un **port de commutation** (`switchport`) : access ou trunk, appartient à des VLAN ;
+  - un **port routé** (`no switchport`) : il devient une interface de routeur, avec sa propre
+    adresse IP, sans VLAN ni spanning tree.
+
+  Le port routé est idéal pour les **liens point à point** entre switchs de distribution et de
+  cœur : chaque lien est un petit réseau /30 (ou /31), le protocole de routage choisit les
+  chemins, et aucun VLAN ne s'étend entre les bâtiments.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW-DIST(config)# ip routing
+  SW-DIST(config)# interface gi1/0/48
+  SW-DIST(config-if)# description VERS-CORE2-Gi1/0/3
+  SW-DIST(config-if)# no switchport
+  SW-DIST(config-if)# ip address 10.255.1.6 255.255.255.252
+  SW-DIST(config-if)# exit
+  SW-DIST(config)# ip route 0.0.0.0 0.0.0.0 10.255.1.5
+  SW-DIST# show interfaces gi1/0/48 switchport
+  Switchport: Disabled
+  SW-DIST# show ip interface brief | include 1/0/48
+  ```
+
+  `no switchport` efface la configuration de commutation du port (VLAN, trunk) ; l'inverse
+  (`switchport`) efface son adresse IP.
+
+  ### SVI ou port routé ?
+
+  | SVI (`interface vlan`)                  | Port routé                           |
+  |-----------------------------------------|--------------------------------------|
+  | passerelle d'un VLAN de plusieurs ports | lien vers **un** équipement          |
+  | dépend de l'état des ports du VLAN      | dépend de l'état du port seulement   |
+  | STP actif dans le VLAN                  | pas de STP sur le lien               |
+
+  Un port routé tombe dès que le câble est coupé : le protocole de routage converge
+  immédiatement, sans attendre de timers STP.
+
+  ### Pièges fréquents
+
+  - Oublier `ip routing` : le switch ne route pas.
+  - Configurer l'IP sur un port encore en `switchport` : `% Invalid input`.
+  - Les switchs d'accès (2960) ne supportent pas `no switchport` : il faut un modèle de
+    niveau 3.
+
+  ### Pour le CCNA / CCNP ENCOR
+
+  La différence entre SVI et ports routés, et les conceptions « routées jusqu'à la
+  distribution », sont étudiées dans les deux examens.
+docs:
+  - title: "Wikipédia — Commutateur réseau"
+    url: https://fr.wikipedia.org/wiki/Commutateur_r%C3%A9seau
+  - title: "Cisco Catalyst 2960-X — guides de configuration"
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html

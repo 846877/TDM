@@ -32,3 +32,57 @@ solution: |
   spanning-tree portfast
   spanning-tree bpduguard enable
   end
+cours: |
+  ## Pourquoi le spanning tree ?
+
+  La redondance de liens entre switchs crée des **boucles** de niveau 2. Ethernet n'a pas de TTL :
+  un broadcast tournerait indéfiniment (tempête de broadcast) et les tables MAC deviendraient
+  instables. **STP** (IEEE 802.1D) calcule un arbre sans boucle et **bloque** les ports
+  redondants, qui ne reprennent du service qu'en cas de panne.
+
+  ### L'élection
+
+  1. le **pont racine** : le switch au plus petit **Bridge ID** (priorité, défaut 32768, puis
+     adresse MAC) ;
+  2. sur chaque autre switch, un **port racine** : celui au plus faible coût vers la racine ;
+  3. sur chaque segment, un **port désigné** ; les autres ports sont **bloqués** (alternate).
+
+  Laisser l'élection au hasard place souvent la racine sur le switch le plus ancien (plus petite
+  MAC). On la **choisit** : un switch de cœur ou de distribution.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW-DIST1(config)# spanning-tree mode rapid-pvst
+  SW-DIST1(config)# spanning-tree vlan 40,50 root primary
+  SW-DIST1(config)# spanning-tree vlan 60 priority 28672
+  SW-ACC(config)# interface range gi1/0/1 - 40
+  SW-ACC(config-if-range)# spanning-tree portfast
+  SW-ACC(config-if-range)# spanning-tree bpduguard enable
+  SW-DIST1# show spanning-tree vlan 40
+    Root ID    Priority    24616
+               This bridge is the root
+  ```
+
+  - **Rapid PVST+** : une instance RSTP (802.1w) par VLAN, convergence en une ou deux secondes
+    au lieu de 30 à 50 s ;
+  - `root primary` fixe une priorité plus basse que la racine actuelle (24576 en général) ;
+  - **PortFast** : un port vers un poste passe immédiatement en *forwarding* ;
+  - **BPDU Guard** : si un BPDU arrive sur un port PortFast (un switch branché à la place d'un
+    PC), le port passe en err-disabled.
+
+  ### Pièges fréquents
+
+  - PortFast sur un lien vers un autre switch : risque de boucle.
+  - La priorité est un multiple de 4096.
+  - Oublier un switch de secours (`root secondary`).
+
+  ### Pour le CCNA
+
+  L'élection STP, les rôles et états des ports, Rapid PVST+, PortFast et BPDU Guard sont au
+  programme.
+docs:
+  - title: "Wikipédia — Spanning Tree Protocol"
+    url: https://fr.wikipedia.org/wiki/Spanning_Tree_Protocol
+  - title: "Cisco — Understand Rapid Spanning Tree Protocol (802.1w)"
+    url: https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/24062-146.html

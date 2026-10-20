@@ -1,0 +1,116 @@
+title: Résumer des routes et poser une route Null0
+level: intermediaire
+order: 31
+device: router
+hostname: R-SIEGE
+tags: [routage, résumé, cidr, null0, static]
+summary: Remplacer quatre routes par une route résumée et éviter les boucles avec Null0.
+description: |
+  `R-SIEGE` atteint les quatre agences `172.16.0.0/24` à `172.16.3.0/24` via `10.0.0.2` (`G0/1`)
+  avec quatre routes statiques. Il sort vers Internet par une route par défaut via
+  `203.0.113.1` (`G0/2`).
+
+  1. remplace les quatre routes par **une seule route résumée** via `10.0.0.2` (calcule le
+     préfixe commun) et supprime les quatre anciennes ; garde la route par défaut ;
+  2. le siège possède le bloc `10.10.0.0/22`, mais seuls `10.10.0.0/24` et `10.10.1.0/24` sont
+     utilisés. Un paquet vers `10.10.3.7` partirait vers Internet par la route par défaut, et
+     reviendrait... Ajoute une route `10.10.0.0/22` vers `Null0` pour jeter ce trafic.
+initial: |
+  interface g0/0
+  no shutdown
+  interface g0/0.10
+  encapsulation dot1Q 10
+  ip address 10.10.0.1 255.255.255.0
+  interface g0/0.11
+  encapsulation dot1Q 11
+  ip address 10.10.1.1 255.255.255.0
+  interface g0/1
+  ip address 10.0.0.1 255.255.255.252
+  no shutdown
+  interface g0/2
+  ip address 203.0.113.2 255.255.255.252
+  no shutdown
+  ip route 172.16.0.0 255.255.255.0 10.0.0.2
+  ip route 172.16.1.0 255.255.255.0 10.0.0.2
+  ip route 172.16.2.0 255.255.255.0 10.0.0.2
+  ip route 172.16.3.0 255.255.255.0 10.0.0.2
+  ip route 0.0.0.0 0.0.0.0 203.0.113.1
+checks:
+  - desc: Route résumée 172.16.0.0/22 via 10.0.0.2
+    expr: route("172.16.0.0", "255.255.252.0", "10.0.0.2")
+  - desc: Les quatre routes /24 sont supprimées, la route par défaut est conservée
+    expr: not any(route("172.16.%d.0" % n, "255.255.255.0") for n in range(4)) and route("0.0.0.0", "0.0.0.0", "203.0.113.1")
+  - desc: Route 10.10.0.0/22 vers Null0
+    expr: route("10.10.0.0", "255.255.252.0", "Null0")
+    hint: "ip route 10.10.0.0 255.255.252.0 Null0"
+solution: |
+  configure terminal
+  no ip route 172.16.0.0 255.255.255.0 10.0.0.2
+  no ip route 172.16.1.0 255.255.255.0 10.0.0.2
+  no ip route 172.16.2.0 255.255.255.0 10.0.0.2
+  no ip route 172.16.3.0 255.255.255.0 10.0.0.2
+  ip route 172.16.0.0 255.255.252.0 10.0.0.2
+  ip route 10.10.0.0 255.255.252.0 Null0
+  end
+cours: |
+  ## Calculer une route résumée
+
+  Un **résumé** (*summary*, agrégation) remplace plusieurs réseaux contigus par un seul préfixe
+  plus court. On écrit les adresses en binaire et on garde les bits **communs** :
+
+  ```
+  192.168.8.0   = 11000000.10101000.000010 00.00000000
+  192.168.9.0   = 11000000.10101000.000010 01.00000000
+  192.168.10.0  = 11000000.10101000.000010 10.00000000
+  192.168.11.0  = 11000000.10101000.000010 11.00000000
+                  ←—— 22 bits communs ——→
+  Résumé : 192.168.8.0/22 (255.255.252.0)
+  ```
+
+  Règles pratiques : le nombre de réseaux résumés est une puissance de 2 (2, 4, 8...) et le
+  premier réseau est un **multiple** de ce nombre dans l'octet concerné (8 est un multiple de 4 :
+  OK ; 192.168.9.0 à 12.0 ne se résume pas proprement en /22).
+
+  Avantages : tables plus petites, mises à jour moins nombreuses, et un incident sur un sous-réseau
+  ne se propage pas (la route résumée reste stable).
+
+  ### La route vers Null0
+
+  `Null0` est une interface virtuelle qui **jette** tout ce qu'on lui envoie, sans générer de
+  charge. Elle sert à :
+
+  - **éviter les boucles** : un routeur qui annonce un résumé reçoit du trafic pour toutes les
+    adresses du bloc, même inutilisées ; sans route plus précise, ce trafic suivrait la route par
+    défaut, repartirait vers l'amont... qui le renverrait (boucle jusqu'à expiration du TTL) ;
+  - **ancrer** un préfixe qu'on veut annoncer en BGP (`network` exige une route identique dans la
+    table).
+
+  ```
+  R1(config)# ip route 192.168.8.0 255.255.252.0 Null0
+  R1# show ip route 192.168.10.5
+  Routing entry for 192.168.8.0/22
+    Known via "static", distance 1, metric 0 (connected)
+    * directly connected, via Null0
+  ```
+
+  Grâce à la **correspondance la plus longue**, les sous-réseaux réellement utilisés (/24
+  connectés) restent préférés à la route Null0 en /22 ; seules les adresses inutilisées tombent
+  dans le « trou noir ». EIGRP et OSPF créent d'ailleurs automatiquement cette route quand on
+  configure un résumé.
+
+  ### Pièges fréquents
+
+  - Un résumé trop large qui englobe des réseaux situés ailleurs : du trafic part dans la
+    mauvaise direction (ou dans Null0).
+  - Supprimer les routes précises avant d'ajouter le résumé en production : coupure brève.
+  - Oublier que `no ip route` doit reprendre exactement la même ligne.
+
+  ### Pour le CCNA
+
+  Le calcul de résumé et la correspondance la plus longue sont des classiques ; Null0 apparaît dans
+  les questions sur les résumés EIGRP/OSPF et la prévention des boucles.
+docs:
+  - title: RFC 4632 — Classless Inter-domain Routing (CIDR)
+    url: https://www.rfc-editor.org/rfc/rfc4632
+  - title: Wikipédia — Classless Inter-Domain Routing
+    url: https://fr.wikipedia.org/wiki/Classless_Inter-Domain_Routing

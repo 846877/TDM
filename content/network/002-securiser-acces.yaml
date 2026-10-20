@@ -31,3 +31,65 @@ solution: |
   exit
   service password-encryption
   end
+cours: |
+  ## Protéger chaque porte d'entrée
+
+  Un équipement neuf n'a aucun mot de passe : quiconque branche un câble console obtient le
+  contrôle total. On protège trois accès :
+
+  1. le passage au **mode privilégié** (`enable`) ;
+  2. la **ligne console** (accès physique) ;
+  3. les **lignes VTY** (accès à distance, voir les exercices Telnet/SSH).
+
+  ### enable secret ou enable password ?
+
+  | Commande          | Stockage                                  |
+  |-------------------|-------------------------------------------|
+  | `enable password` | en clair (ou chiffrement faible type 7)   |
+  | `enable secret`   | **haché** (MD5 type 5, ou scrypt type 9 sur IOS récents) |
+
+  Si les deux existent, `enable secret` l'emporte. On n'utilise que `enable secret`.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# enable secret Pr1v-Atelier
+  SW1(config)# line console 0
+  SW1(config-line)# password C0ns0le!
+  SW1(config-line)# login
+  SW1(config-line)# exit
+  SW1(config)# service password-encryption
+  SW1# show running-config | section line con
+  line con 0
+   password 7 0822455D0A165445415F59
+   login
+  ```
+
+  - `password` définit le mot de passe de la ligne, **`login`** demande de le saisir : sans
+    `login`, le mot de passe n'est jamais demandé ;
+  - `service password-encryption` chiffre (type 7) les mots de passe affichés en clair dans la
+    configuration : cela évite la lecture par-dessus l'épaule, mais le type 7 se déchiffre en
+    quelques secondes avec des outils publics. Ce n'est pas une vraie protection.
+
+  ### Vérifier
+
+  Ressors avec `exit` jusqu'à `Press RETURN to get started` : la console doit demander le mot de
+  passe, puis `enable` doit demander le secret.
+
+  ### Pièges fréquents
+
+  - `password` sans `login` (ou l'inverse : `login` sans mot de passe → `% Login disabled on
+    line`, plus d'accès console).
+  - Utiliser le même mot de passe partout.
+  - Croire que le type 7 est sûr : préférer des comptes locaux avec `secret` (exercice
+    « comptes utilisateurs locaux »).
+
+  ### Pour le CCNA
+
+  La sécurisation de base (enable secret, console, chiffrement des mots de passe) est au
+  programme du domaine « sécurité ».
+docs:
+  - title: "Wikipédia — Cisco IOS"
+    url: https://fr.wikipedia.org/wiki/Cisco_IOS
+  - title: "Cisco IOS 15.4M&T — références de commandes"
+    url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-4m-t/products-command-reference-list.html

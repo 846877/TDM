@@ -50,3 +50,60 @@ solution: |
   ip address 192.168.30.1 255.255.255.0
   no shutdown
   end
+cours: |
+  ## Le switch qui route
+
+  Un **switch de niveau 3** (multicouche) sait commuter **et** router, en matériel, à la vitesse
+  des ports. Pour router entre VLAN, on crée une **SVI** par VLAN (`interface vlan <n>`) avec
+  l'adresse qui sert de passerelle aux hôtes, et on active le routage IPv4 (`ip routing`).
+  Plus besoin de router-on-a-stick : le trafic inter-VLAN ne quitte pas le switch.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW-CORE(config)# ip routing
+  SW-CORE(config)# interface vlan 40
+  SW-CORE(config-if)# ip address 172.16.40.254 255.255.255.0
+  SW-CORE(config-if)# no shutdown
+  SW-CORE(config-if)# interface vlan 50
+  SW-CORE(config-if)# ip address 172.16.50.254 255.255.255.0
+  SW-CORE(config-if)# no shutdown
+  SW-CORE# show ip route connected
+  C    172.16.40.0/24 is directly connected, Vlan40
+  C    172.16.50.0/24 is directly connected, Vlan50
+  ```
+
+  ### Conditions pour qu'une SVI soit up/up
+
+  1. le VLAN existe dans la base des VLAN ;
+  2. la SVI n'est pas `shutdown` ;
+  3. au moins un port actif du VLAN (accès ou trunk qui le transporte, en état *forwarding*).
+
+  ### Router-on-a-stick ou SVI ?
+
+  | Router-on-a-stick                    | SVI sur switch L3                       |
+  |--------------------------------------|-----------------------------------------|
+  | un routeur + un trunk                | tout dans le switch                     |
+  | débit limité par le lien du trunk    | routage matériel, débit des ports       |
+  | adapté aux petits sites              | standard des réseaux d'entreprise       |
+
+  ### Sans ip routing
+
+  Sans `ip routing`, les SVI existent mais le switch ne route pas entre elles : il se comporte
+  comme un hôte (il lui faut `ip default-gateway`). Avec `ip routing`, on configure plutôt une
+  route par défaut (`ip route 0.0.0.0 0.0.0.0 ...`) vers le routeur Internet.
+
+  ### Pièges fréquents
+
+  - Oublier `ip routing`.
+  - Les PC gardent l'ancienne passerelle (celle du routeur) : à changer dans le DHCP.
+  - SVI créée pour un VLAN qui n'existe pas encore : `down/down`.
+
+  ### Pour le CCNA
+
+  Le routage inter-VLAN par SVI et ses conditions de fonctionnement sont au programme.
+docs:
+  - title: "Wikipédia — Commutateur réseau"
+    url: https://fr.wikipedia.org/wiki/Commutateur_r%C3%A9seau
+  - title: "Cisco Catalyst 2960-X — guides de configuration"
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html

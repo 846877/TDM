@@ -36,3 +36,64 @@ solution: |
   ip address 10.0.0.1 255.255.255.252
   no shutdown
   end
+cours: |
+  ## Chaque interface de routeur, un réseau
+
+  Un routeur relie des **réseaux IP différents**. Chacune de ses interfaces appartient à un
+  sous-réseau et porte une adresse de ce sous-réseau, qui sert de **passerelle** aux hôtes
+  connectés. Deux interfaces d'un même routeur ne peuvent pas être dans le même sous-réseau
+  (`% ... overlaps with ...`).
+
+  Contrairement aux ports de switch, les interfaces de routeur sont **éteintes par défaut**
+  (`administratively down`) : il faut `no shutdown`.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  Router(config)# hostname R-NANTES
+  R-NANTES(config)# interface gi0/0
+  R-NANTES(config-if)# description LAN-BUREAUX
+  R-NANTES(config-if)# ip address 172.16.40.1 255.255.255.0
+  R-NANTES(config-if)# no shutdown
+  R-NANTES(config-if)# interface gi0/1
+  R-NANTES(config-if)# description LIEN-SIEGE
+  R-NANTES(config-if)# ip address 10.0.0.5 255.255.255.252
+  R-NANTES(config-if)# no shutdown
+  R-NANTES# show ip interface brief
+  Interface       IP-Address    OK? Method Status  Protocol
+  GigabitEthernet0/0  172.16.40.1  YES manual up  up
+  GigabitEthernet0/1  10.0.0.5     YES manual up  up
+  ```
+
+  ### Les liaisons point à point en /30
+
+  Un lien entre deux routeurs n'a besoin que de **deux** adresses : un **/30**
+  (`255.255.255.252`) offre 4 adresses dont 2 utilisables (réseau `10.0.0.4`, hôtes `.5` et
+  `.6`, broadcast `.7`). Le /31 (RFC 3021) n'en utilise que deux, sans réseau ni broadcast.
+
+  ### Lire l'état d'une interface
+
+  | Status / Protocol          | Cause probable                          |
+  |----------------------------|-----------------------------------------|
+  | administratively down / down | `shutdown`                            |
+  | down / down                | câble débranché, équipement d'en face éteint |
+  | up / down                  | problème de couche 2 (encapsulation, horloge série) |
+  | up / up                    | fonctionnel                             |
+
+  Une fois l'interface `up/up`, son réseau apparaît comme **connecté** (`C`) et local (`L`) dans
+  `show ip route`.
+
+  ### Pièges fréquents
+
+  - Oublier `no shutdown`.
+  - Se tromper de masque : l'hôte et le routeur ne sont plus dans le même réseau.
+  - Attribuer l'adresse réseau ou broadcast à l'interface : refusé (`Bad mask`).
+
+  ### Pour le CCNA
+
+  L'adressage IPv4 des interfaces et la lecture de `show ip interface brief` sont des bases.
+docs:
+  - title: "Wikipédia — Adresse IP"
+    url: https://fr.wikipedia.org/wiki/Adresse_IP
+  - title: "Wikipédia — Sous-réseau"
+    url: https://fr.wikipedia.org/wiki/Sous-r%C3%A9seau

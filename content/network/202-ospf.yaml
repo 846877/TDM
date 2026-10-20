@@ -38,3 +38,58 @@ solution: |
   network 10.0.0.0 0.0.0.3 area 0
   passive-interface g0/0
   end
+cours: |
+  ## Le principe d'OSPF
+
+  OSPF est un protocole de routage à **état de liens** : chaque routeur décrit ses liens dans des
+  **LSA**, les diffuse à tous les routeurs de la zone, et chacun construit la même carte du
+  réseau. L'algorithme **SPF** (Dijkstra) calcule alors le plus court chemin selon le **coût**
+  (inversement proportionnel à la bande passante). Convergence rapide, sans boucle, standard
+  ouvert (RFC 2328).
+
+  Les routeurs voisins se découvrent par des **hellos** (multicast `224.0.0.5`, toutes les 10 s
+  sur Ethernet) et forment des **adjacences**.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# router ospf 10
+  R1(config-router)# router-id 4.4.4.4
+  R1(config-router)# network 172.16.40.0 0.0.0.255 area 0
+  R1(config-router)# network 10.0.0.4 0.0.0.3 area 0
+  R1(config-router)# passive-interface gi0/0
+  R1# show ip ospf neighbor
+  Neighbor ID  Pri  State     Dead Time  Address    Interface
+  5.5.5.5      1    FULL/DR   00:00:36   10.0.0.6   GigabitEthernet0/1
+  R1# show ip route ospf
+  O    172.16.50.0/24 [110/2] via 10.0.0.6, GigabitEthernet0/1
+  ```
+
+  - le numéro de processus (`10`) est local ; il peut différer entre routeurs ;
+  - `network <adresse> <wildcard> area <n>` active OSPF sur les interfaces dont l'adresse
+    correspond ; le **masque générique** est l'inverse du masque (`/30` → `0.0.0.3`) ;
+  - le **router-id** identifie le routeur : à fixer explicitement (sinon plus haute loopback,
+    puis plus haute adresse d'interface) ;
+  - `passive-interface` : le réseau du LAN est annoncé, mais aucun hello n'y est envoyé (pas de
+    voisin à trouver, et personne ne peut s'y faire passer pour un routeur).
+
+  ### Vérifier
+
+  `show ip protocols`, `show ip ospf interface brief`, `show ip ospf neighbor`,
+  `show ip route ospf`. L'état normal d'un voisin est **FULL**.
+
+  ### Pièges fréquents
+
+  - Wildcard erroné : l'interface n'est pas activée, ou dans la mauvaise zone.
+  - Router-id dupliqué entre deux routeurs.
+  - Oublier `passive-interface` côté utilisateurs.
+
+  ### Pour le CCNA
+
+  OSPFv2 en zone unique (configuration, router-id, passive, vérification) est l'un des sujets
+  les plus importants.
+docs:
+  - title: "RFC 2328 — OSPF Version 2"
+    url: https://www.rfc-editor.org/rfc/rfc2328
+  - title: "Wikipédia — Open Shortest Path First"
+    url: https://fr.wikipedia.org/wiki/Open_Shortest_Path_First

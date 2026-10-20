@@ -47,3 +47,66 @@ solution: |
   no vlan 30
   end
   copy running-config startup-config
+cours: |
+  ## Lire avant de modifier
+
+  Reprendre la configuration d'un collègue commence toujours par l'**observation** : on ne
+  corrige que ce qu'on a compris. Les commandes `show` sont sans risque et s'utilisent en mode
+  privilégié (ou avec `do` depuis la configuration).
+
+  | Question                         | Commande                                  |
+  |----------------------------------|-------------------------------------------|
+  | quel est le nom, la config complète ? | `show running-config`                |
+  | quels VLAN existent, quels ports ? | `show vlan brief`                       |
+  | état et VLAN de chaque port      | `show interfaces status`                  |
+  | détail d'un port                 | `show running-config interface fa0/9`     |
+  | différence avec la sauvegarde    | `show startup-config`                     |
+
+  ### Filtrer les sorties
+
+  ```
+  SW1# show running-config | include hostname|vlan
+  SW1# show running-config | section interface FastEthernet0/9
+  SW1# show interfaces status | exclude notconnect
+  SW1# show vlan brief | begin 30
+  ```
+
+  `include`, `exclude`, `begin` et `section` évitent de faire défiler des pages entières.
+
+  ### Corriger (exemple avec d'autres valeurs)
+
+  ```
+  SW1(config)# hostname SW-ATELIER
+  SW-ATELIER(config)# interface fa0/9
+  SW-ATELIER(config-if)# switchport access vlan 40
+  SW-ATELIER(config-if)# exit
+  SW-ATELIER(config)# no vlan 60
+  SW-ATELIER(config)# end
+  SW-ATELIER# copy running-config startup-config
+  ```
+
+  - une nouvelle valeur **remplace** l'ancienne (`hostname`, `switchport access vlan`) ;
+  - `no` supprime un élément (`no vlan 60`) ;
+  - tant qu'on n'a pas sauvegardé, le prochain redémarrage ramène l'ancienne configuration.
+
+  ### Méthode
+
+  1. lire la demande et la configuration actuelle ;
+  2. lister les écarts ;
+  3. corriger un écart à la fois, vérifier avec `show` ;
+  4. sauvegarder et noter ce qui a été fait.
+
+  ### Pièges fréquents
+
+  - Supprimer un VLAN qui contient encore des ports : ils deviennent inactifs.
+  - Corriger sans sauvegarder.
+  - Modifier « au feeling » sans vérifier l'effet.
+
+  ### Pour le CCNA
+
+  Interpréter les sorties `show` pour repérer une erreur est au cœur des questions de dépannage.
+docs:
+  - title: "Wikipédia — Cisco IOS"
+    url: https://fr.wikipedia.org/wiki/Cisco_IOS
+  - title: "Cisco Catalyst 2960-X — guides de configuration"
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html

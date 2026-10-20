@@ -117,3 +117,68 @@ solution: |
   access-class MGMT-ONLY in
   end
   copy running-config startup-config
+cours: |
+  ## La défense en profondeur à l'accès
+
+  La couche **accès** est là où se branchent les utilisateurs... et les attaquants. Un switch
+  d'étage conforme empile plusieurs protections complémentaires :
+
+  | Menace                          | Protection                              |
+  |---------------------------------|-----------------------------------------|
+  | prise libre utilisée            | ports inutilisés éteints, VLAN parking  |
+  | mini-switch, PC pirate, MAC flooding | port-security                      |
+  | switch qui perturbe STP         | PortFast + BPDU Guard                   |
+  | faux serveur DHCP               | DHCP snooping                           |
+  | usurpation ARP                  | inspection ARP dynamique                |
+  | tempête de broadcast            | storm control                           |
+  | négociation de trunk sauvage    | `switchport mode access`, DTP désactivé |
+
+  ### Modèle de port utilisateur (autres valeurs)
+
+  ```
+  interface range gi1/0/1 - 40
+   switchport mode access
+   switchport access vlan 40
+   switchport voice vlan 140
+   spanning-tree portfast
+   spanning-tree bpduguard enable
+   switchport port-security
+   switchport port-security maximum 3
+   switchport port-security violation restrict
+   ip dhcp snooping limit rate 10
+  interface gi1/0/48
+   switchport mode trunk
+   ip dhcp snooping trust
+   ip arp inspection trust
+  ip dhcp snooping
+  ip dhcp snooping vlan 40,140
+  ip arp inspection vlan 40,140
+  ```
+
+  ### Points d'attention
+
+  - les protections fondées sur le DHCP snooping (DAI, IP Source Guard) exigent que l'uplink soit
+    **trusted** ;
+  - un téléphone + un PC = au moins 2 adresses MAC (3 selon les modèles) ;
+  - `errdisable recovery` évite des interventions manuelles pour chaque port coupé ;
+  - une gestion du switch **séparée** (VLAN dédié, SSH, ACL sur les VTY).
+
+  ### Vérifier
+
+  `show port-security`, `show ip dhcp snooping binding`, `show ip arp inspection`,
+  `show spanning-tree summary`, `show interfaces status err-disabled`.
+
+  ### Pièges fréquents
+
+  - Oublier l'uplink en trusted : plus de DHCP pour personne.
+  - Port-security à 1 adresse avec des téléphones IP.
+  - Activer DAI sans DHCP snooping fonctionnel.
+
+  ### Pour le CCNA
+
+  Ce projet couvre l'ensemble des protections de couche 2 du domaine sécurité.
+docs:
+  - title: "Cisco Catalyst 2960-X — guides de configuration"
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html
+  - title: "Wikipédia (EN) — DHCP snooping"
+    url: https://en.wikipedia.org/wiki/DHCP_snooping

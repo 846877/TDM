@@ -1,0 +1,102 @@
+title: NTP authentifié depuis une loopback
+level: intermediaire
+order: 32
+device: router
+hostname: R-DATACENTER
+tags: [ntp, authentification, md5, loopback, heure]
+summary: N'accepter l'heure que de serveurs NTP authentifiés et sourcer les requêtes depuis Loopback0.
+description: |
+  Un audit signale que `R-DATACENTER` accepterait l'heure de n'importe quel serveur se faisant
+  passer pour `10.0.0.10`. Or des journaux mal horodatés rendent toute enquête impossible.
+
+  1. clé NTP `1` en MD5 avec la valeur `Tps-Synchr0` ;
+  2. active l'authentification NTP et déclare la clé `1` comme **de confiance** ;
+  3. serveur `10.0.0.10` avec la clé `1`, **préféré** ; serveur `10.0.0.11` avec la clé `1` ;
+  4. requêtes NTP émises depuis `Loopback0` (les serveurs filtrent sur cette adresse).
+
+  Contrôle avec `show ntp associations` et `show running-config | include ntp`.
+initial: |
+  interface loopback 0
+  ip address 10.255.0.1 255.255.255.255
+  interface g0/0
+  ip address 10.0.0.1 255.255.255.0
+  no shutdown
+checks:
+  - desc: Clé 1 en MD5 de valeur Tps-Synchr0, de confiance, authentification active
+    expr: d.ntp_keys.get(1) == "Tps-Synchr0" and 1 in d.ntp_trusted and d.ntp_authenticate
+  - desc: 10.0.0.10 avec la clé 1 et préféré
+    expr: '"key 1" in d.ntp_server_options.get("10.0.0.10", "") and "prefer" in d.ntp_server_options.get("10.0.0.10", "")'
+  - desc: 10.0.0.11 avec la clé 1
+    expr: '"key 1" in d.ntp_server_options.get("10.0.0.11", "")'
+  - desc: Requêtes NTP sourcées depuis Loopback0
+    expr: d.ntp_source == "Loopback0"
+solution: |
+  configure terminal
+  ntp authentication-key 1 md5 Tps-Synchr0
+  ntp authenticate
+  ntp trusted-key 1
+  ntp server 10.0.0.10 key 1 prefer
+  ntp server 10.0.0.11 key 1
+  ntp source loopback0
+  end
+cours: |
+  ## Pourquoi authentifier NTP ?
+
+  L'heure est le socle de la sécurité : horodatage des journaux, validité des certificats, jetons
+  Kerberos, corrélation d'événements. Un attaquant capable d'envoyer de fausses réponses NTP peut
+  décaler l'horloge d'un routeur pour brouiller les traces ou invalider des certificats.
+  L'authentification ajoute à chaque paquet NTP un **condensé** (MD5 sur IOS classique, SHA sur
+  les versions récentes) calculé avec une clé partagée : seules les réponses signées par la bonne
+  clé sont acceptées.
+
+  ### Les trois commandes indissociables
+
+  ```
+  R1(config)# ntp authentication-key 7 md5 Horl0ge!
+  R1(config)# ntp trusted-key 7
+  R1(config)# ntp authenticate
+  R1(config)# ntp server 192.0.2.123 key 7 prefer
+  R1(config)# ntp server 192.0.2.124 key 7
+  ```
+
+  - `authentication-key` définit la clé (numéro + secret, identique sur le serveur) ;
+  - `trusted-key` la déclare **utilisable** pour authentifier une source ;
+  - `authenticate` **impose** l'authentification : sans elle, les clés sont configurées mais les
+    sources non authentifiées restent acceptées ;
+  - `key 7` sur la ligne `ntp server` indique quelle clé utiliser avec ce serveur.
+
+  `prefer` désigne le serveur favori quand plusieurs sont valides.
+
+  ### La source des requêtes
+
+  ```
+  R1(config)# ntp source loopback0
+  R1# show ntp associations
+    address         ref clock       st   when   poll reach  delay  offset   disp
+  *~192.0.2.123     .GPS.            1     33     64   377  1.204  -0.153  0.441
+   ~192.0.2.124     .GPS.            1     12     64   377  1.512   0.210  0.502
+  R1# show ntp status
+  Clock is synchronized, stratum 2, reference is 192.0.2.123
+  ```
+
+  Une **loopback** ne tombe jamais : l'adresse source reste la même quel que soit le lien emprunté,
+  ce qui simplifie les filtres côté serveur (ACL, pare-feu). `*` marque le serveur de référence,
+  `reach 377` signifie que les 8 dernières requêtes ont abouti.
+
+  ### Pièges fréquents
+
+  - Oublier `ntp trusted-key` : la clé existe mais n'est jamais acceptée, la synchronisation
+    échoue.
+  - Clé différente entre client et serveur (attention aux espaces et à la casse).
+  - La synchronisation prend plusieurs minutes : ne pas conclure trop vite à un échec.
+  - Une loopback non annoncée dans le routage : le serveur ne peut pas répondre.
+
+  ### Pour le CCNA / CCNP ENCOR
+
+  NTP (client, serveur, strates) est au CCNA ; ENCOR ajoute l'authentification et la sécurisation
+  des services d'infrastructure.
+docs:
+  - title: RFC 5905 — Network Time Protocol Version 4
+    url: https://www.rfc-editor.org/rfc/rfc5905
+  - title: Wikipédia — Network Time Protocol
+    url: https://fr.wikipedia.org/wiki/Network_Time_Protocol
