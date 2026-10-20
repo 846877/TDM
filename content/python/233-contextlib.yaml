@@ -264,4 +264,4 @@ docs:
   - title: Module contextlib
     url: https://docs.python.org/fr/3/library/contextlib.html
   - title: Référence — l'instruction with
-    url: https://docs.python.org/fr/3/reference/compound_stmts.html#the-with-statement
+    url: https://docs.python.org/fr/3/reference/compound_stmts.html

@@ -1,0 +1,279 @@
+title: Moteur de règles de pare-feu
+level: expert
+order: 40
+tags: [réseau, sécurité, ipaddress, parsing]
+summary: Analyser des règles, filtrer des paquets au premier match et détecter les règles masquées.
+description: |
+  Une règle s'écrit `action proto source destination ports` :
+
+  - `action` : `allow` ou `deny` ;
+  - `proto` : `tcp`, `udp`, `icmp` ou `any` ;
+  - `source`, `destination` : un réseau CIDR, une adresse seule (équivaut à un `/32` ou un
+    `/128`) ou `any` ;
+  - `ports` : `any`, ou une liste séparée par des virgules de ports (`22`) et de plages
+    (`1024-2048`), entre 1 et 65535. Pour `icmp`, `ports` doit être `any`.
+
+  Utilise `ipaddress`.
+
+  1. `analyser_regle(texte)` renvoie un dictionnaire avec les clés `"action"`, `"proto"`,
+     `"source"`, `"destination"` (objets réseau `ipaddress`, `any` étant
+     `ip_network("0.0.0.0/0")`) et `"ports"` (`None` pour `any`, sinon la liste triée des
+     plages `(debut, fin)` fusionnées si elles se chevauchent ou se touchent). Toute erreur
+     (nombre de champs, valeur inconnue, réseau invalide, port hors limites, plage
+     décroissante, ports avec icmp) lève `ValueError`. On ne traite que l'IPv4.
+  2. `evaluer(regles, paquet, defaut="deny")` : `regles` est une liste de textes, `paquet` un
+     dictionnaire `{"proto": ..., "src": ..., "dst": ..., "port": ...}` (`port` vaut `None`
+     pour l'ICMP). La **première** règle qui correspond décide. Renvoie `(action, indice)`,
+     ou `(defaut, None)` si aucune ne correspond. Une règle avec des ports ne correspond qu'à
+     un paquet dont le port est dans l'une des plages.
+  3. `regles_masquees(regles)` détecte les règles qui ne peuvent **jamais** s'appliquer parce
+     qu'**une seule** règle précédente couvre tout ce qu'elles couvrent (protocole, source,
+     destination et ports). Renvoie une liste de tuples `(indice, indice_masquant, nature)`
+     où `nature` vaut `"redondante"` (même action) ou `"conflit"` (action opposée) ; pour
+     chaque règle masquée, l'indice masquant est le plus petit possible.
+
+  ```python
+  regles = ["allow tcp 10.0.0.0/8 any 22",
+            "deny any any any any"]
+  evaluer(regles, {"proto": "tcp", "src": "10.1.2.3", "dst": "192.168.0.1", "port": 22})
+  # ("allow", 0)
+  regles_masquees(["allow tcp any any 1-1024", "deny tcp 10.0.0.0/8 any 80,443"])
+  # [(1, 0, "conflit")]
+  ```
+starter: |
+  import ipaddress
+
+
+  def analyser_regle(texte):
+      pass
+
+
+  def evaluer(regles, paquet, defaut="deny"):
+      pass
+
+
+  def regles_masquees(regles):
+      pass
+tests: |
+  import ipaddress
+
+  def test_analyser():
+      "analyser_regle"
+      r = solution.analyser_regle("allow tcp 10.0.0.0/8 192.168.1.10 443,80,1000-2000,1500-3000,3001")
+      assert r["action"] == "allow" and r["proto"] == "tcp"
+      assert r["source"] == ipaddress.ip_network("10.0.0.0/8")
+      assert r["destination"] == ipaddress.ip_network("192.168.1.10/32")
+      assert r["ports"] == [(80, 80), (443, 443), (1000, 3001)], r["ports"]
+      r = solution.analyser_regle("deny icmp any any any")
+      assert r["source"] == ipaddress.ip_network("0.0.0.0/0") and r["ports"] is None
+
+  def test_analyser_erreurs():
+      "analyser_regle : erreurs"
+      for mauvais in ["allow tcp any any", "permit tcp any any 22", "allow gre any any any",
+                      "allow tcp 10.0.0.300/8 any 22", "allow tcp 10.0.0.1/8 any 22", "allow tcp any any 0",
+                      "allow tcp any any 70000", "allow tcp any any 30-20", "allow icmp any any 22",
+                      "allow tcp any any 22,,23", "allow tcp any any x"]:
+          try:
+              solution.analyser_regle(mauvais)
+          except ValueError:
+              continue
+          raise AssertionError(f"{mauvais!r} devrait lever ValueError")
+
+  REGLES = [
+      "allow tcp 10.0.0.0/8 any 22",
+      "deny tcp any 192.168.1.0/24 any",
+      "allow tcp any any 80,443",
+      "allow udp any 10.0.0.53 53",
+      "allow icmp 10.0.0.0/8 any any",
+  ]
+
+  def paquet(proto, src, dst, port=None):
+      return {"proto": proto, "src": src, "dst": dst, "port": port}
+
+  def test_evaluer():
+      "evaluer : premier match"
+      e = solution.evaluer
+      assert e(REGLES, paquet("tcp", "10.1.2.3", "192.168.1.5", 22)) == ("allow", 0)
+      assert e(REGLES, paquet("tcp", "8.8.8.8", "192.168.1.5", 80)) == ("deny", 1)
+      assert e(REGLES, paquet("tcp", "8.8.8.8", "172.16.0.1", 443)) == ("allow", 2)
+      assert e(REGLES, paquet("udp", "1.2.3.4", "10.0.0.53", 53)) == ("allow", 3)
+      assert e(REGLES, paquet("udp", "1.2.3.4", "10.0.0.53", 54)) == ("deny", None)
+      assert e(REGLES, paquet("icmp", "10.9.9.9", "1.1.1.1")) == ("allow", 4)
+      assert e(REGLES, paquet("icmp", "11.0.0.1", "1.1.1.1")) == ("deny", None)
+      assert e(REGLES, paquet("icmp", "11.0.0.1", "1.1.1.1"), defaut="allow") == ("allow", None)
+      assert e([], paquet("tcp", "1.1.1.1", "2.2.2.2", 1)) == ("deny", None)
+
+  def test_evaluer_any():
+      "evaluer : protocole any"
+      r = ["deny any 10.66.0.0/16 any any", "allow any any any any"]
+      assert solution.evaluer(r, paquet("icmp", "10.66.1.1", "1.1.1.1")) == ("deny", 0)
+      assert solution.evaluer(r, paquet("udp", "10.67.1.1", "1.1.1.1", 123)) == ("allow", 1)
+      r = ["allow any any any 22"]
+      assert solution.evaluer(r, paquet("icmp", "1.1.1.1", "2.2.2.2")) == ("deny", None), \
+          "une règle avec ports ne correspond pas à l'ICMP"
+
+  def test_masquees():
+      "regles_masquees"
+      r = ["allow tcp any any 1-1024",
+           "deny tcp 10.0.0.0/8 any 80,443",
+           "allow tcp 10.0.0.0/8 192.168.0.0/16 22",
+           "allow udp any any 53",
+           "allow any 10.0.0.0/8 any any",
+           "deny icmp 10.1.0.0/16 any any",
+           "allow tcp 10.0.0.0/8 any 1000-2000"]
+      assert solution.regles_masquees(r) == [(1, 0, "conflit"), (2, 0, "redondante"), (5, 4, "conflit"), (6, 4, "redondante")], \
+          solution.regles_masquees(r)
+
+  def test_masquees_ports():
+      "regles_masquees : couverture des ports"
+      r = ["allow tcp any any 1-100", "allow tcp any any 50-150", "allow tcp any any 60-90,95"]
+      assert solution.regles_masquees(r) == [(2, 0, "redondante")]
+      r = ["allow tcp any any 1-100", "allow tcp any any 101-200", "deny tcp any any 50-150"]
+      assert solution.regles_masquees(r) == [], "masquée par deux règles, pas par une seule"
+      assert solution.regles_masquees(["allow tcp any any 22", "allow any any any any"]) == []
+solution: |
+  import ipaddress
+
+  _TOUT = ipaddress.ip_network("0.0.0.0/0")
+
+
+  def _reseau(texte):
+      if texte == "any":
+          return _TOUT
+      reseau = ipaddress.ip_network(texte)          # ValueError si invalide ou bits d'hôte
+      if reseau.version != 4:
+          raise ValueError("IPv4 uniquement")
+      return reseau
+
+
+  def _ports(texte):
+      if texte == "any":
+          return None
+      plages = []
+      for morceau in texte.split(","):
+          debut, _, fin = morceau.partition("-")
+          if not debut.isdigit() or (fin and not fin.isdigit()) or (_ and not fin):
+              raise ValueError(f"port invalide : {morceau!r}")
+          debut, fin = int(debut), int(fin or debut)
+          if not 1 <= debut <= fin <= 65535:
+              raise ValueError(f"plage invalide : {morceau!r}")
+          plages.append((debut, fin))
+      plages.sort()
+      fusion = [plages[0]]
+      for debut, fin in plages[1:]:
+          if debut <= fusion[-1][1] + 1:
+              fusion[-1] = (fusion[-1][0], max(fusion[-1][1], fin))
+          else:
+              fusion.append((debut, fin))
+      return fusion
+
+
+  def analyser_regle(texte):
+      champs = texte.split()
+      if len(champs) != 5:
+          raise ValueError("5 champs attendus")
+      action, proto, source, destination, ports = champs
+      if action not in ("allow", "deny"):
+          raise ValueError(f"action inconnue : {action}")
+      if proto not in ("tcp", "udp", "icmp", "any"):
+          raise ValueError(f"protocole inconnu : {proto}")
+      plages = _ports(ports)
+      if proto == "icmp" and plages is not None:
+          raise ValueError("pas de ports pour icmp")
+      return {"action": action, "proto": proto, "source": _reseau(source),
+              "destination": _reseau(destination), "ports": plages}
+
+
+  def _correspond(regle, paquet):
+      if regle["proto"] != "any" and regle["proto"] != paquet["proto"]:
+          return False
+      if ipaddress.ip_address(paquet["src"]) not in regle["source"]:
+          return False
+      if ipaddress.ip_address(paquet["dst"]) not in regle["destination"]:
+          return False
+      if regle["ports"] is None:
+          return True
+      port = paquet.get("port")
+      return port is not None and any(d <= port <= f for d, f in regle["ports"])
+
+
+  def evaluer(regles, paquet, defaut="deny"):
+      for i, texte in enumerate(regles):
+          regle = analyser_regle(texte)
+          if _correspond(regle, paquet):
+              return regle["action"], i
+      return defaut, None
+
+
+  def _couvre(a, b):
+      """Vrai si la règle a couvre tout ce que couvre la règle b."""
+      if a["proto"] != "any" and a["proto"] != b["proto"]:
+          return False
+      if not (b["source"].subnet_of(a["source"]) and b["destination"].subnet_of(a["destination"])):
+          return False
+      if a["ports"] is None:
+          return True
+      if b["ports"] is None:
+          return False
+      return all(any(da <= db and fb <= fa for da, fa in a["ports"]) for db, fb in b["ports"])
+
+
+  def regles_masquees(regles):
+      analysees = [analyser_regle(r) for r in regles]
+      resultat = []
+      for i, regle in enumerate(analysees):
+          for j in range(i):
+              if _couvre(analysees[j], regle):
+                  nature = "redondante" if analysees[j]["action"] == regle["action"] else "conflit"
+                  resultat.append((i, j, nature))
+                  break
+      return resultat
+cours: |
+  ## Comment raisonne un pare-feu
+
+  iptables/nftables, les ACL Cisco, les groupes de sécurité cloud ou pfSense évaluent les
+  règles **dans l'ordre** : la **première** qui correspond décide (*first match*). Si aucune
+  ne correspond, une **politique par défaut** s'applique, idéalement `deny` (tout ce qui n'est
+  pas explicitement autorisé est interdit). L'ordre des règles fait donc partie de la
+  sécurité : une règle large placée trop tôt neutralise les suivantes.
+
+  ## Modéliser une règle
+
+  Chaque critère devient un objet facile à tester :
+
+  - les adresses : des réseaux `ipaddress` (`any` = `0.0.0.0/0`), avec `ip in reseau` pour un
+    paquet et `a.subnet_of(b)` pour comparer deux règles ;
+  - les ports : une liste triée de plages **fusionnées** (`80,443,1000-2000`). Normaliser à
+    l'analyse simplifie toutes les comparaisons ultérieures ;
+  - le protocole : `any` couvre tous les autres.
+
+  Valider strictement à l'analyse (port 0, plage inversée, `10.0.0.1/8` avec des bits d'hôte)
+  évite des règles qui ne font pas ce que l'administrateur croit.
+
+  ## Les règles masquées (*shadowing*)
+
+  Une règle est **masquée** si une règle précédente couvre déjà tout son trafic : elle ne
+  s'appliquera jamais. Deux cas :
+
+  - **redondante** (même action) : inutile, elle encombre et ralentit ;
+  - **conflit** (action opposée) : bien plus grave, l'intention de l'administrateur (« bloquer
+    le web pour 10.0.0.0/8 ») est silencieusement ignorée.
+
+  Tester la couverture critère par critère : protocole, source, destination, et chaque plage
+  de ports de la règle masquée incluse dans **une** plage de la règle masquante (les plages
+  étant fusionnées, une plage ne peut pas être couverte par la réunion de deux plages
+  distinctes de la même règle). Détecter le masquage par une **combinaison** de plusieurs
+  règles est un problème plus difficile (soustraction d'ensembles multidimensionnels),
+  traité par les outils d'audit professionnels.
+
+  ## Performances
+
+  Un vrai pare-feu ne réanalyse pas ses règles à chaque paquet : elles sont compilées une fois
+  (arbres de décision, tables de hachage par port, ensembles nftables). Ici, analyser à chaque
+  appel reste acceptable pour quelques dizaines de règles ; en production, on mettrait le
+  résultat en cache.
+docs:
+  - title: Module ipaddress
+    url: https://docs.python.org/fr/3/library/ipaddress.html
+  - title: HOWTO — introduction au module ipaddress
+    url: https://docs.python.org/fr/3/howto/ipaddress.html

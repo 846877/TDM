@@ -1,0 +1,209 @@
+title: Composantes fortement connexes (Tarjan itératif)
+level: expert
+order: 38
+tags: [graphes, algorithmes, pile, dépendances]
+summary: Trouver les cycles de dépendances d'un très grand graphe sans récursion.
+description: |
+  Un graphe orienté est un dictionnaire `{noeud: [successeurs]}` ; un nœud peut n'apparaître
+  que comme successeur. Deux nœuds sont dans la même **composante fortement connexe** (CFC)
+  si chacun peut atteindre l'autre.
+
+  1. `composantes(graphe)` renvoie la liste des CFC. Chaque composante est une liste
+     **triée** de nœuds et la liste des composantes est triée (les nœuds sont comparables).
+     En O(V + E), **sans récursion** : un graphe en chaîne de 200 000 nœuds doit fonctionner
+     (la récursion Python s'arrête vers 1000 niveaux).
+  2. `cycles_de_dependances(graphe)` : on modélise des services (`{"web": ["db", "cache"]}`
+     signifie que `web` dépend de `db` et `cache`). Renvoie les composantes qui forment un
+     cycle : celles de plus d'un nœud et celles d'un seul nœud qui dépend de lui-même. Même
+     format que `composantes`.
+  3. `condenser(graphe)` renvoie le **graphe des composantes** : un dictionnaire
+     `{composante: successeurs}` où chaque composante est représentée par un `tuple` trié de
+     ses nœuds, et ses successeurs par un ensemble de tels tuples (sans boucle sur
+     elle-même). Ce graphe est toujours acyclique.
+
+  ```python
+  g = {"a": ["b"], "b": ["c"], "c": ["a", "d"], "d": ["e"], "e": ["d"], "f": []}
+  composantes(g)        # [["a", "b", "c"], ["d", "e"], ["f"]]
+  condenser(g)[("a", "b", "c")]   # {("d", "e")}
+  ```
+starter: |
+  def composantes(graphe):
+      pass
+
+
+  def cycles_de_dependances(graphe):
+      pass
+
+
+  def condenser(graphe):
+      pass
+tests: |
+  import random
+  import sys
+
+  def brute(graphe):
+      noeuds = set(graphe) | {s for v in graphe.values() for s in v}
+      def accessibles(n):
+          vus, pile = {n}, [n]
+          while pile:
+              for s in graphe.get(pile.pop(), []):
+                  if s not in vus:
+                      vus.add(s); pile.append(s)
+          return vus
+      acc = {n: accessibles(n) for n in noeuds}
+      cfc = {frozenset(m for m in acc[n] if n in acc[m]) for n in noeuds}
+      return sorted(sorted(c) for c in cfc)
+
+  G = {"a": ["b"], "b": ["c"], "c": ["a", "d"], "d": ["e"], "e": ["d"], "f": []}
+
+  def test_exemple():
+      "composantes : exemple"
+      assert solution.composantes(G) == [["a", "b", "c"], ["d", "e"], ["f"]]
+      assert solution.composantes({}) == []
+      assert solution.composantes({1: [2]}) == [[1], [2]]
+
+  def test_aleatoire():
+      "composantes contre force brute"
+      rng = random.Random(11)
+      for _ in range(60):
+          n = rng.randint(1, 25)
+          g = {i: [rng.randrange(n) for _ in range(rng.randint(0, 3))] for i in range(n) if rng.random() < 0.9}
+          assert solution.composantes(g) == brute(g), g
+
+  def test_sans_recursion():
+      "composantes sur une chaîne de 200 000 nœuds"
+      n = 200_000
+      chaine = {i: [i + 1] for i in range(n - 1)}
+      r = solution.composantes(chaine)
+      assert len(r) == n
+      boucle = dict(chaine)
+      boucle[n - 1] = [0]
+      r = solution.composantes(boucle)
+      assert len(r) == 1 and len(r[0]) == n
+
+  def test_cycles():
+      "cycles_de_dependances"
+      services = {"web": ["db", "cache"], "db": ["stockage"], "stockage": ["db"], "cache": [],
+                  "cron": ["cron"], "api": ["web"]}
+      assert solution.cycles_de_dependances(services) == [["cron"], ["db", "stockage"]]
+      assert solution.cycles_de_dependances({"a": ["b"], "b": []}) == []
+
+  def test_condenser():
+      "condenser"
+      c = solution.condenser(G)
+      assert c == {("a", "b", "c"): {("d", "e")}, ("d", "e"): set(), ("f",): set()}, c
+      c = solution.condenser({1: [1, 2], 2: [3], 3: [2, 4]})
+      assert c == {(1,): {(2, 3)}, (2, 3): {(4,)}, (4,): set()}, c
+solution: |
+  def composantes(graphe):
+      noeuds = list(graphe)
+      for successeurs in graphe.values():
+          noeuds.extend(s for s in successeurs if s not in graphe)
+      index, bas = {}, {}
+      sur_pile = set()
+      pile = []
+      resultat = []
+      compteur = 0
+      for depart in noeuds:
+          if depart in index:
+              continue
+          # pile d'appels simulée : (nœud, itérateur sur ses successeurs)
+          appels = [(depart, iter(graphe.get(depart, ())))]
+          index[depart] = bas[depart] = compteur
+          compteur += 1
+          pile.append(depart)
+          sur_pile.add(depart)
+          while appels:
+              v, successeurs = appels[-1]
+              avance = False
+              for w in successeurs:
+                  if w not in index:
+                      index[w] = bas[w] = compteur
+                      compteur += 1
+                      pile.append(w)
+                      sur_pile.add(w)
+                      appels.append((w, iter(graphe.get(w, ()))))
+                      avance = True
+                      break
+                  if w in sur_pile:
+                      bas[v] = min(bas[v], index[w])
+              if avance:
+                  continue
+              appels.pop()
+              if appels:
+                  parent = appels[-1][0]
+                  bas[parent] = min(bas[parent], bas[v])
+              if bas[v] == index[v]:
+                  composante = []
+                  while True:
+                      w = pile.pop()
+                      sur_pile.discard(w)
+                      composante.append(w)
+                      if w == v:
+                          break
+                  resultat.append(sorted(composante))
+      return sorted(resultat)
+
+
+  def cycles_de_dependances(graphe):
+      return [c for c in composantes(graphe)
+              if len(c) > 1 or c[0] in graphe.get(c[0], ())]
+
+
+  def condenser(graphe):
+      cfc = [tuple(c) for c in composantes(graphe)]
+      appartient = {n: c for c in cfc for n in c}
+      resultat = {c: set() for c in cfc}
+      for v, successeurs in graphe.items():
+          for w in successeurs:
+              if appartient[v] != appartient[w]:
+                  resultat[appartient[v]].add(appartient[w])
+      return resultat
+cours: |
+  ## Composantes fortement connexes
+
+  Dans un graphe orienté, une CFC est un ensemble maximal de nœuds mutuellement accessibles.
+  Contracter chaque CFC en un seul nœud donne un graphe **acyclique** (le graphe condensé) :
+  c'est la structure qui révèle les **cycles de dépendances** entre paquets, services systemd,
+  modules d'un projet ou tables d'une base.
+
+  ## L'algorithme de Tarjan
+
+  Un seul parcours en profondeur suffit. Chaque nœud reçoit :
+
+  - `index[v]` : son numéro d'ordre de découverte ;
+  - `bas[v]` (*lowlink*) : le plus petit index atteignable depuis `v` en suivant l'arbre de
+    parcours puis au plus un arc vers un nœud encore **sur la pile**.
+
+  Les nœuds découverts sont empilés. Quand on a fini d'explorer `v` et que
+  `bas[v] == index[v]`, `v` est la racine d'une CFC : on dépile jusqu'à `v`, et ces nœuds
+  forment la composante. Complexité O(V + E).
+
+  Le détail qui piège : un arc vers un nœud déjà visité mais qui **n'est plus sur la pile**
+  (il appartient à une CFC déjà terminée) ne doit pas modifier `bas`.
+
+  ## Dérécursiver un parcours en profondeur
+
+  La version récursive est courte mais explose (`RecursionError`) au-delà d'environ 1000
+  niveaux : une simple chaîne de dépendances suffit. On remplace la pile d'appels par une
+  **pile explicite** de couples `(nœud, itérateur sur ses successeurs)` :
+
+  - tant que l'itérateur du sommet fournit un successeur non visité, on l'**empile**
+    (équivalent de l'appel récursif) et on s'arrête là (`break`) ;
+  - quand l'itérateur est épuisé, on **dépile** (le retour de fonction) et on met à jour
+    `bas` du parent, ce que la version récursive faisait après l'appel.
+
+  Garder l'itérateur permet de reprendre exactement là où l'on s'était arrêté, sans
+  re-parcourir les successeurs déjà traités.
+
+  ## Alternatives
+
+  L'algorithme de Kosaraju fait deux parcours (sur le graphe puis sur le graphe transposé) :
+  plus simple à comprendre, un peu plus lent. Pour un graphe de dépendances, le tri
+  topologique échoue s'il y a un cycle ; Tarjan dit en plus **où** sont les cycles, ce qui est
+  bien plus utile pour un message d'erreur.
+docs:
+  - title: Fonctions natives — iter et next
+    url: https://docs.python.org/fr/3/library/functions.html
+  - title: Module sys (limite de récursion)
+    url: https://docs.python.org/fr/3/library/sys.html
