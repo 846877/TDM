@@ -689,3 +689,34 @@ def test_qos_mqc_et_copp():
     assert session.prompt.endswith("(config-pmap-c)#")
     session.execute("exit")
     assert session.prompt.endswith("(config-pmap)#")
+
+
+@pytest.mark.parametrize("exercise", EXERCISES, ids=[e["id"] for e in EXERCISES])
+def test_cours_et_documentation(exercise):
+    """Chaque exercice réseau a un vrai cours et 1 à 3 liens de documentation."""
+    words = len(exercise.get("cours", "").split())
+    assert 180 <= words <= 650, words
+    docs = exercise.get("docs", [])
+    assert 1 <= len(docs) <= 3 and all(d["url"].startswith("https://") and d["title"] for d in docs)
+
+
+def test_dtp_dynamique_et_sources_en_deux_mots():
+    device = _config("switch", ["int g0/1", "switchport mode dynamic auto", "int g0/2",
+                                "switchport mode dynamic desirable", "exit", "interface loopback 0",
+                                "ip address 10.255.0.9 255.255.255.255", "exit", "ntp source loopback 0",
+                                "logging source-interface Loopback 0", "ip ssh source-interface lo0"])
+    assert device.intf("g0/1").mode is None and device.intf("g0/2").mode is None
+    assert device.ntp_source == device.logging_source == device.ssh_source == "Loopback0"
+    session = apply_commands(device, ["conf t", "int g0/1"])
+    assert is_error(session.execute("switchport mode dynamic toujours"))
+
+
+def test_negation_sans_valeur_et_clear():
+    device = _config("router", ["int g0/1", "ip ospf hello-interval 30", "ip ospf cost 50",
+                                "no ip ospf hello-interval", "no ip ospf cost"])
+    assert device.intf("g0/1").ospf_hello is None and device.intf("g0/1").ospf_cost is None
+    session = apply_commands(device, ["conf t", "int g0/1"])
+    assert is_error(session.execute("ip ospf hello-interval"))  # sans « no », la valeur reste exigée
+    session = apply_commands(_config("router", ["router ospf 1"]), [])
+    assert "Reset ALL OSPF" in session.execute("clear ip ospf process")
+    assert is_error(session.execute("clear ip bgp *"))  # BGP non configuré

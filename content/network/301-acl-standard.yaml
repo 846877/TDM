@@ -40,3 +40,59 @@ solution: |
   interface g0/1
   ip access-group 10 out
   end
+cours: |
+  ## Le principe d'une ACL
+
+  Une **liste de contrôle d'accès** (ACL) est une suite ordonnée de règles `permit` / `deny`.
+  Appliquée à une interface, dans un sens (`in` ou `out`), elle examine chaque paquet :
+
+  1. les règles sont testées **dans l'ordre** ;
+  2. la **première** qui correspond décide, les suivantes sont ignorées ;
+  3. si aucune ne correspond, le paquet est refusé par le **deny implicite** final (invisible
+     dans la configuration).
+
+  Une ACL **standard** (numéros 1-99 et 1300-1999) ne regarde que l'adresse **source**.
+
+  ### Masque générique (wildcard)
+
+  Un bit 0 = « doit correspondre », un bit 1 = « indifférent ». C'est l'inverse du masque de
+  sous-réseau : `/24` → `0.0.0.255`, `/26` → `0.0.0.63`. Raccourcis : `host 10.1.1.5` (=
+  `0.0.0.0`) et `any` (= `0.0.0.0 255.255.255.255`).
+
+  ### Exemple (autres valeurs)
+
+  ```
+  R1(config)# access-list 15 permit 172.16.40.0 0.0.0.255
+  R1(config)# access-list 15 permit host 172.16.50.12
+  R1(config)# access-list 15 deny any
+  R1(config)# interface gi0/2
+  R1(config-if)# ip access-group 15 out
+  R1# show access-lists 15
+  Standard IP access list 15
+      10 permit 172.16.40.0, wildcard bits 0.0.0.255 (85 matches)
+      20 permit 172.16.50.12 (4 matches)
+      30 deny   any (17 matches)
+  R1# show ip interface gi0/2 | include access list
+  ```
+
+  ### Où placer une ACL standard ?
+
+  Comme elle ne connaît pas la destination, une ACL standard se place **près de la
+  destination** : appliquée trop près de la source, elle bloquerait aussi l'accès à d'autres
+  réseaux. Une seule ACL par interface, par sens et par protocole.
+
+  ### Pièges fréquents
+
+  - Oublier qu'il y a un deny implicite : une ACL qui ne contient que des `deny` bloque tout.
+  - Mauvais ordre : un `permit any` en tête rend les règles suivantes inutiles.
+  - Appliquer l'ACL dans le mauvais sens (`in`/`out`).
+  - `no access-list 15` supprime **toute** la liste numérotée.
+
+  ### Pour le CCNA
+
+  Écrire, placer et vérifier une ACL standard est un savoir-faire central de l'examen.
+docs:
+  - title: "Cisco — Configure Commonly Used IP ACLs"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/access-lists/26448-ACLsamples.html
+  - title: "Wikipédia — Liste de contrôle d'accès"
+    url: https://fr.wikipedia.org/wiki/Liste_de_contr%C3%B4le_d%27acc%C3%A8s

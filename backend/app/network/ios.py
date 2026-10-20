@@ -3076,9 +3076,8 @@ class Session:
                 if not 1 <= vid <= 4094:
                     raise CommandError(INVALID)
                 self.device.interfaces[canonical] = Interface(canonical, shutdown=False)
-            elif canonical.startswith("Loopback"):
-                self.device.interfaces[canonical] = Interface(canonical, shutdown=False)
-            elif canonical.startswith("Tunnel") and canonical[6:].isdigit() and self.device.kind == "router":
+            elif canonical.startswith("Loopback") or (
+                    canonical.startswith("Tunnel") and canonical[6:].isdigit() and self.device.kind == "router"):
                 self.device.interfaces[canonical] = Interface(canonical, shutdown=False)
             elif canonical.startswith("Port-channel") and canonical[12:].isdigit() and 1 <= int(canonical[12:]) <= 48:
                 self._create_port_channel(int(canonical[12:]))
@@ -5178,8 +5177,8 @@ class Session:
     def show_archive(self, args, negate):
         a = self.device.archive
         lines = [f"The maximum archive configurations allowed is {a.get('maximum', 10)}.",
-                 f"The next archive file will be named {a.get('path', '(path non défini)')}-"
-                 f"{len(self.device.archive_copies) + 1}", " Archive #  Name"]
+                 (f"The next archive file will be named {a.get('path', '(path non défini)')}-"
+                  f"{len(self.device.archive_copies) + 1}"), " Archive #  Name"]
         lines += [f"   {n}       {name}" for n, name in enumerate(self.device.archive_copies, 1)]
         return "\n".join(lines)
 
@@ -5201,8 +5200,8 @@ class Session:
         d = self.device
         if d.kind != "switch":
             raise CommandError(INVALID)
-        lines = [f"Name      [{d.mst_name or ''}]", f"Revision  {d.mst_revision}     "
-                 f"Instances configured {len(d.mst_instances) + 1}", "",
+        lines = [f"Name      [{d.mst_name or ''}]", (f"Revision  {d.mst_revision}     "
+                                                    f"Instances configured {len(d.mst_instances) + 1}"), "",
                  "Instance  Vlans mapped", "--------  ---------------------------------------------------------------------"]
         mapped = set().union(*d.mst_instances.values()) if d.mst_instances else set()
         lines.append(f"0         {format_vlan_list(set(range(1, 4095)) - mapped)}")

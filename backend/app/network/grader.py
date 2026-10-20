@@ -6,8 +6,15 @@ import secrets
 import time
 from typing import Any
 
-from .ios import (Device, Session, apply_commands, expand_range, mask_to_prefix, normalize_iface,
-                  parse_vlan_list)
+from .ios import (
+    Device,
+    Session,
+    apply_commands,
+    expand_range,
+    mask_to_prefix,
+    normalize_iface,
+    parse_vlan_list,
+)
 
 SESSION_TTL = 6 * 3600
 MAX_SESSIONS = 500

@@ -91,3 +91,68 @@ solution: |
   ntp server 10.0.0.10
   end
   copy running-config startup-config
+cours: |
+  ## Ouvrir un site en double pile
+
+  La **double pile** (*dual stack*) fait fonctionner IPv4 et IPv6 **en parallèle** sur les mêmes
+  interfaces : chaque interface porte une adresse de chaque famille, et chaque protocole a sa
+  propre table de routage. C'est la stratégie de transition la plus répandue.
+
+  ### Les briques du routeur de site (autres valeurs)
+
+  ```
+  ipv6 unicast-routing
+  interface gi0/0
+   no shutdown
+  interface gi0/0.40
+   encapsulation dot1Q 40
+   ip address 172.16.140.1 255.255.255.0
+   ipv6 address 2001:db8:c:40::1/64
+  interface gi0/1
+   ip address 10.0.0.22 255.255.255.252
+   ipv6 address 2001:db8:c:ff::2/64
+  router eigrp 200
+   network 172.16.140.0 0.0.0.255
+   network 10.0.0.20 0.0.0.3
+   passive-interface gi0/0.40
+  ```
+
+  ### Router IPv6 avec EIGRP
+
+  EIGRP pour IPv6 se configure soit en mode classique (`ipv6 router eigrp 200` puis
+  `ipv6 eigrp 200` sur les interfaces), soit en **mode nommé**, qui regroupe les deux familles :
+
+  ```
+  router eigrp SITES
+   address-family ipv4 unicast autonomous-system 200
+    network 172.16.140.0 0.0.0.255
+   address-family ipv6 unicast autonomous-system 200
+    af-interface gi0/0.40
+     passive-interface
+  ```
+
+  En IPv6, EIGRP est activé **par interface** (pas de `network`) et utilise les adresses
+  link-local comme saut suivant ; le router-id reste une valeur sur 32 bits.
+
+  ### Vérifier les deux piles
+
+  - `show ip interface brief` et `show ipv6 interface brief` ;
+  - `show ip eigrp neighbors` et `show ipv6 eigrp neighbors` ;
+  - `show ip route eigrp` et `show ipv6 route eigrp` ;
+  - `ping` et `ping ipv6` vers le siège.
+
+  ### Pièges fréquents
+
+  - Oublier `ipv6 unicast-routing`.
+  - Configurer IPv4 parfaitement et oublier l'activation d'EIGRP IPv6 sur une interface.
+  - Sous-interfaces sans `encapsulation dot1Q` : pas d'adresse possible.
+
+  ### Pour le CCNA / CCNP ENCOR
+
+  L'adressage double pile est au CCNA ; EIGRP (classique et nommé) pour IPv4 et IPv6 est au
+  programme d'ENCOR.
+docs:
+  - title: "Cisco — Enhanced Interior Gateway Routing Protocol (EIGRP)"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/16406-eigrp-toc.html
+  - title: "Wikipédia — IPv6"
+    url: https://fr.wikipedia.org/wiki/IPv6
