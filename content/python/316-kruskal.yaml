@@ -1916,3 +1916,51 @@ solution: |
       print(f"aretes: {utilisees}")
   else:
       print(f"impossible: {composantes} composantes")
+cours: |
+  ## Arbre couvrant minimal
+
+  Dans un graphe non orienté pondéré et connexe, un **arbre couvrant** relie tous les sommets
+  sans cycle, avec exactement n − 1 arêtes. Celui de poids total minimal répond à des
+  questions très concrètes : câbler des bâtiments au moindre coût, concevoir un réseau
+  électrique… Le protocole **Spanning Tree** (STP) des switches calcule lui aussi un arbre
+  couvrant pour supprimer les boucles de niveau 2 (en minimisant le coût vers le pont racine).
+
+  ## Kruskal : un glouton qui marche
+
+  1. Trier les arêtes par poids croissant.
+  2. Parcourir les arêtes : prendre l'arête si elle relie **deux composantes différentes**,
+     sinon l'ignorer (elle créerait un cycle).
+  3. S'arrêter quand on a n − 1 arêtes.
+
+  Contrairement au rendu de monnaie, ce glouton est **prouvé optimal** (propriété de coupe :
+  l'arête la plus légère qui traverse une coupe appartient à un arbre minimal). Les poids
+  négatifs ne posent aucun problème.
+
+  ## Détecter les cycles : Union-Find
+
+  « Les deux extrémités sont-elles déjà reliées ? » est exactement la question de
+  `trouver(u) == trouver(v)`. On unit après avoir pris l'arête. Les boucles `u u w` sont
+  automatiquement ignorées (u est déjà relié à lui-même), et pour des arêtes multiples
+  entre deux villes, le tri garantit qu'on examine la moins chère en premier.
+
+  ## Graphe non connexe
+
+  Si toutes les arêtes ont été examinées sans atteindre n − 1 arêtes, le graphe n'est pas
+  connexe : on obtient une **forêt** couvrante. Le nombre de composantes est le nombre de
+  groupes restants dans l'Union-Find (n moins le nombre d'unions réussies).
+
+  ## Complexité
+
+  O(E log E) pour le tri, puis quasi O(E) pour les unions. L'alternative est l'algorithme de
+  **Prim** (croissance d'un arbre depuis un sommet avec un tas), plus adapté aux graphes
+  denses.
+
+  ## Lecture
+
+  `sys.stdin.read().split()` puis un itérateur (`next(jetons)`) permet de lire les nombres
+  sans se soucier des lignes.
+docs:
+  - title: Wikipédia — Algorithme de Kruskal
+    url: https://fr.wikipedia.org/wiki/Algorithme_de_Kruskal
+  - title: Wikipédia — Arbre couvrant de poids minimal
+    url: https://fr.wikipedia.org/wiki/Arbre_couvrant_de_poids_minimal

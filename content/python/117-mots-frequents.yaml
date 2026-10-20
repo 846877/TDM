@@ -70,3 +70,56 @@ solution: |
   classement = sorted(compteur.items(), key=lambda p: (-p[1], p[0]))
   for mot, nombre in classement[:k]:
       print(f"{mot} : {nombre}")
+cours: |
+  ## `collections.Counter`
+
+  Un `Counter` est un dictionnaire spécialisé pour compter :
+
+  ```python
+  from collections import Counter
+  c = Counter(["GET", "POST", "GET", "GET"])
+  c["GET"]            # 3
+  c["DELETE"]         # 0 (pas de KeyError)
+  c.most_common(1)    # [("GET", 3)]
+  c.update(["POST"])  # ajoute des occurrences
+  ```
+
+  Deux compteurs s'additionnent (`c1 + c2`) et se soustraient.
+
+  ## `most_common` et les égalités
+
+  `most_common(k)` trie par fréquence décroissante, mais en cas d'égalité il garde l'ordre
+  de **première apparition**, pas l'ordre alphabétique. Quand l'énoncé impose un
+  départage, trie toi-même avec une clé tuple : le **signe moins** sur le compte inverse
+  l'ordre de ce seul critère, tandis que le mot reste trié en ordre croissant.
+
+  Ensuite, une tranche `[:k]` garde les `k` premiers ; elle fonctionne même si la liste est
+  plus courte.
+
+  ## Extraire des mots avec une regex
+
+  `re.findall(motif, texte)` renvoie toutes les correspondances. Dans `[^\W\d_]+` :
+
+  - `\w` = caractère de mot (lettre, chiffre, `_`), Unicode par défaut en Python 3 ;
+  - `[^\W\d_]` = « ni non-mot, ni chiffre, ni underscore » = une **lettre**, accents
+    compris ;
+  - `+` = une ou plusieurs fois.
+
+  C'est plus robuste que `split()` : la ponctuation et les apostrophes deviennent des
+  séparateurs naturellement.
+
+  ## Lire la première ligne à part
+
+  `sys.stdin.readline()` lit une seule ligne ; `sys.stdin.read()` lit ensuite **tout le
+  reste**. Pense à mettre le texte en minuscules avant de compter.
+
+  ## Cas d'usage
+
+  C'est exactement ce qu'on fait pour trouver les IP les plus actives dans un log, les URL
+  les plus demandées ou les erreurs les plus fréquentes : extraire, normaliser, compter,
+  trier.
+docs:
+  - title: collections.Counter
+    url: https://docs.python.org/fr/3/library/collections.html#collections.Counter
+  - title: Module re (findall)
+    url: https://docs.python.org/fr/3/library/re.html

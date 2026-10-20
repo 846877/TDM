@@ -72,3 +72,56 @@ solution: |
 
       def __len__(self):
           return len(self.donnees)
+cours: |
+  ## Politique d'éviction LRU
+
+  Un cache a une capacité limitée. Quand il est plein, il faut choisir qui sortir. LRU
+  (*Least Recently Used*) évince l'élément utilisé **le moins récemment** : on parie que ce
+  qui a servi récemment resservira bientôt (localité temporelle). C'est la politique des
+  caches de processeurs, des caches disque, de `functools.lru_cache`, de Redis
+  (`allkeys-lru`)…
+
+  ## Les opérations et leur coût
+
+  Il faut à la fois :
+
+  - retrouver une clé en O(1) → un **dictionnaire** ;
+  - connaître l'ordre d'utilisation et déplacer un élément en tête en O(1) → une structure
+    **ordonnée** modifiable n'importe où.
+
+  Une liste Python ne convient pas pour l'ordre : retirer un élément au milieu
+  (`liste.remove(cle)`) coûte O(n). Avec 200 000 opérations, cela devient quadratique.
+
+  ## `OrderedDict`
+
+  `OrderedDict` combine un dictionnaire et une liste doublement chaînée interne :
+
+  ```python
+  from collections import OrderedDict
+  od = OrderedDict()
+  od["a"] = 1; od["b"] = 2; od["c"] = 3
+  od.move_to_end("a")       # a devient le dernier : b, c, a
+  od.popitem(last=False)    # retire le PREMIER : ("b", 2)
+  ```
+
+  `move_to_end` et `popitem` sont en O(1). Il suffit de choisir une convention (par exemple :
+  la fin = le plus récent) et de s'y tenir. Un `dict` ordinaire conserve aussi l'ordre
+  d'insertion, et on peut « déplacer » une clé en la supprimant puis en la réinsérant.
+
+  ## La version « à la main »
+
+  En entretien, on demande souvent l'implémentation avec un dictionnaire `clé → nœud` et une
+  liste doublement chaînée avec deux nœuds sentinelles (tête et queue), qui évitent tous les
+  cas particuliers de liste vide.
+
+  ## Détails à ne pas oublier
+
+  - un `get` réussi rend la clé récente ; un `get` raté ne change rien ;
+  - un `put` sur une clé existante met à jour la valeur **et** la rend récente, sans
+    éviction ;
+  - l'éviction se fait seulement quand la taille **dépasse** la capacité.
+docs:
+  - title: collections.OrderedDict
+    url: https://docs.python.org/fr/3/library/collections.html#collections.OrderedDict
+  - title: TimeComplexity (wiki Python)
+    url: https://wiki.python.org/moin/TimeComplexity

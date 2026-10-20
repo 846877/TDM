@@ -148,3 +148,49 @@ solution: |
           else:
               k -= len(petits) + nb_egaux
               liste = [x for x in liste if x > pivot]
+cours: |
+  ## Le principe
+
+  1. Choisir un **pivot**.
+  2. **Partitionner** : les éléments plus petits d'un côté, les plus grands de l'autre.
+  3. Trier récursivement chaque partie, puis concaténer.
+
+  En moyenne, le pivot coupe la liste en deux parts comparables : **O(n log n)**.
+
+  ## Le pire cas et comment l'éviter
+
+  Si le pivot est toujours le plus petit élément (premier élément d'une liste déjà triée),
+  une partie est vide et l'autre contient n − 1 éléments : O(n²) et une récursion de
+  profondeur n, qui dépasse la limite de Python. Solution : un pivot **aléatoire**
+  (`random.choice`), qui rend le pire cas extrêmement improbable quelle que soit l'entrée.
+
+  ## Les doublons : partition en trois
+
+  Si tous les éléments sont égaux, une partition « plus petits / plus grands ou égaux » ne
+  réduit jamais le problème : O(n²) à nouveau. La partition de **Dijkstra** (« drapeau
+  hollandais ») crée trois groupes : `<`, `==`, `>`. Le groupe des égaux est déjà à sa
+  place et n'est plus trié. Avec beaucoup de doublons, l'algorithme devient même plus
+  rapide.
+
+  ## Stabilité
+
+  Si la partition parcourt la liste **dans l'ordre** et ajoute chaque élément à la fin de
+  son groupe, l'ordre relatif des éléments égaux est préservé : le tri est stable. Pour un
+  ordre décroissant stable, inverser les groupes « plus petits » et « plus grands » suffit ;
+  inverser le résultat final casserait la stabilité.
+
+  ## Une clé calculée une seule fois
+
+  Avec `cle`, on compare `cle(x)` : calculer la clé une fois par élément (paires
+  `(clé, élément)` ou listes parallèles) évite de la recalculer à chaque comparaison.
+
+  ## Sélection rapide (Quickselect)
+
+  Pour trouver le k-ième plus petit, inutile de tout trier : après partition, on sait dans
+  quel groupe se trouve le rang k, et on ne continue que dans celui-là. Complexité moyenne
+  **O(n)** (n + n/2 + n/4 + …). Une boucle remplace facilement la récursion.
+docs:
+  - title: Wikipédia — Tri rapide
+    url: https://fr.wikipedia.org/wiki/Tri_rapide
+  - title: Module random (choice)
+    url: https://docs.python.org/fr/3/library/random.html

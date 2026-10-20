@@ -1,0 +1,207 @@
+title: Calculatrice en ligne de commande
+level: debutant
+order: 49
+tags: [projet, conditions, exceptions, input]
+summary: Un petit projet qui combine lecture, découpage, conditions et erreurs.
+mode: stdio
+description: |
+  Chaque ligne d'entrée contient une opération de la forme `a opérateur b`, séparée par des
+  espaces, par exemple `12 * 3`. La lecture s'arrête à la ligne `quitter`.
+
+  - Opérateurs : `+`, `-`, `*`, `/`, `//`, `%`, `**`.
+  - Les nombres peuvent être entiers ou décimaux (`2.5`). Si les deux sont entiers (sans
+    point), le calcul se fait en entiers ; sinon en décimaux.
+  - Affiche `a opérateur b = résultat`. Un résultat décimal est arrondi à **3 décimales**
+    avec `round(x, 3)`.
+
+  Messages d'erreur (le programme continue ensuite) :
+
+  - `Erreur : format attendu « a op b »` si la ligne n'a pas exactement 3 morceaux ;
+  - `Erreur : nombre invalide` si `a` ou `b` n'est pas un nombre ;
+  - `Erreur : opérateur inconnu` ;
+  - `Erreur : division par zéro`.
+
+  Les lignes vides sont ignorées. Entrée :
+
+  ```
+  12 * 3
+  7 / 2
+  1 + 2 + 3
+  quitter
+  ```
+
+  Sortie :
+
+  ```
+  12 * 3 = 36
+  7 / 2 = 3.5
+  Erreur : format attendu « a op b »
+  ```
+starter: |
+  # Écris ton code ici
+cases:
+  - name: Exemple de l'énoncé
+    input: |
+      12 * 3
+      7 / 2
+      1 + 2 + 3
+      quitter
+    output: |
+      12 * 3 = 36
+      7 / 2 = 3.5
+      Erreur : format attendu « a op b »
+  - name: Tous les opérateurs
+    input: |
+      17 // 5
+      17 % 5
+      2 ** 10
+      10 - 25
+      0.1 + 0.2
+      10 / 3
+
+      quitter
+    output: |
+      17 // 5 = 3
+      17 % 5 = 2
+      2 ** 10 = 1024
+      10 - 25 = -15
+      0.1 + 0.2 = 0.3
+      10 / 3 = 3.333
+  - name: Erreurs
+    input: |
+      deux + 3
+      4 x 2
+      8 / 0
+      8 % 0
+      5
+      2.5 * 4
+      quitter
+      1 + 1
+    output: |
+      Erreur : nombre invalide
+      Erreur : opérateur inconnu
+      Erreur : division par zéro
+      Erreur : division par zéro
+      Erreur : format attendu « a op b »
+      2.5 * 4 = 10.0
+solution: |
+  def lire_nombre(texte):
+      if "." in texte:
+          return float(texte)
+      return int(texte)
+
+
+  def calculer(a, op, b):
+      if op == "+":
+          return a + b
+      if op == "-":
+          return a - b
+      if op == "*":
+          return a * b
+      if op == "/":
+          return a / b
+      if op == "//":
+          return a // b
+      if op == "%":
+          return a % b
+      if op == "**":
+          return a ** b
+      raise KeyError(op)
+
+
+  while True:
+      ligne = input().strip()
+      if ligne == "quitter":
+          break
+      if not ligne:
+          continue
+      morceaux = ligne.split()
+      if len(morceaux) != 3:
+          print("Erreur : format attendu « a op b »")
+          continue
+      texte_a, op, texte_b = morceaux
+      try:
+          a = lire_nombre(texte_a)
+          b = lire_nombre(texte_b)
+      except ValueError:
+          print("Erreur : nombre invalide")
+          continue
+      try:
+          resultat = calculer(a, op, b)
+      except KeyError:
+          print("Erreur : opérateur inconnu")
+          continue
+      except ZeroDivisionError:
+          print("Erreur : division par zéro")
+          continue
+      if isinstance(resultat, float):
+          resultat = round(resultat, 3)
+      print(f"{texte_a} {op} {texte_b} = {resultat}")
+cours: |
+  ## Assembler les briques
+
+  Ce mini-projet combine tout ce que tu as vu : boucle de lecture, découpage d'une ligne,
+  conversions, conditions, exceptions et affichage. La difficulté n'est pas une notion
+  nouvelle mais l'**organisation** du code.
+
+  ## Découper le problème en fonctions
+
+  Plutôt qu'un seul gros bloc, isole chaque responsabilité :
+
+  - une fonction qui **convertit** un texte en nombre (et lève `ValueError` si c'est
+    impossible) ;
+  - une fonction qui **calcule** `a op b` ;
+  - la boucle principale qui **lit, vérifie, appelle et affiche**.
+
+  Chaque fonction se teste séparément et reste courte. La boucle principale se lit presque
+  comme l'énoncé.
+
+  ## Associer un opérateur à un calcul
+
+  Une suite de `if op == "+": ... if op == "-": ...` fonctionne. Plus élégant : un
+  dictionnaire qui associe chaque symbole à une **fonction** du module `operator` :
+
+  ```python
+  import operator
+  OPERATIONS = {"+": operator.add, "*": operator.mul}
+  OPERATIONS["*"](6, 7)    # 42
+  ```
+
+  Les fonctions sont des valeurs comme les autres : on peut les ranger dans un dictionnaire et
+  les appeler ensuite. Un opérateur absent du dictionnaire se détecte avec `in` (ou en
+  interceptant la `KeyError`).
+
+  ## Les erreurs dans l'ordre
+
+  On vérifie du plus général au plus précis : le **format** de la ligne (nombre de
+  morceaux), puis les **nombres**, puis l'**opérateur**, puis les erreurs de **calcul**
+  (division par zéro). Chaque contrôle qui échoue affiche son message et passe à la ligne
+  suivante avec `continue`.
+
+  ## Plusieurs `except`
+
+  Un même `try` peut avoir plusieurs `except`, un par type d'erreur :
+
+  ```python
+  try:
+      ...
+  except ValueError:
+      ...
+  except ZeroDivisionError:
+      ...
+  ```
+
+  ## Entiers ou décimaux
+
+  `int("2.5")` lève une erreur, `float("2")` donne `2.0`. Ici, la présence d'un point décide
+  du type. Les flottants imprécis (`0.1 + 0.2` vaut `0.30000000000000004`) sont arrondis à
+  l'affichage. Pour afficher les nombres tels qu'ils ont été saisis, on réutilise le texte
+  d'origine plutôt que la valeur convertie.
+
+  **À ne jamais faire** : `eval(ligne)`, qui exécuterait n'importe quel code tapé par
+  l'utilisateur.
+docs:
+  - title: Module operator
+    url: https://docs.python.org/fr/3/library/operator.html
+  - title: Tutoriel — définir des fonctions
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html#defining-functions

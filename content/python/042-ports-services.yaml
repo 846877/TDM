@@ -1,0 +1,172 @@
+title: Annuaire des ports réseau
+level: debutant
+order: 42
+tags: [dictionnaires, réseau, boucles]
+summary: Chercher, parcourir et inverser un dictionnaire de services.
+description: |
+  Un dictionnaire associe des noms de services à leur numéro de port, par exemple :
+
+  ```python
+  PORTS = {"ssh": 22, "http": 80, "https": 443, "dns": 53, "rdp": 3389, "smtp": 25}
+  ```
+
+  1. `port_de(ports, service)` renvoie le port du service (la recherche ignore la casse :
+     `"SSH"` fonctionne), ou `None` s'il est inconnu. Les noms dans le dictionnaire sont
+     toujours en minuscules.
+  2. `service_de(ports, port)` renvoie le nom du service qui utilise ce port, ou
+     `"inconnu"`.
+  3. `ports_systeme(ports)` renvoie la **liste triée des noms** des services dont le port
+     est inférieur à 1024.
+  4. `ajouter_service(ports, service, port)` ajoute le service au dictionnaire reçu et renvoie
+     `True`, **sauf** si le nom ou le port est déjà utilisé : dans ce cas, le dictionnaire
+     n'est pas modifié et la fonction renvoie `False`.
+
+  ```python
+  port_de(PORTS, "SSH")          # 22
+  service_de(PORTS, 443)         # "https"
+  ports_systeme({"ssh": 22, "rdp": 3389, "dns": 53})   # ["dns", "ssh"]
+  ```
+starter: |
+  def port_de(ports, service):
+      pass
+
+
+  def service_de(ports, port):
+      pass
+
+
+  def ports_systeme(ports):
+      pass
+
+
+  def ajouter_service(ports, service, port):
+      pass
+tests: |
+  def ports():
+      return {"ssh": 22, "http": 80, "https": 443, "dns": 53, "rdp": 3389, "smtp": 25}
+
+  def test_port_de():
+      "port_de (insensible à la casse)"
+      p = ports()
+      assert solution.port_de(p, "ssh") == 22
+      assert solution.port_de(p, "SSH") == 22
+      assert solution.port_de(p, "Https") == 443
+      assert solution.port_de(p, "ftp") is None
+
+  def test_service_de():
+      "service_de"
+      p = ports()
+      assert solution.service_de(p, 443) == "https"
+      assert solution.service_de(p, 3389) == "rdp"
+      assert solution.service_de(p, 21) == "inconnu"
+
+  def test_ports_systeme():
+      "ports_systeme : noms triés"
+      r = solution.ports_systeme(ports())
+      assert r == ["dns", "http", "https", "smtp", "ssh"], f"obtenu {r!r}"
+      assert solution.ports_systeme({"rdp": 3389}) == []
+
+  def test_ajouter_ok():
+      "ajouter_service : ajout réussi"
+      p = ports()
+      assert solution.ajouter_service(p, "imap", 143) is True
+      assert p["imap"] == 143
+
+  def test_ajouter_refus():
+      "ajouter_service : nom ou port déjà pris"
+      p = ports()
+      avant = dict(p)
+      assert solution.ajouter_service(p, "ssh", 2222) is False
+      assert solution.ajouter_service(p, "web", 80) is False
+      assert p == avant, "le dictionnaire ne doit pas être modifié en cas de refus"
+solution: |
+  def port_de(ports, service):
+      return ports.get(service.lower())
+
+
+  def service_de(ports, port):
+      for nom, numero in ports.items():
+          if numero == port:
+              return nom
+      return "inconnu"
+
+
+  def ports_systeme(ports):
+      noms = []
+      for nom, numero in ports.items():
+          if numero < 1024:
+              noms.append(nom)
+      return sorted(noms)
+
+
+  def ajouter_service(ports, service, port):
+      if service in ports or port in ports.values():
+          return False
+      ports[service] = port
+      return True
+cours: |
+  ## Rappels sur les dictionnaires
+
+  ```python
+  ports = {"ssh": 22, "http": 80}
+  ports["ssh"]              # 22
+  ports["dns"] = 53         # ajout
+  "http" in ports           # True : in teste les CLÉS
+  ports.get("ftp")          # None au lieu d'une KeyError
+  ports.get("ftp", 21)      # valeur par défaut
+  len(ports)                # 3
+  ```
+
+  ## Parcourir
+
+  ```python
+  for nom in ports:                    # les clés
+  for numero in ports.values():        # les valeurs
+  for nom, numero in ports.items():    # les couples (clé, valeur)
+  ```
+
+  `items()` associé au déballage est la forme la plus courante.
+
+  ## Chercher par clé ou par valeur
+
+  - Chercher par **clé** est instantané (O(1)), quelle que soit la taille du dictionnaire :
+    c'est tout l'intérêt de la structure.
+  - Chercher par **valeur** oblige à parcourir toutes les entrées (O(n)). Si on le fait
+    souvent, on construit un dictionnaire **inverse** une fois pour toutes :
+
+  ```python
+  par_port = {numero: nom for nom, numero in ports.items()}
+  ```
+
+  (Cette écriture est une compréhension de dictionnaire, que tu verras en détail plus tard.)
+
+  `valeur in ports.values()` fonctionne aussi, mais parcourt tout.
+
+  ## Normaliser les clés
+
+  Les clés sont sensibles à la casse : `"SSH"` et `"ssh"` sont deux clés différentes. On
+  choisit une forme canonique (ici les minuscules), on stocke dans cette forme et on
+  convertit les recherches avec `lower()`.
+
+  ## Modifier un dictionnaire reçu
+
+  Comme les listes, un dictionnaire passé à une fonction n'est pas copié : la fonction
+  modifie l'objet de l'appelant. Vérifie **toutes** les conditions avant de modifier, pour
+  ne jamais laisser le dictionnaire dans un état à moitié modifié.
+
+  ## Trier
+
+  `sorted(dictionnaire)` renvoie la liste triée des **clés** ; on peut trier n'importe quelle
+  liste de noms construite au fil d'une boucle.
+
+  ## Pour le technicien réseau
+
+  Le fichier `/etc/services` (ou `C:\Windows\System32\drivers\etc\services`) contient
+  justement cette correspondance nom ↔ port, et le module `socket` y accède :
+  `socket.getservbyname("ssh")` renvoie 22. Les ports inférieurs à 1024 sont dits
+  « bien connus » : sous Linux, seul root peut écouter dessus.
+docs:
+  - title: Tutoriel — les dictionnaires
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#dictionaries
+  - title: Type dict et ses méthodes
+    url: https://docs.python.org/fr/3/library/stdtypes.html#mapping-types-dict

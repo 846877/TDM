@@ -157,3 +157,53 @@ solution: |
   valeur, moins_poids = meilleur[capacite]
   print(f"valeur max: {valeur}")
   print(f"poids utilise: {-moins_poids}")
+cours: |
+  ## Un problème d'optimisation combinatoire
+
+  Choisir un sous-ensemble d'objets qui maximise la valeur sous une contrainte de poids. Il
+  modélise de nombreux problèmes réels : allocation de budget, choix de tâches à planifier,
+  remplissage de conteneurs, sélection de sauvegardes à placer sur un support limité.
+
+  ## Pourquoi pas le glouton ?
+
+  Trier par rapport valeur/poids et prendre dans l'ordre est optimal si l'on peut **couper**
+  les objets (sac à dos fractionnaire), mais pas en version 0/1 : un objet très rentable mais
+  lourd peut bloquer une meilleure combinaison. Et l'énumération des 2ⁿ sous-ensembles est
+  impossible au-delà de n ≈ 25.
+
+  ## La programmation dynamique
+
+  `meilleur[c]` = meilleure valeur atteignable avec une capacité `c`, en n'utilisant que les
+  objets déjà traités. Pour un nouvel objet `(p, v)`, à chaque capacité `c ≥ p`, deux choix :
+  ne pas le prendre (`meilleur[c]` inchangé) ou le prendre (`meilleur[c - p] + v`). On garde
+  le meilleur.
+
+  ### Le sens de parcours
+
+  Avec un tableau **à une dimension**, on parcourt les capacités **de la plus grande à la
+  plus petite**. Si on montait, `meilleur[c - p]` pourrait déjà inclure l'objet courant (mis
+  à jour plus tôt dans la même passe) : on le prendrait plusieurs fois, ce qui est la
+  variante « quantités illimitées ».
+
+  ## Critère secondaire
+
+  Pour départager les solutions de même valeur par le poids le plus petit, on compare des
+  **couples** : les tuples se comparent élément par élément, donc `(valeur, -poids)` maximise
+  la valeur puis minimise le poids. Le tableau stocke alors des couples.
+
+  ## Complexité : pseudo-polynomiale
+
+  O(n × C) en temps et O(C) en mémoire. C'est polynomial en la **valeur** de C, pas en sa
+  taille en bits : avec une capacité d'un milliard, le tableau est inutilisable. Le sac à dos
+  est d'ailleurs NP-difficile ; la programmation dynamique est efficace parce que les poids
+  sont de petits entiers.
+
+  ## Retrouver les objets
+
+  Pour savoir **quels** objets prendre, il faut garder la table complète (n × C) ou noter les
+  décisions, puis remonter, comme pour la LCS.
+docs:
+  - title: Wikipédia — Problème du sac à dos
+    url: https://fr.wikipedia.org/wiki/Probl%C3%A8me_du_sac_%C3%A0_dos
+  - title: Wikipédia — Programmation dynamique
+    url: https://fr.wikipedia.org/wiki/Programmation_dynamique

@@ -119,3 +119,59 @@ solution: |
           return enveloppe
 
       return decorateur
+cours: |
+  ## Trois étages
+
+  Un décorateur **paramétré** est une fonction qui *renvoie un décorateur* :
+
+  ```python
+  @journaliser(niveau="INFO")
+  def f(): ...
+  # équivaut à : f = journaliser(niveau="INFO")(f)
+  ```
+
+  D'où trois fonctions imbriquées :
+
+  ```python
+  def journaliser(niveau="INFO"):          # 1. reçoit les paramètres
+      def decorateur(fonction):             # 2. reçoit la fonction
+          @functools.wraps(fonction)
+          def enveloppe(*args, **kwargs):   # 3. remplace la fonction
+              print(f"[{niveau}] appel de {fonction.__name__}")
+              return fonction(*args, **kwargs)
+          return enveloppe
+      return decorateur
+  ```
+
+  ## Valider tôt
+
+  Les paramètres sont connus dès la **décoration** (à l'import du module) : un paramètre
+  absurde doit lever une erreur à ce moment-là (dans l'étage 1), pas au premier appel.
+
+  ## Avec ou sans parenthèses
+
+  `@reessayer` (sans parenthèses) passe directement la **fonction** au premier étage, alors
+  que `@reessayer()` passe zéro argument. On distingue les deux cas en regardant si le
+  premier argument positionnel est appelable (`callable(x)`) et s'il est le seul argument.
+  Une signature comme `def deco(fonction=None, *, param=...)` rend l'intention plus claire.
+
+  ## Boucle de tentatives
+
+  Pour réessayer, une boucle `for` sur le nombre de tentatives, avec `try / except` à
+  l'intérieur : `return` en cas de succès, mémorisation de l'exception sinon. Après la
+  boucle, on relance la dernière exception (`raise derniere`). Un `except` ne doit attraper
+  **que** les types configurés : `except exceptions as e` accepte un tuple de classes ; les
+  autres exceptions remontent naturellement.
+
+  ## En production
+
+  On ajoute généralement une attente croissante entre les essais (*backoff* exponentiel,
+  avec un peu d'aléatoire, le *jitter*) pour ne pas marteler un service en panne. Des
+  bibliothèques comme `tenacity` le font. Et on ne réessaie que des opérations
+  **idempotentes** (qu'on peut répéter sans effet indésirable) : relancer un paiement est
+  dangereux.
+docs:
+  - title: functools.wraps
+    url: https://docs.python.org/fr/3/library/functools.html#functools.wraps
+  - title: Référence — définitions de fonctions et décorateurs
+    url: https://docs.python.org/fr/3/reference/compound_stmts.html#function-definitions

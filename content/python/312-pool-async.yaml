@@ -201,3 +201,60 @@ solution: |
       async def __aexit__(self, type_exc, exc, tb):
           await self.fermer()
           return False
+cours: |
+  ## Pourquoi un pool ?
+
+  Ouvrir une connexion (base de données, SSH, TLS) est coûteux : handshake, authentification.
+  Un **pool** garde un petit nombre de connexions ouvertes et les **prête** aux tâches qui en
+  ont besoin. Il limite aussi la charge sur le serveur (une base n'accepte qu'un nombre
+  limité de connexions).
+
+  ## Gestionnaire de contexte asynchrone
+
+  `async with` appelle `await obj.__aenter__()` et `await obj.__aexit__(...)`. Le plus simple
+  pour en écrire un est `contextlib.asynccontextmanager` :
+
+  ```python
+  from contextlib import asynccontextmanager
+
+  @asynccontextmanager
+  async def session(pool):
+      conn = await pool.prendre()
+      try:
+          yield conn            # valeur liée par "as"
+      finally:
+          pool.rendre(conn)     # exécuté même en cas d'exception
+  ```
+
+  Le `try / finally` autour du `yield` garantit la restitution, et l'exception éventuelle
+  continue sa propagation.
+
+  ## Attendre une ressource
+
+  Quand toutes les connexions sont prêtées et que la limite est atteinte, la tâche doit
+  **attendre** sans bloquer la boucle d'événements. Outils possibles :
+
+  - une `asyncio.Queue` des connexions libres (`await file.get()` attend qu'une connexion
+    soit rendue, `put_nowait` la rend) ;
+  - un `asyncio.Semaphore(taille)` qui compte les places, plus une liste des connexions
+    libres ;
+  - une `asyncio.Condition` pour des règles plus fines.
+
+  ## Création paresseuse et concurrence
+
+  Les connexions sont créées à la demande. Attention : entre la décision « je peux en créer
+  une » et la fin du `await fabrique()`, d'autres tâches s'exécutent. Il faut **réserver**
+  la place (incrémenter le compteur) **avant** l'`await`, sinon plusieurs tâches pourraient
+  dépasser la limite. C'est la règle d'or de la programmation asynchrone : l'état peut
+  changer à chaque `await`.
+
+  ## Fermeture
+
+  Fermer le pool, c'est fermer toutes les connexions **créées** (libres ou non selon la
+  politique choisie) et refuser les nouvelles demandes. Les vrais pools (asyncpg, aiohttp)
+  gèrent aussi l'expiration des connexions inactives et la vérification de leur santé.
+docs:
+  - title: asyncio — primitives de synchronisation
+    url: https://docs.python.org/fr/3/library/asyncio-sync.html
+  - title: contextlib.asynccontextmanager
+    url: https://docs.python.org/fr/3/library/contextlib.html#contextlib.asynccontextmanager

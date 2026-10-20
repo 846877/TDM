@@ -83,3 +83,54 @@ solution: |
   else:
       print(f"minimum: {minimum[montant]}")
   print(f"facons: {facons[montant]}")
+cours: |
+  ## Quand le glouton échoue
+
+  Avec les pièces 1, 3, 4, prendre toujours la plus grosse pièce donne 4 + 1 + 1 pour 6,
+  alors que 3 + 3 suffit. Un choix localement optimal n'est pas forcément globalement
+  optimal.
+
+  ## La programmation dynamique
+
+  On résout le problème pour **toutes les sommes de 0 à M**, des plus petites aux plus
+  grandes, en réutilisant les résultats déjà calculés. Deux ingrédients :
+
+  1. une **définition** précise : `dp[s]` = meilleure réponse pour la somme `s` ;
+  2. une **relation de récurrence** : comment calculer `dp[s]` à partir de valeurs plus
+     petites. Pour le minimum : la dernière pièce utilisée vaut `p`, donc
+     `dp[s] = 1 + dp[s - p]` pour la meilleure pièce `p`.
+
+  On initialise `dp[0]` (cas de base) et on marque les sommes impossibles par une valeur
+  sentinelle (`float("inf")` ou `None`).
+
+  ## Compter les façons sans doublons
+
+  Pour compter les combinaisons **sans tenir compte de l'ordre**, l'ordre des boucles est
+  décisif :
+
+  - boucle externe sur les **pièces**, interne sur les sommes : chaque combinaison est
+    comptée une fois (les pièces sont « introduites » dans un ordre fixe) ;
+  - boucle externe sur les sommes : on compte les **arrangements** (1+2 et 2+1 séparément).
+
+  ```python
+  # schéma (comptage) : ways[0] = 1
+  # pour chaque pièce p :
+  #     pour s de p à M : ways[s] += ways[s - p]
+  ```
+
+  Écris les deux versions sur un petit exemple pour voir la différence.
+
+  ## Complexité
+
+  O(M × k) en temps pour k pièces, O(M) en mémoire. Les entiers Python étant illimités, le
+  nombre de façons peut devenir énorme sans débordement.
+
+  ## Doublons dans l'entrée
+
+  Si une même valeur de pièce apparaît deux fois, elle compterait double dans le nombre de
+  façons : dédoublonne avec un `set`.
+docs:
+  - title: Wikipédia — Programmation dynamique
+    url: https://fr.wikipedia.org/wiki/Programmation_dynamique
+  - title: Wikipédia — Problème du rendu de monnaie
+    url: https://fr.wikipedia.org/wiki/Probl%C3%A8me_du_rendu_de_monnaie

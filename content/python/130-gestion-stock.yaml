@@ -113,3 +113,63 @@ solution: |
           executer(stock, morceaux)
       except ErreurCommande as erreur:
           print(f"Erreur : {erreur}")
+cours: |
+  ## L'interpréteur de commandes
+
+  Un programme qui lit des commandes et les exécute suit toujours la même boucle :
+  **lire → analyser → exécuter → afficher** (*REPL*). On lit l'entrée ligne par ligne :
+
+  ```python
+  import sys
+  for ligne in sys.stdin:
+      morceaux = ligne.split()
+      if not morceaux:
+          continue          # ligne vide
+      commande, *arguments = morceaux
+  ```
+
+  `commande, *arguments = ...` place le premier élément dans `commande` et **tous les autres**
+  dans la liste `arguments` (déballage étendu).
+
+  ## Répartir les commandes : `match`
+
+  Depuis Python 3.10, `match` filtre une valeur selon sa **forme** :
+
+  ```python
+  match morceaux:
+      case ["ping", hote]:
+          print("ping", hote)
+      case ["scan", hote, port]:
+          print("scan", hote, port)
+      case ["quitter"]:
+          ...
+      case _:
+          print("Erreur : commande inconnue")
+  ```
+
+  Un motif de liste vérifie à la fois le nom de la commande **et** le nombre d'arguments.
+  Sans `match`, un dictionnaire `{nom: fonction}` ou une cascade `if/elif` font l'affaire.
+
+  ## Valider sans planter
+
+  Chaque erreur doit afficher un message et laisser la boucle continuer. Pour une quantité :
+  `int()` dans un `try / except ValueError`, puis vérifier qu'elle est strictement positive.
+  Une petite fonction `lire_quantite(texte)` qui lève ou renvoie l'entier rend le code
+  principal lisible.
+
+  ## État et invariants
+
+  Le stock est un dictionnaire `article → quantité`. Invariants à préserver : aucune
+  quantité négative, et un article à 0 disparaît du dictionnaire (`del stock[article]`).
+  Vérifie le stock **avant** de retirer.
+
+  ## Normaliser les clés
+
+  Les noms insensibles à la casse sont stockés en minuscules dès l'entrée : toutes les
+  commandes utilisent alors la même forme. Pour la liste, `sorted(stock.items())` trie par
+  nom.
+docs:
+  - title: Tutoriel — l'instruction match (filtrage par motif)
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html#match-statements
+  - title: Module sys (sys.stdin)
+    url: https://docs.python.org/fr/3/library/sys.html#sys.stdin

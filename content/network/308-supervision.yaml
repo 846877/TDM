@@ -50,3 +50,58 @@ solution: |
   ntp server 10.0.0.10
   clock timezone CET 1
   end
+cours: |
+  ## Superviser sans ouvrir de faille
+
+  Un équipement supervisé informe la plateforme de son état par trois canaux :
+
+  - **SNMP** : la plateforme interroge l'équipement (UDP 161) et reçoit ses alertes (traps,
+    UDP 162) ; elle lit les compteurs d'interfaces, le processeur, la mémoire ;
+  - **syslog** : l'équipement envoie ses messages (UDP 514) ;
+  - **NTP** : pour que tout soit horodaté de façon cohérente.
+
+  ### SNMPv2c : les communautés
+
+  En v1/v2c, l'accès est protégé par une **communauté**, un simple mot de passe transmis en
+  clair. Les valeurs par défaut `public` (lecture) et `private` (écriture) sont les premières
+  testées par les attaquants. Règles :
+
+  - supprimer les communautés par défaut ;
+  - **lecture seule** (`RO`) uniquement ;
+  - limiter les clients autorisés par une **ACL** ;
+  - passer à SNMPv3 dès que possible (authentification et chiffrement).
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# no snmp-server community public
+  R1(config)# ip access-list standard SUPERVISEURS
+  R1(config-std-nacl)# permit host 172.16.100.60
+  R1(config)# snmp-server community Sup3rv-Lect RO SUPERVISEURS
+  R1(config)# snmp-server location Nantes-Baie-B2
+  R1(config)# snmp-server contact reseau@exemple.lan
+  R1(config)# logging host 172.16.100.61
+  R1(config)# logging trap notifications
+  R1(config)# ntp server 172.16.100.1
+  R1(config)# clock timezone CET 1
+  R1# show snmp community
+  R1# show logging | include Logging to
+  ```
+
+  `location` et `contact` apparaissent dans l'outil de supervision et aident l'astreinte à
+  savoir où intervenir et qui prévenir.
+
+  ### Pièges fréquents
+
+  - Une communauté `RW` : quiconque la connaît peut modifier la configuration.
+  - Oublier l'ACL : n'importe qui peut interroger l'équipement.
+  - `logging trap debugging` : le serveur est inondé.
+
+  ### Pour le CCNA
+
+  SNMP (gestionnaire, agent, MIB, versions), syslog et NTP sont au programme des services IP.
+docs:
+  - title: "Wikipédia — Simple Network Management Protocol"
+    url: https://fr.wikipedia.org/wiki/Simple_Network_Management_Protocol
+  - title: "RFC 5424 — The Syslog Protocol"
+    url: https://www.rfc-editor.org/rfc/rfc5424

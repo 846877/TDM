@@ -218,3 +218,63 @@ solution: |
 
   class Modele(metaclass=MetaModele):
       pass
+cours: |
+  ## Générer du code à la création de la classe
+
+  `dataclasses`, les ORM (Django, SQLAlchemy) ou Pydantic lisent la **déclaration** de la
+  classe et en déduisent des méthodes. Une métaclasse permet d'intervenir exactement à ce
+  moment.
+
+  ## Le dictionnaire du corps de classe
+
+  Dans `__new__(mcs, nom, bases, ns)`, `ns` contient tout ce qui a été défini dans le corps,
+  **dans l'ordre de définition** (les dictionnaires sont ordonnés). On peut le filtrer, le
+  modifier (retirer des entrées, en ajouter) avant d'appeler `super().__new__`.
+
+  ```python
+  class Meta(type):
+      def __new__(mcs, nom, bases, ns):
+          declares = {k: v for k, v in ns.items() if isinstance(v, int)}
+          for k in declares:
+              del ns[k]
+          cls = super().__new__(mcs, nom, bases, ns)
+          cls._entiers = declares
+          return cls
+  ```
+
+  ## Héritage des champs
+
+  Les champs des classes parentes ont déjà été collectés lors de la création de celles-ci :
+  on part de l'attribut des bases (dans le bon ordre), puis on ajoute (ou remplace) les
+  champs déclarés dans la classe. Copier le dictionnaire du parent évite de le modifier.
+
+  ## Générer des méthodes
+
+  Une méthode générée est une simple fonction affectée sur la classe. Pour `__init__`, on
+  accepte `*args, **kwargs`, on les associe aux champs dans l'ordre, et on vérifie : trop
+  d'arguments, argument inconnu, argument donné deux fois, champ obligatoire manquant (des
+  `TypeError`, comme Python). `inspect.Signature` peut aussi faire ce travail
+  d'association.
+
+  Ne pas écraser une méthode définie par l'utilisateur : `if "__repr__" not in ns`.
+
+  ## Valider à la définition
+
+  Comme `dataclasses`, on refuse un champ obligatoire après un champ à valeur par défaut,
+  avec une erreur **au moment de la définition** de la classe : le développeur la voit
+  immédiatement à l'import, pas lors d'un appel en production.
+
+  ## Valeurs par défaut absentes
+
+  Pour distinguer « pas de défaut » de « défaut = None », on utilise une **sentinelle**
+  (`MANQUANT = object()`), exactement comme `dataclasses.MISSING`.
+
+  ## Mot de la fin
+
+  Les métaclasses sont puissantes mais complexes : la plupart du temps, un décorateur de
+  classe ou `__init_subclass__` suffit.
+docs:
+  - title: Référence — personnaliser la création de classes
+    url: https://docs.python.org/fr/3/reference/datamodel.html#customizing-class-creation
+  - title: Module dataclasses (le modèle à imiter)
+    url: https://docs.python.org/fr/3/library/dataclasses.html

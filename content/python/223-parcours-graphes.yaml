@@ -157,3 +157,59 @@ solution: |
               nombre += 1
               vus.update(bfs(graphe, sommet))
       return nombre
+cours: |
+  ## Représenter un graphe
+
+  Une **liste d'adjacence** associe à chaque sommet la liste de ses voisins :
+  `{"routeur": ["sw1", "sw2"], "sw1": ["pc1"], ...}`. C'est compact et permet d'énumérer les
+  voisins en O(degré).
+
+  ## Parcours en largeur (BFS)
+
+  On explore par **niveaux** : d'abord les voisins directs, puis les voisins des voisins…
+  La structure est une **file** (FIFO) :
+
+  ```python
+  from collections import deque
+  file = deque([depart])
+  vus = {depart}
+  while file:
+      sommet = file.popleft()
+      for voisin in graphe[sommet]:
+          if voisin not in vus:
+              vus.add(voisin)
+              file.append(voisin)
+  ```
+
+  Marquer un sommet comme vu **au moment où on l'ajoute** à la file (et non quand on le
+  retire) évite de l'ajouter plusieurs fois.
+
+  ## Plus court chemin non pondéré
+
+  Le BFS atteint chaque sommet par un chemin de longueur minimale. En mémorisant pour chaque
+  sommet son **prédécesseur** (`parent[voisin] = sommet`), on reconstruit le chemin en
+  remontant depuis l'arrivée, puis on l'inverse.
+
+  ## Parcours en profondeur (DFS)
+
+  On s'enfonce le plus loin possible avant de revenir en arrière. La version récursive est
+  naturelle mais limitée à ~1000 niveaux en Python. La version itérative utilise une
+  **pile** (LIFO). Deux subtilités pour reproduire l'ordre récursif :
+
+  - comme la pile renvoie le **dernier** empilé, il faut empiler les voisins **en ordre
+    inverse** pour visiter le premier voisin en premier ;
+  - un sommet peut être empilé plusieurs fois : on le marque comme visité quand on le
+    **dépile**, et on ignore les sommets déjà visités.
+
+  ## Complexité
+
+  BFS et DFS sont en **O(V + E)** (sommets + arêtes). Applications : découverte de
+  topologie réseau, détection de boucles, résolution de dépendances, labyrinthes,
+  composantes connexes.
+docs:
+  - title: Wikipédia — Algorithme de parcours en largeur
+    url: https://fr.wikipedia.org/wiki/Algorithme_de_parcours_en_largeur
+  - title: Wikipédia — Algorithme de parcours en profondeur
+    url: https://fr.wikipedia.org/wiki/Algorithme_de_parcours_en_profondeur
+  - title: collections.deque
+    url: https://docs.python.org/fr/3/library/collections.html#collections.deque

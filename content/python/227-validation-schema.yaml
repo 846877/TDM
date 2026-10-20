@@ -151,3 +151,52 @@ solution: |
       erreurs = []
       _valider_dict(donnees, schema, "", erreurs)
       return sorted(erreurs)
+cours: |
+  ## Données décrites par des données
+
+  Plutôt que d'écrire du code de validation spécifique à chaque formulaire, on décrit les
+  règles dans une **structure de données** (le schéma) et on écrit **un seul** moteur
+  générique qui l'interprète. C'est le principe de JSON Schema, Pydantic, Cerberus ou des
+  validations d'Ansible.
+
+  ## Une fonction par règle
+
+  Le moteur parcourt les champs et applique chaque règle présente. Une organisation
+  lisible : une petite fonction de vérification par règle, toutes appelées depuis une boucle.
+  Les règles qui n'ont de sens que pour certains types (`min`/`max` pour une longueur ou une
+  valeur, `motif` pour une chaîne) ne doivent être appliquées qu'après la vérification du
+  type.
+
+  ## Récursion et chemins
+
+  Pour un sous-dictionnaire, on rappelle le validateur avec le sous-schéma ; pour une
+  liste, on valide chaque élément avec la règle `elements`. Pour situer l'erreur, on passe un
+  **préfixe de chemin** qui s'allonge à chaque niveau :
+
+  ```python
+  def chemin(prefixe, cle):
+      return f"{prefixe}.{cle}" if prefixe else str(cle)
+  # "adresse.ville", "tags[2]"
+  ```
+
+  ## Collecter plutôt qu'arrêter
+
+  Un bon validateur renvoie **toutes** les erreurs d'un coup, pour que l'utilisateur corrige
+  tout en une fois. On les accumule dans une liste passée aux appels récursifs (ou on
+  concatène les listes renvoyées), puis on trie.
+
+  ## Pièges de types
+
+  `isinstance(True, int)` est **vrai** : `bool` hérite de `int`. Un champ `int` ne devrait
+  généralement pas accepter `True`, il faut donc l'exclure explicitement. Pour les motifs,
+  `re.fullmatch` exige que toute la chaîne corresponde (`re.match` accepterait un préfixe).
+
+  ## Principe
+
+  « Ne jamais faire confiance aux entrées » : toute donnée venant d'un utilisateur, d'une API
+  ou d'un fichier doit être validée à la frontière du programme.
+docs:
+  - title: Module re (fullmatch)
+    url: https://docs.python.org/fr/3/library/re.html#re.fullmatch
+  - title: JSON Schema — comprendre les schémas
+    url: https://json-schema.org/understanding-json-schema/

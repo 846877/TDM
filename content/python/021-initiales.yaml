@@ -50,3 +50,56 @@ solution: |
       for mot in nom_complet.replace("-", " ").split():
           resultat += mot[0].upper() + "."
       return resultat
+cours: |
+  ## Découper une chaîne : `split`
+
+  `texte.split(sep)` renvoie la **liste** des morceaux séparés par `sep` :
+
+  ```python
+  "a,b,,c".split(",")       # ['a', 'b', '', 'c']
+  "  un   deux ".split()    # ['un', 'deux']
+  "192.168.1.10".split(".") # ['192', '168', '1', '10']
+  ```
+
+  Différence importante :
+
+  - **sans argument**, `split()` coupe sur n'importe quelle suite d'espaces (espaces,
+    tabulations, retours à la ligne) et ignore les espaces au début et à la fin ;
+  - **avec un séparateur explicite**, chaque occurrence compte : deux séparateurs collés
+    produisent une chaîne vide.
+
+  ## Recoller : `join`
+
+  `sep.join(liste)` fait l'inverse : il assemble une liste de **chaînes** avec un
+  séparateur.
+
+  ```python
+  "-".join(["2026", "10", "19"])   # "2026-10-19"
+  "".join(["a", "b", "c"])         # "abc"
+  ```
+
+  Tous les éléments doivent être des chaînes, sinon `TypeError`.
+
+  ## Accéder au premier caractère
+
+  `mot[0]` donne le premier caractère. Sur une chaîne vide, c'est une `IndexError` : c'est
+  une raison de plus de préférer `split()` sans argument, qui ne produit jamais de morceau
+  vide.
+
+  ## Normaliser avant de traiter
+
+  Une stratégie robuste pour traiter du texte saisi par un humain :
+
+  1. remplacer les séparateurs « exotiques » par un séparateur unique (`replace`) ;
+  2. découper (`split`) ;
+  3. transformer chaque morceau (`upper`, `capitalize`, `title`…) ;
+  4. recoller (`join` ou concaténation).
+
+  `"jean-luc".title()` donne `"Jean-Luc"` : `title()` met une majuscule après chaque
+  caractère non alphabétique. Pratique, mais attention à `"l'été".title()` qui donne
+  `"L'Été"`.
+docs:
+  - title: Méthode str.split
+    url: https://docs.python.org/fr/3/library/stdtypes.html#str.split
+  - title: Méthode str.join
+    url: https://docs.python.org/fr/3/library/stdtypes.html#str.join

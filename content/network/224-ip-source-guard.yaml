@@ -1,0 +1,110 @@
+title: IP Source Guard contre l'usurpation d'adresse
+level: avance
+order: 24
+device: switch
+hostname: SW-ACCES4
+tags: [ip source guard, dhcp snooping, sécurité, usurpation]
+summary: N'accepter sur chaque port que l'adresse IP attribuée par DHCP (ou déclarée).
+description: |
+  Le DHCP snooping est déjà actif sur `SW-ACCES4` (VLAN `10`, uplink `G0/1` de confiance). Un
+  utilisateur a pourtant configuré à la main l'adresse IP du serveur de paie sur son PC.
+
+  1. **IP Source Guard** (`ip verify source`) sur les ports utilisateurs `Fa0/1` à `Fa0/20` :
+     seules les adresses présentes dans la table du DHCP snooping passent ;
+  2. `Fa0/21` accueille un serveur à **adresse fixe** `192.168.10.200`, MAC `0050.56aa.0001` :
+     - port-security activée et filtrage IP **et** MAC (`ip verify source port-security`) ;
+     - liaison statique dans la table :
+       `ip source binding 0050.56aa.0001 vlan 10 192.168.10.200 interface fa0/21` ;
+  3. jamais sur l'uplink `G0/1`.
+
+  Contrôle avec `show ip verify source` et `show ip source binding`.
+initial: |
+  vlan 10
+  name UTILISATEURS
+  ip dhcp snooping
+  ip dhcp snooping vlan 10
+  interface range fa0/1 - 21
+  switchport mode access
+  switchport access vlan 10
+  interface g0/1
+  switchport mode trunk
+  ip dhcp snooping trust
+checks:
+  - desc: IP Source Guard sur Fa0/1-20, pas sur l'uplink
+    expr: all(i.ip_verify_source == "" for i in ports("fa0/1-20")) and intf("g0/1").ip_verify_source is None
+  - desc: Fa0/21 avec port-security et filtrage IP + MAC
+    expr: intf("fa0/21").port_security and intf("fa0/21").ip_verify_source == "port-security"
+  - desc: Liaison statique du serveur 192.168.10.200
+    expr: ("0050.56aa.0001", 10, "192.168.10.200", ifname("fa0/21")) in d.ip_source_bindings
+solution: |
+  configure terminal
+  interface range fa0/1 - 20
+  ip verify source
+  interface fa0/21
+  switchport port-security
+  ip verify source port-security
+  exit
+  ip source binding 0050.56aa.0001 vlan 10 192.168.10.200 interface fa0/21
+  end
+cours: |
+  ## Le principe
+
+  Le **DHCP snooping** construit une table de liaisons (*binding table*) : pour chaque bail
+  attribué, il note l'adresse MAC, l'adresse IP, le VLAN et le port. **IP Source Guard** (IPSG)
+  utilise cette table pour installer sur chaque port un filtre : seuls les paquets dont l'adresse
+  IP source correspond à la liaison du port sont acceptés. Une adresse configurée à la main, ou
+  usurpée, est jetée.
+
+  C'est le troisième étage de la protection de la couche d'accès :
+
+  | Mécanisme          | Protège contre                         | S'appuie sur        |
+  |--------------------|----------------------------------------|---------------------|
+  | DHCP snooping      | faux serveurs DHCP                     | ports de confiance  |
+  | DAI                | empoisonnement ARP                     | table de snooping   |
+  | **IP Source Guard** | usurpation d'adresse IP (et MAC)      | table de snooping   |
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# ip dhcp snooping
+  SW1(config)# ip dhcp snooping vlan 40
+  SW1(config)# interface range gi1/0/1 - 40
+  SW1(config-if-range)# ip verify source
+  SW1(config)# interface gi1/0/41
+  SW1(config-if)# switchport port-security
+  SW1(config-if)# ip verify source port-security
+  SW1(config)# ip source binding 00aa.0000.0042 vlan 40 172.16.40.250 interface gi1/0/41
+  SW1# show ip verify source
+  Interface  Filter-type  Filter-mode  IP-address       Mac-address     Vlan
+  Gi1/0/3    ip           active       172.16.40.23                     40
+  Gi1/0/41   ip-mac       active       172.16.40.250    00:AA:00:00:00:42 40
+  SW1# show ip source binding
+  ```
+
+  - `ip verify source` : filtre sur l'adresse **IP** seule ;
+  - `ip verify source port-security` : filtre IP **et** MAC (nécessite la port-security sur le
+    port, qui limite les MAC) ;
+  - une **liaison statique** remplace le bail DHCP pour les équipements à adresse fixe.
+
+  ### Ce qui se passe au démarrage
+
+  Tant qu'un poste n'a pas obtenu de bail, seul le trafic **DHCP** passe sur un port protégé.
+  Après un redémarrage du switch, la table de snooping est vide (sauf si elle est sauvegardée avec
+  `ip dhcp snooping database`) : les postes doivent renouveler leur bail.
+
+  ### Pièges fréquents
+
+  - Activer IPSG sans DHCP snooping fonctionnel : tous les postes sont coupés.
+  - Oublier les équipements à adresse fixe (imprimantes, serveurs) : il faut une liaison
+    statique.
+  - Activer IPSG sur un **uplink** ou un port de trunk vers un autre switch.
+
+  ### Pour le CCNP ENCOR
+
+  ENCOR couvre les protections de la couche 2 : port-security, DHCP snooping, DAI, IP Source
+  Guard, storm control.
+docs:
+  - title: Cisco Catalyst 2960-X — guides de configuration
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html
+  - title: Wikipédia — Usurpation d'adresse IP
+    url: https://fr.wikipedia.org/wiki/Usurpation_d%27adresse_IP

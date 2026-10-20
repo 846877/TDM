@@ -38,3 +38,56 @@ solution: |
   description NON-UTILISE
   shutdown
   end
+cours: |
+  ## Un port libre est une porte ouverte
+
+  Sur un switch, tous les ports sont **actifs** par défaut et placés dans le VLAN 1. Une prise
+  murale inutilisée mais brassée permet à n'importe qui de se brancher sur le réseau interne :
+  visiteur, prestataire, appareil personnel. Éteindre les ports inutilisés est l'une des
+  premières mesures de durcissement d'un switch d'accès.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# interface range fa0/30 - 48 , gi0/4
+  SW1(config-if-range)# description LIBRE
+  SW1(config-if-range)# switchport mode access
+  SW1(config-if-range)# switchport access vlan 998
+  SW1(config-if-range)# shutdown
+  SW1# show interfaces status | include disabled
+  Fa0/30   LIBRE    disabled 998   auto   auto 10/100BaseTX
+  ```
+
+  Bonnes pratiques complémentaires :
+
+  - placer ces ports dans un VLAN « parking » **sans routage** (999, nommé `PARKING` ou
+    `INUTILISE`) : si quelqu'un réactive le port par erreur, il n'atteint rien ;
+  - forcer le mode `access` pour qu'aucun trunk ne puisse être négocié ;
+  - une description explicite pour que le collègue comprenne pourquoi le port est éteint.
+
+  ### États d'un port
+
+  | `show interfaces status` | Signification                       |
+  |--------------------------|-------------------------------------|
+  | `connected`              | actif, un équipement est branché     |
+  | `notconnect`             | actif, rien de branché              |
+  | `disabled`               | `shutdown` (administratively down)  |
+  | `err-disabled`           | coupé par une protection (BPDU Guard, port-security...) |
+
+  Pour remettre en service un port : `no shutdown` (et son VLAN normal).
+
+  ### Pièges fréquents
+
+  - Éteindre l'uplink ou le port sur lequel on est connecté : on perd la main sur le switch.
+  - Se tromper de plage dans `interface range`.
+  - Oublier les ports gigabit en plus des ports FastEthernet.
+
+  ### Pour le CCNA
+
+  La désactivation des ports inutilisés et le VLAN parking sont cités parmi les bonnes pratiques
+  de sécurité des switchs.
+docs:
+  - title: "Cisco Catalyst 2960-X — guides de configuration"
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html
+  - title: "Wikipédia — Commutateur réseau"
+    url: https://fr.wikipedia.org/wiki/Commutateur_r%C3%A9seau

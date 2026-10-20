@@ -32,3 +32,58 @@ tests: |
 solution: |
   def compter_voyelles(texte):
       return sum(1 for c in texte.lower() if c in "aeiouy")
+cours: |
+  ## Parcourir une chaîne
+
+  Une chaîne est une **séquence** de caractères : on peut la parcourir avec `for` comme une
+  liste.
+
+  ```python
+  for lettre in "chat":
+      print(lettre)   # c, h, a, t (une par ligne)
+  ```
+
+  ## L'opérateur `in`
+
+  `x in sequence` vaut `True` si `x` est présent. Avec deux chaînes, il cherche une
+  **sous-chaîne** :
+
+  ```python
+  "a" in "chat"         # True
+  "ha" in "chat"        # True
+  "z" in "aeiou"        # False
+  ```
+
+  C'est très pratique pour tester si un caractère appartient à un ensemble de caractères
+  autorisés : `if c in "0123456789": ...`
+
+  ## Majuscules et minuscules
+
+  Les comparaisons de chaînes sont **sensibles à la casse** : `"A" == "a"` est faux.
+  Plutôt que de lister les deux versions de chaque lettre, on normalise :
+
+  ```python
+  "BonJour".lower()   # "bonjour"
+  "BonJour".upper()   # "BONJOUR"
+  ```
+
+  Les chaînes sont **immuables** : `lower()` renvoie une nouvelle chaîne, l'originale ne
+  change pas.
+
+  ## Compter
+
+  Deux approches :
+
+  - un compteur qu'on incrémente dans une boucle avec une condition (`compteur += 1`) ;
+  - la méthode `texte.count("x")`, qui compte les occurrences d'**une** sous-chaîne.
+
+  Bonus : `sum()` sur des booléens les compte (`True` vaut 1), ce qui permet des écritures
+  compactes avec une expression génératrice — tu les verras au niveau intermédiaire.
+
+  **Piège** : `"é"` n'est pas `"e"`. Si un énoncé ignore les accents, ne les ajoute pas à
+  ton ensemble de voyelles.
+docs:
+  - title: Méthodes des chaînes (str.lower, str.count…)
+    url: https://docs.python.org/fr/3/library/stdtypes.html#string-methods
+  - title: Référence — tests d'appartenance (in)
+    url: https://docs.python.org/fr/3/reference/expressions.html#membership-test-operations

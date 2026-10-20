@@ -44,3 +44,60 @@ solution: |
   encapsulation dot1Q 99
   ip address 192.168.99.1 255.255.255.0
   end
+cours: |
+  ## Router entre VLAN avec une seule interface
+
+  Les VLAN sont isolés : pour qu'un poste du VLAN 40 parle à un serveur du VLAN 50, il faut un
+  routeur. Plutôt que d'utiliser une interface physique par VLAN, on relie le routeur au switch
+  par **un trunk** et on crée une **sous-interface** par VLAN : c'est le *router-on-a-stick*.
+
+  Chaque sous-interface :
+
+  - reçoit et émet les trames **étiquetées** d'un VLAN (`encapsulation dot1Q <vlan>`) ;
+  - porte l'adresse IP qui sert de **passerelle** aux hôtes de ce VLAN.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# interface gi0/1
+  R1(config-if)# no shutdown
+  R1(config-if)# interface gi0/1.40
+  R1(config-subif)# encapsulation dot1Q 40
+  R1(config-subif)# ip address 172.16.40.1 255.255.255.0
+  R1(config-subif)# interface gi0/1.50
+  R1(config-subif)# encapsulation dot1Q 50
+  R1(config-subif)# ip address 172.16.50.1 255.255.255.0
+  R1# show ip interface brief | include Gig
+  R1# show interfaces gi0/1.40
+  ```
+
+  Côté switch, le port vers le routeur est un **trunk** qui autorise ces VLAN.
+
+  ### Points clés
+
+  - le numéro de sous-interface (`.40`) est libre, mais le faire correspondre au VLAN évite les
+    erreurs ;
+  - c'est l'`encapsulation dot1Q` qui associe le VLAN, **pas** le numéro ;
+  - `no shutdown` se fait sur l'interface **physique** : les sous-interfaces suivent son état ;
+  - pour le VLAN natif : `encapsulation dot1Q 99 native`.
+
+  ### Limites
+
+  Tout le trafic inter-VLAN passe deux fois sur le même lien (aller vers le routeur, retour vers
+  le switch) : le lien devient un goulot d'étranglement. Dans un réseau d'entreprise, on préfère
+  un **switch de niveau 3** avec des SVI.
+
+  ### Pièges fréquents
+
+  - Oublier `encapsulation dot1Q` : impossible de mettre une adresse IP.
+  - Port du switch en mode access au lieu de trunk.
+  - Passerelle des PC différente de l'adresse de la sous-interface.
+
+  ### Pour le CCNA
+
+  Le router-on-a-stick et le routage inter-VLAN par SVI sont tous deux au programme.
+docs:
+  - title: "Wikipédia (EN) — Router on a stick"
+    url: https://en.wikipedia.org/wiki/Router_on_a_stick
+  - title: "Wikipédia — IEEE 802.1Q"
+    url: https://fr.wikipedia.org/wiki/IEEE_802.1Q

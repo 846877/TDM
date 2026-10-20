@@ -40,3 +40,58 @@ solution: |
   standby 10 priority 110
   standby 10 preempt
   end
+cours: |
+  ## Le problème de la passerelle unique
+
+  Un PC ne connaît qu'**une** passerelle par défaut. Si ce routeur tombe, tout le réseau perd
+  l'accès aux autres réseaux, même si un second routeur est branché à côté. Les protocoles de
+  **redondance de passerelle** (FHRP) créent une **adresse IP virtuelle** partagée par plusieurs
+  routeurs : les PC l'utilisent comme passerelle, et le routeur actif répond pour elle.
+
+  | Protocole | Norme    | Rôles               | Partage de charge         |
+  |-----------|----------|---------------------|---------------------------|
+  | **HSRP**  | Cisco    | active / standby    | par groupes (un par VLAN) |
+  | VRRP      | standard | master / backup     | par groupes               |
+  | GLBP      | Cisco    | AVG / AVF           | oui, dans un même groupe  |
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R-A(config)# interface gi0/1
+  R-A(config-if)# ip address 172.16.40.2 255.255.255.0
+  R-A(config-if)# standby version 2
+  R-A(config-if)# standby 40 ip 172.16.40.254
+  R-A(config-if)# standby 40 priority 120
+  R-A(config-if)# standby 40 preempt
+  R-A# show standby brief
+  Interface  Grp  Pri P State    Active    Standby       Virtual IP
+  Gi0/1      40   120 P Active   local     172.16.40.3   172.16.40.254
+  ```
+
+  - le routeur à la **priorité** la plus haute (défaut 100) devient actif ;
+  - `preempt` : il reprend le rôle actif à son retour (sans `preempt`, l'actif reste en place) ;
+  - l'IP virtuelle a une **MAC virtuelle** (`0000.0c9f.fXXX` en version 2) : les PC n'ont rien à
+    réapprendre lors de la bascule ;
+  - les deux routeurs doivent avoir le même numéro de groupe, la même IP virtuelle et la même
+    version.
+
+  ### Aller plus loin
+
+  `standby 40 track gi0/0 30` baisse la priorité si le lien vers Internet tombe, pour que
+  l'autre routeur prenne le relais. On place souvent l'actif HSRP sur le même switch que le pont
+  racine STP du VLAN.
+
+  ### Pièges fréquents
+
+  - Passerelle des PC = adresse réelle d'un routeur au lieu de l'IP virtuelle.
+  - Versions HSRP différentes entre les deux routeurs.
+  - Oublier `preempt` et s'étonner que le routeur principal ne reprenne pas la main.
+
+  ### Pour le CCNA
+
+  Le rôle des FHRP et le fonctionnement de HSRP sont au programme.
+docs:
+  - title: "Cisco — Hot Standby Router Protocol (HSRP)"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/hot-standby-router-protocol-hsrp/9234-hsrpguidetoc.html
+  - title: "RFC 2281 — Cisco Hot Standby Router Protocol (HSRP)"
+    url: https://www.rfc-editor.org/rfc/rfc2281

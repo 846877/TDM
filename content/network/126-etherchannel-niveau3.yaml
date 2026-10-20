@@ -1,0 +1,104 @@
+title: EtherChannel de niveau 3 entre deux cœurs
+level: intermediaire
+order: 26
+device: switch
+hostname: SW-COEUR1
+tags: [etherchannel, lacp, niveau 3, port routé]
+summary: Agréger deux liens routés en un seul port-channel adressé en IP.
+description: |
+  `SW-COEUR1` et `SW-COEUR2` sont deux switchs multicouches reliés par `Gi0/1` et `Gi0/2`. Plutôt
+  qu'un trunk, on veut un **lien routé** agrégé : une seule interface IP, deux câbles, et aucun
+  spanning tree à gérer entre les deux cœurs.
+
+  1. active le routage IPv4 (`ip routing`) ;
+  2. passe `Gi0/1` et `Gi0/2` en ports routés (`no switchport`) et regroupe-les dans le
+     **groupe 2** en LACP **actif** ;
+  3. sur `Port-channel2` : port routé, adresse `10.0.12.1/30`, interface active.
+
+  Contrôle avec `show etherchannel summary` (drapeau `R` = niveau 3) et `show ip interface brief`.
+checks:
+  - desc: Routage IPv4 activé
+    expr: d.ip_routing
+  - desc: Gi0/1 et Gi0/2 routés, groupe 2 en LACP actif
+    expr: members(2) == ["Gi0/1", "Gi0/2"] and all(not i.is_switchport and i.channel_mode == "active" for i in ports("g0/1-2"))
+  - desc: Port-channel2 routé en 10.0.12.1/30
+    expr: not intf("po2").is_switchport and intf("po2").ip == "10.0.12.1" and prefix(intf("po2").mask) == 30
+  - desc: Port-channel2 actif
+    expr: not intf("po2").shutdown
+solution: |
+  configure terminal
+  ip routing
+  interface range g0/1 - 2
+  no switchport
+  channel-group 2 mode active
+  exit
+  interface port-channel 2
+  no switchport
+  ip address 10.0.12.1 255.255.255.252
+  no shutdown
+  end
+cours: |
+  ## EtherChannel de niveau 2 ou de niveau 3
+
+  Un EtherChannel regroupe jusqu'à 8 liens physiques en une **interface logique**
+  (`Port-channel`). Il peut fonctionner :
+
+  - en **niveau 2** : le port-channel est un port de switch (access ou trunk) ; STP le voit comme
+    un seul lien ;
+  - en **niveau 3** : le port-channel est un **port routé** avec une adresse IP. Entre deux
+    switchs de cœur, c'est souvent le meilleur choix : pas de VLAN étendu entre les deux, pas de
+    spanning tree, convergence rapide assurée par le protocole de routage.
+
+  ### Configuration
+
+  La règle d'or : les membres et le port-channel doivent être **du même type**. On passe donc les
+  ports physiques en `no switchport` **avant** de les mettre dans le groupe :
+
+  ```
+  SW1(config)# ip routing
+  SW1(config)# interface range te1/0/1 - 2
+  SW1(config-if-range)# no switchport
+  SW1(config-if-range)# channel-group 5 mode active
+  SW1(config-if-range)# interface port-channel 5
+  SW1(config-if)# no switchport
+  SW1(config-if)# ip address 172.31.0.5 255.255.255.252
+  SW1# show etherchannel summary
+  Flags:  R - Layer3      S - Layer2     U - in use     P - bundled in port-channel
+  5      Po5(RU)         LACP      Te1/0/1(P)  Te1/0/2(P)
+  ```
+
+  L'adresse IP se configure **sur le port-channel**, jamais sur les membres.
+
+  ### LACP et ses modes
+
+  | Mode     | Comportement                                   |
+  |----------|------------------------------------------------|
+  | active   | envoie des LACPDU et négocie                   |
+  | passive  | répond seulement                               |
+  | on       | agrégation forcée, sans négociation (risqué)   |
+
+  Deux côtés `passive` ne forment jamais le canal. `active` des deux côtés est la configuration la
+  plus sûre.
+
+  ### Répartition de charge
+
+  Un flux donné suit toujours le même lien (hachage sur les adresses). On choisit le critère avec
+  `port-channel load-balance src-dst-ip` ; deux liens à 1 Gbit/s ne donnent donc pas 2 Gbit/s à un
+  seul transfert.
+
+  ### Pièges fréquents
+
+  - Membres en `switchport` et port-channel en `no switchport` (ou l'inverse) : les ports sont
+    suspendus (`s`).
+  - Vitesse, duplex ou mode différents entre les membres.
+  - Oublier `ip routing` : le switch ne route pas entre ses interfaces.
+
+  ### Pour le CCNA / CCNP ENCOR
+
+  ENCOR attend la maîtrise des EtherChannel de niveau 2 et 3, de LACP/PAgP et du diagnostic avec
+  `show etherchannel summary`.
+docs:
+  - title: Wikipédia — Agrégation de liens
+    url: https://fr.wikipedia.org/wiki/Agr%C3%A9gation_de_liens
+  - title: Cisco Catalyst 2960-X — guides de configuration
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html

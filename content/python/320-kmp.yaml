@@ -132,3 +132,49 @@ solution: |
   def periode(s):
       k = len(s) - fonction_prefixe(s)[-1]
       return k if len(s) % k == 0 else len(s)
+cours: |
+  ## Le problème de la recherche naïve
+
+  Chercher un motif de longueur m dans un texte de longueur n en essayant chaque position
+  coûte O(n × m) dans le pire cas (motif `aaaab` dans un texte `aaaa…a`) : à chaque échec, on
+  recommence la comparaison depuis zéro, en oubliant tout ce qu'on vient de lire.
+
+  ## L'idée de KMP
+
+  Quand une comparaison échoue après avoir reconnu `k` caractères du motif, on sait déjà
+  quels caractères précèdent dans le texte : ce sont les `k` premiers du motif. On peut donc
+  décaler le motif directement à la position où un **préfixe du motif** coïncide avec la
+  **fin** de ce qu'on a lu, sans jamais reculer dans le texte.
+
+  ## La fonction préfixe
+
+  `pi[i]` = longueur du plus long préfixe **propre** (différent de la chaîne entière) de
+  `s[:i+1]` qui est aussi un suffixe de `s[:i+1]`. Exemple pour `"abab"` : `[0, 0, 1, 2]`.
+
+  Elle se calcule en O(m) avec un raisonnement incrémental : on essaie de prolonger le bord
+  précédent ; si le caractère suivant ne correspond pas, on se replie sur le bord **du bord**
+  (`k = pi[k - 1]`), et ainsi de suite jusqu'à pouvoir prolonger ou atteindre 0. Chaque repli
+  diminue `k`, qui n'augmente que d'un par caractère : coût total linéaire (analyse
+  amortie).
+
+  ## La recherche
+
+  Même mécanisme sur le texte, avec `k` = nombre de caractères du motif actuellement
+  reconnus. Quand `k == m`, une occurrence se termine à la position courante ; pour trouver
+  les occurrences **chevauchantes**, on continue avec `k = pi[m - 1]`. Une astuce classique :
+  calculer la fonction préfixe de `motif + séparateur + texte`, où le séparateur n'apparaît
+  nulle part.
+
+  ## Périodes
+
+  La fonction préfixe donne aussi la plus petite période d'une chaîne : si `p = n − pi[n−1]`
+  divise `n`, la chaîne est la répétition de ses `p` premiers caractères.
+
+  ## En pratique
+
+  `str.find` de CPython utilise un algorithme hybride très optimisé ; KMP et ses cousins
+  (Boyer-Moore, Aho-Corasick pour plusieurs motifs) sont utilisés dans `grep`, les antivirus,
+  les IDS réseau (Snort) et la bio-informatique.
+docs:
+  - title: Wikipédia — Algorithme de Knuth-Morris-Pratt
+    url: https://fr.wikipedia.org/wiki/Algorithme_de_Knuth-Morris-Pratt

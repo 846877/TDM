@@ -99,3 +99,53 @@ solution: |
 
   def derniers(iterable, n):
       return list(deque(iterable, maxlen=n))
+cours: |
+  ## Une file à deux bouts
+
+  `deque` (*double-ended queue*) ajoute et retire en **O(1)** aux deux extrémités, là où une
+  liste est en O(n) pour `insert(0, x)` ou `pop(0)` (tous les éléments sont décalés).
+
+  ```python
+  from collections import deque
+  d = deque([1, 2, 3])
+  d.append(4)        # à droite
+  d.appendleft(0)    # à gauche
+  d.pop()            # 4
+  d.popleft()        # 0
+  d.rotate(1)        # deque([3, 1, 2])
+  ```
+
+  C'est la structure idéale pour une **file d'attente** (FIFO) : `append` pour entrer,
+  `popleft` pour sortir. Par contre, l'accès par indice au milieu est en O(n).
+
+  ## Taille maximale
+
+  Avec `maxlen`, une deque pleine éjecte automatiquement l'élément du côté opposé :
+
+  ```python
+  historique = deque(maxlen=3)
+  for cmd in ["ls", "cd", "pwd", "top"]:
+      historique.append(cmd)
+  historique   # deque(['cd', 'pwd', 'top'], maxlen=3)
+  ```
+
+  C'est exactement ce que fait `tail -n 3` sur un fichier : garder les N dernières lignes
+  sans tout charger en mémoire, quelle que soit la taille de l'entrée (fonctionne donc avec
+  un générateur infini… tant qu'il finit par s'arrêter).
+
+  ## Fenêtre glissante
+
+  Une fenêtre de taille `k` qui avance d'un cran : un élément entre, le plus ancien sort.
+  Recalculer la somme de toute la fenêtre à chaque pas coûte O(k) par pas. Astuce : garder
+  une **somme courante**, à laquelle on ajoute l'entrant et retire le sortant : O(1) par pas,
+  O(n) au total. Le premier résultat n'est disponible qu'une fois la fenêtre remplie.
+
+  ## Valider les paramètres
+
+  Une taille de fenêtre nulle ou négative n'a pas de sens : lever `ValueError` tout de suite
+  est préférable à un résultat absurde ou à une division par zéro plus loin.
+
+  `rotate(n)` décale vers la droite pour `n > 0`, vers la gauche pour `n < 0`.
+docs:
+  - title: collections.deque
+    url: https://docs.python.org/fr/3/library/collections.html#collections.deque

@@ -190,3 +190,57 @@ solution: |
           print(formater(evaluer(jetons)))
       except ErreurRPN as exc:
           print(f"erreur: {exc}")
+cours: |
+  ## La notation postfixée
+
+  En RPN, l'opérateur vient **après** ses opérandes : `(3 + 4) × 2` s'écrit `3 4 + 2 *`.
+  Aucune parenthèse, aucune règle de priorité : l'ordre des jetons suffit. C'était la
+  notation des calculatrices HP, et c'est le principe des machines virtuelles à pile
+  (bytecode Python, JVM, PostScript).
+
+  ## Évaluation avec une pile
+
+  - un **nombre** est empilé ;
+  - un **opérateur binaire** dépile deux valeurs, calcule, empile le résultat ;
+  - à la fin, la pile doit contenir **exactement une** valeur.
+
+  **Ordre des opérandes** : le premier dépilé est l'opérande de **droite**. Pour `10 2 -`, on
+  dépile 2 puis 10, et on calcule `10 - 2`. L'inverser est l'erreur classique (visible
+  seulement avec `-`, `/` et `^`).
+
+  ## Une table d'opérations
+
+  Plutôt qu'une longue cascade de `if`, un dictionnaire associe chaque jeton à une fonction :
+
+  ```python
+  import operator
+  BINAIRES = {"+": operator.add, "-": operator.sub, "*": operator.mul}
+  UNAIRES = {"abs": abs}
+  ```
+
+  Ajouter un opérateur revient à ajouter une entrée. Les opérations de manipulation de pile
+  (`dup`, `swap`) se traitent à part.
+
+  ## Erreurs : une ligne, un message
+
+  Chaque ligne est indépendante : une erreur (pile insuffisante, jeton inconnu, division par
+  zéro, racine d'un négatif, résidu de plusieurs valeurs) doit produire un message et laisser
+  le programme passer à la ligne suivante. Une exception personnalisée levée au cœur de
+  l'évaluation et attrapée dans la boucle principale rend le code très lisible.
+
+  ## Nombres
+
+  Lire un jeton comme entier si possible (`int`), sinon comme flottant (`float`), sinon
+  c'est un opérateur. `float.is_integer()` indique si un flottant a une valeur entière, pour
+  l'affichage. Attention : `float("nan")` et `float("inf")` sont acceptés par Python, ce qui
+  peut surprendre.
+
+  ## Lien avec les parsers
+
+  L'algorithme de la gare de triage (*shunting-yard*) de Dijkstra convertit une expression
+  infixe en RPN : c'est une autre façon d'écrire une calculatrice.
+docs:
+  - title: Wikipédia — Notation polonaise inverse
+    url: https://fr.wikipedia.org/wiki/Notation_polonaise_inverse
+  - title: Tutoriel — utiliser les listes comme des piles
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#using-lists-as-stacks

@@ -21,18 +21,51 @@ cases:
 solution: |
   print("Bonjour, le monde !")
 cours: |
+  ## Ton premier programme
+
+  Un programme Python est une suite d'**instructions** exécutées de haut en bas, une par
+  ligne. La plus simple consiste à afficher du texte.
+
   ## La fonction `print()`
 
-  `print()` affiche ses arguments sur la sortie standard, suivis d'un retour à la ligne.
+  `print()` affiche ses arguments sur la **sortie standard** (le terminal), suivis d'un retour
+  à la ligne.
 
   ```python
   print("Salut")            # Salut
+  print(42)                 # 42 : on peut afficher autre chose que du texte
   print("a", "b", sep="-")  # a-b
   print("sans retour", end="")
+  print()                   # une ligne vide
   ```
 
-  - Une **chaîne de caractères** (`str`) s'écrit entre guillemets simples ou doubles.
-  - `sep` choisit le séparateur entre les arguments (une espace par défaut), `end` ce qui est écrit à la fin.
+  - Une **chaîne de caractères** (`str`) s'écrit entre guillemets simples `'...'` ou doubles
+    `"..."`. Les deux sont équivalents ; choisis ceux qui ne figurent pas dans le texte
+    (`"l'été"` ou `'Il dit "oui"'`).
+  - Plusieurs arguments séparés par des virgules sont affichés séparés par une espace.
+  - `sep` choisit le séparateur entre les arguments, `end` ce qui est écrit à la fin (un
+    retour à la ligne `"\n"` par défaut).
+
+  ## Les erreurs fréquentes
+
+  - Oublier les guillemets : `print(Bonjour)` cherche une **variable** nommée `Bonjour` et
+    lève une `NameError`.
+  - Oublier les parenthèses : `print "x"` était valable en Python 2, c'est une
+    `SyntaxError` en Python 3.
+  - Mettre une majuscule : `Print(...)` n'existe pas, Python est sensible à la casse.
+
+  ## Les commentaires
+
+  Tout ce qui suit un `#` sur une ligne est ignoré par Python : sers-t'en pour expliquer ton
+  code.
+
+  ## La moulinette
+
+  Dans les exercices « entrée/sortie », ton programme est exécuté et son affichage est
+  comparé **exactement** à celui attendu : la ponctuation, les espaces et les majuscules
+  comptent. Ici, attention à l'espace avant le `!` (typographie française) et à la virgule.
 docs:
   - title: Documentation Python — print()
     url: https://docs.python.org/fr/3/library/functions.html#print
+  - title: Tutoriel — utiliser Python comme une calculatrice
+    url: https://docs.python.org/fr/3/tutorial/introduction.html

@@ -37,3 +37,50 @@ solution: |
           if crible[i]:
               crible[i * i::i] = [False] * len(crible[i * i::i])
       return [i for i, ok in enumerate(crible) if ok]
+cours: |
+  ## Tester un nombre
+
+  Un nombre premier est un entier ≥ 2 divisible uniquement par 1 et par lui-même. Méthode
+  naïve : essayer tous les diviseurs de 2 à n − 1. Amélioration décisive : si `n = a × b`
+  avec `a ≤ b`, alors `a ≤ √n`. Il suffit donc de tester les diviseurs jusqu'à **√n**.
+
+  ```python
+  import math
+  math.isqrt(50)   # 7 : racine carrée entière, sans flottants
+  ```
+
+  Tester chaque nombre jusqu'à n de cette façon coûte environ O(n √n) : trop lent pour
+  n = 100 000 dans une moulinette avec limite de temps.
+
+  ## Le crible d'Ératosthène
+
+  Plutôt que de tester chaque nombre, on **raye les multiples** :
+
+  1. on crée un tableau de booléens `est_premier[0..n]`, initialisé à `True` (sauf 0 et 1) ;
+  2. pour chaque nombre `p` encore marqué premier, on raye ses multiples ;
+  3. à la fin, les cases restées à `True` sont les nombres premiers.
+
+  Deux optimisations : on peut commencer à rayer à partir de `p * p` (les multiples plus
+  petits ont déjà été rayés par un facteur plus petit), et on peut s'arrêter dès que
+  `p * p > n`.
+
+  ```python
+  marques = [True] * 11          # liste de 11 booléens
+  for k in range(4, 11, 2):      # rayer les multiples de 2 à partir de 4
+      marques[k] = False
+  ```
+
+  Complexité : **O(n log log n)**, quasiment linéaire. C'est l'un des plus vieux algorithmes
+  connus (IIIᵉ siècle av. J.-C.) et toujours l'un des meilleurs pour cette tâche.
+
+  ## Échanger mémoire contre temps
+
+  Le crible utilise O(n) mémoire pour gagner énormément de temps : c'est un compromis
+  classique en algorithmique. Pour des n gigantesques, on utilise des cribles segmentés.
+
+  **Cas limites** : n < 2 doit renvoyer une liste vide.
+docs:
+  - title: Wikipédia — Crible d'Ératosthène
+    url: https://fr.wikipedia.org/wiki/Crible_d%27%C3%89ratosth%C3%A8ne
+  - title: Module math (isqrt)
+    url: https://docs.python.org/fr/3/library/math.html

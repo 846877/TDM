@@ -54,3 +54,54 @@ solution: |
 
       def __len__(self):
           return sum(1 for _ in self)
+cours: |
+  ## Itérable ou itérateur ?
+
+  - Un **itérable** est un objet qu'on peut parcourir avec `for` : il possède `__iter__`,
+    qui renvoie un itérateur. Listes, chaînes, dict, `range` sont itérables.
+  - Un **itérateur** est l'objet qui fait le parcours : il possède `__next__` (renvoie
+    l'élément suivant ou lève `StopIteration`) et un `__iter__` qui renvoie lui-même.
+
+  ```python
+  nombres = [1, 2]
+  it = iter(nombres)   # appelle nombres.__iter__()
+  next(it)             # 1
+  next(it)             # 2
+  next(it)             # StopIteration
+  ```
+
+  La boucle `for` fait exactement cela en coulisses, et s'arrête sur `StopIteration`.
+
+  ## Le piège de l'itérateur à usage unique
+
+  Un itérateur s'**épuise** : une fois parcouru, il est vide. Si ta classe est son propre
+  itérateur (`__iter__` renvoie `self`), un second `for` ne produira rien :
+
+  ```python
+  g = (x * 2 for x in range(3))
+  list(g)   # [0, 2, 4]
+  list(g)   # []   épuisé
+  ```
+
+  Un `range` en revanche peut être parcouru plusieurs fois, car chaque `iter(range(...))`
+  crée un **nouvel** itérateur. Pour obtenir ce comportement, `__iter__` doit renvoyer un
+  objet neuf à chaque appel — le plus simple étant d'écrire `__iter__` comme un
+  **générateur** (avec `yield`).
+
+  ## `__len__`
+
+  Pour supporter `len()`, il faut calculer le nombre d'éléments sans forcément parcourir.
+  Pour une progression arithmétique strictement bornée, c'est `ceil((fin - debut) / pas)`
+  (et 0 si négatif). Avec les flottants, compter en parcourant garantit la cohérence avec
+  l'itération.
+
+  ## Flottants
+
+  `0.1 * 3` vaut `0.30000000000000004`. Calculer chaque valeur comme `debut + i * pas`
+  (plutôt qu'en ajoutant `pas` à chaque tour) évite l'accumulation d'erreurs, et
+  `round(x, 10)` masque les résidus.
+docs:
+  - title: Tutoriel — itérateurs
+    url: https://docs.python.org/fr/3/tutorial/classes.html#iterators
+  - title: Types itérateurs (protocole)
+    url: https://docs.python.org/fr/3/library/stdtypes.html#iterator-types

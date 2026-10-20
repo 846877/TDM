@@ -76,3 +76,57 @@ solution: |
                   compteur += 1
                   heapq.heappush(file, (nouveau, compteur, voisin))
       return None, []
+cours: |
+  ## Le problème
+
+  Dans un graphe pondéré (poids **positifs**), trouver le chemin de coût total minimal
+  entre deux sommets. Les protocoles de routage à état de liens (OSPF, IS-IS) calculent
+  ainsi leur table de routage : chaque routeur connaît la topologie et le coût des liens, et
+  exécute Dijkstra depuis lui-même.
+
+  ## L'idée
+
+  On maintient pour chaque sommet la meilleure distance **connue** depuis le départ. On
+  extrait toujours le sommet non finalisé de plus petite distance : comme tous les poids
+  sont positifs, aucun autre chemin ne pourra faire mieux, sa distance est **définitive**.
+  On **relâche** alors ses arcs : pour chaque voisin, si passer par ce sommet améliore la
+  distance du voisin, on la met à jour et on note le prédécesseur.
+
+  ## Avec un tas
+
+  ```python
+  import heapq
+  tas = [(0, depart)]
+  distances = {depart: 0}
+  while tas:
+      d, sommet = heapq.heappop(tas)
+      if d > distances.get(sommet, float("inf")):
+          continue          # entrée périmée : on a déjà trouvé mieux
+      ...
+  ```
+
+  `heapq` n'a pas d'opération « diminuer une priorité » : on **réinsère** le sommet avec sa
+  nouvelle distance et on ignore les entrées périmées à l'extraction (technique de la
+  suppression paresseuse). On peut aussi s'arrêter dès que l'arrivée est extraite.
+
+  ## Reconstruire le chemin
+
+  Un dictionnaire `precedent[v] = u` mémorise d'où l'on vient. On remonte depuis l'arrivée
+  jusqu'au départ, puis on inverse la liste.
+
+  ## Pièges
+
+  - un sommet peut n'apparaître que comme voisin, jamais comme clé : utilise
+    `graphe.get(sommet, {})` ;
+  - départ = arrivée : coût 0, chemin d'un seul sommet ;
+  - poids négatifs : Dijkstra donne un résultat faux (voir Bellman-Ford).
+
+  ## Complexité
+
+  **O((V + E) log V)** avec un tas binaire, contre O(V²) pour la version naïve qui cherche
+  le minimum par parcours linéaire.
+docs:
+  - title: Module heapq
+    url: https://docs.python.org/fr/3/library/heapq.html
+  - title: Wikipédia — Algorithme de Dijkstra
+    url: https://fr.wikipedia.org/wiki/Algorithme_de_Dijkstra

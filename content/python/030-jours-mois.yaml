@@ -81,3 +81,53 @@ solution: |
       for mois in range(1, 13):
           total += jours_dans_mois(mois, annee)
       return total
+cours: |
+  ## Une table plutôt qu'une cascade de `if`
+
+  Quand une valeur dépend d'un petit nombre de cas fixes, une **table** (tuple ou liste) est
+  plus lisible et moins sujette aux erreurs qu'une suite de conditions :
+
+  ```python
+  JOURS_SEMAINE = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
+  JOURS_SEMAINE[0]       # "lundi"
+  JOURS_SEMAINE[3 - 1]   # "mercredi" (jour n°3 -> indice 2)
+  ```
+
+  Les indices commencent à 0 alors que les humains comptent à partir de 1 : d'où le
+  décalage `- 1`. Les noms en MAJUSCULES signalent par convention une **constante**.
+  Un tuple convient bien car la table ne doit pas être modifiée.
+
+  ## Valider les entrées
+
+  Avant d'indexer la table, vérifie que la valeur est dans la plage autorisée : sinon on
+  obtient une `IndexError`… ou pire, un résultat faux sans erreur, car les indices négatifs
+  sont valides en Python (`table[-1]` renvoie le dernier élément !).
+
+  ## Réutiliser ses fonctions
+
+  Une fonction peut en appeler une autre : c'est la base de la **décomposition** d'un
+  problème. Écrire `jours_dans_annee` à partir de `jours_dans_mois` garantit que les deux
+  restent cohérentes ; si on corrige un bug dans l'une, l'autre en profite.
+
+  ```python
+  def secondes_dans_jour():
+      return 24 * secondes_dans_heure()
+
+  def secondes_dans_heure():
+      return 60 * 60
+  ```
+
+  (L'ordre de définition n'importe pas tant que la fonction existe au moment de l'**appel**.)
+
+  ## Cas particulier
+
+  Février est l'exception : la table donne la valeur normale, et une condition ajuste le cas
+  bissextile. Isoler l'exception plutôt que de la mélanger à la règle générale est une bonne
+  habitude.
+
+  En vrai : `calendar.monthrange(annee, mois)[1]` donne le nombre de jours d'un mois.
+docs:
+  - title: Tutoriel — tuples et séquences
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#tuples-and-sequences
+  - title: Module calendar (monthrange)
+    url: https://docs.python.org/fr/3/library/calendar.html

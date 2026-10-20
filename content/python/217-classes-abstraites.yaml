@@ -181,3 +181,64 @@ solution: |
 
   def trier_par_aire(formes):
       return sorted(formes, key=lambda f: f.aire())
+cours: |
+  ## L'héritage
+
+  Une classe fille hérite des attributs et méthodes de sa mère, et peut les redéfinir :
+
+  ```python
+  class Equipement:
+      def __init__(self, nom):
+          self.nom = nom
+      def decrire(self):
+          return f"{type(self).__name__} {self.nom}"
+
+  class Routeur(Equipement):
+      def __init__(self, nom, nb_ports):
+          super().__init__(nom)     # réutilise l'initialisation de la mère
+          self.nb_ports = nb_ports
+  ```
+
+  `super()` appelle la méthode de la classe parente. `type(self).__name__` donne le nom de
+  la classe **réelle** de l'objet, ce qui permet d'écrire une méthode générique dans la
+  classe mère. `isinstance(r, Equipement)` est vrai pour un `Routeur`.
+
+  ## Les classes abstraites
+
+  Une classe abstraite définit une **interface** que les filles doivent implémenter, et ne
+  peut pas être instanciée elle-même :
+
+  ```python
+  from abc import ABC, abstractmethod
+
+  class Sauvegarde(ABC):
+      @abstractmethod
+      def executer(self): ...
+
+      def lancer(self):                 # méthode concrète qui utilise l'abstraite
+          print("Début"); self.executer(); print("Fin")
+  ```
+
+  `Sauvegarde()` lève `TypeError`, tout comme une sous-classe qui oublierait d'implémenter
+  `executer`. L'erreur arrive à la création de l'objet plutôt qu'au milieu de l'exécution.
+
+  C'est le patron **méthode template** : la mère fixe l'algorithme, les filles fournissent
+  les étapes.
+
+  ## Le principe de substitution (Liskov)
+
+  Un objet fille doit pouvoir remplacer un objet mère sans surprise. Faire hériter `Carre`
+  de `Rectangle` est un exemple célèbre de débat : si un rectangle permet de changer sa
+  largeur seule, un carré ne respecte plus son invariant. Ici, les formes sont immuables
+  après création, donc l'héritage est sain.
+
+  ## Comparaisons
+
+  Définir `__lt__` et `__eq__` dans la classe mère les rend disponibles pour toutes les
+  formes, et `sorted` utilise `__lt__`. Comparer des flottants exige une tolérance
+  (`math.isclose` ou un écart < 1e-9).
+docs:
+  - title: Module abc
+    url: https://docs.python.org/fr/3/library/abc.html
+  - title: Tutoriel — héritage
+    url: https://docs.python.org/fr/3/tutorial/classes.html#inheritance

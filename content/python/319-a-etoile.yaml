@@ -156,3 +156,52 @@ solution: |
                       parent[voisin] = position
                       heapq.heappush(tas, (nouveau + h(voisin), nouveau, voisin))
       return None
+cours: |
+  ## Dijkstra guidé
+
+  Dijkstra explore dans toutes les directions par coût croissant. **A\*** ajoute une
+  **heuristique** `h(n)` qui estime le coût restant jusqu'au but, et explore en priorité les
+  nœuds qui minimisent `f(n) = g(n) + h(n)`, où `g(n)` est le coût réel depuis le départ.
+  L'exploration est attirée vers la cible : beaucoup moins de nœuds visités.
+
+  ## Heuristique admissible
+
+  Si `h` ne **surestime jamais** le coût réel restant (heuristique *admissible*), A\* trouve
+  un chemin optimal. Sur une grille à 4 directions où chaque case coûte au moins 1, la
+  **distance de Manhattan** `|l1 − l2| + |c1 − c2|` est admissible.
+
+  - `h = 0` : on retrouve exactement Dijkstra ;
+  - `h` trop grande (non admissible) : plus rapide mais chemin parfois sous-optimal.
+
+  Si de plus `h` est *cohérente* (`h(a) ≤ coût(a, b) + h(b)`), un nœud extrait du tas a son
+  coût définitif, comme dans Dijkstra. Manhattan est cohérente ici.
+
+  ## Implémentation
+
+  ```python
+  import heapq
+  tas = [(h(depart), 0, depart)]          # (f, g, position)
+  g = {depart: 0}
+  parent = {}
+  ```
+
+  À chaque extraction : ignorer les entrées périmées (`g` extrait plus grand que le meilleur
+  connu), s'arrêter si c'est le but, sinon examiner les 4 voisins : coût d'entrée selon la
+  case, mise à jour de `g` et `parent` si on améliore, et insertion avec la nouvelle priorité
+  `f`. Le chemin se reconstruit en remontant `parent`.
+
+  ## Départager les égalités
+
+  À `f` égal, préférer le plus grand `g` (le nœud le plus proche du but) réduit souvent
+  l'exploration. Dans le tuple, un compteur évite de comparer des objets non comparables.
+
+  ## Applications
+
+  Jeux vidéo (déplacement des personnages), GPS et calcul d'itinéraire (avec des heuristiques
+  géographiques), robotique, résolution de puzzles (taquin). La qualité de l'heuristique fait
+  toute la différence de performance.
+docs:
+  - title: Wikipédia — Algorithme A*
+    url: https://fr.wikipedia.org/wiki/Algorithme_A*
+  - title: Module heapq
+    url: https://docs.python.org/fr/3/library/heapq.html

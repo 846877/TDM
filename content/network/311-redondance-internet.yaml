@@ -62,3 +62,58 @@ solution: |
   router ospf 1
   default-information originate
   end
+cours: |
+  ## Deux accès Internet, deux piles IP
+
+  Pour qu'un site survive à la panne de son opérateur, on prend deux accès (deux FAI ou deux
+  technologies). Sans protocole de routage avec les opérateurs (pas de BGP), on combine :
+
+  - une **route par défaut principale** (distance 1) vers le FAI principal ;
+  - une **route flottante** (distance plus élevée) vers le FAI de secours ;
+  - la même chose en **IPv6**, avec `::/0`.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# ip route 0.0.0.0 0.0.0.0 198.51.100.1
+  R1(config)# ip route 0.0.0.0 0.0.0.0 192.0.2.129 30
+  R1(config)# ipv6 unicast-routing
+  R1(config)# ipv6 route ::/0 2001:db8:100::1
+  R1(config)# ipv6 route ::/0 2001:db8:200::1 30
+  R1(config)# router ospf 10
+  R1(config-router)# default-information originate
+  R1# show ip route 0.0.0.0
+  R1# show ipv6 route ::/0
+  ```
+
+  ### Une seule route par défaut annoncée en interne
+
+  Les routeurs et switchs internes n'ont pas à connaître les deux accès : le routeur de bordure
+  annonce **une** route par défaut dans OSPF avec `default-information originate`. Elle n'est
+  annoncée que tant que le routeur possède lui-même une route par défaut active ; si les deux
+  accès tombent, l'annonce disparaît et les routeurs internes peuvent utiliser une autre sortie.
+  En IPv6 avec OSPFv3, la commande équivalente se place sous `ipv6 router ospf`.
+
+  ### Limites du basculement statique
+
+  - la route principale ne disparaît que si l'interface tombe ; une panne **chez** l'opérateur
+    n'est pas détectée sans IP SLA + `track` ;
+  - avec deux opérateurs, les adresses publiques diffèrent : le NAT doit utiliser l'interface de
+    sortie active (route-map par interface) ; en IPv6, les préfixes délégués changent aussi ;
+  - le trafic entrant (serveurs publiés) ne bascule pas automatiquement : il faudrait BGP ou un
+    DNS dynamique.
+
+  ### Pièges fréquents
+
+  - Distance de la route de secours égale à la principale : partage de charge involontaire.
+  - Oublier le pendant IPv6 de la route de secours.
+  - `default-information originate always` : annonce même sans accès réel (trou noir).
+
+  ### Pour le CCNA
+
+  Routes flottantes IPv4/IPv6 et propagation de la route par défaut dans OSPF sont au programme.
+docs:
+  - title: "Wikipédia (EN) — Administrative distance"
+    url: https://en.wikipedia.org/wiki/Administrative_distance
+  - title: "Cisco — OSPF Design Guide"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/7039-1.html

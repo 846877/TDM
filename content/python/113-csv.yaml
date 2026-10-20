@@ -37,3 +37,53 @@ solution: |
           return []
       entetes = [h.strip() for h in lignes[0].split(separateur)]
       return [dict(zip(entetes, (v.strip() for v in l.split(separateur)))) for l in lignes[1:]]
+cours: |
+  ## Le format CSV
+
+  *Comma-Separated Values* : une ligne par enregistrement, des valeurs séparées par une
+  virgule (ou un point-virgule dans les tableurs français, où la virgule est le séparateur
+  décimal). La première ligne contient généralement les noms de colonnes.
+
+  ## Découper en lignes
+
+  `texte.splitlines()` découpe sur les fins de ligne (`\n`, `\r\n`…) **sans** produire
+  d'élément vide final, contrairement à `texte.split("\n")` :
+
+  ```python
+  "a\nb\n".split("\n")     # ['a', 'b', '']
+  "a\nb\n".splitlines()    # ['a', 'b']
+  ```
+
+  Les lignes vides au milieu restent présentes : filtre-les (`if ligne.strip()`).
+
+  ## Associer en-têtes et valeurs : `zip`
+
+  `zip` parcourt plusieurs séquences en parallèle :
+
+  ```python
+  colonnes = ["hote", "ip"]
+  valeurs = ["srv1", "10.0.0.1"]
+  list(zip(colonnes, valeurs))   # [("hote", "srv1"), ("ip", "10.0.0.1")]
+  dict(zip(colonnes, valeurs))   # {"hote": "srv1", "ip": "10.0.0.1"}
+  ```
+
+  `dict(zip(...))` est l'idiome pour construire un dictionnaire à partir de deux listes.
+  `zip` s'arrête à la plus courte (depuis Python 3.10, `zip(..., strict=True)` lève une
+  erreur si les longueurs diffèrent).
+
+  ## Nettoyer chaque champ
+
+  Une compréhension applique `strip()` à chaque valeur :
+  `[v.strip() for v in ligne.split(sep)]`.
+
+  ## Pourquoi utiliser le module `csv` en vrai ?
+
+  Le CSV réel est plein de pièges : valeurs entre guillemets contenant le séparateur
+  (`"Dupont, Jean"`), guillemets échappés, retours à la ligne dans une cellule, encodages…
+  `csv.DictReader` gère tout cela et produit justement des dictionnaires. Écrire le parseur
+  à la main une fois permet de comprendre ce qu'il fait ; ensuite, on utilise la bibliothèque.
+docs:
+  - title: Module csv
+    url: https://docs.python.org/fr/3/library/csv.html
+  - title: Méthode str.splitlines
+    url: https://docs.python.org/fr/3/library/stdtypes.html#str.splitlines

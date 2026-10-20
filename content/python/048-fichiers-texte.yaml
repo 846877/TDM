@@ -1,0 +1,185 @@
+title: Lire et écrire un fichier texte
+level: debutant
+order: 48
+tags: [fichiers, with, open]
+summary: Ouvrir un fichier avec with open() pour lire et écrire.
+description: |
+  Les fonctions reçoivent un **chemin** de fichier (une chaîne).
+
+  1. `ecrire_lignes(chemin, lignes)` écrit chaque élément de la liste `lignes` dans le
+     fichier, **une par ligne** (chaque ligne se termine par `\n`). Le fichier est créé ou
+     remplacé.
+  2. `lire_lignes(chemin)` renvoie la liste des lignes du fichier, **sans** le `\n` final et
+     sans les espaces autour, en ignorant les lignes vides.
+  3. `ajouter_ligne(chemin, texte)` ajoute une ligne **à la fin** du fichier sans effacer son
+     contenu.
+  4. `compter(chemin, mot)` renvoie le nombre de lignes qui contiennent `mot`. Si le fichier
+     n'existe pas, renvoie `0` (intercepte `FileNotFoundError`).
+
+  ```python
+  ecrire_lignes("hotes.txt", ["web01", "db01"])
+  ajouter_ligne("hotes.txt", "web02")
+  lire_lignes("hotes.txt")        # ["web01", "db01", "web02"]
+  compter("hotes.txt", "web")     # 2
+  ```
+
+  Ouvre toujours les fichiers avec `with open(..., encoding="utf-8")`.
+starter: |
+  def ecrire_lignes(chemin, lignes):
+      pass
+
+
+  def lire_lignes(chemin):
+      pass
+
+
+  def ajouter_ligne(chemin, texte):
+      pass
+
+
+  def compter(chemin, mot):
+      pass
+tests: |
+  import os
+  import tempfile
+
+  DOSSIER = tempfile.mkdtemp()
+
+  def chemin(nom):
+      return os.path.join(DOSSIER, nom)
+
+  def test_ecrire():
+      "ecrire_lignes crée le fichier, une valeur par ligne"
+      c = chemin("a.txt")
+      solution.ecrire_lignes(c, ["web01", "db01"])
+      with open(c, encoding="utf-8") as f:
+          contenu = f.read()
+      assert contenu == "web01\ndb01\n", f"contenu du fichier : {contenu!r}"
+
+  def test_ecrire_remplace():
+      "ecrire_lignes remplace le contenu existant"
+      c = chemin("b.txt")
+      solution.ecrire_lignes(c, ["ancien"])
+      solution.ecrire_lignes(c, ["nouveau"])
+      with open(c, encoding="utf-8") as f:
+          assert f.read() == "nouveau\n"
+
+  def test_lire():
+      "lire_lignes ignore les lignes vides et les espaces"
+      c = chemin("c.txt")
+      with open(c, "w", encoding="utf-8") as f:
+          f.write("  web01 \n\ndb01\n   \nrouteur-é\n")
+      r = solution.lire_lignes(c)
+      assert r == ["web01", "db01", "routeur-é"], f"obtenu {r!r}"
+
+  def test_ajouter():
+      "ajouter_ligne ajoute à la fin"
+      c = chemin("d.txt")
+      solution.ecrire_lignes(c, ["web01", "db01"])
+      solution.ajouter_ligne(c, "web02")
+      with open(c, encoding="utf-8") as f:
+          assert f.read() == "web01\ndb01\nweb02\n"
+
+  def test_compter():
+      "compter"
+      c = chemin("e.txt")
+      solution.ecrire_lignes(c, ["web01", "db01", "web02", "proxy-web"])
+      assert solution.compter(c, "web") == 3
+      assert solution.compter(c, "mail") == 0
+
+  def test_compter_absent():
+      "compter sur un fichier inexistant -> 0"
+      assert solution.compter(chemin("inexistant.txt"), "x") == 0
+solution: |
+  def ecrire_lignes(chemin, lignes):
+      with open(chemin, "w", encoding="utf-8") as f:
+          for ligne in lignes:
+              f.write(ligne + "\n")
+
+
+  def lire_lignes(chemin):
+      resultat = []
+      with open(chemin, encoding="utf-8") as f:
+          for ligne in f:
+              ligne = ligne.strip()
+              if ligne:
+                  resultat.append(ligne)
+      return resultat
+
+
+  def ajouter_ligne(chemin, texte):
+      with open(chemin, "a", encoding="utf-8") as f:
+          f.write(texte + "\n")
+
+
+  def compter(chemin, mot):
+      try:
+          with open(chemin, encoding="utf-8") as f:
+              return sum(1 for ligne in f if mot in ligne)
+      except FileNotFoundError:
+          return 0
+cours: |
+  ## Ouvrir un fichier
+
+  `open(chemin, mode, encoding=...)` renvoie un objet fichier. Les modes principaux :
+
+  | Mode | Effet |
+  |------|-------|
+  | `"r"` | lecture (par défaut) ; erreur si le fichier n'existe pas |
+  | `"w"` | écriture : crée le fichier ou **efface** son contenu |
+  | `"a"` | ajout (*append*) : écrit à la fin, crée le fichier si besoin |
+  | `"x"` | création exclusive : erreur si le fichier existe déjà |
+
+  Attention au mode `"w"` : il vide le fichier **dès l'ouverture**, même si tu n'écris
+  rien ensuite.
+
+  ## Toujours avec `with`
+
+  ```python
+  with open("rapport.txt", "w", encoding="utf-8") as f:
+      f.write("Sauvegarde OK\n")
+  # ici, le fichier est fermé automatiquement
+  ```
+
+  Le bloc `with` garantit que le fichier est **fermé** à la sortie, même si une erreur
+  survient : les données sont bien écrites sur le disque et le fichier n'est pas verrouillé.
+
+  ## Toujours préciser l'encodage
+
+  Sans `encoding="utf-8"`, Python utilise l'encodage par défaut du système (souvent cp1252
+  sous Windows) : les accents deviennent illisibles quand le fichier change de machine.
+
+  ## Lire
+
+  ```python
+  with open("hotes.txt", encoding="utf-8") as f:
+      for ligne in f:            # ligne par ligne, chaque ligne finit par "\n"
+          print(ligne.strip())
+  ```
+
+  - `f.read()` renvoie tout le contenu en une chaîne ;
+  - `f.readlines()` renvoie la liste des lignes (avec leurs `\n`) ;
+  - itérer sur `f` lit une ligne à la fois, sans charger tout le fichier : idéal pour les gros
+    journaux.
+
+  ## Écrire
+
+  `f.write(texte)` écrit exactement le texte : **aucun** retour à la ligne n'est ajouté. Il
+  faut écrire `"\n"` soi-même (ou utiliser `print(texte, file=f)`).
+
+  ## Fichier absent
+
+  Ouvrir en lecture un fichier inexistant lève `FileNotFoundError`. Selon le besoin, on la
+  laisse remonter (c'est une vraie erreur) ou on l'intercepte pour renvoyer une valeur par
+  défaut.
+
+  ## Chemins
+
+  Un chemin relatif (`"hotes.txt"`) est interprété depuis le **répertoire courant** du
+  programme, qui n'est pas forcément celui du script. Le module `pathlib` (niveau
+  intermédiaire) simplifie la manipulation des chemins.
+docs:
+  - title: Tutoriel — lecture et écriture de fichiers
+    url: https://docs.python.org/fr/3/tutorial/inputoutput.html#reading-and-writing-files
+  - title: Documentation Python — open()
+    url: https://docs.python.org/fr/3/library/functions.html#open

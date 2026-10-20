@@ -184,3 +184,66 @@ solution: |
           if cle not in self._seaux:
               self._seaux[cle] = LimiteurDebit(self.capacite, self.debit, self.horloge)
           return self._seaux[cle].autoriser(cout)
+cours: |
+  ## Le seau à jetons
+
+  Un seau de capacité `C` se remplit de `r` jetons par seconde. Chaque requête consomme des
+  jetons ; s'il n'y en a pas assez, elle est refusée. Résultat : un débit moyen limité à `r`,
+  avec des **rafales** autorisées jusqu'à `C`. C'est l'algorithme des API publiques, de la
+  QoS réseau (*policing* et *shaping* sur les routeurs Cisco), de `iptables -m limit` et de
+  nginx (`limit_req`).
+
+  ## Pas besoin de minuterie
+
+  On ne remplit pas le seau en continu avec un thread : on calcule le remplissage **au moment
+  où on en a besoin**, à partir du temps écoulé depuis le dernier calcul :
+
+  ```
+  jetons = min(capacite, jetons + (maintenant - dernier) * debit)
+  dernier = maintenant
+  ```
+
+  Chaque opération appelle d'abord cette mise à jour : O(1), aucune ressource consommée entre
+  deux requêtes.
+
+  ## `time.monotonic` plutôt que `time.time`
+
+  `time.time()` suit l'horloge murale, qui peut **reculer** (correction NTP, changement
+  manuel). `time.monotonic()` ne recule jamais : c'est la bonne horloge pour mesurer des
+  durées.
+
+  ## Injecter l'horloge pour tester
+
+  Tester du code dépendant du temps avec de vrais `sleep` est lent et fragile. On passe
+  l'horloge en paramètre :
+
+  ```python
+  class FausseHorloge:
+      def __init__(self):
+          self.t = 0.0
+      def __call__(self):
+          return self.t
+
+  h = FausseHorloge()
+  objet = MaClasse(horloge=h)
+  h.t += 2.5          # « avancer le temps » instantanément
+  ```
+
+  C'est l'**injection de dépendance** : le code ne va pas chercher lui-même ses
+  collaborateurs (heure, réseau, disque), on les lui fournit. Les tests deviennent rapides
+  et déterministes.
+
+  ## Temps d'attente
+
+  S'il manque `k` jetons, il faut attendre `k / debit` secondes. Si le coût dépasse la
+  capacité, la requête ne pourra **jamais** passer : c'est un cas à traiter explicitement.
+
+  ## Variante par clé
+
+  Pour limiter **par client** (par IP), on garde un seau par clé dans un dictionnaire, en
+  pensant à purger les seaux pleins inactifs pour ne pas faire grossir la mémoire.
+docs:
+  - title: Module time (monotonic)
+    url: https://docs.python.org/fr/3/library/time.html#time.monotonic
+  - title: Wikipédia — Seau à jetons
+    url: https://fr.wikipedia.org/wiki/Seau_%C3%A0_jetons

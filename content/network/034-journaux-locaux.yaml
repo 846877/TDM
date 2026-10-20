@@ -1,0 +1,96 @@
+title: Journaux sur la console et en mémoire
+level: debutant
+order: 34
+device: switch
+hostname: SW-ETAGE3
+tags: [logging, syslog, journaux]
+summary: Garder l'historique des événements et calmer la console.
+description: |
+  Par défaut, tous les messages (même de débogage) s'affichent sur la console et ne sont
+  conservés nulle part. Règle la journalisation locale de `SW-ETAGE3` :
+
+  1. garde les messages en mémoire dans un tampon de `16384` octets : `logging buffered 16384` ;
+  2. n'affiche sur la console que les messages de niveau **warnings** et plus graves :
+     `logging console warnings` ;
+  3. sur la ligne console, empêche les messages de couper ta saisie (`logging synchronous`).
+
+  Relis ensuite le tampon avec `show logging`.
+checks:
+  - desc: Tampon de journalisation de 16384 octets
+    expr: (d.logging_buffered or "").startswith("16384")
+  - desc: Console limitée au niveau warnings
+    expr: d.logging_console == "warnings"
+    hint: "logging console warnings"
+  - desc: logging synchronous sur la console
+    expr: line("console").logging_synchronous
+solution: |
+  configure terminal
+  logging buffered 16384
+  logging console warnings
+  line console 0
+  logging synchronous
+  end
+cours: |
+  ## Les messages système d'IOS
+
+  Chaque événement (interface qui tombe, connexion, erreur) produit un message au format :
+
+  ```
+  *Oct 19 10:02:11.523: %LINEPROTO-5-UPDOWN: Line protocol on Interface Gi0/1, changed state to down
+                         |         | |
+                         |         | +-- mnémonique
+                         |         +---- gravité (0 à 7)
+                         +-------------- composant
+  ```
+
+  ### Les huit niveaux de gravité
+
+  | N° | Mot-clé        | Exemple                                  |
+  |----|----------------|------------------------------------------|
+  | 0  | emergencies    | système inutilisable                     |
+  | 1  | alerts         | action immédiate requise                 |
+  | 2  | critical       | panne matérielle                         |
+  | 3  | errors         | interface en erreur (`%LINK-3-UPDOWN`)   |
+  | 4  | warnings       | violation de port-security               |
+  | 5  | notifications  | changement d'état de protocole           |
+  | 6  | informational  | ACL avec `log`, connexion                |
+  | 7  | debugging      | sortie des commandes `debug`             |
+
+  Choisir un niveau inclut tous les niveaux **plus graves** (numéros plus petits) :
+  `logging console warnings` affiche les niveaux 0 à 4. Moyen mnémotechnique anglais :
+  *« Every Awesome Cisco Engineer Will Need Ice cream Daily »*.
+
+  ### Les destinations
+
+  ```
+  SW1(config)# logging buffered 32768 informational   (mémoire, lue avec show logging)
+  SW1(config)# logging console errors                  (console série)
+  SW1(config)# logging monitor debugging               (sessions VTY, après « terminal monitor »)
+  SW1(config)# logging host 10.0.0.20                  (serveur syslog, niveau intermédiaire)
+  SW1(config)# logging trap warnings                   (niveau envoyé au serveur)
+  ```
+
+  `no logging console` coupe complètement la console : utile sur un équipement qui génère
+  beaucoup de messages, mais on y perd les alertes en direct.
+
+  ### Lire et vider le tampon
+
+  `show logging` affiche la configuration puis le contenu du tampon ; `clear logging` le vide.
+  Le tampon est en RAM : il disparaît au redémarrage, d'où l'intérêt d'un serveur syslog.
+
+  ### Pièges fréquents
+
+  - Laisser la console au niveau `debugging` pendant un `debug` intensif : la console série
+    (9600 bauds) peut saturer le processeur.
+  - Un tampon trop petit : les événements importants sont écrasés en quelques minutes.
+  - Ne pas activer `terminal monitor` en SSH, puis s'étonner de ne voir aucun message.
+
+  ### Pour le CCNA
+
+  Les niveaux de gravité (numéros **et** noms) et les destinations de journalisation font partie
+  des notions de gestion d'équipement évaluées.
+docs:
+  - title: Wikipédia — Syslog
+    url: https://fr.wikipedia.org/wiki/Syslog
+  - title: RFC 5424 — The Syslog Protocol
+    url: https://www.rfc-editor.org/rfc/rfc5424

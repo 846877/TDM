@@ -427,3 +427,296 @@ def test_port_channel_et_noms_interfaces():
     assert normalize_iface("po1") == "Port-channel1"
     assert normalize_iface("Port-channel 12") == "Port-channel12"
     assert normalize_iface("port-channel1") == "Port-channel1"
+
+
+# -- extension du simulateur : gestion, commutation, routage avancé, VPN, QoS ------
+
+
+def test_bannieres_horloge_hotes_services():
+    device = _config("router", ["banner login #Acces reserve#", "banner exec ^Bienvenue^",
+                                "service timestamps log datetime localtime msec", "clock timezone CET 1",
+                                "clock summer-time CEST recurring last Sun Mar 2:00 last Sun Oct 3:00",
+                                "ip host SRV-WEB 192.168.1.10", "no ip source-route", "service tcp-keepalives-in",
+                                "logging console warnings", "privilege exec level 5 show running-config"])
+    assert device.banner_login == "Acces reserve" and device.banner_exec == "Bienvenue"
+    assert device.service_timestamps["log"] == "datetime msec localtime"
+    assert device.clock_summer_time.startswith("CEST recurring")
+    assert device.ip_hosts == {"SRV-WEB": "192.168.1.10"} and not device.source_route
+    assert device.tcp_keepalives_in and device.logging_console == "warnings"
+    assert ("exec", 5, "show running-config") in device.privileges
+    cfg = device.running_config()
+    for line in ("banner login ^CAcces reserve^C", "no ip source-route", "ip host SRV-WEB 192.168.1.10",
+                 "service timestamps log datetime msec localtime", "logging console warnings"):
+        assert line in cfg
+    assert "SRV-WEB" in _show(device, "show hosts") and "CEST" in _show(device, "show clock")
+    apply_commands(device, ["conf t", "no logging console"])
+    assert device.logging_console is None and "no logging console" in device.running_config()
+
+
+def test_table_mac_et_archive():
+    device = _config("switch", ["mac address-table static 0011.2233.4455 vlan 1 interface fa0/5",
+                                "mac address-table aging-time 600", "archive", "path flash:sw-$h",
+                                "write-memory", "maximum 5"], hostname="SW1")
+    assert device.mac_static == [("0011.2233.4455", 1, "FastEthernet0/5")] and device.mac_aging == 600
+    assert device.archive == {"path": "flash:sw-$h", "write_memory": True, "maximum": 5}
+    assert "STATIC      Fa0/5" in _show(device, "show mac address-table")
+    assert "sw-SW1-1" in _show(device, "archive config")
+    out = _show(device, "copy running-config tftp://192.168.1.50/SW1-confg")
+    assert "bytes copied" in out and device.backups == ["tftp://192.168.1.50/SW1-confg"]
+    assert is_error(_show(device, "copy running-config tftp://serveur/SW1"))
+    session = apply_commands(device, ["conf t"])
+    assert is_error(session.execute("mac address-table static 0011.2233 vlan 1 interface fa0/5"))
+
+
+def test_ntp_authentifie_et_sources():
+    device = _config("router", ["interface loopback0", "ip address 10.255.0.1 255.255.255.255", "exit",
+                                "ntp authenticate", "ntp authentication-key 1 md5 NtpK3y", "ntp trusted-key 1",
+                                "ntp server 10.0.0.1 key 1 prefer", "ntp source lo0",
+                                "logging source-interface loopback0", "ip ssh source-interface lo0"])
+    assert device.ntp_authenticate and device.ntp_keys == {1: "NtpK3y"} and device.ntp_trusted == {1}
+    assert device.ntp_server_options["10.0.0.1"] == "key 1 prefer"
+    assert device.ntp_source == device.logging_source == device.ssh_source == "Loopback0"
+    assert "ntp server 10.0.0.1 key 1 prefer" in device.running_config()
+
+
+def test_mst_et_span():
+    device = _config("switch", ["spanning-tree mode mst", "spanning-tree mst configuration", "name CAMPUS",
+                                "revision 2", "instance 1 vlan 10,20", "instance 2 vlan 30-40", "exit",
+                                "spanning-tree mst 1 priority 24576", "spanning-tree mst 2 root secondary",
+                                "monitor session 1 source interface fa0/1 - 2 rx",
+                                "monitor session 1 destination interface fa0/24"])
+    assert device.mst_name == "CAMPUS" and device.mst_revision == 2
+    assert device.mst_instances == {1: {10, 20}, 2: set(range(30, 41))}
+    assert device.mst_priority == {1: 24576, 2: 28672}
+    mon = device.monitor_sessions[1]
+    assert mon["dest"] == "FastEthernet0/24" and ("FastEthernet0/1", "rx") in mon["sources"]
+    assert "instance 1 vlan 10,20" in device.running_config()
+    assert "Fa0/24" in _show(device, "show monitor")
+    assert "CAMPUS" in _show(device, "show spanning-tree mst configuration")
+    session = apply_commands(device, ["conf t"])
+    assert is_error(session.execute("monitor session 1 source interface fa0/24"))
+    apply_commands(device, ["conf t", "no monitor session 1"])
+    assert device.monitor_sessions == {}
+
+
+def test_port_security_vieillissement_et_ip_source_guard():
+    device = _config("switch", ["int fa0/3", "switchport mode access", "switchport port-security",
+                                "switchport port-security maximum 2",
+                                "switchport port-security mac-address 0011.2233.4455",
+                                "switchport port-security aging time 10",
+                                "switchport port-security aging type inactivity",
+                                "ip verify source port-security", "exit",
+                                "ip source binding 00aa.bbcc.ddee vlan 1 192.168.1.20 interface fa0/3"])
+    iface = device.intf("fa0/3")
+    assert iface.port_security_macs == ["0011.2233.4455"] and iface.port_security_aging_time == 10
+    assert iface.port_security_aging_type == "inactivity" and iface.ip_verify_source == "port-security"
+    assert device.ip_source_bindings == [("00aa.bbcc.ddee", 1, "192.168.1.20", "FastEthernet0/3")]
+    assert "192.168.1.20" in _show(device, "show ip verify source")
+
+
+def test_dhcpv6_slaac_ospfv3():
+    session = apply_commands(Device("router"), ["conf t"])
+    assert is_error(session.execute("ipv6 router ospf 1"))  # ipv6 unicast-routing d'abord
+    device = _config("router", ["ipv6 unicast-routing", "ipv6 dhcp pool LAN6", "dns-server 2001:DB8::53",
+                                "domain-name tdm.local", "exit", "interface g0/0",
+                                "ipv6 address 2001:db8:1::1/64", "ipv6 nd other-config-flag",
+                                "ipv6 dhcp server LAN6", "ipv6 ospf 1 area 0", "interface g0/1",
+                                "ipv6 address autoconfig", "exit", "ipv6 router ospf 1", "router-id 1.1.1.1",
+                                "passive-interface g0/0"])
+    assert device.dhcpv6_pools["LAN6"] == {"dns": ["2001:db8::53"], "domain": "tdm.local", "address_prefix": None}
+    g0 = device.intf("g0/0")
+    assert g0.ipv6_nd_other and g0.ipv6_dhcp_server == "LAN6" and g0.ospfv3_area == (1, "0")
+    assert device.intf("g0/1").ipv6_autoconfig
+    assert device.ospfv3[1].router_id == "1.1.1.1" and device.ospfv3[1].is_passive("g0/0")
+    assert "ipv6 router ospf 1" in device.running_config() and "ipv6 ospf 1 area 0" in device.running_config()
+    assert "GigabitEthernet0/0 (Area 0)" in _show(device, "show ipv6 protocols")
+
+
+def test_acl_ipv6():
+    device = _config("router", ["ipv6 access-list FILTRE6", "permit tcp 2001:DB8:1::/64 any eq 443",
+                                "deny ipv6 any any log", "int g0/0", "ipv6 traffic-filter FILTRE6 in"])
+    assert device.ipv6_acls["FILTRE6"] == ["permit tcp 2001:db8:1::/64 any eq 443", "deny ipv6 any any log"]
+    assert device.intf("g0/0").ipv6_traffic_filter == {"in": "FILTRE6"}
+
+
+def test_ospf_reseau_timers_authentification():
+    device = _config("router", ["int g0/1", "ip address 10.0.0.1 255.255.255.252", "ip ospf network point-to-point",
+                                "ip ospf hello-interval 5", "ip ospf dead-interval 20",
+                                "ip ospf authentication message-digest", "ip ospf message-digest-key 1 md5 S3cr3t",
+                                "exit", "router ospf 1", "network 10.0.0.0 0.0.0.3 area 0",
+                                "area 0 authentication message-digest"])
+    g1 = device.intf("g0/1")
+    assert (g1.ospf_network, g1.ospf_hello, g1.ospf_dead) == ("point-to-point", 5, 20)
+    assert g1.ospf_auth == "message-digest" and g1.ospf_md5_keys == {1: "S3cr3t"}
+    assert device.ospf[1].area_auth == {"0": "message-digest"}
+    out = _show(device, "show ip ospf interface brief")
+    assert "point-to-point" in out and "md5" in out
+
+
+def test_eigrp_stub_resume_variance():
+    device = _config("router", ["router eigrp 100", "network 10.0.0.0", "eigrp stub", "variance 2", "exit",
+                                "int s0/0/0", "ip summary-address eigrp 100 10.1.0.0 255.255.252.0"])
+    assert device.eigrp[100].stub == "connected summary" and device.eigrp[100].variance == 2
+    assert device.intf("s0/0/0").eigrp_summaries == [(100, "10.1.0.0", "255.255.252.0")]
+    apply_commands(device, ["conf t", "router eigrp 100", "eigrp stub receive-only"])
+    assert device.eigrp[100].stub == "receive-only"
+
+
+def test_bgp_prefix_list_route_map():
+    session = apply_commands(Device("router"), ["conf t", "router bgp 65001"])
+    assert is_error(session.execute("neighbor 203.0.113.1 description FAI"))  # remote-as d'abord
+    device = _config("router", ["ip route 198.51.100.0 255.255.255.0 null0",
+                                "ip prefix-list SORTIE seq 5 permit 198.51.100.0/24",
+                                "ip prefix-list RFC1918 permit 10.0.0.0/8 le 32",
+                                "route-map LP-FAI1 permit 10", "set local-preference 200", "exit",
+                                "router bgp 65001", "bgp router-id 1.1.1.1",
+                                "neighbor 203.0.113.1 remote-as 65000", "neighbor 203.0.113.1 description FAI-1",
+                                "neighbor 203.0.113.1 prefix-list SORTIE out",
+                                "neighbor 203.0.113.1 route-map LP-FAI1 in",
+                                "network 198.51.100.0 mask 255.255.255.0"])
+    bgp = device.bgp
+    nb = bgp.neighbors["203.0.113.1"]
+    assert bgp.asn == 65001 and nb.remote_as == 65000 and nb.description == "FAI-1"
+    assert nb.prefix_lists == {"out": "SORTIE"} and nb.route_maps == {"in": "LP-FAI1"}
+    assert bgp.has_network("198.51.100.0", "255.255.255.0")
+    assert device.plist("SORTIE") == ["permit 198.51.100.0/24"]
+    assert device.plist("RFC1918") == ["permit 10.0.0.0/8 le 32"]
+    assert device.rmap("LP-FAI1", 10).sets == ["local-preference 200"]
+    assert device.has_route("198.51.100.0", "255.255.255.0", "null0")
+    assert "*>" in _show(device, "show ip bgp") and "65000" in _show(device, "show ip bgp summary")
+    session = apply_commands(device, ["conf t"])
+    assert is_error(session.execute("ip prefix-list X permit 10.0.0.0/8 ge 4"))
+
+
+def test_pbr_et_redistribution_avec_route_map():
+    device = _config("router", ["access-list 101 permit ip 192.168.20.0 0.0.0.255 any",
+                                "route-map PBR-INVITES permit 10", "match ip address 101",
+                                "set ip next-hop 10.0.0.6", "exit", "int g0/0", "ip policy route-map PBR-INVITES",
+                                "exit", "router ospf 1", "redistribute static subnets route-map STATIQUES"])
+    entry = device.rmap("PBR-INVITES")
+    assert entry.matches == ["ip address 101"] and entry.sets == ["ip next-hop 10.0.0.6"]
+    assert device.intf("g0/0").policy_route_map == "PBR-INVITES"
+    assert device.ospf[1].redist("static") == "static subnets route-map STATIQUES"
+    apply_commands(device, ["conf t", "route-map PBR-INVITES permit 10", "set ip next-hop 10.0.0.10"])
+    assert device.rmap("PBR-INVITES").sets == ["ip next-hop 10.0.0.10"]
+
+
+def test_vrf_lite():
+    device = _config("router", ["int g0/1", "ip address 10.1.1.1 255.255.255.0", "no shutdown"])
+    session = apply_commands(device, ["conf t", "int g0/1"])
+    assert is_error(session.execute("vrf forwarding CLIENT-A"))  # VRF absente
+    apply_commands(device, ["conf t", "vrf definition CLIENT-A", "rd 65000:1", "address-family ipv4",
+                            "exit-address-family", "exit"])
+    out = session.execute("vrf forwarding CLIENT-A")
+    assert "removed due to enabling VRF CLIENT-A" in out and device.intf("g0/1").ip is None
+    session.execute("ip address 10.1.1.1 255.255.255.0")
+    apply_commands(device, ["conf t", "ip route vrf CLIENT-A 0.0.0.0 0.0.0.0 10.1.1.254"])
+    assert device.has_vrf_route("CLIENT-A", "0.0.0.0", "0.0.0.0", "10.1.1.254")
+    assert "10.1.1.0/24" not in _show(device, "show ip route")
+    assert "10.1.1.0/24" in _show(device, "show ip route vrf CLIENT-A")
+    assert "vrf forwarding CLIENT-A" in device.running_config()
+
+
+def test_aaa_radius_tacacs():
+    device = _config("router", ["aaa new-model", "radius server ISE-1",
+                                "address ipv4 10.0.0.20 auth-port 1812 acct-port 1813",
+                                "key R4d1usK3y", "exit", "aaa group server radius ISE", "server name ISE-1", "exit",
+                                "aaa authentication login default group ISE local",
+                                "aaa authorization exec default group ISE local",
+                                "aaa accounting exec default start-stop group ISE",
+                                "line vty 0 4", "authorization exec default"])
+    assert device.radius_servers["ISE-1"] == {"address": "10.0.0.20", "auth_port": 1812, "acct_port": 1813,
+                                              "key": "R4d1usK3y"}
+    assert device.aaa_groups["ISE"] == {"type": "radius", "servers": ["ISE-1"]}
+    assert device.aaa_authentication["login default"] == "group ISE local"
+    assert device.aaa_authorization["exec default"] == "group ISE local"
+    assert device.aaa_accounting["exec default"] == "start-stop group ISE"
+    assert device.lines["vty"].authorization_exec == "default"
+
+
+def test_snmpv3():
+    device = _config("router", ["snmp-server view SUPERVISION iso included",
+                                "snmp-server group NOC v3 priv read SUPERVISION access 10",
+                                "snmp-server user zabbix NOC v3 auth sha AuthPass1 priv aes 128 PrivPass1",
+                                "snmp-server host 10.0.0.50 version 3 priv zabbix", "snmp-server enable traps"])
+    assert device.snmp_groups["NOC"] == {"level": "priv", "read": "SUPERVISION", "access": "10"}
+    assert device.snmp_users["zabbix"] == {"group": "NOC", "auth": "sha", "priv": "aes 128", "access": None}
+    assert "zabbix NOC" not in device.running_config()  # comme IOS, les utilisateurs v3 n'y apparaissent pas
+    assert "zabbix" in _show(device, "show snmp user")
+    session = apply_commands(device, ["conf t"])
+    assert is_error(session.execute("snmp-server user bob NOC v3 auth sha court"))
+
+
+def test_tunnel_gre_et_ipsec():
+    device = _config("router", ["access-list 110 permit ip 192.168.1.0 0.0.0.255 192.168.2.0 0.0.0.255",
+                                "crypto isakmp policy 10", "encr aes 256", "hash sha256", "authentication pre-share",
+                                "group 14", "lifetime 3600", "exit",
+                                "crypto isakmp key 0 V3ryS3cr3t address 198.51.100.2",
+                                "crypto ipsec transform-set TS esp-aes 256 esp-sha256-hmac", "mode tunnel", "exit",
+                                "crypto map VPN 10 ipsec-isakmp", "set peer 198.51.100.2", "set transform-set TS",
+                                "match address 110", "exit", "int g0/1", "crypto map VPN", "exit",
+                                "interface tunnel 0", "ip address 172.16.0.1 255.255.255.252", "tunnel source g0/1",
+                                "tunnel destination 198.51.100.2", "ip mtu 1400", "ip tcp adjust-mss 1360"])
+    assert device.isakmp_policies[10] == {"encryption": "aes 256", "hash": "sha256", "authentication": "pre-share",
+                                          "group": "14", "lifetime": "3600"}
+    assert device.isakmp_keys == {"198.51.100.2": "V3ryS3cr3t"}
+    assert device.transform_sets["TS"] == {"transforms": ["esp-aes 256", "esp-sha256-hmac"], "mode": "tunnel"}
+    assert device.crypto_maps["VPN"][10] == {"peers": ["198.51.100.2"], "transform_set": "TS", "acl": "110"}
+    tu = device.intf("tu0")
+    assert tu.tunnel_source == "GigabitEthernet0/1" and tu.tunnel_destination == "198.51.100.2" and tu.ip_mtu == 1400
+    assert device.intf("g0/1").crypto_map == "VPN"
+    assert "Tunnel source GigabitEthernet0/1" in _show(device, "show interfaces tunnel 0")
+    assert "crypto map VPN 10 ipsec-isakmp" in device.running_config()
+    session = apply_commands(device, ["conf t", "crypto map VPN 10"])
+    assert is_error(session.execute("set transform-set INCONNU"))
+
+
+def test_qos_mqc_et_copp():
+    device = _config("router", ["class-map match-any VOIX", "match dscp EF", "exit",
+                                "policy-map WAN", "class VOIX", "priority percent 30", "class class-default",
+                                "fair-queue", "exit", "exit", "int g0/1", "service-policy output WAN", "exit",
+                                "policy-map COPP", "class class-default",
+                                "police 64000 conform-action transmit exceed-action drop", "exit", "exit",
+                                "control-plane", "service-policy input COPP"])
+    assert device.class_maps["VOIX"] == {"type": "match-any", "matches": ["dscp ef"]}
+    assert device.policy_maps["WAN"] == {"VOIX": ["priority percent 30"], "class-default": ["fair-queue"]}
+    assert device.intf("g0/1").service_policies == {"output": "WAN"}
+    assert device.control_plane_policy == "COPP"
+    session = apply_commands(device, ["conf t", "policy-map WAN"])
+    assert is_error(session.execute("class INCONNUE"))
+    assert session.prompt.endswith("(config-pmap)#")
+    session.execute("class VOIX")
+    assert session.prompt.endswith("(config-pmap-c)#")
+    session.execute("exit")
+    assert session.prompt.endswith("(config-pmap)#")
+
+
+@pytest.mark.parametrize("exercise", EXERCISES, ids=[e["id"] for e in EXERCISES])
+def test_cours_et_documentation(exercise):
+    """Chaque exercice réseau a un vrai cours et 1 à 3 liens de documentation."""
+    words = len(exercise.get("cours", "").split())
+    assert 180 <= words <= 650, words
+    docs = exercise.get("docs", [])
+    assert 1 <= len(docs) <= 3 and all(d["url"].startswith("https://") and d["title"] for d in docs)
+
+
+def test_dtp_dynamique_et_sources_en_deux_mots():
+    device = _config("switch", ["int g0/1", "switchport mode dynamic auto", "int g0/2",
+                                "switchport mode dynamic desirable", "exit", "interface loopback 0",
+                                "ip address 10.255.0.9 255.255.255.255", "exit", "ntp source loopback 0",
+                                "logging source-interface Loopback 0", "ip ssh source-interface lo0"])
+    assert device.intf("g0/1").mode is None and device.intf("g0/2").mode is None
+    assert device.ntp_source == device.logging_source == device.ssh_source == "Loopback0"
+    session = apply_commands(device, ["conf t", "int g0/1"])
+    assert is_error(session.execute("switchport mode dynamic toujours"))
+
+
+def test_negation_sans_valeur_et_clear():
+    device = _config("router", ["int g0/1", "ip ospf hello-interval 30", "ip ospf cost 50",
+                                "no ip ospf hello-interval", "no ip ospf cost"])
+    assert device.intf("g0/1").ospf_hello is None and device.intf("g0/1").ospf_cost is None
+    session = apply_commands(device, ["conf t", "int g0/1"])
+    assert is_error(session.execute("ip ospf hello-interval"))  # sans « no », la valeur reste exigée
+    session = apply_commands(_config("router", ["router ospf 1"]), [])
+    assert "Reset ALL OSPF" in session.execute("clear ip ospf process")
+    assert is_error(session.execute("clear ip bgp *"))  # BGP non configuré

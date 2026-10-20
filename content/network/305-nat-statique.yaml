@@ -53,3 +53,58 @@ solution: |
   exit
   ip nat inside source list NAT-LAN interface g0/1 overload
   end
+cours: |
+  ## Rendre un serveur joignable depuis Internet
+
+  Le PAT permet aux postes internes de **sortir**, mais il ne permet pas à un client d'Internet
+  d'**entrer** : le routeur ne sait pas vers quel poste envoyer une connexion qu'il n'a pas vu
+  partir. Pour publier un serveur, on crée une traduction **permanente** :
+
+  - **NAT statique** un pour un : une adresse publique entière est associée à une adresse
+    privée (tous les ports) ;
+  - **redirection de port** (*port forwarding*, PAT statique) : un seul port d'une adresse
+    publique est redirigé vers un serveur interne. Plusieurs serveurs peuvent ainsi partager une
+    adresse publique sur des ports différents.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# ip nat inside source static 172.16.100.80 198.51.100.10
+  R1(config)# ip nat inside source static tcp 172.16.100.25 25 198.51.100.11 25
+  R1(config)# ip nat inside source static tcp 172.16.100.30 443 198.51.100.11 8443
+  R1(config)# ip access-list standard LAN-SORTIE
+  R1(config-std-nacl)# permit 172.16.0.0 0.0.255.255
+  R1(config)# ip nat inside source list LAN-SORTIE interface gi0/2 overload
+  R1# show ip nat translations
+  Pro Inside global       Inside local        Outside local  Outside global
+  --- 198.51.100.10       172.16.100.80       ---            ---
+  tcp 198.51.100.11:25    172.16.100.25:25    ---            ---
+  ```
+
+  Les traductions statiques apparaissent **en permanence** dans la table, même sans trafic. Elles
+  coexistent avec le PAT des postes.
+
+  ### Sécurité
+
+  Publier un serveur l'expose à tout Internet. On l'accompagne :
+
+  - d'une ACL d'entrée (ou d'un pare-feu) qui n'autorise que le port publié ;
+  - d'un placement du serveur en **DMZ**, séparée du LAN interne ;
+  - de la mise à jour régulière du service exposé.
+
+  ### Pièges fréquents
+
+  - Oublier `ip nat inside` / `outside` sur les interfaces.
+  - Utiliser comme adresse statique l'adresse de l'interface WAN déjà utilisée par le PAT
+    (possible seulement avec des redirections de ports).
+  - Tester depuis le LAN avec l'adresse publique : le *hairpinning* n'est pas pris en charge par
+    défaut.
+
+  ### Pour le CCNA
+
+  Le NAT statique et sa différence avec le NAT dynamique et le PAT sont au programme.
+docs:
+  - title: "Cisco — NAT Frequently Asked Questions"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/network-address-translation-nat/26704-nat-faq-00.html
+  - title: "Wikipédia — Network address translation"
+    url: https://fr.wikipedia.org/wiki/Network_address_translation

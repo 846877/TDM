@@ -72,3 +72,60 @@ solution: |
   exec-timeout 5 0
   transport input ssh
   end
+cours: |
+  ## Durcir un équipement exposé
+
+  Un routeur en DMZ ou en bordure est une cible : il faut réduire sa **surface d'attaque** et
+  rendre les attaques par mot de passe inefficaces. Mesures classiques :
+
+  | Mesure                                       | Commande                                     |
+  |----------------------------------------------|----------------------------------------------|
+  | longueur minimale des mots de passe          | `security passwords min-length 12`           |
+  | supprimer l'ancien mot de passe faible       | `no enable password`                         |
+  | secret haché                                 | `enable secret ...`                          |
+  | modèle AAA et comptes locaux                 | `aaa new-model` + `aaa authentication login default local` |
+  | blocage après échecs                         | `login block-for 300 attempts 4 within 120`  |
+  | services web d'administration coupés         | `no ip http server` / `no ip http secure-server` |
+  | déconnexion des sessions inactives           | `exec-timeout 5 0`                           |
+  | SSH seulement                                | `transport input ssh`                        |
+
+  ### AAA local (autres valeurs)
+
+  ```
+  R1(config)# username secops privilege 15 secret L0ng-Et-Unique!
+  R1(config)# aaa new-model
+  R1(config)# aaa authentication login default local
+  R1(config)# login block-for 300 attempts 4 within 120
+  R1(config)# login on-failure log
+  R1# show login
+       A login delay of 1 seconds is applied.
+       Router enabled to watch for login Attacks.
+       If more than 4 login failures occur in 120 seconds or less,
+       logins will be disabled for 300 seconds.
+  ```
+
+  `aaa new-model` change la façon dont les lignes s'authentifient : dès qu'il est actif, la liste
+  `default` s'applique à la console et aux VTY. Créer le compte local **avant** évite de
+  s'enfermer dehors. C'est aussi la première étape vers RADIUS/TACACS+.
+
+  ### Le blocage des connexions
+
+  `login block-for` passe l'équipement en *quiet mode* après trop d'échecs : plus aucune
+  connexion pendant la durée indiquée. `login quiet-mode access-class <acl>` laisse passer le
+  réseau d'administration pendant ce temps, pour ne pas se bloquer soi-même.
+
+  ### Pièges fréquents
+
+  - `aaa new-model` sans compte local : la console demande un identifiant inexistant.
+  - Oublier de couper le serveur HTTP (interface web souvent vulnérable).
+  - `min-length` n'affecte que les mots de passe saisis **après** la commande.
+
+  ### Pour le CCNA
+
+  Le durcissement de l'accès aux équipements (mots de passe, AAA local, SSH, services) est au
+  programme du domaine sécurité.
+docs:
+  - title: "Cisco IOS 15.4M&T — références de commandes"
+    url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-4m-t/products-command-reference-list.html
+  - title: "Wikipédia — Cisco IOS"
+    url: https://fr.wikipedia.org/wiki/Cisco_IOS

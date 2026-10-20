@@ -43,3 +43,52 @@ solution: |
   interface range fa0/23 - 24
   spanning-tree guard root
   end
+cours: |
+  ## Protéger la topologie STP
+
+  Le spanning tree fait confiance à tous les BPDU qu'il reçoit. Un switch branché sur une prise
+  murale avec une priorité basse peut devenir **pont racine** : tout le trafic de l'étage
+  passerait alors par ce petit switch, voire par un attaquant. Plusieurs protections existent :
+
+  | Fonction                       | Où l'activer                 | Effet                                  |
+  |--------------------------------|------------------------------|----------------------------------------|
+  | PortFast                       | ports d'accès                | passage immédiat en forwarding         |
+  | **BPDU Guard**                 | ports d'accès (PortFast)     | BPDU reçu → port err-disabled          |
+  | **Root Guard**                 | ports vers les switchs en aval | BPDU supérieur reçu → port bloqué (root-inconsistent) |
+  | Loop Guard                     | ports bloqués / racine       | perte de BPDU → port bloqué plutôt que forwarding |
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW-DIST(config)# spanning-tree mode rapid-pvst
+  SW-DIST(config)# spanning-tree vlan 40,50 root primary
+  SW-DIST(config)# spanning-tree vlan 60 root secondary
+  SW-ACC(config)# spanning-tree portfast default
+  SW-ACC(config)# spanning-tree portfast bpduguard default
+  SW-DIST(config)# interface range gi1/0/10 - 12
+  SW-DIST(config-if-range)# spanning-tree guard root
+  SW-DIST# show spanning-tree inconsistentports
+  SW-ACC# show spanning-tree summary
+  ```
+
+  - `portfast default` active PortFast sur **tous les ports d'accès** (pas sur les trunks) ;
+  - `portfast bpduguard default` active BPDU Guard sur tous les ports PortFast ;
+  - `root primary` / `root secondary` : racine et racine de secours (priorités 24576 et 28672) ;
+  - Root Guard sur les ports qui mènent vers les switchs d'accès : ils ne pourront jamais devenir
+    chemin vers la racine. Le port se rétablit seul quand les BPDU supérieurs cessent.
+
+  ### Pièges fréquents
+
+  - Root Guard sur le port **vers** la racine : il bloque le chemin légitime.
+  - PortFast sur un port qui relie un switch.
+  - Oublier la racine de secours : à la panne de la racine, l'élection redevient aléatoire.
+
+  ### Pour le CCNA
+
+  PortFast, BPDU Guard et le choix du pont racine sont au programme ; Root Guard et Loop Guard
+  sont détaillés dans ENCOR.
+docs:
+  - title: "Wikipédia — Spanning Tree Protocol"
+    url: https://fr.wikipedia.org/wiki/Spanning_Tree_Protocol
+  - title: "Cisco — Understand Rapid Spanning Tree Protocol (802.1w)"
+    url: https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/24062-146.html

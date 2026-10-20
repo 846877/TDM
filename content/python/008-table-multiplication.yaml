@@ -48,3 +48,50 @@ solution: |
   n = int(input())
   for i in range(1, 11):
       print(f"{n} x {i} = {n * i}")
+cours: |
+  ## Convertir la saisie
+
+  `input()` renvoie toujours du texte. Pour calculer, il faut convertir :
+
+  ```python
+  texte = input()      # "7"
+  n = int(texte)       # 7 (int)
+  n = int(input())     # en une seule ligne
+  ```
+
+  `"7" * 3` donne `"777"` (répétition de chaîne) alors que `7 * 3` donne `21` : oublier la
+  conversion produit des résultats surprenants plutôt qu'une erreur. `int("abc")` lève une
+  `ValueError`, `int(" 12 ")` tolère les espaces autour.
+
+  ## Afficher proprement à chaque tour
+
+  Dans une boucle, chaque `print` produit une nouvelle ligne. Les f-strings permettent de
+  construire la ligne exacte demandée :
+
+  ```python
+  prix = 4
+  for quantite in range(1, 4):
+      print(f"{quantite} article(s) : {quantite * prix} €")
+  # 1 article(s) : 4 €
+  # 2 article(s) : 8 €
+  # 3 article(s) : 12 €
+  ```
+
+  ## Sortie exacte
+
+  Une moulinette en mode « entrée/sortie » compare ton affichage **caractère par
+  caractère** (les espaces en fin de ligne sont tolérés ici). Vérifie :
+
+  - les espaces autour des symboles (`x`, `=`) ;
+  - le nombre de lignes (de 1 à 10 **inclus** : pense à la borne exclue de `range`) ;
+  - l'absence de texte en trop (pas de `input("Nombre ? ")`, qui afficherait la question).
+
+  ## Alternatives d'affichage
+
+  `print(a, "x", b)` sépare les arguments par une espace ; `sep=""` supprime ce séparateur.
+  Les f-strings restent la façon la plus lisible et la plus utilisée aujourd'hui.
+docs:
+  - title: Documentation Python — int()
+    url: https://docs.python.org/fr/3/library/functions.html#int
+  - title: Tutoriel — entrées et sorties
+    url: https://docs.python.org/fr/3/tutorial/inputoutput.html

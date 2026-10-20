@@ -110,3 +110,68 @@ solution: |
       if not 0 <= age <= 130:
           raise ValeurInvalide("age", "l'âge doit être entre 0 et 130")
       return {"nom": formulaire["nom"].strip(), "age": age}
+cours: |
+  ## Attraper une exception
+
+  ```python
+  try:
+      port = int(saisie)
+  except ValueError:
+      print("Ce n'est pas un nombre")
+  else:
+      print("Port :", port)      # seulement si aucune exception
+  finally:
+      print("Toujours exécuté")
+  ```
+
+  On attrape l'exception la plus **précise** possible. Un `except:` nu (ou
+  `except Exception`) masque les vrais bugs : à éviter, sauf au plus haut niveau d'un
+  programme pour journaliser.
+
+  ## Définir ses propres exceptions
+
+  Une exception est une classe qui hérite de `Exception`. Une **hiérarchie** permet à
+  l'appelant de choisir son niveau de détail :
+
+  ```python
+  class ErreurReseau(Exception):
+      pass
+
+  class HoteInjoignable(ErreurReseau):
+      def __init__(self, hote, message):
+          super().__init__(message)   # str(e) renverra message
+          self.hote = hote
+
+  try:
+      raise HoteInjoignable("srv1", "délai dépassé")
+  except ErreurReseau as e:           # attrape aussi les sous-classes
+      print(e.hote, e)                # srv1 délai dépassé
+  ```
+
+  `super().__init__(message)` transmet le message à la classe `Exception`, qui l'utilise pour
+  `str(e)` et pour l'affichage du traceback. On ajoute ensuite ses propres attributs.
+
+  ## Chaîner : `raise ... from ...`
+
+  Quand on traduit une exception de bas niveau en exception métier, on garde la cause :
+
+  ```python
+  try:
+      valeur = int(texte)
+  except ValueError as erreur:
+      raise ErreurReseau("port invalide") from erreur
+  ```
+
+  La nouvelle exception a alors `__cause__` égal à l'originale, et le traceback affiche les
+  deux : précieux pour déboguer.
+
+  ## Ordre des vérifications
+
+  Valide dans l'ordre demandé : les tests vérifient quelle exception est levée quand
+  plusieurs problèmes coexistent. Une valeur vide (`""` ou espaces) doit souvent être traitée
+  comme absente : pense à `strip()`.
+docs:
+  - title: Tutoriel — erreurs et exceptions
+    url: https://docs.python.org/fr/3/tutorial/errors.html
+  - title: Exceptions natives (hiérarchie)
+    url: https://docs.python.org/fr/3/library/exceptions.html

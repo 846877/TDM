@@ -151,3 +151,58 @@ solution: |
 
       def __repr__(self):
           return f"Matrice({self._lignes})"
+cours: |
+  ## `__getitem__` et les tuples d'indices
+
+  `m[i, j]` appelle `m.__getitem__((i, j))` : la virgule crée un **tuple**. La méthode
+  peut donc distinguer `m[i]` (un entier) de `m[i, j]` (un tuple) :
+
+  ```python
+  class Grille:
+      def __getitem__(self, cle):
+          if isinstance(cle, tuple):
+              ligne, col = cle
+              return self._cases[ligne][col]
+          return tuple(self._cases[cle])
+
+      def __setitem__(self, cle, valeur):
+          ligne, col = cle
+          self._cases[ligne][col] = valeur
+  ```
+
+  Les indices négatifs fonctionnent gratuitement si on délègue à une liste.
+
+  ## Rendre l'objet itérable et mesurable
+
+  `__len__` permet `len(m)`, `__iter__` permet `for`. Si `__iter__` n'est pas défini mais
+  que `__getitem__` accepte des entiers, Python sait déjà itérer (protocole historique),
+  mais un `__iter__` explicite est plus clair.
+
+  ## L'opérateur `@`
+
+  Depuis Python 3.5, `a @ b` appelle `a.__matmul__(b)` : il a été ajouté précisément pour
+  le produit matriciel (NumPy l'utilise).
+
+  ## Encapsulation et copies défensives
+
+  Le constructeur doit **copier** les lignes reçues : sinon, modifier la liste d'origine
+  modifierait la matrice. De même, renvoyer des tuples (immuables) pour les lignes empêche
+  l'appelant de modifier l'état interne par accident. Valider les données à la construction
+  (lignes de même longueur, matrice non vide) garantit l'invariant pour toutes les autres
+  méthodes.
+
+  ## Égalité
+
+  `__eq__` renvoie `NotImplemented` face à un autre type, ce qui donne `False` pour `==`.
+  Une classe mutable qui définit `__eq__` n'est plus hachable, ce qui est voulu : sa valeur
+  peut changer.
+
+  ## `__repr__`
+
+  Un `repr` qui recrée l'objet facilite énormément le débogage et les messages d'erreur des
+  tests.
+docs:
+  - title: Référence — émuler les conteneurs (__getitem__…)
+    url: https://docs.python.org/fr/3/reference/datamodel.html#emulating-container-types
+  - title: Référence — émulation des types numériques (__matmul__)
+    url: https://docs.python.org/fr/3/reference/datamodel.html#emulating-numeric-types

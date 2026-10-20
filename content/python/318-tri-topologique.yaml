@@ -177,3 +177,52 @@ solution: |
           bloquees = {t for t, n in restants.items() if n > 0}
           raise CycleError(_trouver_cycle(dependances, bloquees))
       return resultat
+cours: |
+  ## Ordonner des dépendances
+
+  Un graphe orienté **acyclique** (DAG) de dépendances admet un ordre où chaque tâche vient
+  après ses prérequis : un **tri topologique**. `apt`, `pip`, `make`, systemd (`After=`),
+  Terraform ou Ansible le calculent en permanence.
+
+  ## Algorithme de Kahn
+
+  1. Calculer le **degré entrant** de chaque tâche (son nombre de prérequis non satisfaits).
+  2. Mettre dans une structure « disponibles » toutes les tâches de degré 0.
+  3. Tant qu'il y a des disponibles : en retirer une, l'ajouter au résultat, et décrémenter
+     le degré de chaque tâche qui en dépend ; celles qui tombent à 0 deviennent disponibles.
+
+  Il faut donc le graphe **inverse** : pour chaque prérequis, la liste des tâches qui en
+  dépendent (`defaultdict(list)`). Pense à inclure les prérequis qui ne sont pas des clés.
+
+  ## Un résultat déterministe
+
+  Plusieurs ordres sont souvent valides. Pour toujours choisir la plus petite tâche
+  disponible, la structure « disponibles » est un **tas** (`heapq`) : O(log n) par opération.
+
+  ## Par étapes (niveaux)
+
+  Pour paralléliser, on traite les disponibles **par vagues** : toutes les tâches de degré 0
+  forment l'étape 1 ; en les retirant, celles qui tombent à 0 forment l'étape 2, etc. C'est un
+  BFS par niveaux sur le graphe.
+
+  ## Détecter les cycles
+
+  S'il reste des tâches non traitées quand plus aucune n'est disponible, elles font partie
+  d'un cycle (ou en dépendent) : aucune ne pourra jamais atteindre le degré 0. On lève alors
+  une exception dédiée, idéalement avec les tâches concernées.
+
+  ```python
+  class ErreurConfig(Exception):
+      """Erreur métier, sous-classe d'une exception existante si pertinent."""
+  ```
+
+  ## La bibliothèque standard
+
+  `graphlib.TopologicalSorter` (Python 3.9+) implémente tout cela, y compris le mode
+  parallèle (`get_ready` / `done`) et `CycleError`. Complexité de Kahn : O(V + E), ou
+  O((V + E) log V) avec le tas.
+docs:
+  - title: Module graphlib (TopologicalSorter)
+    url: https://docs.python.org/fr/3/library/graphlib.html
+  - title: Wikipédia — Tri topologique
+    url: https://fr.wikipedia.org/wiki/Tri_topologique

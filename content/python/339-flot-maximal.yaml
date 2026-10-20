@@ -1,0 +1,208 @@
+title: Flot maximal et coupe minimale
+level: expert
+order: 39
+tags: [graphes, algorithmes, réseau, bfs]
+summary: Calculer le débit maximal entre deux routeurs avec Edmonds-Karp et trouver les liens critiques.
+description: |
+  Un réseau est décrit par un dictionnaire `capacites` `{(u, v): capacité}` : le lien orienté
+  de `u` vers `v` peut transporter au plus `capacité` (entier ≥ 0, par exemple en Gbit/s).
+  Les deux sens d'un même lien peuvent figurer séparément, avec des capacités différentes.
+
+  1. `flot_maximal(capacites, source, puits)` renvoie `(valeur, flots)` : `valeur` est le
+     débit maximal de `source` vers `puits` et `flots` un dictionnaire `{(u, v): flux}`
+     ne contenant que les arcs de `capacites` de flux **strictement positif**. Les flux doivent
+     respecter les capacités et la **conservation** (en chaque nœud autre que la source et le
+     puits, ce qui entre égale ce qui sort) ; pour deux arcs opposés, au plus un des deux porte
+     du flux. Utilise l'algorithme d'**Edmonds-Karp** (chemins augmentants trouvés en largeur).
+     `source == puits` lève `ValueError` ; un puits inaccessible donne `(0, {})`.
+  2. `coupe_minimale(capacites, source, puits)` renvoie `(valeur, liens)` : `liens` est la
+     liste triée des arcs d'une coupe minimale (les arcs de capacité > 0 qui vont de
+     l'ensemble des nœuds encore accessibles depuis la source dans le graphe résiduel vers les
+     autres). La somme de leurs capacités vaut le flot maximal : ce sont les liens qui
+     limitent le débit.
+
+  ```python
+  c = {("s", "a"): 10, ("s", "b"): 5, ("a", "b"): 15, ("a", "t"): 5, ("b", "t"): 10}
+  flot_maximal(c, "s", "t")[0]        # 15
+  coupe_minimale(c, "s", "t")         # (15, [("s", "a"), ("s", "b")])
+  ```
+starter: |
+  from collections import defaultdict, deque
+
+
+  def flot_maximal(capacites, source, puits):
+      pass
+
+
+  def coupe_minimale(capacites, source, puits):
+      pass
+tests: |
+  import random
+  import time
+
+  def verifier_flot(capacites, source, puits, valeur, flots):
+      noeuds = {u for u, v in capacites} | {v for u, v in capacites}
+      for arc, f in flots.items():
+          assert arc in capacites, f"arc inconnu {arc}"
+          assert 0 < f <= capacites[arc], f"capacité violée sur {arc}"
+          u, v = arc
+          assert flots.get((v, u), 0) == 0, f"flux dans les deux sens sur {arc}"
+      bilan = {n: 0 for n in noeuds}
+      for (u, v), f in flots.items():
+          bilan[u] -= f
+          bilan[v] += f
+      for n in noeuds - {source, puits}:
+          assert bilan[n] == 0, f"conservation violée en {n}"
+      assert bilan.get(puits, 0) == valeur
+
+  C = {("s", "a"): 10, ("s", "b"): 5, ("a", "b"): 15, ("a", "t"): 5, ("b", "t"): 10}
+
+  def test_exemple():
+      "flot_maximal : exemple"
+      valeur, flots = solution.flot_maximal(C, "s", "t")
+      assert valeur == 15
+      verifier_flot(C, "s", "t", valeur, flots)
+
+  def test_classique():
+      "flot_maximal : graphe de CLRS"
+      c = {("s", "v1"): 16, ("s", "v2"): 13, ("v2", "v1"): 4, ("v1", "v3"): 12, ("v3", "v2"): 9,
+           ("v2", "v4"): 14, ("v4", "v3"): 7, ("v3", "t"): 20, ("v4", "t"): 4}
+      valeur, flots = solution.flot_maximal(c, "s", "t")
+      assert valeur == 23
+      verifier_flot(c, "s", "t", valeur, flots)
+
+  def test_arcs_opposes():
+      "flot_maximal : liens bidirectionnels"
+      c = {("s", "a"): 4, ("a", "s"): 4, ("a", "b"): 3, ("b", "a"): 3, ("b", "t"): 4, ("s", "b"): 1, ("t", "b"): 9}
+      valeur, flots = solution.flot_maximal(c, "s", "t")
+      assert valeur == 4
+      verifier_flot(c, "s", "t", valeur, flots)
+
+  def test_cas_limites():
+      "flot_maximal : cas limites"
+      assert solution.flot_maximal({("s", "a"): 3, ("b", "t"): 3}, "s", "t") == (0, {})
+      assert solution.flot_maximal({("s", "t"): 0}, "s", "t") == (0, {})
+      try:
+          solution.flot_maximal(C, "s", "s")
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("ValueError attendue")
+
+  def test_coupe():
+      "coupe_minimale"
+      assert solution.coupe_minimale(C, "s", "t") == (15, [("s", "a"), ("s", "b")])
+      c = {("s", "a"): 1, ("a", "t"): 100, ("s", "b"): 100, ("b", "t"): 2}
+      assert solution.coupe_minimale(c, "s", "t") == (3, [("b", "t"), ("s", "a")])
+
+  def test_aleatoire_et_performances():
+      "flot et coupe sur des graphes aléatoires"
+      rng = random.Random(4)
+      debut = time.perf_counter()
+      for taille in (10, 30, 120):
+          c = {}
+          for _ in range(taille * 5):
+              u, v = rng.randrange(taille), rng.randrange(taille)
+              if u != v:
+                  c[(u, v)] = rng.randint(1, 50)
+          valeur, flots = solution.flot_maximal(c, 0, taille - 1)
+          verifier_flot(c, 0, taille - 1, valeur, flots)
+          v2, liens = solution.coupe_minimale(c, 0, taille - 1)
+          assert v2 == valeur == sum(c[l] for l in liens)
+      assert time.perf_counter() - debut < 5
+solution: |
+  from collections import defaultdict, deque
+
+
+  def _residuel(capacites, source, puits):
+      if source == puits:
+          raise ValueError("la source et le puits doivent être distincts")
+      residuel = defaultdict(lambda: defaultdict(int))
+      for (u, v), c in capacites.items():
+          residuel[u][v] += c
+          residuel[v][u] += 0          # crée l'arc retour
+      valeur = 0
+      while True:
+          parents = {source: None}
+          file = deque([source])
+          while file and puits not in parents:
+              u = file.popleft()
+              for v, reste in residuel[u].items():
+                  if reste > 0 and v not in parents:
+                      parents[v] = u
+                      file.append(v)
+          if puits not in parents:
+              return valeur, residuel, parents
+          # capacité du goulot le long du chemin trouvé
+          goulot, v = float("inf"), puits
+          while parents[v] is not None:
+              goulot = min(goulot, residuel[parents[v]][v])
+              v = parents[v]
+          v = puits
+          while parents[v] is not None:
+              u = parents[v]
+              residuel[u][v] -= goulot
+              residuel[v][u] += goulot
+              v = u
+          valeur += goulot
+
+
+  def flot_maximal(capacites, source, puits):
+      valeur, residuel, _ = _residuel(capacites, source, puits)
+      flots = {}
+      for (u, v), c in capacites.items():
+          net = c - residuel[u][v]           # flux net de u vers v (négatif s'il va de v vers u)
+          if net > 0:
+              flots[(u, v)] = net
+      return valeur, flots
+
+
+  def coupe_minimale(capacites, source, puits):
+      valeur, _, accessibles = _residuel(capacites, source, puits)
+      liens = sorted((u, v) for (u, v), c in capacites.items()
+                     if c > 0 and u in accessibles and v not in accessibles)
+      return valeur, liens
+cours: |
+  ## Le problème
+
+  Entre deux sites reliés par un maillage de liens de capacités différentes, quel débit
+  maximal peut-on faire passer ? Le **flot maximal** répond à cette question, mais aussi à des
+  problèmes d'affectation (tâches → machines), d'évacuation ou de couplage biparti.
+
+  ## Graphe résiduel et chemins augmentants
+
+  L'idée de Ford-Fulkerson : tant qu'il existe un chemin de la source au puits où chaque arc a
+  encore de la capacité disponible, on y pousse autant de flux que le permet son **goulot**.
+  La subtilité, c'est le **graphe résiduel** : pousser `f` sur `u → v` diminue de `f` la
+  capacité restante de `u → v` et **augmente** de `f` celle de `v → u`. Cet arc retour permet
+  à un chemin ultérieur d'**annuler** une partie d'un choix précédent, sans quoi l'algorithme
+  glouton resterait bloqué sur une solution sous-optimale.
+
+  ## Edmonds-Karp : chercher en largeur
+
+  Choisir les chemins augmentants par un **parcours en largeur** (le plus court en nombre
+  d'arcs) garantit une complexité O(V × E²), indépendante des valeurs de capacité. Une file
+  `collections.deque` et un dictionnaire de parents suffisent ; on remonte les parents depuis
+  le puits pour trouver le goulot puis mettre à jour le résiduel.
+
+  ## Arcs dans les deux sens
+
+  Si `u → v` et `v → u` existent tous les deux (un lien full-duplex), on additionne
+  capacité directe et arc retour dans le même compteur résiduel. Le flux réel se lit ensuite
+  comme un flux **net** : des flux qui se croisent sur un même lien s'annulent.
+
+  ## Théorème flot maximal / coupe minimale
+
+  Quand plus aucun chemin augmentant n'existe, les nœuds encore accessibles depuis la source
+  forment un ensemble `S`. Les arcs qui sortent de `S` sont saturés et leur capacité totale
+  égale le flot : c'est une **coupe minimale**. En termes réseau, ce sont les liens qui
+  limitent le débit et qu'il faudrait renforcer en priorité, ou les points de rupture
+  qu'un attaquant viserait.
+
+  ## Pour aller plus loin
+
+  Dinic (graphe de niveaux + flot bloquant) et push-relabel sont bien plus rapides sur de
+  grands graphes ; la bibliothèque `networkx` les fournit (`maximum_flow`, `minimum_cut`).
+docs:
+  - title: Module collections (deque, defaultdict)
+    url: https://docs.python.org/fr/3/library/collections.html

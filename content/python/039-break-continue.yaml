@@ -1,0 +1,146 @@
+title: Lire jusqu'à « fin »
+level: debutant
+order: 39
+tags: [while, break, continue, input]
+summary: Contrôler une boucle avec break et continue.
+mode: stdio
+description: |
+  Ton programme lit des lignes une par une avec `input()` et additionne les nombres entiers
+  qu'elles contiennent, avec ces règles :
+
+  - une ligne vide ou qui commence par `#` (un commentaire) est **ignorée** (`continue`) ;
+  - la ligne `fin` **arrête** la lecture (`break`) : les lignes suivantes ne sont pas lues ;
+  - toute autre ligne contient un entier à ajouter au total.
+
+  À la fin, affiche le nombre de valeurs additionnées et le total :
+
+  ```
+  Valeurs : 3
+  Total : 42
+  ```
+
+  Exemple d'entrée :
+
+  ```
+  # relevés du matin
+  10
+
+  30
+  2
+  fin
+  1000
+  ```
+
+  La ligne `fin` est toujours présente.
+starter: |
+  # Écris ton code ici
+cases:
+  - name: Exemple de l'énoncé
+    input: |
+      # relevés du matin
+      10
+
+      30
+      2
+      fin
+      1000
+    output: |
+      Valeurs : 3
+      Total : 42
+  - name: Rien à additionner
+    input: |
+      # vide
+      fin
+    output: |
+      Valeurs : 0
+      Total : 0
+  - name: Nombres négatifs et commentaires
+    input: |
+      -5
+      #12
+      20
+      # -100
+      -3
+      fin
+      # fin
+    output: |
+      Valeurs : 3
+      Total : 12
+solution: |
+  total = 0
+  nombre = 0
+  while True:
+      ligne = input()
+      if ligne == "fin":
+          break
+      if ligne == "" or ligne.startswith("#"):
+          continue
+      total += int(ligne)
+      nombre += 1
+  print(f"Valeurs : {nombre}")
+  print(f"Total : {total}")
+cours: |
+  ## La boucle « infinie » contrôlée
+
+  Quand la condition d'arrêt dépend de ce qu'on lit **pendant** la boucle, on écrit souvent :
+
+  ```python
+  while True:
+      commande = input()
+      if commande == "quitter":
+          break
+      print("Exécution de", commande)
+  ```
+
+  `while True` tourne indéfiniment ; c'est le `break` qui en sort. Ce motif évite de devoir
+  lire une première fois avant la boucle puis une seconde fois à la fin de chaque tour.
+
+  ## `break` : sortir immédiatement
+
+  `break` quitte la boucle **la plus proche** (pas les boucles englobantes) et l'exécution
+  reprend juste après. Le reste du corps n'est pas exécuté.
+
+  ## `continue` : passer au tour suivant
+
+  `continue` saute la fin du corps et revient au test de la boucle (ou à l'élément suivant
+  pour un `for`). On l'utilise pour **filtrer** au début du corps les cas à ignorer, ce qui
+  évite d'imbriquer tout le reste dans un `if` :
+
+  ```python
+  for ligne in lignes:
+      if not ligne.strip():
+          continue          # ligne vide : on passe
+      if ligne.startswith("#"):
+          continue          # commentaire : on passe
+      traiter(ligne)        # le cas « normal » reste peu indenté
+  ```
+
+  Cette technique des **clauses de garde** rend le code plus lisible.
+
+  ## Ordre des tests
+
+  Dans une boucle de lecture, l'ordre compte : le test d'arrêt vient en général en premier,
+  puis les filtres, puis le traitement. Une ligne vide ne peut pas être convertie avec
+  `int("")` (`ValueError`) : elle doit être écartée **avant** la conversion.
+
+  ## `startswith`
+
+  `ligne.startswith("#")` est plus sûr que `ligne[0] == "#"`, qui lève une `IndexError` sur
+  une chaîne vide.
+
+  ## Un format très courant
+
+  Ignorer les lignes vides et les commentaires `#` est exactement ce que font les programmes
+  qui lisent des fichiers de configuration Unix (`/etc/hosts`, `/etc/fstab`, `sshd_config`,
+  crontab). Tu écriras souvent cette boucle.
+
+  ## `else` sur une boucle
+
+  Pour la culture : une boucle peut avoir un bloc `else`, exécuté seulement si elle s'est
+  terminée **sans** `break`. C'est pratique pour une recherche (« pas trouvé »), mais peu
+  connu : commente-le si tu l'utilises.
+docs:
+  - title: Tutoriel — break, continue et else sur les boucles
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html
+  - title: Méthode str.startswith
+    url: https://docs.python.org/fr/3/library/stdtypes.html#str.startswith

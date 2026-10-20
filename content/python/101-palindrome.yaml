@@ -36,3 +36,52 @@ solution: |
   def est_palindrome(texte):
       propre = [c.lower() for c in texte if c.isalnum()]
       return propre == propre[::-1]
+cours: |
+  ## Normaliser avant de comparer
+
+  Beaucoup de problèmes de texte se résolvent en deux temps : **nettoyer** la donnée, puis
+  appliquer un test simple. Pour filtrer les caractères d'une chaîne, on construit une
+  nouvelle chaîne avec seulement ceux qu'on garde :
+
+  ```python
+  brut = "Tél : 06-12-34"
+  chiffres = "".join(c for c in brut if c.isdigit())   # "061234"
+  ```
+
+  `c for c in brut if ...` est une **expression génératrice** : elle produit les caractères
+  retenus un par un, et `"".join` les recolle. `str.isalnum()` est vrai pour les lettres
+  (accents compris) et les chiffres. Pour ignorer la casse, `lower()` (ou `casefold()`,
+  plus agressif, qui transforme par exemple `ß` en `ss`).
+
+  ## Comparer une séquence avec elle-même
+
+  Deux stratégies classiques :
+
+  1. **Construire la version inversée** (slicing avec un pas négatif) et comparer. Simple,
+     mais crée une copie : O(n) en mémoire.
+  2. **Deux pointeurs** : un indice `i` part du début, un indice `j` de la fin ; on compare
+     `s[i]` et `s[j]`, puis on rapproche les indices jusqu'à ce qu'ils se croisent. On
+     s'arrête au premier désaccord : O(1) mémoire supplémentaire.
+
+  ```python
+  i, j = 0, len(s) - 1
+  while i < j:
+      ...
+      i += 1
+      j -= 1
+  ```
+
+  La technique des deux pointeurs revient très souvent (somme de deux nombres dans une
+  liste triée, fusion, inversion sur place…).
+
+  ## Cas limites
+
+  - La chaîne vide et une chaîne sans aucun caractère alphanumérique sont des palindromes
+    (rien ne contredit la symétrie).
+  - Les accents : `"é"` et `"e"` sont différents. Pour les assimiler, il faudrait le module
+    `unicodedata` (décomposition NFD), ce que l'exercice ne demande pas.
+docs:
+  - title: Méthodes des chaînes (isalnum, lower…)
+    url: https://docs.python.org/fr/3/library/stdtypes.html#string-methods
+  - title: Méthode str.join
+    url: https://docs.python.org/fr/3/library/stdtypes.html#str.join
