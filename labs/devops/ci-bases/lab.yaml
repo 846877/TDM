@@ -1,0 +1,346 @@
+title: Bases de l'intégration continue
+level: debutant
+order: 10
+tags: [ci, tests, make, pytest, lint, hooks, artefacts]
+summary: Construire pas à pas une chaîne d'intégration continue - tests, Makefile, analyse statique, rapport JUnit, artefact versionné, script de pipeline, hook pre-commit et mini-serveur de CI.
+build: .
+shell: bash
+user: eleve
+workdir: /home/eleve/projet
+description: |
+  Un poste Ubuntu (utilisateur `eleve`) avec `git`, `make`, Python 3, **pytest** et **pyflakes**.
+
+  Dans **`~/projet`** se trouve `calc`, une petite bibliothèque Python, avec ses tests (`tests/`) et un
+  fichier `VERSION`. C'est un dépôt Git dont le dépôt partagé est **`/srv/git/calc.git`**.
+
+  Avant de découvrir GitLab CI, GitHub Actions ou Jenkins, tu vas reconstruire **à la main** ce que fait
+  une plateforme de CI : lancer les tests, analyser le code, produire un rapport et un artefact, enchaîner
+  le tout dans un pipeline qui s'arrête à la première erreur, puis le déclencher automatiquement à chaque
+  commit et à chaque push.
+
+  Lance toujours les tests depuis `~/projet` avec **`python3 -m pytest`** (cette forme ajoute le dossier
+  courant au chemin d'import de Python).
+cours: |
+  ## L'intégration continue : vérifier chaque changement, automatiquement
+
+  L'**intégration continue** (CI) consiste à intégrer souvent le travail de chacun dans la branche
+  commune, et à **vérifier automatiquement** chaque changement : compilation, analyse statique, tests,
+  construction d'un artefact. Un problème est détecté quelques minutes après le commit qui l'a introduit,
+  quand il est encore facile à corriger, et non des semaines plus tard.
+
+  ```
+   commit ──> push ──> serveur de CI ──> pipeline
+                                        ┌──────┐   ┌──────┐   ┌───────┐
+                                        │ lint │──>│ test │──>│ build │──> artefact
+                                        └──────┘   └──────┘   └───────┘
+                                     chaque étape doit réussir pour passer à la suivante
+                                            │
+                                            └──> statut (succès/échec), rapports, notification
+  ```
+
+  La **livraison continue** (CD) prolonge la chaîne : l'artefact validé est déployé automatiquement en
+  recette, puis en production, sur décision ou sans intervention.
+
+  ### Les briques
+
+  - **Tests automatisés** : unitaires (une fonction), d'intégration (plusieurs composants), de bout en
+    bout. Leur code de retour (0 = succès) est ce qui pilote la CI.
+  - **Analyse statique** (*lint*) : repère sans exécuter le code les imports inutiles, variables non
+    définies, erreurs de style (pyflakes, flake8, ruff, shellcheck, hadolint…).
+  - **Rapports** : le format **JUnit XML** est compris par toutes les plateformes, qui affichent alors
+    les tests en échec.
+  - **Artefact** : ce que l'on livre (archive, paquet, image Docker), nommé avec sa **version** et
+    accompagné d'une **somme de contrôle**.
+  - **Un point d'entrée unique** : `make` ou un script, pour que la CI et le développeur lancent
+    exactement les mêmes commandes.
+  - **Déclencheurs** : un hook `pre-commit` sur le poste (retour immédiat), un hook serveur ou un webhook
+    qui lance le pipeline après chaque push.
+
+  ### Mémo make
+
+  ```make
+  .PHONY: all test lint clean      # cibles qui ne sont pas des fichiers
+  all: lint test                   # la première cible est celle par défaut
+  test:
+  <TAB>python3 -m pytest -q        # les recettes commencent par une TABULATION
+  ```
+
+  `make -n cible` affiche les commandes sans les exécuter. `$(shell cat VERSION)` lit un fichier, et une
+  recette qui échoue arrête make avec un code non nul.
+
+  ### Pièges
+
+  - Des tests qui dépendent de l'ordre, du réseau ou de l'heure : ils échouent au hasard (*flaky*), et
+    l'équipe finit par ignorer le rouge.
+  - Un pipeline qui continue après une erreur : `set -e` dans les scripts, `&&` entre les commandes.
+  - « Ça marche sur mon poste » : la CI doit partir d'un état propre (clone neuf, dépendances
+    déclarées).
+  - Corriger un test pour qu'il passe au lieu de corriger le code.
+  - Un pipeline trop long : on ne l'attend plus. Les vérifications rapides passent en premier.
+
+  ### Bonnes pratiques
+
+  Le pipeline est **versionné avec le code**, rapide, reproductible et **bloquant** : une branche rouge
+  ne se fusionne pas. On le casse rarement et on le répare tout de suite. Les artefacts sont construits
+  une seule fois, puis promus d'un environnement à l'autre.
+
+  ### Pour réviser
+
+  1. Pourquoi l'ordre lint → test → build ?
+  2. Comment une plateforme de CI sait-elle qu'une étape a échoué ?
+  3. Quelle différence entre un hook `pre-commit` et un pipeline lancé après un push ?
+  4. Pourquoi nommer un artefact avec sa version et publier sa somme de contrôle ?
+docs:
+  - title: Documentation de pytest
+    url: https://docs.pytest.org/en/stable/
+  - title: Manuel de GNU make
+    url: https://www.gnu.org/software/make/manual/make.html
+  - title: Pro Git - Crochets Git (hooks)
+    url: https://git-scm.com/book/fr/v2/Personnalisation-de-Git-Crochets-Git
+  - title: Martin Fowler - Continuous Integration
+    url: https://martinfowler.com/articles/continuousIntegration.html
+exercises:
+  - id: ci-tests
+    title: Lancer les tests et corriger le code
+    description: |
+      Lance les tests : `python3 -m pytest` depuis `~/projet`. L'un d'eux échoue. Lis le message, trouve le
+      bogue dans **`calc/`** et corrige-le. Les fichiers de `tests/` ne doivent **pas** être modifiés : un
+      test qui échoue signale un problème du code, pas du test.
+    hint: "Le test test_moyenne échoue : regarde la formule de moyenne() dans calc/operations.py"
+    cours: |
+      **pytest** découvre automatiquement les fichiers `test_*.py` et les fonctions ou méthodes `test_*`, les
+      exécute et résume le résultat : un point par test réussi, `F` pour un échec, `E` pour une erreur
+      (exception inattendue). Son **code de retour** est 0 si tout passe, 1 si au moins un test échoue :
+      c'est ce code qu'exploite une plateforme de CI.
+
+      Le rapport d'échec affiche l'assertion, les valeurs comparées (`assert 3.0 == 2`) et la ligne
+      concernée. Options utiles : `-q` (sortie courte), `-v` (un test par ligne), `-x` (s'arrêter au premier
+      échec), `-k motif` (filtrer par nom), `--lf` (relancer les derniers échecs).
+
+      pytest exécute aussi les tests écrits avec `unittest`, la bibliothèque standard de Python, comme ici.
+      Un test est un contrat : on ne le modifie que si le comportement attendu change vraiment.
+    checks:
+      - desc: Tous les tests passent
+        run: cd /home/eleve/projet && python3 -m pytest -q -p no:cacheprovider tests >/dev/null 2>&1
+      - desc: Les fichiers de tests n'ont pas été modifiés
+        run: cd /home/eleve/projet && sha256sum --quiet -c /opt/ci-reference/tests.sha256
+  - id: ci-make
+    title: Un Makefile comme point d'entrée
+    description: |
+      Crée **`~/projet/Makefile`** avec les cibles :
+      - `test` : lance `python3 -m pytest -q` ;
+      - `lint` : lance l'analyse statique `python3 -m pyflakes calc tests` (elle signalera des problèmes : tu
+        les corrigeras à l'exercice suivant) ;
+      - `clean` : supprime les dossiers `__pycache__`, `.pytest_cache`, `dist` et `rapports` ;
+      - `all` : **première cible**, donc celle par défaut ; elle dépend de `lint` puis `test`.
+
+      Déclare ces cibles comme `.PHONY`.
+    hint: "Les recettes commencent par une tabulation ; all: lint test ; clean: rm -rf dist rapports .pytest_cache et find . -name __pycache__ -prune -exec rm -rf {} +"
+    cours: |
+      **make** lit un `Makefile` composé de **règles** : `cible: dépendances`, puis une ou plusieurs lignes de
+      **recette**, chacune commençant obligatoirement par une **tabulation** (l'erreur « missing separator »
+      signale des espaces). make exécute d'abord les dépendances, puis la recette ; il s'arrête dès qu'une
+      commande renvoie un code non nul.
+
+      À l'origine, une cible est un fichier à produire, reconstruit seulement s'il est plus ancien que ses
+      dépendances. Pour des cibles qui sont des **actions** (`test`, `clean`), on les déclare dans
+      `.PHONY` : sinon, un fichier nommé `test` dans le dossier empêcherait la recette de s'exécuter.
+
+      Sans argument, `make` lance la **première** cible du fichier. `make -n` affiche ce qui serait exécuté.
+      Un Makefile donne à toute l'équipe et à la CI les mêmes commandes : `make test` partout, quel que
+      soit l'outil derrière.
+    checks:
+      - desc: make test réussit
+        run: cd /home/eleve/projet && make -s test >/dev/null 2>&1
+      - desc: lint utilise pyflakes, et la cible par défaut enchaîne lint et test
+        run: cd /home/eleve/projet && make -n lint 2>/dev/null | grep -q pyflakes && make -n 2>/dev/null | grep -q pyflakes && make -n 2>/dev/null | grep -q pytest
+      - desc: make clean supprime les caches
+        run: |
+          cd /home/eleve/projet && python3 -m pytest -q tests >/dev/null 2>&1; make -s clean >/dev/null 2>&1 && test -z "$(find . -name __pycache__ -o -name .pytest_cache)"
+      - desc: Les cibles sont déclarées .PHONY
+        run: grep -Eq '^\.PHONY:.*\btest\b' /home/eleve/projet/Makefile && grep -Eq '^\.PHONY:.*\bclean\b' /home/eleve/projet/Makefile
+  - id: ci-lint
+    title: Faire passer l'analyse statique
+    description: |
+      `make lint` échoue : pyflakes signale des problèmes dans le code. Corrige **le code** (pas le
+      Makefile) pour que `make lint` réussisse, sans casser les tests.
+    hint: "pyflakes signale deux imports inutilisés dans calc/affichage.py"
+    cours: |
+      L'**analyse statique** examine le code **sans l'exécuter**. pyflakes se concentre sur les erreurs
+      probables : imports inutilisés, variables non définies ou jamais utilisées, fonctions redéfinies.
+      Il ne juge pas le style : c'est le rôle de flake8 (qui inclut pyflakes et les règles PEP 8) ou de
+      ruff, très rapide, qui regroupe des centaines de règles.
+
+      En CI, le lint passe **en premier** : il est rapide, et inutile de lancer des tests longs sur du code
+      qui contient une variable non définie. Chaque langage a ses outils : shellcheck pour le shell,
+      hadolint pour les Dockerfile, yamllint, eslint…
+
+      Un avertissement se corrige plutôt qu'il ne se masque. Quand une exception est vraiment justifiée,
+      les outils prévoient un commentaire ciblé (`# noqa`), qui documente la décision.
+    checks:
+      - desc: make lint réussit
+        run: cd /home/eleve/projet && make -s lint >/dev/null 2>&1
+      - desc: lint utilise toujours pyflakes et les tests passent
+        run: cd /home/eleve/projet && make -n lint | grep -q pyflakes && python3 -m pytest -q -p no:cacheprovider tests >/dev/null 2>&1
+  - id: ci-rapport
+    title: Un rapport de tests JUnit
+    description: |
+      Modifie la cible `test` pour qu'elle produise aussi un rapport **JUnit XML** dans
+      **`rapports/junit.xml`** (le dossier doit être créé s'il n'existe pas).
+    hint: "python3 -m pytest -q --junitxml=rapports/junit.xml (pytest crée le dossier)"
+    cours: |
+      Lire la sortie texte d'un outil n'est pas pratique pour une plateforme de CI. Le format **JUnit XML**,
+      né avec l'outil de tests Java du même nom, est devenu le standard d'échange : chaque `testsuite`
+      indique le nombre de tests, d'échecs (`failures`), d'erreurs et de tests ignorés, et chaque
+      `testcase` porte son nom, sa durée et le message d'échec éventuel.
+
+      GitLab CI (`artifacts:reports:junit`), Jenkins (étape `junit`), GitHub Actions (avec une action
+      dédiée) ou Azure DevOps lisent ce fichier et affichent les tests en échec directement dans la merge
+      request, avec leur historique.
+
+      pytest le produit avec `--junitxml=chemin`. D'autres rapports sont courants : la **couverture** de code
+      (format Cobertura, avec `pytest-cov`) et les rapports des analyseurs de sécurité.
+    checks:
+      - desc: make test produit rapports/junit.xml
+        run: cd /home/eleve/projet && rm -rf rapports && make -s test >/dev/null 2>&1 && test -s rapports/junit.xml
+      - desc: Le rapport compte au moins 8 tests et aucun échec
+        run: |
+          python3 -c '
+          import sys, xml.etree.ElementTree as ET
+          r = ET.parse("/home/eleve/projet/rapports/junit.xml").getroot()
+          s = r if r.tag == "testsuite" else r.find("testsuite")
+          sys.exit(not (int(s.get("tests")) >= 8 and int(s.get("failures")) == 0 and int(s.get("errors")) == 0))'
+  - id: ci-artefact
+    title: Un artefact versionné
+    description: |
+      Ajoute une cible **`build`** qui :
+      1. lit la version dans le fichier `VERSION` ;
+      2. crée l'archive **`dist/calc-<version>.tar.gz`** qui contient le dossier `calc/` (sans les tests ni
+         les caches `__pycache__`) ;
+      3. écrit dans **`dist/SHA256SUMS`** la somme de contrôle de l'archive (format de `sha256sum`).
+
+      Avec `VERSION` = `1.3.0`, `make build` produit donc `dist/calc-1.3.0.tar.gz`.
+    hint: "VERSION := $(shell cat VERSION) ; mkdir -p dist ; tar --exclude=__pycache__ -czf dist/calc-$(VERSION).tar.gz calc ; cd dist && sha256sum calc-$(VERSION).tar.gz > SHA256SUMS"
+    cours: |
+      L'**artefact** est le produit livrable d'un pipeline : archive, paquet Python (*wheel*), binaire,
+      image Docker. Trois règles :
+      - il est **nommé avec sa version**, pour savoir exactement ce qui est déployé et pouvoir revenir en
+        arrière ;
+      - il ne contient **que** ce qui est nécessaire à l'exécution, sans tests, caches ni fichiers de
+        développement ;
+      - il est accompagné d'une **somme de contrôle** (SHA-256) qui permet de vérifier son intégrité après
+        un téléchargement : `sha256sum -c SHA256SUMS`.
+
+      La version vient d'une source unique : un fichier `VERSION`, un tag Git (`git describe --tags`), ou
+      les métadonnées du projet (`pyproject.toml`). Dans un Makefile, `VERSION := $(shell cat VERSION)` la
+      lit une fois. On construit l'artefact une seule fois, puis on promeut ce même fichier d'environnement en
+      environnement.
+    checks:
+      - desc: make build produit l'archive versionnée et sa somme de contrôle valide
+        run: cd /home/eleve/projet && rm -rf dist && make -s build >/dev/null 2>&1 && test -f dist/calc-1.3.0.tar.gz && (cd dist && sha256sum --quiet -c SHA256SUMS)
+      - desc: L'archive contient calc/ mais ni tests ni caches
+        run: |
+          l=$(tar -tzf /home/eleve/projet/dist/calc-1.3.0.tar.gz) && echo "$l" | grep -q 'calc/operations.py' && ! echo "$l" | grep -qE 'tests/|__pycache__'
+      - desc: La version vient bien du fichier VERSION
+        run: |
+          d=$(mktemp -d) && cp -a /home/eleve/projet "$d/p" && cd "$d/p" && rm -rf dist && echo 9.9.9 > VERSION && make -s build >/dev/null 2>&1 && test -f dist/calc-9.9.9.tar.gz; r=$?; cd /; rm -rf "$d"; exit $r
+  - id: ci-script
+    title: Le script du pipeline
+    description: |
+      Écris **`~/projet/ci.sh`** (exécutable) : le pipeline complet, tel qu'un serveur de CI le lancerait.
+      Il doit :
+      - se placer dans le dossier du script, quel que soit l'endroit d'où on l'appelle ;
+      - enchaîner les étapes **lint**, **test** et **build** en affichant le nom de chaque étape ;
+      - **s'arrêter à la première étape en échec** avec un code non nul (et donc ne pas produire
+        d'archive si le lint ou les tests échouent) ;
+      - partir d'un état propre (supprimer `dist/` au début).
+    hint: "#!/bin/bash, set -euo pipefail, cd \"$(dirname \"$0\")\", make clean, puis echo '=== lint ===' && make lint, etc."
+    cours: |
+      Un pipeline est une suite d'**étapes** (*stages*) : chacune ne démarre que si la précédente a réussi.
+      Dans un script shell, `set -e` arrête l'exécution à la première commande en échec, `set -u` refuse les
+      variables non définies, `set -o pipefail` fait échouer un pipe si l'une de ses commandes échoue. Le
+      code de retour du script devient alors le **statut du pipeline**.
+
+      Le script doit pouvoir être lancé depuis n'importe où : `cd "$(dirname "$0")"` le place dans son
+      propre dossier. Il part d'un état propre (`make clean`) pour ne pas réutiliser par erreur un artefact
+      d'une exécution précédente.
+
+      Afficher clairement le début de chaque étape facilite la lecture des journaux. Les plateformes de CI
+      font la même chose avec leurs fichiers (`.gitlab-ci.yml`, `Jenkinsfile`), mais chaque étape y appelle
+      souvent… un script ou une cible make comme les tiens.
+    checks:
+      - desc: ci.sh est exécutable et réussit sur le projet
+        run: |
+          d=$(mktemp -d) && cp -a /home/eleve/projet "$d/p" && test -x "$d/p/ci.sh" && (cd / && "$d/p/ci.sh" >/dev/null 2>&1) && ls "$d"/p/dist/calc-*.tar.gz >/dev/null 2>&1; r=$?; rm -rf "$d"; exit $r
+      - desc: Un test en échec arrête le pipeline avant le build
+        run: |
+          d=$(mktemp -d) && cp -a /home/eleve/projet "$d/p" && rm -rf "$d/p/dist" && sed -i 's/assertEqual(addition(2, 3), 5)/assertEqual(addition(2, 3), 6)/' "$d/p/tests/test_operations.py" && ! (cd / && "$d/p/ci.sh" >/dev/null 2>&1) && ! ls "$d"/p/dist/calc-*.tar.gz >/dev/null 2>&1; r=$?; rm -rf "$d"; exit $r
+      - desc: Une erreur de lint arrête aussi le pipeline
+        run: |
+          d=$(mktemp -d) && cp -a /home/eleve/projet "$d/p" && printf 'import os\n' >> "$d/p/calc/operations.py" && ! (cd / && "$d/p/ci.sh" >/dev/null 2>&1) && ! ls "$d"/p/dist/calc-*.tar.gz >/dev/null 2>&1; r=$?; rm -rf "$d"; exit $r
+  - id: ci-precommit
+    title: Un hook pre-commit
+    description: |
+      Installe dans le dépôt `~/projet` un hook **`pre-commit`** (exécutable) qui lance `make lint test` et
+      **bloque le commit** si l'une des deux étapes échoue.
+
+      Ensuite, committe ton travail (Makefile, `ci.sh`, corrections) : le hook doit laisser passer le
+      commit.
+    hint: "Fichier .git/hooks/pre-commit : #!/bin/sh puis exec make -s lint test ; chmod +x"
+    cours: |
+      Les **hooks** Git sont des scripts placés dans `.git/hooks/` et exécutés à certains moments.
+      **`pre-commit`** s'exécute avant la création du commit : s'il se termine avec un code non nul, le
+      commit est annulé. Le développeur a ainsi un retour en quelques secondes, avant même de pousser.
+
+      Limites : les hooks ne sont **pas versionnés** dans `.git/hooks` (chacun doit les installer), et
+      `git commit --no-verify` les contourne. On les complète donc toujours par la CI côté serveur. Pour
+      les partager, on versionne un dossier de hooks (`git config core.hooksPath .githooks`) ou on
+      utilise l'outil `pre-commit`, qui gère des hooks déclarés dans un fichier YAML.
+
+      Un hook doit rester **rapide** : lint et tests unitaires, pas la suite complète de bout en bout.
+    checks:
+      - desc: Le hook pre-commit est installé et exécutable
+        run: test -x /home/eleve/projet/.git/hooks/pre-commit
+      - desc: Le hook bloque un commit qui casse les tests
+        run: |
+          d=$(mktemp -d) && cp -a /home/eleve/projet "$d/p" && cd "$d/p" && sed -i 's/assertEqual(addition(2, 3), 5)/assertEqual(addition(2, 3), 6)/' tests/test_operations.py && git add -A && ! git -c user.name=V -c user.email=v@exemple.fr commit -q -m "test: casse" >/dev/null 2>&1; r=$?; cd /; rm -rf "$d"; exit $r
+      - desc: Le travail est committé (Makefile et ci.sh suivis, arbre propre)
+        run: |
+          cd /home/eleve/projet && git ls-files --error-unmatch Makefile ci.sh >/dev/null 2>&1 && test -z "$(git status --porcelain)"
+  - id: ci-serveur
+    title: Un mini-serveur de CI
+    description: |
+      Transforme le dépôt partagé en serveur de CI : un hook **`/srv/git/calc.git/hooks/post-receive`**
+      (exécutable) qui, pour **chaque branche poussée** (en ignorant les suppressions) :
+      1. extrait le commit reçu dans un dossier temporaire ;
+      2. y lance `./ci.sh` ;
+      3. écrit dans **`/srv/ci/derniere-execution.txt`** une seule ligne : `SUCCES <sha>` ou `ECHEC <sha>`
+         (`<sha>` : l'identifiant complet du commit) ;
+      4. en cas de succès, copie l'archive produite dans **`/srv/ci/artefacts/`**.
+
+      Pousse ensuite ton travail sur `origin main`.
+    hint: "Lis « ancien nouveau ref » sur l'entrée ; t=$(mktemp -d) ; git archive \"$nouveau\" | tar -x -C \"$t\" ; (cd \"$t\" && ./ci.sh) ; puis echo \"SUCCES $nouveau\" > /srv/ci/derniere-execution.txt"
+    cours: |
+      Une plateforme de CI réagit aux **événements** du dépôt : un push déclenche un *webhook* vers le
+      serveur de CI, qui clone le commit dans un environnement propre, exécute le pipeline et publie le
+      **statut** (affiché à côté du commit) et les **artefacts**.
+
+      Le hook serveur **`post-receive`** s'exécute après la mise à jour des références. Il ne peut plus
+      refuser le push, mais il peut tout lancer. Il lit sur son entrée une ligne `ancien nouveau ref` par
+      branche poussée ; un `nouveau` fait de zéros signale une suppression.
+
+      Pour obtenir les fichiers d'un commit sans copie de travail, `git archive <sha> | tar -x -C dossier`
+      fonctionne dans un dépôt nu. Exécuter le pipeline dans un dossier **neuf** garantit qu'il ne dépend
+      que de ce qui est versionné : c'est tout l'intérêt de la CI. Ce qui s'affiche dans le hook apparaît
+      chez le développeur, préfixé par `remote:`.
+    checks:
+      - desc: Le hook post-receive est installé et exécutable
+        run: test -x /srv/git/calc.git/hooks/post-receive
+      - desc: Un push correct produit SUCCES et un artefact
+        timeout: 120
+        run: |
+          d=$(mktemp -d) && git clone -q /srv/git/calc.git "$d/c" && cd "$d/c" && test -x ci.sh && git -c user.name=V -c user.email=v@exemple.fr commit -q --allow-empty -m "chore: verification CI" && rm -f /srv/ci/artefacts/*.tar.gz && git push -q origin HEAD:refs/heads/tdm-ci-ok >/dev/null 2>&1 && s=$(git rev-parse HEAD) && test "$(cat /srv/ci/derniere-execution.txt)" = "SUCCES $s" && ls /srv/ci/artefacts/calc-*.tar.gz >/dev/null 2>&1; r=$?; git push -q origin --delete tdm-ci-ok >/dev/null 2>&1; cd /; rm -rf "$d"; exit $r
+      - desc: Un push qui casse les tests produit ECHEC
+        timeout: 120
+        run: |
+          d=$(mktemp -d) && git clone -q /srv/git/calc.git "$d/c" && cd "$d/c" && sed -i 's/assertEqual(addition(2, 3), 5)/assertEqual(addition(2, 3), 6)/' tests/test_operations.py && git -c user.name=V -c user.email=v@exemple.fr commit -q --no-verify -am "test: casse volontairement" && git push -q origin HEAD:refs/heads/tdm-ci-ko >/dev/null 2>&1 && s=$(git rev-parse HEAD) && test "$(cat /srv/ci/derniere-execution.txt)" = "ECHEC $s"; r=$?; git push -q origin --delete tdm-ci-ko >/dev/null 2>&1; cd /; rm -rf "$d"; exit $r
