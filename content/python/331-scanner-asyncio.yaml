@@ -1,0 +1,235 @@
+title: Scanner de ports asynchrone
+level: expert
+order: 31
+tags: [asyncio, réseau, concurrence, timeouts]
+summary: Lancer des centaines de sondes en parallèle avec limite, délais et annulation.
+description: |
+  On écrit le cœur d'un scanner réseau avec `asyncio`. Pour rester testable (et ne rien
+  scanner réellement), la sonde est **injectée** : c'est une fonction asynchrone
+  `sonde(hote, port)` qui renvoie `True` (port ouvert) ou `False` (fermé), peut lever
+  `OSError` (erreur réseau) ou ne jamais répondre.
+
+  1. `async def scanner(cibles, sonde, limite=10, delai=1.0)` : `cibles` est une liste de
+     tuples `(hote, port)`. Lance les sondes **en parallèle**, mais jamais plus de `limite` à
+     la fois (`asyncio.Semaphore`). Chaque sonde dispose d'au plus `delai` secondes
+     (`asyncio.wait_for`). Renvoie un dictionnaire `{(hote, port): statut}` avec le statut
+     `"ouvert"`, `"fermé"`, `"timeout"` ou `"erreur"` (pour une `OSError` ; les autres
+     exceptions se propagent).
+  2. `async def premier_joignable(hotes, sonde, port, delai=1.0)` : sonde le même port sur
+     tous les hôtes en parallèle et renvoie le **premier** hôte (dans l'ordre des réponses,
+     pas de la liste) dont la sonde renvoie `True` ; les sondes encore en cours sont alors
+     **annulées**. Renvoie `None` si aucun ne répond `True` dans le délai.
+  3. `resume(resultats)` renvoie un dictionnaire `{statut: nombre}` ne contenant que les
+     statuts présents.
+
+  ```python
+  async def sonde(hote, port):
+      reader, writer = await asyncio.open_connection(hote, port)   # en vrai
+      writer.close()
+      return True
+
+  asyncio.run(scanner([("10.0.0.1", 22), ("10.0.0.1", 80)], sonde, limite=100, delai=0.5))
+  ```
+starter: |
+  import asyncio
+
+
+  async def scanner(cibles, sonde, limite=10, delai=1.0):
+      pass
+
+
+  async def premier_joignable(hotes, sonde, port, delai=1.0):
+      pass
+
+
+  def resume(resultats):
+      pass
+tests: |
+  import asyncio
+  import time
+
+  OUVERTS = {("a", 22), ("a", 80), ("b", 443)}
+
+  def fabrique(duree=0.05):
+      etat = {"en_cours": 0, "max": 0, "annulees": 0}
+      async def sonde(hote, port):
+          etat["en_cours"] += 1
+          etat["max"] = max(etat["max"], etat["en_cours"])
+          try:
+              if hote == "lent":
+                  await asyncio.sleep(10)
+              await asyncio.sleep(duree)
+              if hote == "panne":
+                  raise ConnectionRefusedError("refusé")
+              return (hote, port) in OUVERTS
+          except asyncio.CancelledError:
+              etat["annulees"] += 1
+              raise
+          finally:
+              etat["en_cours"] -= 1
+      return sonde, etat
+
+  def test_statuts():
+      "scanner : les quatre statuts"
+      sonde, _ = fabrique()
+      cibles = [("a", 22), ("a", 23), ("b", 443), ("lent", 1), ("panne", 2)]
+      r = asyncio.run(solution.scanner(cibles, sonde, limite=10, delai=0.3))
+      assert r == {("a", 22): "ouvert", ("a", 23): "fermé", ("b", 443): "ouvert",
+                   ("lent", 1): "timeout", ("panne", 2): "erreur"}, r
+
+  def test_parallele_et_limite():
+      "scanner : parallélisme borné par limite"
+      sonde, etat = fabrique(0.05)
+      cibles = [("h", p) for p in range(40)]
+      debut = time.perf_counter()
+      r = asyncio.run(solution.scanner(cibles, sonde, limite=8, delai=1))
+      duree = time.perf_counter() - debut
+      assert len(r) == 40 and set(r.values()) == {"fermé"}
+      assert etat["max"] == 8, f"au plus 8 sondes simultanées (observé : {etat['max']})"
+      assert duree < 1.0, f"trop lent ({duree:.2f} s) : les sondes doivent tourner en parallèle"
+
+  def test_autres_exceptions():
+      "scanner : une exception non réseau se propage"
+      async def sonde(h, p):
+          raise KeyError("bug")
+      try:
+          asyncio.run(solution.scanner([("a", 1)], sonde))
+      except KeyError:
+          pass
+      else:
+          raise AssertionError("KeyError doit se propager")
+
+  def test_premier_joignable():
+      "premier_joignable renvoie le plus rapide et annule les autres"
+      etat = {"annulees": 0}
+      async def sonde(hote, port):
+          try:
+              await asyncio.sleep({"lointain": 0.4, "proche": 0.05, "ferme": 0.01, "mort": 5}[hote])
+              return hote != "ferme"
+          except asyncio.CancelledError:
+              etat["annulees"] += 1
+              raise
+      debut = time.perf_counter()
+      r = asyncio.run(solution.premier_joignable(["lointain", "mort", "ferme", "proche"], sonde, 22, delai=2))
+      assert r == "proche", r
+      assert time.perf_counter() - debut < 0.3, "il faut renvoyer dès la première réponse positive"
+      assert etat["annulees"] == 2, "les sondes restantes doivent être annulées"
+
+  def test_premier_joignable_aucun():
+      "premier_joignable : aucun hôte"
+      async def sonde(hote, port):
+          if hote == "mort":
+              await asyncio.sleep(5)
+          if hote == "panne":
+              raise OSError
+          return False
+      debut = time.perf_counter()
+      assert asyncio.run(solution.premier_joignable(["x", "mort", "panne"], sonde, 22, delai=0.2)) is None
+      assert time.perf_counter() - debut < 1
+      assert asyncio.run(solution.premier_joignable([], sonde, 22)) is None
+
+  def test_resume():
+      "resume"
+      r = {("a", 1): "ouvert", ("a", 2): "fermé", ("a", 3): "fermé"}
+      assert solution.resume(r) == {"ouvert": 1, "fermé": 2}
+      assert solution.resume({}) == {}
+solution: |
+  import asyncio
+  from collections import Counter
+
+
+  async def scanner(cibles, sonde, limite=10, delai=1.0):
+      verrou = asyncio.Semaphore(limite)
+
+      async def une(hote, port):
+          async with verrou:
+              try:
+                  ouvert = await asyncio.wait_for(sonde(hote, port), delai)
+              except asyncio.TimeoutError:
+                  return "timeout"
+              except OSError:
+                  return "erreur"
+              return "ouvert" if ouvert else "fermé"
+
+      statuts = await asyncio.gather(*(une(h, p) for h, p in cibles))
+      return dict(zip(cibles, statuts))
+
+
+  async def premier_joignable(hotes, sonde, port, delai=1.0):
+      async def une(hote):
+          try:
+              return hote if await sonde(hote, port) else None
+          except OSError:
+              return None
+
+      taches = {asyncio.create_task(une(h)) for h in hotes}
+      try:
+          async with asyncio.timeout(delai):
+              for prochaine in asyncio.as_completed(taches):
+                  hote = await prochaine
+                  if hote is not None:
+                      return hote
+      except TimeoutError:
+          pass
+      finally:
+          for t in taches:
+              t.cancel()
+          await asyncio.gather(*taches, return_exceptions=True)
+      return None
+
+
+  def resume(resultats):
+      return dict(Counter(resultats.values()))
+cours: |
+  ## Pourquoi l'asynchrone pour le réseau ?
+
+  Une sonde réseau passe 99 % de son temps à **attendre**. Avec `asyncio`, une seule boucle
+  d'événements fait progresser des milliers de connexions : pendant qu'une coroutine attend
+  (`await`), les autres avancent. Scanner 1000 ports en séquence avec 1 s de délai prend
+  1000 s ; en parallèle, quelques secondes.
+
+  ## Lancer en parallèle
+
+  ```python
+  resultats = await asyncio.gather(*(sonder(h) for h in hotes))   # ordre conservé
+  ```
+
+  `gather` attend tout et renvoie les résultats **dans l'ordre des arguments**, ce qui permet
+  de les réassocier à leurs cibles avec `zip`. `asyncio.TaskGroup` (3.11+) est une
+  alternative structurée qui annule les tâches sœurs si l'une échoue.
+
+  ## Borner la concurrence
+
+  Ouvrir 65 535 sockets d'un coup épuise les descripteurs de fichiers (`ulimit -n`) et
+  ressemble à une attaque. Un `asyncio.Semaphore(n)` utilisé avec `async with` laisse entrer
+  au plus `n` coroutines dans la section critique ; les autres attendent leur tour.
+
+  ## Délais
+
+  `await asyncio.wait_for(coro, 2)` lève `TimeoutError` (alias `asyncio.TimeoutError`) et
+  **annule** la coroutine si elle dépasse le délai. `async with asyncio.timeout(2):` (3.11+)
+  borne tout un bloc. Sans délai, une seule machine qui ne répond pas (paquets ignorés par un
+  pare-feu) bloque tout le programme.
+
+  ## Le premier qui répond
+
+  `asyncio.as_completed(taches)` produit les résultats **dans l'ordre de fin**. Dès qu'on a
+  ce qu'on veut, il faut **annuler** les tâches restantes (`tache.cancel()`), puis les
+  attendre (`gather(..., return_exceptions=True)`) pour qu'elles se terminent proprement :
+  une tâche oubliée continue de tourner et provoque des avertissements à la fermeture.
+
+  ## L'annulation
+
+  `cancel()` injecte une `CancelledError` au point d'attente de la coroutine. Elle peut faire
+  du nettoyage (`finally`) mais doit **relancer** l'exception : l'avaler casse le mécanisme.
+
+  ## Injection de dépendance
+
+  Passer la sonde en paramètre sépare la logique (concurrence, délais, agrégation) des
+  entrées-sorties réelles (`asyncio.open_connection`). On teste ainsi tous les cas, y compris
+  les pannes, sans réseau.
+docs:
+  - title: Module asyncio — tâches et coroutines
+    url: https://docs.python.org/fr/3/library/asyncio-task.html
+  - title: asyncio — primitives de synchronisation
+    url: https://docs.python.org/fr/3/library/asyncio-sync.html
