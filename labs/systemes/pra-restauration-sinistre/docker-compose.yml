@@ -1,0 +1,32 @@
+# Plan de reprise d'activité d'« Ateliers Durand » : srv-web a brûlé. srv-neuf (installé à neuf, vide),
+# nas (sauvegardes de srv-web) et admin (poste du technicien).
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    volumes: [cles:/lab-ssh]
+    extra_hosts:
+      - "boutique.durand.lan:10.177.0.20"
+    networks:
+      lan: {ipv4_address: 10.177.0.5}
+  srv-neuf:
+    build: {context: ., dockerfile: srv-neuf/Dockerfile}
+    hostname: srv-neuf
+    init: true
+    volumes: [cles:/lab-ssh, kit:/kit-pra-partage]
+    networks:
+      lan: {ipv4_address: 10.177.0.20}
+  nas:
+    build: {context: ., dockerfile: nas/Dockerfile}
+    hostname: nas
+    volumes: [cles:/lab-ssh, kit:/kit-pra-partage]
+    networks:
+      lan: {ipv4_address: 10.177.0.30}
+volumes:
+  cles:
+  kit:
+networks:
+  lan:
+    internal: true
+    ipam:
+      config: [{subnet: 10.177.0.0/24, ip_range: 10.177.0.128/28}]

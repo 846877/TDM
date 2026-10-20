@@ -11,5 +11,9 @@ RUN useradd -m -s /bin/bash -c "Paul Leroy (parti)" pleroy \
     && echo "Inventaire des postes 2023" > /home/pleroy/Documents/inventaire.txt \
     && echo "Contrat fournisseur" > /home/pleroy/Documents/contrat.txt \
     && chown -R pleroy:pleroy /home/pleroy
+# Claire Petit vient de se marier : son compte doit être renommé (cmoreau).
+RUN useradd -m -u 1600 -s /bin/bash -c "Claire Petit" cpetit \
+    && echo "Notes de reunion" > /home/cpetit/notes.txt \
+    && chown cpetit:cpetit /home/cpetit/notes.txt
 WORKDIR /root
 CMD ["sleep", "infinity"]

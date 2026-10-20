@@ -30,9 +30,119 @@ description: |
   Le pare-feu route déjà (`ip_forward=1`) mais n'a **aucune règle**. Travaille dans un fichier
   (`/root/pare-feu.nft` sur fw) que tu charges avec `nft -f`, en commençant par `flush ruleset`.
   Pour tester sans risque : `nft -c -f fichier` vérifie la syntaxe sans rien appliquer.
+cours: |
+  ## Architecture à trois pattes
+
+  ```
+                 ┌──────────── pare-feu ────────────┐
+   LAN ── lan ──▶│ input   : trafic VERS le pare-feu │◀── wan ── Internet
+  (postes)       │ forward : trafic TRAVERSANT       │
+   DMZ ── dmz ──▶│ output  : trafic émis PAR lui     │
+  (serveurs publics)                                 │
+                 └────────────────────────────────────┘
+  ```
+
+  La **DMZ** héberge ce qui doit être joignable depuis Internet (site web, relais de messagerie). Si un de
+  ces serveurs est compromis, l'attaquant reste enfermé : la DMZ n'a pas le droit d'initier de connexion
+  vers le LAN.
+
+  Principe directeur : **politique par défaut `drop`** et liste blanche des flux autorisés, documentée
+  dans une **matrice des flux** (source, destination, port, justification).
+
+  ## Le chemin d'un paquet (netfilter)
+
+  ```
+  entrée ─▶ prerouting (DNAT) ─▶ décision de routage ─┬─▶ input ─▶ processus local ─▶ output ─┐
+                                                      └─▶ forward ──────────────────────────────┴─▶ postrouting (SNAT, masquerade) ─▶ sortie
+  ```
+
+  - Le **DNAT** (publication d'un service, redirection de port) se fait en `prerouting`, **avant** le
+    routage : la chaîne `forward` voit donc l'adresse **interne** de destination.
+  - Le **SNAT / masquerade** (sortie Internet des adresses privées) se fait en `postrouting`.
+  - Le **suivi de connexion** (conntrack) reconnaît les réponses : une seule règle
+    `ct state established,related accept` autorise tous les retours.
+
+  ## Structure nftables
+
+  ```
+  flush ruleset
+  table inet filtre {
+      set liste_noire { type ipv4_addr; }
+      chain input {
+          type filter hook input priority 0; policy drop;
+          ip saddr @liste_noire drop
+          iif lo accept
+          ct state established,related accept
+          icmp type echo-request accept
+          iifname "lan" ip saddr 192.168.1.5 tcp dport 22 accept
+          log prefix "FW-DROP " group 0
+      }
+      chain forward { type filter hook forward priority 0; policy drop; ... }
+      chain output  { type filter hook output priority 0; policy accept; }
+  }
+  table ip nat {
+      chain prerouting  { type nat hook prerouting priority dstnat; iifname "wan" tcp dport 80 dnat to 172.16.10.10; }
+      chain postrouting { type nat hook postrouting priority srcnat; oifname "wan" masquerade; }
+  }
+  ```
+
+  Les règles d'une chaîne sont évaluées **dans l'ordre** ; la première action terminale (`accept`, `drop`)
+  décide. Les familles : `ip` (IPv4), `ip6`, `inet` (les deux), `bridge`, `arp`.
+
+  ## Mémo des commandes
+
+  | Besoin                           | Commande                                            |
+  |----------------------------------|-----------------------------------------------------|
+  | Tester un fichier sans appliquer | `nft -c -f /root/pare-feu.nft`                      |
+  | Charger un fichier               | `nft -f /root/pare-feu.nft`                         |
+  | Tout afficher (avec numéros)     | `nft -a list ruleset`                               |
+  | Ajouter un élément à un set      | `nft add element inet filtre liste_noire { 1.2.3.4 }` |
+  | Supprimer une règle              | `nft delete rule inet filtre input handle 12`       |
+  | Connexions suivies               | `conntrack -L` (paquet conntrack)                   |
+  | Persistance                      | `/etc/nftables.conf` + service `nftables`           |
+
+  Tester les flux depuis les machines : `nc -zv hôte port`, `curl`, `ping`, et regarder les compteurs
+  (`counter` dans une règle) ou les journaux.
+
+  ## Pièges courants
+
+  - Se couper l'accès en appliquant `policy drop` sans règle pour sa propre session SSH (ici : interface
+    `mgmt`). En production : console de secours, ou commande d'annulation programmée
+    (`sleep 60 && nft flush ruleset &`) pendant le test.
+  - Oublier les réponses (`established,related`) : rien ne marche dans un sens.
+  - Autoriser le DNAT en `prerouting` mais oublier la règle `forward` correspondante (ou l'inverse).
+  - Ouvrir DNS en UDP seulement : les grosses réponses passent en TCP.
+  - Règles chargées à la main mais pas enregistrées : perdues au redémarrage.
+
+  ## Bonnes pratiques en entreprise
+
+  - Matrice des flux validée, chaque règle commentée (`comment "ticket 1234"`), revue régulière.
+  - Journaliser les refus (avec limitation de débit) et centraliser les journaux.
+  - Filtrer aussi en **sortie** : un serveur de DMZ n'a besoin que de ses mises à jour.
+  - Les pare-feu du marché (pfSense/OPNsense, Fortinet, Stormshield) reprennent exactement ces notions :
+    zones, NAT, règles ordonnées, objets et groupes d'adresses.
+docs:
+  - title: Wiki officiel de nftables
+    url: https://wiki.nftables.org/
+  - title: nft(8) - syntaxe complète (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man8/nft.8.html
+  - title: Debian Wiki - nftables
+    url: https://wiki.debian.org/nftables
+  - title: Wikipédia - Zone démilitarisée (informatique)
+    url: https://fr.wikipedia.org/wiki/Zone_d%C3%A9militaris%C3%A9e_(informatique)
 exercises:
   - id: politique
     title: Politique par défaut et protection du pare-feu
+    cours: |
+      Une chaîne de base nftables se déclare avec son type, son hook, sa priorité et sa politique :
+      `type filter hook input priority 0; policy drop;`. La politique s'applique aux paquets qui n'ont
+      correspondu à aucune règle.
+
+      Critères utiles : `iif lo` (interface de bouclage), `iifname "<nom>"` (interface d'entrée par son nom),
+      `ct state established,related`, `icmp type echo-request`, `ip saddr <adresse>`, `tcp dport <port>`.
+
+      Écris le jeu de règles dans un fichier qui commence par `flush ruleset`, vérifie-le avec `nft -c -f`
+      puis charge-le avec `nft -f`. Ne retire jamais la règle qui accepte l'interface `mgmt`.
     description: |
       Crée la table `inet filtre` avec les chaînes `input`, `forward` et `output` (hooks correspondants,
       priorité 0). `input` et `forward` ont une **politique `drop`**, `output` reste en `accept`.
@@ -57,6 +167,17 @@ exercises:
 
   - id: nat-sortant
     title: Accès Internet du LAN (masquerade)
+    cours: |
+      Deux choses distinctes sont nécessaires pour la sortie Internet :
+
+      1. le **filtrage** dans `forward` : interfaces d'entrée et de sortie (`iifname` / `oifname`), protocoles
+         et ports autorisés ; un ensemble anonyme `{ 80, 443 }` évite d'écrire une règle par port ; DNS
+         utilise `udp dport 53` **et** `tcp dport 53` ;
+      2. la **traduction d'adresses** dans une table `ip nat` : une chaîne de type `nat` au hook
+         `postrouting`, priorité `srcnat`, avec l'action `masquerade` sur l'interface de sortie.
+
+      `masquerade` utilise l'adresse de l'interface au moment de la sortie (adaptée aux adresses dynamiques) ;
+      `snat to <adresse>` fixe une adresse.
     description: |
       Les postes du LAN doivent naviguer sur Internet : dans `forward`, autorise du LAN vers le WAN
       **uniquement** HTTP (80), HTTPS (443), DNS (53 en UDP et TCP) et le ping, ainsi que les réponses
@@ -75,6 +196,17 @@ exercises:
 
   - id: publication-dmz
     title: Publier le site web de la DMZ
+    cours: |
+      Publier un serveur interne, c'est traduire l'adresse de **destination** : un **DNAT** en `prerouting`
+      (type `nat`, priorité `dstnat`), avant la décision de routage, avec l'action `dnat to <adresse>`.
+
+      Après la traduction, le paquet a pour destination l'adresse interne : la règle d'autorisation dans
+      `forward` doit donc porter sur **172.16.10.10**, pas sur l'adresse publique.
+
+      Pour tester, la requête doit venir du WAN (machine `externe`) ; depuis le LAN, elle ne passerait pas
+      par la même règle (interface d'entrée différente).
+
+      Teste depuis l'extérieur, puis depuis le LAN : les deux chemins passent par des règles différentes et l'un peut marcher sans l'autre.
     description: |
       Le site public est hébergé sur `srv-web` (172.16.10.10:80), en DMZ. Publie-le sur l'adresse publique
       du pare-feu : une requête vers `http://203.0.113.2/` venant du WAN doit être **redirigée (DNAT)** vers
@@ -87,6 +219,15 @@ exercises:
 
   - id: redirection-port
     title: Redirection de port réservée à un partenaire
+    cours: |
+      Une **redirection de port** est un DNAT qui change aussi le port : `dnat to <adresse>:<port>`. La règle
+      peut être restreinte à une source avec `ip saddr <adresse>`, à mettre **à la fois** dans la règle de
+      `prerouting` et dans celle de `forward`.
+
+      Exposer SSH, même sur un port non standard, attire les scans : le filtrage par adresse source réduit
+      fortement la surface d'attaque. En entreprise, on préfère souvent un VPN pour les prestataires.
+
+      Journalise les connexions acceptées par cette règle : en cas d'incident, on saura qui est entré, et quand.
     description: |
       Le prestataire qui maintient le site (adresse `203.0.113.50`, la machine `externe`) doit pouvoir se
       connecter en SSH à srv-web. Redirige le port **2222** de l'adresse publique vers le port **22** de
@@ -101,6 +242,13 @@ exercises:
 
   - id: isolation-dmz
     title: Isoler la DMZ
+    cours: |
+      La règle `ct state established,related accept` laisse passer les **réponses** : si le LAN ouvre une
+      connexion vers la DMZ, le retour est autorisé. Il suffit donc de **ne pas** écrire de règle autorisant la
+      DMZ à initier quoi que ce soit vers le LAN : la politique `drop` s'en charge.
+
+      Écris une règle par flux autorisé (sens, interfaces, adresses, port), dans l'esprit d'une matrice des
+      flux. Teste aussi les flux qui doivent être **bloqués** : c'est la moitié du travail.
     description: |
       Si srv-web était piraté, l'attaquant ne doit pas pouvoir rebondir vers le LAN. Règles à respecter :
       - la DMZ ne peut **jamais** initier de connexion vers le LAN ;
@@ -120,6 +268,16 @@ exercises:
 
   - id: journalisation
     title: Journaliser les paquets refusés
+    cours: |
+      L'instruction `log` écrit une trace pour chaque paquet qui atteint la règle, puis **continue**
+      l'évaluation (ce n'est pas une décision). Placée en **dernière** position, elle ne voit que les paquets
+      qui vont tomber sur la politique `drop`.
+
+      - `prefix "<texte>"` permet de retrouver les lignes dans les journaux ;
+      - `group <n>` envoie les traces au démon **ulogd2** via netlink (dans un conteneur, le noyau ne peut
+        pas écrire dans un syslog local) ;
+      - en production, ajoute une limite (`limit rate 10/minute`) pour ne pas saturer le disque lors d'une
+        attaque.
     description: |
       Pour pouvoir enquêter, journalise les paquets refusés **juste avant** qu'ils ne tombent sur la
       politique `drop` des chaînes `input` et `forward` : `log prefix "FW-DROP " group 0`. Le démon
@@ -141,6 +299,15 @@ exercises:
 
   - id: liste-noire
     title: Liste noire dynamique
+    cours: |
+      Un **set** nftables est un ensemble nommé d'éléments (adresses, ports, réseaux) déclaré dans une table :
+      `set <nom> { type ipv4_addr; }` (ajoute `flags interval;` pour y mettre des réseaux).
+
+      - `@<nom>` l'utilise dans une règle : `ip saddr @liste_noire drop` ;
+      - `nft add element` / `nft delete element` le modifient **à chaud**, sans recharger les règles ;
+      - avec `timeout`, les éléments expirent tout seuls (bannissement temporaire, comme fail2ban).
+
+      La règle de blocage doit être en **tête** des chaînes, avant les règles qui acceptent.
     description: |
       L'adresse `203.0.113.66` scanne nos ports. Crée dans `inet filtre` un **ensemble** (`set`) nommé
       `liste_noire` de type `ipv4_addr`, ajoute-lui cette adresse, et bloque tout ce qui en provient, aussi
@@ -158,6 +325,16 @@ exercises:
 
   - id: persistance
     title: Rendre les règles persistantes
+    cours: |
+      `nft list ruleset` affiche la configuration chargée dans une syntaxe directement rechargeable. Sur
+      Debian/Ubuntu, le service `nftables` charge `/etc/nftables.conf` au démarrage.
+
+      Le fichier doit commencer par `flush ruleset` (sinon un rechargement ajouterait les règles aux
+      existantes) ; un regroupement de commandes `{ cmd1; cmd2; } > fichier` écrit plusieurs sorties dans un
+      même fichier. `nft -c -f` valide le fichier sans l'appliquer. Versionne ce fichier : c'est la mémoire de
+      ta politique de sécurité.
+
+      Après le redémarrage, compare `nft list ruleset` avec le fichier sauvegardé : toute différence indique une règle oubliée ou un service qui ajoute les siennes.
     description: |
       Les règles chargées en mémoire disparaissent au redémarrage. Enregistre la configuration complète
       dans `/etc/nftables.conf` (chargée au démarrage par le service nftables) : elle doit commencer par

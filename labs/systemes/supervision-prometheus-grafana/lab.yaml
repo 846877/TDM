@@ -33,9 +33,138 @@ description: |
   - Interfaces web depuis ta machine : **Grafana** http://localhost:9431 et **Prometheus**
     http://localhost:9432. Tout peut aussi se faire par l'API HTTP de Grafana avec
     `curl -u 'admin:Grafana2024!' http://grafana:3000/api/...`.
+cours: |
+  ## Superviser : savoir avant les utilisateurs
+
+  La supervision répond à trois questions : **est-ce que ça marche ?** (disponibilité), **est-ce que ça
+  va bien ?** (performances, capacité) et **qui doit être prévenu ?** (alertes). Deux grandes familles
+  d'outils :
+
+  | Approche                  | Exemples                    | Principe                                           |
+  |---------------------------|-----------------------------|----------------------------------------------------|
+  | contrôles (checks)        | Nagios, Centreon, Zabbix    | un état OK / WARNING / CRITICAL par service         |
+  | métriques (séries temporelles) | Prometheus + Grafana    | des valeurs numériques horodatées, des requêtes et des seuils |
+
+  ## Architecture Prometheus
+
+  ```
+   node exporter (srv-web:9100) ◀──┐
+   node exporter (srv-bdd:9101) ◀──┤ scrape (HTTP GET /metrics, toutes les 15 s)
+   blackbox exporter ──▶ sonde http://srv-web/
+                                   │
+                              Prometheus ── règles (enregistrement, alertes) ──▶ Alertmanager ──▶ mail, chat
+                                   │
+                               Grafana (tableaux de bord, requêtes PromQL)
+  ```
+
+  Prometheus **va chercher** les métriques (*pull*) auprès d'**exporters**. Chaque série est identifiée par
+  un nom et des **étiquettes** :
+
+  ```
+  node_filesystem_avail_bytes{instance="srv-web:9100", job="serveurs", site="lyon", mountpoint="/"}  4.2e+09
+  ```
+
+  ## prometheus.yml
+
+  ```yaml
+  global:
+    scrape_interval: 15s
+  rule_files: [regles.yml]
+  alerting:
+    alertmanagers:
+      - static_configs: [{targets: ['alertmanager:9093']}]
+  scrape_configs:
+    - job_name: serveurs
+      static_configs:
+        - targets: ['srv-web:9100', 'srv-bdd:9101']
+          labels: {site: lyon}
+  ```
+
+  ## PromQL : les requêtes à connaître
+
+  | Requête                                                      | Signification                              |
+  |--------------------------------------------------------------|--------------------------------------------|
+  | `up`                                                         | 1 si la cible répond, 0 sinon              |
+  | `up == 0`                                                    | cibles en panne                            |
+  | `rate(node_cpu_seconds_total{mode!="idle"}[5m])`             | utilisation CPU (vitesse d'un compteur)     |
+  | `100 * node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes` | % de mémoire disponible            |
+  | `node_filesystem_avail_bytes{mountpoint="/"} / 1e9`          | Go libres sur /                            |
+  | `predict_linear(node_filesystem_avail_bytes[6h], 24*3600) < 0` | disque plein dans moins de 24 h           |
+  | `time() - durand_sauvegarde_derniere_reussite_timestamp_seconds` | âge de la dernière sauvegarde (s)     |
+  | `probe_success{job="intranet"}`                              | le site répond-il ?                        |
+
+  Types de métriques : **compteur** (ne fait que croître, on l'utilise avec `rate()`), **jauge** (monte et
+  descend), **histogramme**.
+
+  ## Règles et alertes
+
+  ```yaml
+  groups:
+    - name: durand
+      rules:
+        - record: instance:node_memory_disponible:pourcent
+          expr: 100 * node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes
+        - alert: ServeurInjoignable
+          expr: up == 0
+          for: 30s
+          labels: {severite: critique}
+          annotations: {summary: "{{ $labels.instance }} ne répond plus"}
+  ```
+
+  Une alerte passe de **inactive** à **pending** (condition vraie) puis **firing** (vraie pendant `for`).
+  Alertmanager regroupe, déduplique, route selon les étiquettes et met en sourdine (*silences*) pendant
+  une maintenance.
+
+  ## Mémo
+
+  | Besoin                         | Commande                                                 |
+  |--------------------------------|----------------------------------------------------------|
+  | Vérifier la configuration      | `promtool check config prometheus.yml`                   |
+  | Recharger                      | `curl -X POST http://prometheus:9090/-/reload`            |
+  | État des cibles                | `curl -s http://prometheus:9090/api/v1/targets \| jq`     |
+  | Requête                        | `curl -s --data-urlencode 'query=up' .../api/v1/query`   |
+  | Métriques brutes d'un exporter | `curl -s http://srv-web:9100/metrics \| grep node_load`   |
+
+  ## Pièges courants
+
+  - Trop d'alertes : l'équipe finit par toutes les ignorer. Une alerte doit appeler une **action**.
+  - Superviser seulement « le serveur répond au ping » : le service peut être en panne. Sondes de bout en
+    bout (HTTP, DNS, connexion à la base).
+  - Oublier de retirer les machines décommissionnées : fausses alertes permanentes.
+  - Étiquettes à valeurs illimitées (identifiant d'utilisateur...) : explosion du nombre de séries.
+
+  ## Bonnes pratiques en entreprise
+
+  - Superviser les **symptômes** vus par l'utilisateur (site lent, erreurs) et la **capacité** (disque,
+    mémoire, licences) avec des seuils d'anticipation.
+  - Chaque alerte a une procédure (runbook) et une personne d'astreinte.
+  - Tableaux de bord en lecture seule pour le support, comptes nominatifs pour les administrateurs.
+  - Superviser aussi les sauvegardes, les certificats (date d'expiration) et la supervision elle-même.
+docs:
+  - title: Prometheus - présentation et documentation
+    url: https://prometheus.io/docs/introduction/overview/
+  - title: Prometheus - le langage de requête PromQL
+    url: https://prometheus.io/docs/prometheus/latest/querying/basics/
+  - title: Documentation de Grafana
+    url: https://grafana.com/docs/grafana/latest/
 exercises:
   - id: prom-cible-nas
     title: Superviser le NAS
+    cours: |
+      Prometheus collecte des **cibles** regroupées en **jobs** dans la section `scrape_configs` :
+
+      ```yaml
+      scrape_configs:
+        - job_name: <nom>
+          static_configs:
+            - targets: ['<hôte>:<port>']
+      ```
+
+      Le YAML est sensible à l'**indentation** (espaces, jamais de tabulations). Après modification, l'API
+      `/-/reload` recharge la configuration ; si elle est invalide, Prometheus la refuse et garde l'ancienne.
+      La page *Status → Targets* (ou l'API `targets`) affiche l'état de chaque cible et la dernière erreur.
+
+      Ajoute une étiquette (par exemple le rôle de la machine) à la cible : elle servira à filtrer les requêtes et les alertes. Vérifie enfin que l'exporter répond depuis le serveur Prometheus avant de chercher l'erreur dans sa configuration.
     description: |
       Ajoute dans `/srv/prometheus/prometheus.yml` un job nommé **`nas`** qui collecte le node exporter
       du NAS (`nas:9100`), recharge Prometheus, puis vérifie que la cible est **UP** (page *Status →
@@ -48,6 +177,16 @@ exercises:
 
   - id: prom-node-exporter-serveurs
     title: Node exporter sur les serveurs Linux
+    cours: |
+      Le **node exporter** publie les métriques du système (CPU, mémoire, disques, réseau) sur
+      `http://<hôte>:9100/metrics`. Sur Ubuntu, le paquet s'appelle `prometheus-node-exporter`.
+
+      - `--collector.textfile.directory=<dossier>` lui fait aussi publier les métriques écrites dans des
+        fichiers `.prom` de ce dossier ;
+      - sans systemd, `nohup <commande> > <journal> 2>&1 &` lance un processus qui survit à la déconnexion.
+
+      Dans un job, un bloc `static_configs` peut porter des `labels:` ajoutés à toutes ses cibles : idéal
+      pour le site, l'environnement ou l'équipe responsable. Une cible peut avoir un port non standard.
     description: |
       Sur **srv-web**, démarre le node exporter installé par le paquet Ubuntu
       (`prometheus-node-exporter`) en arrière-plan sur le port 9100, avec le collecteur *textfile* lisant
@@ -66,6 +205,17 @@ exercises:
 
   - id: prom-metrique-metier
     title: Une métrique métier par le collecteur textfile
+    cours: |
+      Le collecteur **textfile** permet de publier n'importe quelle valeur calculée par un script, au format
+      texte de Prometheus : `nom_de_la_metrique <valeur>` (une métrique par ligne, des étiquettes possibles
+      entre accolades).
+
+      - `date +%s` donne l'horodatage Unix (secondes depuis 1970) ;
+      - écrire dans un fichier temporaire puis le **renommer** avec `mv` rend le remplacement atomique ;
+      - une crontab avec `*/5` dans le champ des minutes s'exécute toutes les 5 minutes.
+
+      Côté Prometheus, `time() - <métrique>` donnera l'âge de la dernière réussite : une alerte si elle dépasse
+      26 heures, par exemple.
     description: |
       On veut être alerté si la sauvegarde nocturne de srv-web ne tourne plus. Sur **srv-web**, écris le
       script `/usr/local/bin/metrique-sauvegarde.sh` qui écrit dans
@@ -88,6 +238,17 @@ exercises:
 
   - id: prom-regle-enregistrement
     title: Règle d'enregistrement (PromQL)
+    cours: |
+      Une **règle d'enregistrement** calcule régulièrement une expression PromQL et stocke le résultat comme
+      une nouvelle série : les tableaux de bord sont plus rapides et les requêtes plus lisibles.
+
+      Les règles vivent dans des fichiers déclarés par `rule_files` (chemins relatifs au dossier de
+      `prometheus.yml`), organisés en `groups` contenant des `rules` avec `record` (nom de la nouvelle série)
+      et `expr`. La convention de nommage est `niveau:métrique:opération`.
+
+      `promtool check rules <fichier>` valide le fichier. Teste toujours l'expression dans l'interface avant.
+
+      Nomme la règle selon la convention `niveau:métrique:opération`, qui dit d'un coup d'œil ce qu'elle calcule.
     description: |
       Le pourcentage de mémoire disponible sera affiché partout : on le pré-calcule. Crée le fichier
       `/srv/prometheus/regles.yml` avec un groupe **`durand`** contenant une règle d'enregistrement
@@ -108,6 +269,16 @@ exercises:
 
   - id: prom-alerte-injoignable
     title: Alerte « serveur injoignable » vers Alertmanager
+    cours: |
+      Une **règle d'alerte** est une expression PromQL : tant qu'elle renvoie des résultats, l'alerte est
+      active. Champs : `alert` (nom), `expr`, `for` (durée pendant laquelle la condition doit rester vraie),
+      `labels` (servent au routage dans Alertmanager), `annotations` (textes lisibles, avec des modèles comme
+      `{{ $labels.instance }}`).
+
+      La section `alerting` de `prometheus.yml` indique où envoyer les alertes. La page *Alerts* montre les
+      états *inactive*, *pending* puis *firing* ; l'API v2 d'Alertmanager liste ce qu'il a reçu.
+
+      Réduis temporairement la durée `for:` pour tester l'alerte, puis remets une valeur raisonnable pour éviter les fausses alertes.
     description: |
       1. Dans `regles.yml`, ajoute au groupe `durand` une alerte **`ServeurInjoignable`** qui se
          déclenche quand `up == 0` **pendant 30 secondes**, avec le label `severite: critique` et une
@@ -133,6 +304,18 @@ exercises:
 
   - id: prom-sonde-http
     title: Sonde HTTP de l'intranet (blackbox exporter)
+    cours: |
+      Le **blackbox exporter** teste un service de l'extérieur (HTTP, TCP, ICMP, DNS) : Prometheus lui
+      demande `/probe?target=<url>&module=<module>` et récupère `probe_success`, `probe_duration_seconds`...
+
+      Dans le job :
+      - `metrics_path: /probe` et `params: {module: [http_2xx]}` ;
+      - les **relabel_configs** transforment l'adresse de la cible en paramètre `target`, copient ce paramètre
+        dans l'étiquette `instance`, puis remplacent `__address__` par l'adresse du blackbox.
+
+      Les étiquettes commençant par `__` sont internes et disparaissent après le relabeling.
+
+      La métrique `probe_success` vaut 1 quand la sonde réussit : c'est elle que l'on surveille dans les alertes. Vérifie aussi le code HTTP renvoyé avec `probe_http_status_code`.
     description: |
       Un serveur peut être « UP » alors que le site est en panne. Ajoute un job **`intranet`** qui
       interroge le blackbox exporter (`blackbox:9115`, chemin `/probe`, module `http_2xx`) pour sonder
@@ -150,6 +333,16 @@ exercises:
 
   - id: grafana-source-donnees
     title: Grafana – source de données Prometheus
+    cours: |
+      Grafana ne stocke pas de métriques : il interroge des **sources de données** (Prometheus, Loki, bases
+      SQL, Elasticsearch...). Une source se crée dans *Connections → Data sources* ou par l'API HTTP
+      (`POST /api/datasources` avec un JSON décrivant nom, type, URL et mode d'accès).
+
+      L'URL est vue **depuis le serveur Grafana** (`access: proxy`) : ici le nom du conteneur Prometheus, pas
+      `localhost`. La source par défaut est utilisée par les nouveaux panneaux. Le bouton *Save & test*
+      vérifie la connexion.
+
+      Utilise l'adresse du serveur Prometheus vue depuis le conteneur Grafana, et non celle vue depuis ton poste.
     description: |
       Dans Grafana (http://localhost:9431 ou par l'API), ajoute une source de données de type
       **Prometheus** nommée **`Prometheus-Durand`**, d'URL `http://prometheus:9090`, définie comme
@@ -165,6 +358,16 @@ exercises:
 
   - id: grafana-tableau-bord
     title: Grafana – tableau de bord du parc
+    cours: |
+      Un **tableau de bord** (dashboard) regroupe des **panneaux** ; chaque panneau a une ou plusieurs
+      requêtes et une visualisation (*Time series*, *Stat*, *Gauge*, *Table*...).
+
+      - les **dossiers** organisent les tableaux et portent les droits d'accès ;
+      - dans un panneau *Stat*, des **seuils** et des correspondances de valeurs (1 = OK, 0 = KO) affichent un
+        état coloré ;
+      - la légende `{{instance}}` rend les séries lisibles.
+
+      Un tableau se sauvegarde en JSON (export), ce qui permet de le versionner ou de le recréer par l'API.
     description: |
       Crée un dossier **`Supervision`** et, dedans, un tableau de bord **`Parc serveurs Durand`** avec au
       moins **deux panneaux** :
@@ -184,6 +387,18 @@ exercises:
 
   - id: grafana-compte-noc
     title: Grafana – compte en lecture seule pour le support
+    cours: |
+      Grafana gère des **utilisateurs** appartenant à des **organisations** avec un rôle :
+
+      | Rôle   | Droits                                                   |
+      |--------|----------------------------------------------------------|
+      | Viewer | consulter les tableaux                                   |
+      | Editor | créer et modifier des tableaux                           |
+      | Admin  | gérer sources de données, utilisateurs, organisation     |
+
+      La création se fait dans *Administration → Users and access* ou par l'API (`/api/admin/users`, puis
+      changement de rôle dans l'organisation). En entreprise, on branche plutôt Grafana sur l'annuaire (LDAP
+      ou SSO) et on donne les rôles par groupe.
     description: |
       Le support (NOC) doit voir les tableaux sans pouvoir les modifier. Crée l'utilisateur Grafana
       **`noc`** (mot de passe `Noc2024!`, e-mail `noc@durand.lan`) avec le rôle **Viewer** dans

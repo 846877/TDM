@@ -47,3 +47,56 @@ solution: |
           else:
               resultat.append(str(i))
       return resultat
+cours: |
+  ## Un classique des entretiens
+
+  FizzBuzz paraît simple mais révèle deux compétences : **l'ordre des conditions** et la
+  **construction d'une liste** dans une boucle.
+
+  ## L'ordre des tests
+
+  Quand plusieurs conditions peuvent être vraies en même temps, on teste d'abord la plus
+  **spécifique**. Exemple avec des tarifs :
+
+  ```python
+  def tarif(age, etudiant):
+      if age < 12:
+          return "enfant"
+      elif etudiant and age < 26:
+          return "étudiant"
+      elif age >= 65:
+          return "senior"
+      return "plein"
+  ```
+
+  Avec `if / elif`, seul le **premier** bloc vrai s'exécute : si le cas général est placé en
+  premier, le cas particulier n'est jamais atteint. Une astuce : un nombre divisible par 3
+  **et** par 5 est divisible par 15.
+
+  ## Construire une liste
+
+  ```python
+  carres = []
+  for i in range(1, 6):
+      carres.append(i * i)
+  # carres == [1, 4, 9, 16, 25]
+  ```
+
+  On part d'une liste vide et on y ajoute un élément par tour avec `append`.
+
+  ## Types : nombre ou texte ?
+
+  La liste demandée contient uniquement des **chaînes**. `3` (int) et `"3"` (str) sont
+  différents : `3 == "3"` vaut `False`. Pour convertir un nombre en texte : `str(3)`.
+
+  ## Variante élégante
+
+  On peut aussi construire le mot par **concaténation** : partir d'une chaîne vide, ajouter
+  un morceau si divisible par 3, un autre si divisible par 5, et si la chaîne est restée
+  vide, utiliser le nombre. Cette version s'étend facilement à d'autres règles
+  (7 → « Bang »…) sans multiplier les combinaisons.
+docs:
+  - title: Tutoriel — instructions de contrôle (if, for)
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html
+  - title: Documentation Python — str()
+    url: https://docs.python.org/fr/3/library/stdtypes.html#str

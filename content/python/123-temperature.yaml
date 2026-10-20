@@ -122,3 +122,54 @@ solution: |
           if not isinstance(autre, Temperature):
               return NotImplemented
           return self._celsius < autre._celsius
+cours: |
+  ## Propriétés avec setter
+
+  Une propriété permet de contrôler l'accès à un attribut tout en gardant la syntaxe
+  `objet.attribut` :
+
+  ```python
+  class Volume:
+      def __init__(self, niveau=50):
+          self.niveau = niveau          # passe déjà par le setter !
+
+      @property
+      def niveau(self):
+          return self._niveau
+
+      @niveau.setter
+      def niveau(self, valeur):
+          if not 0 <= valeur <= 100:
+              raise ValueError("niveau entre 0 et 100")
+          self._niveau = valeur
+  ```
+
+  - La valeur réelle est stockée dans un attribut « privé » (`_niveau`, préfixe `_` par
+    convention). Si le setter écrivait `self.niveau = ...`, il s'appellerait lui-même à
+    l'infini (`RecursionError`).
+  - En affectant via la propriété dans `__init__`, la validation s'applique dès la création.
+  - Une seconde propriété peut lire et écrire **la même** donnée sous une autre unité : une
+    seule source de vérité, plusieurs vues.
+
+  ## `__str__` et `__repr__`
+
+  - `__str__` : représentation lisible pour l'utilisateur (`print`, `str()`, f-strings) ;
+  - `__repr__` : représentation non ambiguë pour le développeur (console, débogueur,
+    listes). Idéalement, elle ressemble à du code qui recrée l'objet.
+
+  `f"{x!r}"` utilise `repr`, et `f"{x:.1f}"` formate un flottant avec une décimale.
+
+  ## Comparaisons
+
+  `__eq__(self, autre)` définit `==`, `__lt__` définit `<`. Si `autre` n'est pas du bon
+  type, renvoie `NotImplemented` (pas `False`) : Python essaiera alors l'opération dans
+  l'autre sens. Le décorateur `functools.total_ordering` complète `<=`, `>`, `>=` à partir
+  de `__eq__` et `__lt__`.
+
+  **Attention** : définir `__eq__` rend l'objet non hachable (sauf si on définit aussi
+  `__hash__`), ce qui est voulu pour un objet modifiable.
+docs:
+  - title: Documentation Python — property
+    url: https://docs.python.org/fr/3/library/functions.html#property
+  - title: Référence — méthodes spéciales (modèle de données)
+    url: https://docs.python.org/fr/3/reference/datamodel.html#special-method-names

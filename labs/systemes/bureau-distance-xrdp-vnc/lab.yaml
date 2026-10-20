@@ -24,9 +24,117 @@ description: |
 
   xrdp n'a pas de systemd ici : démarrage avec `xrdp-sesman` puis `xrdp` ; arrêt avec
   `pkill xrdp; pkill xrdp-sesman`. Journaux : `/var/log/xrdp.log` et `/var/log/xrdp-sesman.log`.
+cours: |
+  ## Deux familles de bureau à distance
+
+  | Protocole | Port  | Principe                                                         | Usage typique                     |
+  |-----------|-------|------------------------------------------------------------------|-----------------------------------|
+  | **RDP**   | 3389  | le serveur crée une **session** dédiée à l'utilisateur ; envoie des ordres de dessin compressés, son, presse-papiers, imprimantes, lecteurs | bureaux distants, serveurs Windows (RDS), clients légers |
+  | **VNC**   | 5900+N| partage d'un **écran** (framebuffer) sous forme d'images         | prise en main, assistance         |
+
+  RDP est le protocole de Microsoft (client `mstsc`, « Connexion Bureau à distance ») ; sous Linux, le
+  serveur **xrdp** le parle, ce qui permet aux postes Windows de se connecter sans logiciel supplémentaire.
+  Côté Windows Server, le rôle **Services Bureau à distance (RDS)** joue le même rôle à grande échelle, avec
+  des licences d'accès client (CAL RDS).
+
+  ## Architecture de xrdp
+
+  ```
+  mstsc / Remmina ──RDP/TLS 3389──▶ xrdp ──▶ xrdp-sesman ──▶ authentification PAM
+                                     │          └─ démarre Xorg (xorgxrdp) + startwm.sh
+                                     └──────────────── relie l'écran de la session au client
+  ```
+
+  | Fichier                    | Rôle                                                          |
+  |----------------------------|---------------------------------------------------------------|
+  | `/etc/xrdp/xrdp.ini`       | écoute, sécurité (TLS), certificat, apparence de l'écran de connexion |
+  | `/etc/xrdp/sesman.ini`     | sessions : qui a le droit, limites, délais                    |
+  | `/etc/xrdp/startwm.sh`     | script lancé à l'ouverture de session (ou `~/.xsession`)       |
+  | `/var/log/xrdp*.log`       | journaux                                                      |
+
+  ```
+  ; xrdp.ini [Globals]
+  port=3389
+  security_layer=tls        ; rdp (ancien, faible) | tls | negotiate
+  crypt_level=high
+  certificate=/etc/xrdp/cert.pem
+  key_file=/etc/xrdp/key.pem
+
+  ; sesman.ini [Security]
+  AllowRootLogin=false
+  TerminalServerUsers=tsusers
+  AlwaysGroupCheck=true
+  ```
+
+  ## Certificat TLS
+
+  Le client affiche l'empreinte du certificat à la première connexion : avec un certificat auto-signé,
+  l'utilisateur doit comparer l'empreinte (comme pour SSH). En entreprise, on utilise un certificat signé
+  par l'**autorité de certification interne** (ADCS sous Windows), déployée sur les postes : plus aucun
+  avertissement, et une alerte réelle en cas d'usurpation.
+
+  ```bash
+  openssl req -x509 -newkey rsa:2048 -nodes -days 730 -subj '/CN=bureau.durand.lan' \
+      -keyout key.pem -out cert.pem
+  openssl x509 -in cert.pem -noout -subject -dates -fingerprint -sha256
+  ```
+
+  ## VNC : à ne jamais exposer tel quel
+
+  Le mot de passe VNC est limité à **8 caractères** et le flux n'est pas chiffré par défaut. La règle :
+  écouter **uniquement sur la boucle locale** (`-localhost yes`) et passer par un **tunnel SSH**.
+
+  ```
+  admin:5901 ══ tunnel SSH chiffré ══▶ bureau ──▶ 127.0.0.1:5901 (Xvnc)
+  ssh -f -N -L 5901:127.0.0.1:5901 support@bureau      puis client VNC → 127.0.0.1:5901
+  ```
+
+  | Commande TigerVNC                  | Usage                               |
+  |------------------------------------|-------------------------------------|
+  | `vncpasswd`                        | définir le mot de passe VNC         |
+  | `vncserver :1 -geometry 1280x800 -localhost yes` | démarrer l'affichage :1 (port 5901) |
+  | `vncserver -list` / `-kill :1`     | lister / arrêter                    |
+  | `~/.vnc/xstartup`                  | programme lancé dans la session     |
+
+  ## Pièges courants
+
+  - Ouvrir 3389 sur Internet : c'est l'un des vecteurs d'attaque les plus exploités (force brute,
+    rançongiciels). On passe par un **VPN** ou une **passerelle RD Gateway** (RDP dans HTTPS).
+  - Un utilisateur déjà connecté localement à l'écran ne peut souvent pas ouvrir de session xrdp en même
+    temps (une seule session graphique par utilisateur sur certains bureaux).
+  - Clé privée du certificat illisible par xrdp : connexion refusée, message dans `xrdp.log`.
+  - Écran noir à la connexion : session (`startwm.sh`, `~/.xsession`) qui ne démarre pas.
+
+  ## Bonnes pratiques en entreprise
+
+  - Restreindre l'accès à un **groupe** dédié, jamais à root.
+  - Imposer TLS (ou NLA côté Windows), avec un certificat de l'autorité interne.
+  - Fixer des limites de sessions et de déconnexion pour libérer les ressources.
+  - Pour la prise en main des postes utilisateurs, demander l'accord de l'utilisateur (outils avec
+    acceptation explicite) et tracer les interventions.
+docs:
+  - title: Projet xrdp (GitHub)
+    url: https://github.com/neutrinolabs/xrdp
+  - title: sesman.ini(5) - gestionnaire de sessions xrdp (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/sesman.ini.5.html
+  - title: Wikipédia - Remote Desktop Protocol
+    url: https://fr.wikipedia.org/wiki/Remote_Desktop_Protocol
+  - title: Wikipédia - Virtual Network Computing
+    url: https://fr.wikipedia.org/wiki/Virtual_Network_Computing
 exercises:
   - id: comptes
     title: Comptes et groupe autorisé
+    cours: |
+      L'accès RDP sera réservé à un **groupe**, comme le groupe « Utilisateurs du Bureau à distance » sous
+      Windows. On crée donc d'abord le groupe, puis les comptes :
+
+      - `groupadd <groupe>` ;
+      - `useradd -m -s /bin/bash -c "<Nom>" -G <groupe> <login>` (dossier personnel indispensable pour une
+        session graphique) ;
+      - `chpasswd` pour fixer le mot de passe dans un script.
+
+      xrdp authentifie les utilisateurs par **PAM**, c'est-à-dire avec les comptes du système (ou d'un
+      annuaire LDAP/AD si le serveur y est joint).
     description: |
       Sur `bureau`, crée :
       - le groupe `tsusers` (utilisateurs autorisés à ouvrir une session RDP) ;
@@ -45,6 +153,17 @@ exercises:
 
   - id: rdp-certificat
     title: Certificat TLS du serveur RDP
+    cours: |
+      `openssl req -x509` génère en une commande une clé et un certificat **auto-signé** :
+
+      - `-newkey rsa:2048` crée une nouvelle clé RSA de 2048 bits ; `-nodes` la laisse non chiffrée (le
+        service doit pouvoir la lire au démarrage) ;
+      - `-days` fixe la durée de validité ;
+      - `-subj '/CN=<nom>'` évite les questions interactives ;
+      - `-keyout` et `-out` désignent les fichiers de la clé et du certificat.
+
+      `openssl x509 -noout -subject -dates` relit un certificat. La clé privée est le secret du serveur :
+      lisible par root et par le groupe du service seulement (`chown`, `chmod`).
     description: |
       Par défaut, xrdp utilise un certificat générique (« snakeoil »). Génère un certificat auto-signé
       propre au serveur, valable **2 ans**, avec le CN `bureau.durand.lan` et une clé RSA **2048** bits :
@@ -62,6 +181,15 @@ exercises:
 
   - id: configuration
     title: Configurer xrdp et le gestionnaire de sessions
+    cours: |
+      Les fichiers de xrdp sont au format **INI** : des sections `[Nom]` et des lignes `clé=valeur`.
+
+      - dans `xrdp.ini`, la section `[Globals]` règle l'écoute et la sécurité : `security_layer=tls` refuse
+        l'ancien chiffrement RDP natif, `crypt_level` fixe le niveau, `certificate`/`key_file` les fichiers ;
+      - dans `sesman.ini`, la section `[Security]` décide qui peut ouvrir une session.
+
+      `sed -i 's/^clé=.*/clé=valeur/' fichier` modifie une valeur existante ; vérifie ensuite avec `grep`.
+      Attention à ne pas modifier une clé du même nom dans une autre section.
     description: |
       1. Dans `/etc/xrdp/xrdp.ini` (section `[Globals]`) : port `3389`, `security_layer=tls` (on refuse
          l'ancienne sécurité RDP native), `crypt_level=high`, `certificate` et `key_file` pointant vers tes
@@ -85,6 +213,16 @@ exercises:
 
   - id: rdp-demarrage
     title: Démarrer le service RDP
+    cours: |
+      xrdp se compose de deux démons : **xrdp-sesman** (authentification et création des sessions) et
+      **xrdp** (le serveur RDP lui-même). Le gestionnaire de sessions doit être démarré en premier.
+
+      - `ss -ltnp | grep 3389` vérifie l'écoute ;
+      - `/var/log/xrdp.log` et `/var/log/xrdp-sesman.log` expliquent les refus (certificat illisible, groupe
+        manquant, mot de passe faux).
+
+      Une connexion RDP commence par une **négociation** (trame X.224) où le client propose des protocoles de
+      sécurité et où le serveur en choisit un : c'est ce que la vérification observe.
     description: |
       Démarre `xrdp-sesman` puis `xrdp` sur `bureau`. Le serveur doit répondre à une négociation RDP en
       choisissant **TLS**. La vérification envoie elle-même une demande de connexion RDP (trame X.224) et
@@ -103,6 +241,17 @@ exercises:
 
   - id: session-xfce
     title: Ouvrir un bureau XFCE
+    cours: |
+      À l'ouverture de session, xrdp exécute `/etc/xrdp/startwm.sh`. Ce script lance la session définie par
+      l'utilisateur dans `~/.xsession` si elle existe, sinon la session par défaut du système.
+
+      - `startxfce4` démarre l'environnement XFCE, léger et adapté aux bureaux distants ;
+      - le fichier `~/.xsession` doit appartenir à l'utilisateur.
+
+      Modifier `startwm.sh` agit pour tous les utilisateurs ; `~/.xsession` permet un choix par utilisateur.
+      `ps -u <login>` montre les processus de la session une fois connectée.
+
+      Si la session se ferme aussitôt ouverte, le fichier `~/.xsession-errors` de l'utilisateur donne presque toujours la raison.
     description: |
       À la connexion, xrdp lance `/etc/xrdp/startwm.sh`, qui démarre par défaut la session système. Pour que
       chaque utilisateur obtienne un bureau **XFCE**, crée pour `lgarnier` le fichier `~/.xsession`
@@ -117,6 +266,15 @@ exercises:
 
   - id: vnc
     title: Serveur VNC pour le support
+    cours: |
+      TigerVNC fournit un serveur X virtuel (`Xtigervnc`) lancé par `vncserver`.
+
+      - `vncpasswd`, exécuté **par l'utilisateur concerné**, enregistre son mot de passe VNC dans `~/.vnc/` ;
+      - `vncserver :<N>` démarre l'affichage N, qui écoute sur le port **5900 + N** ;
+      - `-geometry` fixe la résolution ; `-localhost yes` limite l'écoute à 127.0.0.1.
+
+      `su - <login> -c '<commande>'` exécute une commande avec l'identité et l'environnement d'un autre
+      utilisateur. Sans `-localhost`, le port serait accessible à tout le réseau, avec un chiffrement faible.
     description: |
       Pour le support, configure TigerVNC pour l'utilisateur `support` :
       1. mot de passe VNC (`vncpasswd`, en tant que support) ;
@@ -142,6 +300,16 @@ exercises:
 
   - id: tunnel-vnc
     title: Prise en main VNC à travers SSH
+    cours: |
+      Un **tunnel local** SSH (`-L <port_local>:<hôte>:<port>`) fait écouter un port sur ton poste et
+      transporte les connexions à travers SSH ; l'hôte de destination est vu **depuis le serveur** :
+      `127.0.0.1` y désigne donc le serveur lui-même, là où VNC écoute.
+
+      `-f` passe en arrière-plan après l'authentification et `-N` n'exécute aucune commande distante. Le
+      client VNC (Remmina, TigerVNC Viewer...) se connecte ensuite sur le port local, et tout le trafic est
+      chiffré par SSH.
+
+      Le serveur VNC peut alors n'écouter que sur `localhost` : il devient injoignable directement depuis le réseau, seul le tunnel y mène.
     description: |
       Depuis admin, ouvre en arrière-plan un tunnel SSH (`-f -N -L`) avec le compte `support` (mot de passe
       `Support2024!`) pour que le port **5901 local d'admin** mène au VNC de bureau. Un client VNC
@@ -151,3 +319,86 @@ exercises:
       - desc: Le port 5901 d'admin mène au serveur VNC
         run: |
           (sleep 2) | nc -w3 127.0.0.1 5901 | head -c 12 | grep -q 'RFB 003'
+
+  - id: rdp-limites-sessions
+    title: Limiter et nettoyer les sessions
+    cours: |
+      La section `[Sessions]` de `sesman.ini` règle la vie des sessions :
+
+      | Clé                     | Rôle                                                      |
+      |-------------------------|-----------------------------------------------------------|
+      | `MaxSessions`           | nombre maximum de sessions simultanées                    |
+      | `KillDisconnected`      | fermer les sessions déconnectées                          |
+      | `DisconnectedTimeLimit` | délai (secondes) avant de fermer une session déconnectée  |
+      | `IdleTimeLimit`         | délai d'inactivité avant déconnexion                      |
+
+      Une session « déconnectée » continue de tourner (programmes ouverts) : l'utilisateur peut la
+      retrouver. C'est confortable, mais sur un serveur partagé, la mémoire s'épuise. Windows RDS propose les
+      mêmes réglages par stratégie de groupe.
+    description: |
+      Des commerciaux ferment la fenêtre RDP sans se déconnecter : leurs sessions restent ouvertes et
+      consomment de la mémoire. Dans la section `[Sessions]` de `/etc/xrdp/sesman.ini` :
+      - `MaxSessions=10` (sessions simultanées maximum sur le serveur) ;
+      - `KillDisconnected=true` et `DisconnectedTimeLimit=3600` : une session déconnectée est fermée au bout
+        d'une heure.
+
+      Redémarre ensuite `xrdp-sesman` pour appliquer.
+    hint: "sed -i 's/^MaxSessions=.*/MaxSessions=10/' /etc/xrdp/sesman.ini (idem pour les deux autres clés)"
+    checks:
+      - desc: MaxSessions=10, KillDisconnected activé, délai 3600 s
+        run: |
+          ssh bureau cat /etc/xrdp/sesman.ini > /tmp/sesman2.ini
+          grep -Eq '^MaxSessions *= *10 *$' /tmp/sesman2.ini && grep -Eq '^KillDisconnected *= *(true|yes|1) *$' /tmp/sesman2.ini &&
+          grep -Eq '^DisconnectedTimeLimit *= *3600 *$' /tmp/sesman2.ini
+      - desc: xrdp-sesman tourne
+        run: ssh bureau 'pgrep -x xrdp-sesman >/dev/null'
+
+  - id: vnc-xstartup
+    title: Bureau XFCE dans la session VNC
+    cours: |
+      `vncserver` exécute le script `~/.vnc/xstartup` de l'utilisateur pour peupler l'écran virtuel. S'il
+      n'existe pas, un script par défaut est utilisé, souvent inadapté.
+
+      Le script est un shell script ordinaire : `#!/bin/sh` en première ligne, puis la commande de session.
+      `exec` remplace le shell par le programme : quand la session se termine, le serveur VNC le sait.
+      Retirer la variable `SESSION_MANAGER` évite des conflits avec une autre session.
+
+      Il doit être **exécutable** et appartenir à l'utilisateur. `vncserver -kill :1` arrête l'affichage.
+    description: |
+      Sans configuration, la session VNC de `support` affiche un écran vide ou un bureau minimal. Crée pour
+      lui le script `~/.vnc/xstartup` (exécutable, appartenant à `support`) qui lance XFCE avec
+      `exec startxfce4`, puis redémarre son serveur VNC (`vncserver -kill :1` puis relance comme à
+      l'exercice VNC).
+    hint: "printf '#!/bin/sh\\nunset SESSION_MANAGER\\nexec startxfce4\\n' > /home/support/.vnc/xstartup ; chmod 755 ; chown support:"
+    checks:
+      - desc: ~/.vnc/xstartup de support est exécutable et lance XFCE
+        run: ssh bureau 'f=/home/support/.vnc/xstartup; test -x $f && grep -q "startxfce4" $f && test "$(stat -c %U $f)" = support'
+      - desc: Le serveur VNC de support tourne toujours
+        run: ssh bureau 'pgrep -u support -f "Xtigervnc|Xvnc" >/dev/null'
+
+  - id: rdp-dossier-commercial
+    title: Dossier partagé des commerciaux
+    cours: |
+      Un dossier partagé entre membres d'un groupe se construit toujours de la même façon : propriétaire
+      `root`, groupe du service, droits `2770` (le setgid fait hériter le groupe aux nouveaux fichiers).
+
+      Les environnements de bureau affichent sur le bureau le contenu du dossier `~/Bureau` (ou `~/Desktop`
+      selon la langue, réglé par `xdg-user-dirs`). Un **lien symbolique** (`ln -s <cible> <nom>`) y fait
+      apparaître un raccourci vers le dossier partagé.
+
+      Les dossiers créés par root dans un dossier personnel doivent être rendus à l'utilisateur (`chown`).
+    description: |
+      Les commerciaux veulent un dossier commun visible sur leur bureau XFCE.
+      1. Crée `/srv/commercial` : propriétaire `root:tsusers`, droits `2770`.
+      2. Crée dans le dossier personnel de `lgarnier` un **lien symbolique** `Bureau/Commercial` (ou
+         `Desktop/Commercial`) vers `/srv/commercial` : XFCE affiche le contenu de ce dossier sur le bureau.
+         Le dossier `Bureau` doit appartenir à lgarnier.
+    hint: "mkdir -p /srv/commercial && chown root:tsusers /srv/commercial && chmod 2770 /srv/commercial ; mkdir -p /home/lgarnier/Bureau ; ln -s /srv/commercial /home/lgarnier/Bureau/Commercial"
+    checks:
+      - desc: /srv/commercial en 2770, root:tsusers
+        run: test "$(ssh bureau stat -c %a:%U:%G /srv/commercial)" = 2770:root:tsusers
+      - desc: Le raccourci du bureau de lgarnier pointe vers /srv/commercial
+        run: |
+          ssh bureau 'for d in Bureau Desktop; do l=/home/lgarnier/$d/Commercial; if test -L $l && test "$(readlink -f $l)" = /srv/commercial && test "$(stat -c %U /home/lgarnier/$d)" = lgarnier; then exit 0; fi; done; exit 1'
+      - desc: lgarnier peut écrire dans le dossier, support non
+        run: ssh bureau 'runuser -u lgarnier -- touch /srv/commercial/.verif && rm -f /srv/commercial/.verif && ! runuser -u support -- touch /srv/commercial/.verif2 2>/dev/null'

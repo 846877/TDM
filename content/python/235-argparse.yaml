@@ -1,0 +1,226 @@
+title: Une vraie ligne de commande avec argparse
+level: avance
+order: 35
+tags: [argparse, cli, sysadmin]
+summary: Construire l'interface d'un outil en ligne de commande avec sous-commandes.
+description: |
+  On construit l'interface de l'outil `netcheck`. Écris `construire_parser()` qui renvoie un
+  `argparse.ArgumentParser` (avec `prog="netcheck"`) acceptant :
+
+  - option globale `-v` / `--verbose`, **cumulable** (`-vv` → 2), par défaut 0 ;
+  - sous-commande `ping` (attribut `commande` = `"ping"`) :
+    - un ou plusieurs `hotes` (positionnels) ;
+    - `-c` / `--count` : entier, défaut 4 ;
+    - `--timeout` : décimal, défaut 1.0 ;
+  - sous-commande `scan` :
+    - `hote` (un seul, positionnel) ;
+    - `-p` / `--ports` : texte converti par la fonction `ports(texte)` (à écrire, voir
+      ci-dessous), défaut `"1-1024"` (converti lui aussi) ;
+    - `--proto` : `"tcp"` ou `"udp"` uniquement (`choices`), défaut `"tcp"` ;
+  - sous-commande **obligatoire** : sans sous-commande, le parser signale une erreur.
+
+  `ports(texte)` convertit `"22,80,8000-8002"` en liste triée sans doublon
+  `[22, 80, 8000, 8001, 8002]`. Chaque port doit être entre 1 et 65535 et chaque plage
+  croissante, sinon lève `argparse.ArgumentTypeError` (argparse transformera cette erreur en
+  message propre).
+
+  Enfin, `executer(args)` (où `args` est le résultat de `parse_args`) renvoie une chaîne :
+  `"ping 2 hôte(s) x4"` pour un ping (nombre d'hôtes et count), `"scan srv (tcp) : 3 port(s)"`
+  pour un scan.
+
+  ```python
+  p = construire_parser()
+  a = p.parse_args(["-vv", "scan", "srv", "-p", "22,80,443", "--proto", "udp"])
+  a.verbose, a.commande, a.ports, a.proto    # (2, "scan", [22, 80, 443], "udp")
+  executer(a)                                # "scan srv (udp) : 3 port(s)"
+  ```
+
+  (Rappel : quand argparse rencontre une erreur, il affiche un message et lève `SystemExit`.)
+starter: |
+  import argparse
+
+
+  def ports(texte):
+      pass
+
+
+  def construire_parser():
+      pass
+
+
+  def executer(args):
+      pass
+tests: |
+  import argparse
+  import contextlib
+  import io
+
+  def analyser(argv):
+      return solution.construire_parser().parse_args(argv)
+
+  def doit_echouer(argv):
+      err = io.StringIO()
+      try:
+          with contextlib.redirect_stderr(err):
+              analyser(argv)
+      except SystemExit as e:
+          assert e.code != 0
+          return err.getvalue()
+      raise AssertionError(f"parse_args({argv}) aurait dû échouer")
+
+  def test_ports():
+      "ports"
+      assert solution.ports("22,80,8000-8002") == [22, 80, 8000, 8001, 8002]
+      assert solution.ports("443,22,443") == [22, 443]
+      for mauvais in ["0", "70000", "90-80", "abc", "22,,80", "1-2-3"]:
+          try:
+              solution.ports(mauvais)
+          except argparse.ArgumentTypeError:
+              continue
+          raise AssertionError(f"ports({mauvais!r}) devrait lever ArgumentTypeError")
+
+  def test_parser():
+      "construire_parser renvoie un ArgumentParser"
+      p = solution.construire_parser()
+      assert isinstance(p, argparse.ArgumentParser) and p.prog == "netcheck"
+
+  def test_ping():
+      "sous-commande ping"
+      a = analyser(["ping", "10.0.0.1", "10.0.0.2"])
+      assert (a.commande, a.hotes, a.count, a.timeout, a.verbose) == ("ping", ["10.0.0.1", "10.0.0.2"], 4, 1.0, 0)
+      a = analyser(["-v", "ping", "-c", "10", "--timeout", "0.5", "h"])
+      assert (a.count, a.timeout, a.verbose) == (10, 0.5, 1)
+
+  def test_scan():
+      "sous-commande scan"
+      a = analyser(["-vv", "scan", "srv", "-p", "22,80,443", "--proto", "udp"])
+      assert (a.verbose, a.commande, a.hote, a.ports, a.proto) == (2, "scan", "srv", [22, 80, 443], "udp")
+      a = analyser(["scan", "srv"])
+      assert a.ports == list(range(1, 1025)) and a.proto == "tcp"
+
+  def test_erreurs():
+      "Erreurs détectées par argparse"
+      doit_echouer([])
+      doit_echouer(["ping"])
+      doit_echouer(["ping", "h", "-c", "beaucoup"])
+      doit_echouer(["scan", "srv", "--proto", "icmp"])
+      message = doit_echouer(["scan", "srv", "-p", "99999"])
+      assert "99999" in message or "port" in message.lower(), message
+
+  def test_executer():
+      "executer"
+      assert solution.executer(analyser(["ping", "a", "b"])) == "ping 2 hôte(s) x4"
+      assert solution.executer(analyser(["scan", "srv", "-p", "22,80,443", "--proto", "udp"])) == "scan srv (udp) : 3 port(s)"
+solution: |
+  import argparse
+
+
+  def ports(texte):
+      resultat = set()
+      try:
+          for morceau in texte.split(","):
+              if "-" in morceau:
+                  debut, fin = morceau.split("-")
+                  debut, fin = int(debut), int(fin)
+                  if debut > fin:
+                      raise ValueError
+                  resultat.update(range(debut, fin + 1))
+              else:
+                  resultat.add(int(morceau))
+      except ValueError:
+          raise argparse.ArgumentTypeError(f"liste de ports invalide : {texte!r}") from None
+      if not all(1 <= p <= 65535 for p in resultat):
+          raise argparse.ArgumentTypeError(f"port hors limites dans {texte!r}")
+      return sorted(resultat)
+
+
+  def construire_parser():
+      parser = argparse.ArgumentParser(prog="netcheck", description="Outils de diagnostic réseau")
+      parser.add_argument("-v", "--verbose", action="count", default=0, help="plus de détails")
+      sous = parser.add_subparsers(dest="commande", required=True)
+
+      ping = sous.add_parser("ping", help="tester la joignabilité")
+      ping.add_argument("hotes", nargs="+")
+      ping.add_argument("-c", "--count", type=int, default=4)
+      ping.add_argument("--timeout", type=float, default=1.0)
+
+      scan = sous.add_parser("scan", help="scanner des ports")
+      scan.add_argument("hote")
+      scan.add_argument("-p", "--ports", type=ports, default="1-1024")
+      scan.add_argument("--proto", choices=["tcp", "udp"], default="tcp")
+      return parser
+
+
+  def executer(args):
+      if args.commande == "ping":
+          return f"ping {len(args.hotes)} hôte(s) x{args.count}"
+      return f"scan {args.hote} ({args.proto}) : {len(args.ports)} port(s)"
+cours: |
+  ## Pourquoi `argparse` ?
+
+  Lire `sys.argv` à la main devient vite ingérable : options courtes et longues, valeurs par
+  défaut, conversions, messages d'erreur, aide. `argparse` gère tout cela et génère
+  automatiquement `--help`.
+
+  ```python
+  import argparse
+  parser = argparse.ArgumentParser(prog="sauvegarde", description="Sauvegarde des dossiers")
+  parser.add_argument("source")                                  # positionnel obligatoire
+  parser.add_argument("-d", "--destination", default="/backup")  # option
+  parser.add_argument("-n", "--dry-run", action="store_true")    # drapeau booléen
+  args = parser.parse_args()          # lit sys.argv[1:]
+  args.dry_run                        # les tirets deviennent des _
+  ```
+
+  Pour tester, on passe la liste explicitement : `parser.parse_args(["src", "-n"])`.
+
+  ## Les paramètres utiles de `add_argument`
+
+  | Paramètre | Effet |
+  |-----------|-------|
+  | `type=int` | conversion (n'importe quelle fonction texte → valeur) |
+  | `default=...` | valeur si absent ; une chaîne par défaut passe aussi par `type` |
+  | `choices=[...]` | valeurs autorisées |
+  | `nargs="+"`, `"*"`, `"?"`, `2` | nombre de valeurs |
+  | `action="store_true"` | drapeau booléen |
+  | `action="count"` | compte les répétitions (`-vvv` → 3) |
+  | `required=True` | rend une option obligatoire |
+  | `help="..."` | texte affiché par `--help` |
+
+  ## Types personnalisés
+
+  `type` accepte n'importe quelle fonction. Pour signaler une valeur invalide, elle lève
+  `argparse.ArgumentTypeError` (ou `ValueError`) : argparse affiche alors un message clair et
+  quitte avec le code 2, au lieu d'une trace d'exception.
+
+  ## Sous-commandes
+
+  Comme `git commit` ou `docker run`, un outil peut avoir des sous-commandes, chacune avec ses
+  propres arguments :
+
+  ```python
+  sous = parser.add_subparsers(dest="commande", required=True)
+  p_list = sous.add_parser("list")
+  p_add = sous.add_parser("add")
+  p_add.add_argument("nom")
+  ```
+
+  `dest` indique quel attribut reçoit le nom de la sous-commande. On peut aussi associer une
+  fonction à chaque sous-commande avec `set_defaults(fonction=...)` et appeler
+  `args.fonction(args)`.
+
+  ## Erreurs et codes de sortie
+
+  En cas d'erreur, argparse écrit l'usage et le message sur `stderr`, puis appelle
+  `sys.exit(2)` (donc lève `SystemExit`). Les scripts appelés par d'autres programmes doivent
+  renvoyer 0 en cas de succès et un code non nul en cas d'échec.
+
+  ## Structure recommandée
+
+  Séparer la **construction** du parser, l'**analyse** et l'**exécution** rend l'outil
+  testable sans lancer de processus : c'est ce que fait cet exercice.
+docs:
+  - title: Module argparse
+    url: https://docs.python.org/fr/3/library/argparse.html
+  - title: Tutoriel argparse
+    url: https://docs.python.org/fr/3/howto/argparse.html

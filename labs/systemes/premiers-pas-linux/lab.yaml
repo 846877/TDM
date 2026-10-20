@@ -1,0 +1,407 @@
+title: Premiers pas sous Linux
+level: debutant
+order: 0
+tags: [linux, terminal, fichiers, nano, grep, find, redirections]
+summary: Se repérer dans l'arborescence, manipuler fichiers et dossiers, éditer, lire un journal, chercher, rediriger et enchaîner des commandes.
+build: .
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Premier jour chez *Ateliers Durand* : ton responsable t'a ouvert un poste Linux et t'a
+  laissé quelques fichiers. Avant de toucher aux serveurs, tu dois être à l'aise avec le **terminal** :
+  te déplacer, créer et ranger des fichiers, en modifier un, lire un journal, retrouver une information
+  et enchaîner des commandes.
+
+  **Machine.** Poste Ubuntu, terminal `root`. Dossiers à explorer : `/srv/accueil`, `/srv/partage`,
+  `/var/log/appli` et ton dossier personnel `/root`.
+
+  Réponses à écrire dans `/root/reponses.txt`, au format `cle=valeur` (une réponse par ligne), par
+  exemple avec `nano /root/reponses.txt`.
+
+  Outils : `pwd`, `ls -la`, `cd`, `mkdir -p`, `cp`, `mv`, `rm -r`, `cat`, `less`, `head`, `tail`,
+  `wc -l`, `nano`, `grep`, `find`, `sort`, `uniq`, `cut`, `>`, `>>`, `2>`, `|`.
+cours: |
+  ## Le terminal et l'interpréteur de commandes
+
+  Le **terminal** affiche une invite (*prompt*) qui indique qui tu es, sur quelle machine et où :
+
+  ```
+  root@premiers-pas-linux:~#
+  └─┬┘ └───────┬────────┘ │└─ # = administrateur (root), $ = utilisateur ordinaire
+   compte    machine      └── dossier courant (~ = dossier personnel)
+  ```
+
+  Une commande s'écrit `commande [options] [arguments]` : `ls -l /srv`. Les options courtes se
+  combinent (`ls -la` = `ls -l -a`). La touche **Tab** complète les noms (une fois) ou propose les choix
+  (deux fois) ; **flèche haut** rappelle les commandes précédentes ; **Ctrl+C** interrompt ; `man ls` ou
+  `ls --help` affichent l'aide.
+
+  ## L'arborescence
+
+  Sous Linux, tout part de la **racine** `/` : pas de lettres de lecteur comme sous Windows.
+
+  ```
+  /
+  ├── etc/      configuration du système
+  ├── home/     dossiers personnels des utilisateurs (/root pour l'administrateur)
+  ├── srv/      données servies par la machine (partages, sites)
+  ├── tmp/      fichiers temporaires
+  ├── usr/      programmes installés
+  └── var/      données variables : journaux (/var/log), files d'attente, bases
+  ```
+
+  Un chemin **absolu** commence par `/` (`/srv/accueil/modeles`). Un chemin **relatif** part du dossier
+  courant (`modeles/courrier.txt`). Raccourcis : `.` dossier courant, `..` dossier parent, `~` dossier
+  personnel, `cd -` dossier précédent. Les fichiers dont le nom commence par un point sont **cachés** :
+  `ls -a` les affiche.
+
+  ## Mémo des commandes de base
+
+  | Besoin                         | Commande                                  |
+  |--------------------------------|-------------------------------------------|
+  | Où suis-je ? que contient-il ? | `pwd`, `ls -la`, `tree -a`                |
+  | Créer des dossiers             | `mkdir -p a/b/c` (crée les parents)       |
+  | Copier / déplacer / renommer   | `cp source dest`, `cp -r dossier dest`, `mv ancien nouveau` |
+  | Supprimer                      | `rm fichier`, `rm -r dossier` (**sans corbeille**) |
+  | Lire                           | `cat` (court), `less` (long, `q` pour quitter), `head -n 5`, `tail -n 5`, `tail -f` |
+  | Compter                        | `wc -l` (lignes), `wc -w` (mots)          |
+  | Chercher du texte              | `grep motif fichier`, `-i` (casse), `-c` (compter), `-r` (récursif), `-n` (numéros) |
+  | Chercher des fichiers          | `find /srv -name '*.pdf'`, `-type f`, `-size +1M`, `-mtime +30` |
+  | Type d'un fichier              | `file fichier`                            |
+
+  ## Redirections et tubes
+
+  Chaque commande a une **entrée** (clavier), une **sortie** (écran) et une **sortie d'erreur** (écran
+  aussi). On peut les détourner :
+
+  ```
+  commande  > fichier     sortie dans un fichier (écrase son contenu)
+  commande >> fichier     sortie ajoutée à la fin du fichier
+  commande 2> fichier     erreurs dans un fichier
+  commande1 | commande2   la sortie de commande1 devient l'entrée de commande2
+  ```
+
+  Les **tubes** (*pipes*) permettent de construire des traitements à partir de petites commandes :
+
+  ```bash
+  cut -d';' -f3 annuaire.csv | sort | uniq -c | sort -rn   # nombre de personnes par service
+  ```
+
+  ## L'éditeur nano
+
+  `nano fichier` ouvre l'éditeur. On tape directement le texte ; les raccourcis sont affichés en bas
+  (`^` = touche Ctrl) : **Ctrl+O** puis Entrée pour enregistrer, **Ctrl+X** pour quitter, **Ctrl+W** pour
+  chercher, **Ctrl+K** pour couper une ligne. `vi` (ou `vim`) est présent sur tous les serveurs : `i` pour
+  écrire, Échap puis `:wq` pour enregistrer et quitter, `:q!` pour quitter sans enregistrer.
+
+  ## Pièges courants
+
+  - `rm` ne passe pas par une corbeille : relis la commande, surtout avec `-r` et des jokers (`*`).
+  - `>` écrase sans prévenir : `>>` pour ajouter.
+  - Les espaces dans les noms de fichiers : mettre le nom entre guillemets (`"mon fichier.txt"`).
+  - Linux distingue majuscules et minuscules : `Rapport.txt` et `rapport.txt` sont deux fichiers.
+  - Un chemin relatif dépend du dossier courant : en cas de doute, `pwd` ou chemin absolu.
+
+  ## Bonnes pratiques en entreprise
+
+  - Sur un serveur, on travaille avec un compte personnel et `sudo`, pas directement en root.
+  - Avant de modifier un fichier de configuration, on en garde une copie (`cp fichier fichier.bak`).
+  - On vérifie ce qu'une commande va toucher avant de l'exécuter (`ls` avant `rm`, `find` avant
+    `find -delete`).
+  - On note dans le ticket les commandes passées : un collègue doit pouvoir refaire ou défaire.
+docs:
+  - title: Ubuntu - la ligne de commande pour débutants (tutoriel officiel)
+    url: https://ubuntu.com/tutorials/command-line-for-beginners
+  - title: find(1) - rechercher des fichiers (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man1/find.1.html
+  - title: grep(1) - rechercher du texte (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man1/grep.1.html
+  - title: Manuel de Bash (GNU)
+    url: https://www.gnu.org/software/bash/manual/bash.html
+exercises:
+  - id: pp-se-reperer
+    title: Se repérer et voir les fichiers cachés
+    cours: |
+      `pwd` affiche le dossier courant, `cd <dossier>` s'y déplace et `ls` en liste le contenu. Les
+      options de `ls` les plus utiles :
+
+      - `-l` : format long (droits, propriétaire, taille, date) ;
+      - `-a` : affiche aussi les fichiers **cachés**, dont le nom commence par un point ;
+      - `-h` : tailles lisibles (Ko, Mo) avec `-l`.
+
+      `.` et `..` apparaissent toujours avec `-a` : ce sont le dossier lui-même et son parent, pas des
+      fichiers. `cat <fichier>` affiche un petit fichier texte. Pour compter les éléments d'un dossier,
+      `ls <dossier> | wc -l` fait l'affaire.
+    description: |
+      Va dans `/srv/accueil`, lis `bienvenue.txt`, puis affiche **tous** les fichiers du dossier, y compris
+      les fichiers cachés. L'un d'eux contient le code de ton poste.
+
+      Réponses : `code_poste=` (la valeur après `code=`) et `nb_modeles=` (le nombre de fichiers du dossier
+      `modeles`).
+    hint: cd /srv/accueil ; ls -la ; cat .config-poste ; ls modeles | wc -l
+    checks:
+      - desc: Code du poste
+        run: grep -Eq '^code_poste *= *ATD-4821 *$' /root/reponses.txt
+      - desc: Nombre de modèles
+        run: grep -Eq '^nb_modeles *= *3 *$' /root/reponses.txt
+
+  - id: pp-arborescence
+    title: Créer une arborescence de dossiers
+    cours: |
+      `mkdir <dossier>` crée un dossier. Avec `-p`, il crée aussi les dossiers parents manquants et ne
+      signale pas d'erreur si le dossier existe déjà : `mkdir -p a/b/c`.
+
+      Le shell sait développer les **accolades** : `mkdir -p projet/{docs,scripts}` équivaut à
+      `mkdir -p projet/docs projet/scripts`.
+
+      Pour créer un petit fichier texte sans éditeur, on redirige la sortie de `echo` :
+      `echo "texte" > fichier.txt`. `tree <dossier>` affiche ensuite l'arborescence sous forme d'arbre,
+      pratique pour vérifier son travail.
+
+      Choisis des noms sans espace ni accent : ils se tapent plus facilement et ne posent pas de problème aux scripts.
+    description: |
+      Dans ton dossier personnel, crée l'arborescence du projet de migration :
+
+      ```
+      /root/projet
+      ├── archives
+      ├── docs
+      │   └── lisezmoi.txt   (contient la phrase « Projet migration »)
+      └── scripts
+      ```
+    hint: mkdir -p /root/projet/{docs,scripts,archives} ; echo "Projet migration" > /root/projet/docs/lisezmoi.txt ; tree /root/projet
+    checks:
+      - desc: Les trois dossiers existent
+        run: test -d /root/projet/docs && test -d /root/projet/scripts && test -d /root/projet/archives
+      - desc: lisezmoi.txt contient « Projet migration »
+        run: grep -qi 'projet migration' /root/projet/docs/lisezmoi.txt
+
+  - id: pp-copier-deplacer
+    title: Copier, déplacer, renommer, supprimer
+    cours: |
+      - `cp <source> <destination>` copie un fichier ; si la destination est un dossier, le fichier y
+        garde son nom. Le joker `*` désigne plusieurs fichiers : `cp modeles/*.txt docs/`.
+      - `mv <source> <destination>` déplace **et** renomme en une seule commande.
+      - `rm <fichier>` supprime un fichier, `rm -r <dossier>` un dossier et tout son contenu.
+
+      Sous Linux, il n'y a **pas de corbeille** en ligne de commande : vérifie avec `ls` ce que désigne ton
+      chemin avant de supprimer. L'option `-i` demande une confirmation pour chaque fichier, `-v` affiche ce
+      qui est fait.
+    description: |
+      1. Copie les trois modèles de `/srv/accueil/modeles/` dans `/root/projet/docs/` (les originaux
+         restent en place).
+      2. Déplace `/root/brouillon.txt` dans `/root/projet/archives/` en le renommant `brouillon-2026.txt`.
+      3. Supprime le dossier `/root/a-supprimer` et tout son contenu.
+    hint: cp /srv/accueil/modeles/*.txt /root/projet/docs/ ; mv /root/brouillon.txt /root/projet/archives/brouillon-2026.txt ; rm -r /root/a-supprimer
+    checks:
+      - desc: Les modèles sont copiés et les originaux toujours là
+        run: |
+          for m in courrier facture devis; do test -f /root/projet/docs/$m.txt && test -f /srv/accueil/modeles/$m.txt || exit 1; done
+      - desc: Le brouillon est déplacé et renommé
+        run: test -f /root/projet/archives/brouillon-2026.txt && test ! -e /root/brouillon.txt && grep -q inventaire /root/projet/archives/brouillon-2026.txt
+      - desc: Le dossier a-supprimer n'existe plus
+        run: test ! -e /root/a-supprimer
+
+  - id: pp-editeur
+    title: Modifier un fichier avec nano
+    cours: |
+      `nano <fichier>` ouvre l'éditeur dans le terminal. On se déplace avec les flèches et on tape
+      directement. Les raccourcis sont rappelés en bas de l'écran, `^` signifiant la touche **Ctrl** :
+
+      | Raccourci       | Action                          |
+      |-----------------|---------------------------------|
+      | Ctrl+O, Entrée  | enregistrer                     |
+      | Ctrl+X          | quitter                         |
+      | Ctrl+W          | chercher                        |
+      | Ctrl+K / Ctrl+U | couper / coller une ligne       |
+
+      Dans un fichier de configuration au format `cle=valeur`, on ne met pas d'espace autour du `=` et on ne
+      touche pas aux autres lignes. Les lignes commençant par `#` sont des commentaires.
+    description: |
+      Le fichier `/root/config-poste.ini` doit être adapté à la production. Avec `nano` :
+
+      - remplace `mode=test` par `mode=production` ;
+      - renseigne l'imprimante : `imprimante=atelier-2` ;
+      - ajoute à la fin une ligne `responsable=` suivie de ton prénom.
+
+      Les autres lignes ne doivent pas changer.
+    hint: nano /root/config-poste.ini  (Ctrl+O puis Entrée pour enregistrer, Ctrl+X pour quitter)
+    checks:
+      - desc: mode=production (et plus de mode=test)
+        run: grep -qx 'mode=production' /root/config-poste.ini && ! grep -q '^mode=test' /root/config-poste.ini
+      - desc: imprimante=atelier-2
+        run: grep -qx 'imprimante=atelier-2' /root/config-poste.ini
+      - desc: Ligne responsable= renseignée
+        run: grep -Eq '^responsable=[^ ]+' /root/config-poste.ini
+      - desc: Les autres lignes sont intactes
+        run: grep -qx 'serveur=srv-fichiers.durand.lan' /root/config-poste.ini && grep -qx 'langue=fr' /root/config-poste.ini && grep -q '^# Configuration du poste' /root/config-poste.ini
+
+  - id: pp-lire-journal
+    title: Lire un long fichier journal
+    cours: |
+      Un journal peut contenir des milliers de lignes : `cat` les ferait défiler trop vite.
+
+      - `less <fichier>` permet de naviguer (flèches, Espace, `G` pour aller à la fin, `/mot` pour
+        chercher, `q` pour quitter) ;
+      - `head -n <N>` affiche les N premières lignes, `tail -n <N>` les N dernières ;
+      - `tail -f` suit un journal en direct (Ctrl+C pour arrêter) ;
+      - `wc -l <fichier>` compte les lignes.
+
+      Dans un journal, chaque ligne commence généralement par la **date et l'heure** : c'est ce qui permet
+      de relier un événement à un incident signalé par un utilisateur.
+    description: |
+      Examine `/var/log/appli/demarrage.log`.
+
+      Réponses : `nb_lignes=` (le nombre de lignes du journal) et `heure_fin=` (l'heure, au format
+      `HH:MM:SS`, de la **dernière** ligne).
+    hint: wc -l /var/log/appli/demarrage.log ; tail -n 1 /var/log/appli/demarrage.log
+    checks:
+      - desc: Nombre de lignes
+        run: |
+          test "$(grep -E '^nb_lignes *=' /root/reponses.txt | tail -n1 | cut -d= -f2 | tr -d ' ')" = "$(wc -l < /var/log/appli/demarrage.log)"
+      - desc: Heure de la dernière ligne
+        run: |
+          test "$(grep -E '^heure_fin *=' /root/reponses.txt | tail -n1 | cut -d= -f2 | tr -d ' ')" = "$(tail -n1 /var/log/appli/demarrage.log | cut -d' ' -f2)"
+
+  - id: pp-chercher-texte
+    title: Chercher du texte avec grep
+    cours: |
+      `grep <motif> <fichier>` affiche les lignes qui contiennent le motif. Options courantes :
+
+      | Option | Effet                                         |
+      |--------|-----------------------------------------------|
+      | `-i`   | ignore majuscules et minuscules               |
+      | `-c`   | affiche le **nombre** de lignes trouvées      |
+      | `-n`   | affiche le numéro de chaque ligne             |
+      | `-v`   | inverse : lignes qui ne contiennent **pas** le motif |
+      | `-r`   | cherche dans tous les fichiers d'un dossier   |
+
+      Mets le motif entre apostrophes s'il contient des espaces ou des caractères spéciaux :
+      `grep 'Leroy;Martin' annuaire.csv`. Attention à l'ordre des colonnes d'un fichier CSV : regarde la
+      première ligne (l'en-tête) avant de chercher.
+    description: |
+      1. Compte les lignes d'erreur (`ERREUR`) dans `/var/log/appli/demarrage.log`.
+      2. Dans l'annuaire `/srv/accueil/annuaire.csv`, trouve le téléphone de **Martin Leroy** (nom Leroy,
+         prénom Martin).
+
+      Réponses : `nb_erreurs=` et `tel_leroy=` (au format de l'annuaire, par exemple `04 72 10 20 99`).
+    hint: grep -c ERREUR /var/log/appli/demarrage.log ; head -1 /srv/accueil/annuaire.csv ; grep 'Leroy;Martin' /srv/accueil/annuaire.csv
+    checks:
+      - desc: Nombre de lignes d'erreur
+        run: |
+          test "$(grep -E '^nb_erreurs *=' /root/reponses.txt | tail -n1 | cut -d= -f2 | tr -d ' ')" = "$(grep -c ERREUR /var/log/appli/demarrage.log)"
+      - desc: Téléphone de Martin Leroy
+        run: grep -Eq '^tel_leroy *= *04 72 10 20 35 *$' /root/reponses.txt
+
+  - id: pp-trouver-fichiers
+    title: Retrouver des fichiers avec find
+    cours: |
+      `find <dossier> <critères>` parcourt une arborescence et affiche les chemins qui correspondent :
+
+      - `-name 'motif'` : par nom (`*` joker ; `-iname` ignore la casse) ;
+      - `-type f` (fichier) ou `-type d` (dossier) ;
+      - `-size +1M` : plus de 1 Mio (`k`, `M`, `G`) ;
+      - `-mtime +30` : modifié il y a plus de 30 jours.
+
+      Les critères se combinent (ils doivent tous être vrais). Mets toujours le motif de `-name` entre
+      apostrophes, sinon le shell remplace le joker avant que `find` ne le voie. Ajoute `| wc -l` pour
+      compter les résultats, ou `-exec ls -lh {} \;` pour voir leur taille.
+    description: |
+      Un collègue cherche la procédure VPN, rangée « quelque part » dans `/srv/partage`. Et le partage est
+      presque plein : combien de fichiers y dépassent 1 Mo ?
+
+      Réponses : `chemin_vpn=` (chemin complet du fichier `procedure-vpn.pdf`) et `nb_gros_fichiers=`
+      (nombre de fichiers de plus de 1 Mo sous `/srv/partage`, critère `-size +1M`).
+    hint: find /srv/partage -name 'procedure-vpn.pdf' ; find /srv/partage -type f -size +1M | wc -l
+    checks:
+      - desc: Chemin de la procédure VPN
+        run: grep -Eq '^chemin_vpn *= */srv/partage/informatique/2025/procedures/procedure-vpn\.pdf *$' /root/reponses.txt
+      - desc: Nombre de gros fichiers
+        run: |
+          test "$(grep -E '^nb_gros_fichiers *=' /root/reponses.txt | tail -n1 | cut -d= -f2 | tr -d ' ')" = "$(find /srv/partage -type f -size +1M | wc -l)"
+
+  - id: pp-redirections
+    title: Rediriger les sorties vers des fichiers
+    cours: |
+      Le résultat d'une commande peut être envoyé dans un fichier au lieu de l'écran :
+
+      - `>` crée ou **écrase** le fichier ;
+      - `>>` ajoute à la fin du fichier ;
+      - `2>` redirige les **messages d'erreur** (sortie d'erreur), qui sont séparés de la sortie normale.
+
+      Ainsi `ls dossier1 dossier-absent > liste.txt 2> erreurs.txt` range la liste dans un fichier et le
+      message « No such file or directory » dans l'autre. `date` affiche la date et l'heure du moment, utile
+      pour horodater un inventaire. `cat` permet de vérifier le résultat.
+    description: |
+      1. Écris la liste des fichiers de `/srv/accueil/modeles` dans `/root/projet/inventaire.txt`, puis
+         **ajoute** la date du jour à la fin de ce fichier (commande `date`).
+      2. En **une seule** commande `ls /srv/accueil /dossier-inexistant`, envoie la liste dans
+         `/root/projet/liste.txt` et le message d'erreur dans `/root/projet/erreurs.txt`.
+    hint: ls /srv/accueil/modeles > /root/projet/inventaire.txt ; date >> /root/projet/inventaire.txt ; ls /srv/accueil /dossier-inexistant > /root/projet/liste.txt 2> /root/projet/erreurs.txt
+    checks:
+      - desc: inventaire.txt contient les modèles puis la date
+        run: |
+          f=/root/projet/inventaire.txt; grep -qx 'courrier.txt' $f && grep -qx 'devis.txt' $f && test "$(wc -l < $f)" -eq 4 && tail -n1 $f | grep -q '[0-9]:[0-9][0-9]:[0-9][0-9]'
+      - desc: liste.txt contient la liste, sans message d'erreur
+        run: grep -q 'bienvenue.txt' /root/projet/liste.txt && ! grep -qi 'no such' /root/projet/liste.txt
+      - desc: erreurs.txt contient le message d'erreur
+        run: grep -q 'dossier-inexistant' /root/projet/erreurs.txt
+
+  - id: pp-tubes
+    title: Enchaîner des commandes avec des tubes
+    cours: |
+      Le tube `|` envoie la sortie d'une commande à l'entrée de la suivante. Quelques briques à combiner :
+
+      | Commande          | Rôle                                                |
+      |-------------------|-----------------------------------------------------|
+      | `tail -n +2`      | tout sauf la première ligne (l'en-tête d'un CSV)    |
+      | `cut -d';' -f3`   | 3e colonne, avec `;` comme séparateur               |
+      | `sort`            | trie les lignes                                     |
+      | `sort -u`         | trie et supprime les doublons                       |
+      | `uniq -c`         | compte les lignes identiques **consécutives** (après un `sort`) |
+      | `wc -l`           | compte les lignes                                   |
+
+      Construis la chaîne pas à pas : lance la première commande, regarde le résultat, ajoute la suivante.
+    description: |
+      À partir de `/srv/accueil/annuaire.csv` :
+
+      1. écris dans `/root/projet/services.txt` la liste **triée et sans doublon** des services (une ligne
+         par service, sans l'en-tête `service`) ;
+      2. réponds `nb_services=` (le nombre de services différents).
+    hint: tail -n +2 /srv/accueil/annuaire.csv | cut -d';' -f3 | sort -u > /root/projet/services.txt ; wc -l /root/projet/services.txt
+    checks:
+      - desc: services.txt contient la liste triée et unique des services
+        run: |
+          tail -n +2 /srv/accueil/annuaire.csv | cut -d';' -f3 | sort -u | diff -q - /root/projet/services.txt
+      - desc: Nombre de services
+        run: |
+          test "$(grep -E '^nb_services *=' /root/reponses.txt | tail -n1 | cut -d= -f2 | tr -d ' ')" = "$(tail -n +2 /srv/accueil/annuaire.csv | cut -d';' -f3 | sort -u | wc -l)"
+
+  - id: pp-alias-script
+    title: Un alias et un premier script
+    cours: |
+      Le fichier `~/.bashrc` est lu à l'ouverture de chaque terminal Bash : c'est là qu'on personnalise son
+      environnement.
+
+      - un **alias** donne un nom court à une commande : `alias nom='commande longue'` ;
+      - la variable `PATH` liste les dossiers où le shell cherche les commandes ;
+        `export PATH="$HOME/bin:$PATH"` y ajoute ton dossier `~/bin`.
+
+      Un **script** est un fichier texte qui commence par `#!/bin/bash` (l'interpréteur à utiliser), suivi
+      des commandes. Il faut le rendre exécutable (`chmod +x`). `$(whoami)` insère dans un texte le résultat
+      de la commande `whoami`. `source ~/.bashrc` recharge le fichier sans rouvrir le terminal.
+    description: |
+      1. Dans `/root/.bashrc`, ajoute un alias **`journal`** qui affiche les 20 dernières lignes de
+         `/var/log/appli/demarrage.log`.
+      2. Crée le script **`/root/bin/bonjour`**, exécutable, qui affiche `Bonjour ` suivi du nom du compte
+         qui le lance (avec `whoami`).
+      3. Ajoute `/root/bin` au `PATH` dans `/root/.bashrc`, pour lancer le script en tapant simplement
+         `bonjour`.
+    hint: echo "alias journal='tail -n 20 /var/log/appli/demarrage.log'" >> ~/.bashrc ; mkdir -p ~/bin ; nano ~/bin/bonjour (#!/bin/bash puis echo "Bonjour $(whoami)") ; chmod +x ~/bin/bonjour ; echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
+    checks:
+      - desc: L'alias journal est défini dans .bashrc
+        run: bash -ic 'alias journal' 2>/dev/null | grep -q 'tail -n *20 /var/log/appli/demarrage.log'
+      - desc: Le script bonjour est exécutable et affiche « Bonjour root »
+        run: test -x /root/bin/bonjour && /root/bin/bonjour | grep -qx 'Bonjour root'
+      - desc: bonjour se lance sans son chemin
+        run: bash -ic 'command -v bonjour' 2>/dev/null | grep -qx '/root/bin/bonjour'

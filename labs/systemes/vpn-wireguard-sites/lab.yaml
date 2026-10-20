@@ -31,9 +31,109 @@ description: |
   d'administration hors bande). Outils : `wg genkey`, `wg pubkey`, `wg show`, `wg-quick up|down wg0`
   (configuration dans `/etc/wireguard/wg0.conf`). Si le noyau n'a pas le module WireGuard, `wg-quick`
   bascule automatiquement sur **wireguard-go** (implémentation en espace utilisateur).
+cours: |
+  ## À quoi sert un VPN
+
+  Un **VPN** crée un tunnel chiffré à travers un réseau non fiable (Internet). Deux usages en entreprise :
+
+  - **site à site** : deux passerelles relient les LAN de deux sites, les postes ne voient rien ;
+  - **nomade** (*road warrior*) : un portable rejoint le réseau de l'entreprise depuis n'importe où.
+
+  Alternatives connues : IPsec (standard historique entre équipements de marques différentes),
+  OpenVPN (TLS), et les VPN SSL des pare-feu commerciaux. **WireGuard** est récent, intégré au noyau
+  Linux, très simple et rapide.
+
+  ## Principes de WireGuard
+
+  ```
+  pc-agence ─▶ gw-agence ══ UDP 51820 chiffré sur Internet ══▶ gw-siege ─▶ pc-siege
+   10.20.0.10   wg0 10.200.0.2                                  wg0 10.200.0.1   10.10.0.10
+  ```
+
+  - Chaque pair a une **paire de clés** (Curve25519) : la clé privée reste sur la machine, la clé publique
+    est donnée aux autres. Pas de certificats, pas de mot de passe.
+  - **AllowedIPs** joue un double rôle (*cryptokey routing*) :
+    - en **sortie** : les paquets vers ces adresses partent vers ce pair (et `wg-quick` crée les routes) ;
+    - en **entrée** : seuls les paquets dont l'adresse source est dans cette liste sont acceptés de ce pair.
+  - **Endpoint** : adresse publique et port où joindre le pair (au moins un des deux côtés doit le connaître).
+  - **PersistentKeepalive** : envoie un paquet régulier pour garder ouverte la traduction NAT d'une box.
+  - WireGuard est silencieux : il ne répond à rien sans clé valide, il n'apparaît pas à un scan.
+
+  ```ini
+  # /etc/wireguard/wg0.conf (gw-siege, droits 600)
+  [Interface]
+  PrivateKey = <clé privée de gw-siege>
+  Address = 10.200.0.1/24
+  ListenPort = 51820
+
+  [Peer]                       # agence
+  PublicKey = <clé publique de gw-agence>
+  Endpoint = 198.51.100.20:51820
+  AllowedIPs = 10.200.0.2/32, 10.20.0.0/24
+  ```
+
+  ## Split tunnel ou full tunnel
+
+  | Mode           | AllowedIPs côté nomade         | Effet                                         |
+  |----------------|--------------------------------|-----------------------------------------------|
+  | split tunnel   | réseaux de l'entreprise        | seul le trafic interne passe par le VPN       |
+  | full tunnel    | `0.0.0.0/0`                    | tout passe par l'entreprise (filtrage, proxy) |
+
+  ## Mémo des commandes
+
+  | Besoin                       | Commande                                                  |
+  |------------------------------|-----------------------------------------------------------|
+  | Générer une paire de clés    | `umask 077; wg genkey \| tee privatekey \| wg pubkey > publickey` |
+  | Monter / démonter            | `wg-quick up wg0` / `wg-quick down wg0`                   |
+  | État, poignées de main       | `wg show`                                                 |
+  | Ajouter un pair à chaud      | `wg set wg0 peer <clé> allowed-ips 10.200.0.10/32`        |
+  | Retirer un pair à chaud      | `wg set wg0 peer <clé> remove`                            |
+  | Recharger sans couper        | `wg syncconf wg0 <(wg-quick strip wg0)`                   |
+  | Au démarrage (systemd)       | `systemctl enable --now wg-quick@wg0`                     |
+
+  ## Dépannage méthodique
+
+  1. `wg show` : y a-t-il un *latest handshake* récent ? Sinon : clés, endpoint, port UDP filtré.
+  2. Handshake OK mais pas de trafic : **AllowedIPs** (des deux côtés), routes (`ip route`), `ip_forward`.
+  3. `tcpdump -ni wg0` (trafic en clair dans le tunnel) et `tcpdump -ni <interface Internet> udp port 51820`
+     (paquets chiffrés).
+  4. Pare-feu de la passerelle : chaîne `forward` entre `wg0` et le LAN.
+
+  ## Pièges courants
+
+  - Deux sous-réseaux identiques sur les deux sites (`192.168.1.0/24` partout) : impossible de router.
+    Le plan d'adressage doit être pensé pour tous les sites.
+  - Oublier une adresse dans AllowedIPs : les paquets sont silencieusement rejetés.
+  - Clé privée lisible par tous ou envoyée par mail.
+  - Retirer un pair à chaud mais pas du fichier : il revient au redémarrage.
+
+  ## Bonnes pratiques en entreprise
+
+  - Une paire de clés par appareil, inventoriée (propriétaire, date), révoquée en cas de perte.
+  - Sur Internet, la passerelle n'expose que le port UDP du VPN.
+  - Pour les nomades : clés protégées sur le poste, et idéalement une solution de gestion centralisée
+    (Netbird, Headscale, ou le VPN du pare-feu avec authentification AD et double facteur).
+docs:
+  - title: WireGuard - démarrage rapide (site officiel)
+    url: https://www.wireguard.com/quickstart/
+  - title: wg-quick(8) - fichier wg0.conf (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man8/wg-quick.8.html
+  - title: Debian Wiki - WireGuard
+    url: https://wiki.debian.org/WireGuard
+  - title: Wikipédia - Réseau privé virtuel
+    url: https://fr.wikipedia.org/wiki/R%C3%A9seau_priv%C3%A9_virtuel
 exercises:
   - id: wg-cles
     title: Générer les paires de clés
+    cours: |
+      WireGuard utilise des clés de **courbe elliptique** (Curve25519), courtes et rapides.
+
+      - `wg genkey` affiche une nouvelle clé privée (encodée en base64) ;
+      - `wg pubkey` lit une clé privée sur son entrée standard et affiche la clé publique correspondante ;
+      - `tee <fichier>` écrit ce qu'il reçoit dans un fichier **et** le transmet à la commande suivante.
+
+      Le **umask** `077` fait naître les fichiers en `600` : la clé privée n'est jamais, même un instant,
+      lisible par d'autres utilisateurs. Seule la clé publique sera copiée sur l'autre passerelle.
     description: |
       Sur **gw-siege** et **gw-agence**, génère une paire de clés WireGuard dans `/etc/wireguard/privatekey`
       et `/etc/wireguard/publickey`. La clé privée ne doit être lisible que par root (`umask 077`).
@@ -49,6 +149,16 @@ exercises:
 
   - id: tunnel
     title: Monter le tunnel site à site
+    cours: |
+      `wg0.conf` comporte une section `[Interface]` (la machine elle-même : clé privée, adresse dans le
+      tunnel, port d'écoute) et une section `[Peer]` par correspondant (sa clé publique, son `Endpoint`, ses
+      `AllowedIPs`).
+
+      Les `AllowedIPs` d'un pair listent son adresse de tunnel **et** les réseaux qui se trouvent derrière
+      lui. `PersistentKeepalive` est utile du côté qui est derrière un NAT.
+
+      `wg-quick up wg0` crée l'interface, applique la configuration, ajoute les adresses et les routes.
+      `wg show` affiche les pairs et l'heure de la dernière poignée de main.
     description: |
       Écris `/etc/wireguard/wg0.conf` (droits `600`) sur les deux passerelles :
       - **gw-siege** : `Address = 10.200.0.1/24`, `ListenPort = 51820`, sa clé privée ; un `[Peer]` agence
@@ -71,6 +181,16 @@ exercises:
 
   - id: lan-lan
     title: Relier les deux réseaux locaux
+    cours: |
+      Pour que deux LAN communiquent à travers le VPN, il faut :
+
+      1. sur chaque passerelle, une **route** vers le LAN distant via `wg0` (créée par `wg-quick` à partir des
+         AllowedIPs) ;
+      2. le **routage** activé sur les passerelles (`ip_forward`, déjà fait ici) ;
+      3. les postes qui utilisent leur passerelle locale comme passerelle par défaut.
+
+      `tcpdump -ni wg0` montre les paquets en clair à l'intérieur du tunnel, `tcpdump -ni <interface
+      Internet> udp port 51820` les paquets chiffrés : la comparaison est très parlante.
     description: |
       Grâce aux `AllowedIPs`, `wg-quick` a ajouté les routes vers le LAN distant sur chaque passerelle.
       Vérifie que **pc-agence** consulte l'intranet du siège (`curl http://10.10.0.10/`) et que
@@ -85,6 +205,15 @@ exercises:
 
   - id: nomade
     title: Raccorder un nomade (split tunnel)
+    cours: |
+      Un nomade est un pair comme un autre, avec une adresse de tunnel en `/32` et sans réseau derrière lui.
+
+      - côté nomade : `AllowedIPs` liste les réseaux de l'entreprise à joindre par le tunnel (**split
+        tunnel**) ; `0.0.0.0/0` ferait tout passer par l'entreprise ;
+      - côté passerelle : un `[Peer]` supplémentaire avec `AllowedIPs = <adresse du nomade>/32`.
+
+      Pour ne pas couper le tunnel de l'agence, on ajoute le pair **à chaud** avec `wg set wg0 peer <clé
+      publique> allowed-ips ...` (ou `wg syncconf`) en plus de la modification du fichier.
     description: |
       Sur **nomade**, génère une paire de clés et crée `wg0` avec l'adresse `10.200.0.10/32`, un pair
       `gw-siege` (endpoint `198.51.100.10:51820`) et `AllowedIPs = 10.200.0.0/24, 10.10.0.0/24` : seul le
@@ -103,6 +232,16 @@ exercises:
 
   - id: wg-filtrage
     title: Exposer uniquement WireGuard sur Internet
+    cours: |
+      Une passerelle VPN exposée sur Internet ne doit offrir que le port du VPN. Rappels nftables :
+
+      - chaîne de base `type filter hook input priority 0; policy drop;` ;
+      - `iifname { "a", "b" } accept` accepte plusieurs interfaces d'un coup ;
+      - `ct state established,related accept` laisse passer les réponses ;
+      - `iifname "internet" udp dport 51820 accept` n'ouvre que WireGuard.
+
+      Comme WireGuard ne répond jamais à un paquet non authentifié, le port UDP ouvert reste invisible aux
+      scanners. Garde l'interface `mgmt` acceptée pour ne pas perdre l'accès.
     description: |
       La passerelle du siège est exposée sur Internet. Avec nftables, sur **gw-siege**, crée une table
       `inet filtre` dont la chaîne `input` (politique `drop`) n'accepte que : `lo`, l'interface `mgmt`,
@@ -122,6 +261,18 @@ exercises:
 
   - id: revocation
     title: Révoquer un pair
+    cours: |
+      Révoquer un accès WireGuard, c'est supprimer la clé publique du pair sur la passerelle : sans elle, ses
+      paquets sont ignorés.
+
+      Deux endroits à traiter :
+      - la configuration **active** : `wg set wg0 peer <clé publique> remove` agit immédiatement, sans couper
+        les autres pairs ;
+      - le **fichier** `wg0.conf` : sinon le pair reviendrait au prochain `wg-quick up`.
+
+      `wg show` doit ensuite ne plus lister ce pair. Pense à tracer la révocation (date, appareil, motif).
+
+      Supprime aussi la clé publique du pair des fichiers de configuration de tous les sites, pour qu'un redémarrage ne la recharge pas.
     description: |
       Le portable du commercial a été volé. **Révoque** immédiatement le pair nomade sur gw-siege : retire-le
       de l'interface active (`wg set wg0 peer <clé> remove`) **et** de `wg0.conf` (sinon il reviendrait au

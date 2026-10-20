@@ -70,3 +70,58 @@ solution: |
               raise ValueError("solde insuffisant")
           self.solde -= montant
           self.historique.append(("retrait", montant))
+cours: |
+  ## Classe, instance, attribut, méthode
+
+  Une **classe** est un modèle ; une **instance** est un objet construit à partir de ce
+  modèle. Les données de l'objet sont ses **attributs**, les fonctions qui agissent dessus
+  ses **méthodes**.
+
+  ```python
+  class Serveur:
+      def __init__(self, nom, ram_go=8):
+          self.nom = nom
+          self.ram_go = ram_go
+          self.services = []          # chaque instance a SA liste
+
+      def ajouter_service(self, service):
+          self.services.append(service)
+
+  web = Serveur("web01")
+  web.ajouter_service("nginx")
+  web.services          # ["nginx"]
+  ```
+
+  - `__init__` est appelé automatiquement à la création ; il initialise les attributs.
+  - `self` désigne l'instance courante : `web.ajouter_service("nginx")` est équivalent à
+    `Serveur.ajouter_service(web, "nginx")`.
+  - Crée les listes dans `__init__`, **pas** au niveau de la classe : un attribut de classe
+    mutable serait partagé par toutes les instances.
+
+  ## Lever une exception
+
+  Quand une opération est impossible, on **lève** une exception plutôt que de renvoyer une
+  valeur spéciale ou d'afficher un message :
+
+  ```python
+  if ram_go <= 0:
+      raise ValueError("la RAM doit être positive")
+  ```
+
+  `ValueError` signale une valeur du bon type mais inacceptable. L'appelant peut l'attraper
+  avec `try / except ValueError`. Si personne ne l'attrape, le programme s'arrête avec un
+  message clair : c'est mieux qu'une erreur silencieuse.
+
+  ## Invariants
+
+  Un objet bien conçu garantit ses **invariants** (ici : le solde n'est jamais négatif, et
+  l'historique reflète exactement les opérations réussies). Règle d'or : **vérifier avant de
+  modifier**. Si on modifie le solde puis qu'on lève l'exception, l'objet reste dans un état
+  incohérent.
+
+  Pour aller plus loin, une `@property` permet d'exposer `solde` en lecture seule.
+docs:
+  - title: Tutoriel — les classes
+    url: https://docs.python.org/fr/3/tutorial/classes.html
+  - title: Tutoriel — lever des exceptions
+    url: https://docs.python.org/fr/3/tutorial/errors.html#raising-exceptions

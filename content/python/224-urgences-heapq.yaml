@@ -121,3 +121,53 @@ solution: |
 
   restants = [nom for _, numero, nom in sorted(tas) if en_attente.get(nom) == numero]
   print("restants: " + (", ".join(restants) if restants else "aucun"))
+cours: |
+  ## Le tas binaire
+
+  Une **file de priorité** donne toujours accès au plus petit (ou plus grand) élément.
+  Le module `heapq` l'implémente avec un **tas binaire** stocké dans une simple liste :
+
+  ```python
+  import heapq
+  tas = []
+  heapq.heappush(tas, 5)
+  heapq.heappush(tas, 1)
+  heapq.heappush(tas, 3)
+  tas[0]                 # 1 : le minimum, toujours en tête
+  heapq.heappop(tas)     # 1
+  ```
+
+  Insertion et extraction en **O(log n)**, consultation du minimum en O(1). Trier une liste
+  à chaque insertion coûterait O(n log n).
+
+  ## Tas min → priorité max
+
+  `heapq` est un tas **min**. Pour sortir d'abord la plus grande priorité, on insère la
+  priorité **négative**.
+
+  ## Départager avec des tuples
+
+  Les tuples se comparent élément par élément. En insérant `(priorité, numéro_arrivée,
+  donnée)`, à priorité égale c'est le numéro le plus petit (le premier arrivé) qui sort.
+  Le numéro unique a un autre avantage : la comparaison ne descend jamais jusqu'à la donnée
+  (qui pourrait ne pas être comparable). `itertools.count()` fournit des numéros croissants.
+
+  ## Supprimer un élément au milieu : suppression paresseuse
+
+  Retirer un élément arbitraire d'un tas coûte O(n). L'astuce recommandée par la
+  documentation : le **marquer** comme supprimé (dans un ensemble ou un dictionnaire) et
+  l'ignorer quand il remonte en tête lors d'un `heappop`. Il faut alors tenir un compteur
+  séparé des éléments réellement présents.
+
+  ## Ordre final
+
+  `sorted(tas)` donne l'ordre de sortie (puisque c'est l'ordre des clés), sans vider le tas ;
+  n'oublie pas d'exclure les éléments marqués supprimés.
+
+  ## Ailleurs
+
+  Ordonnanceurs de processus, Dijkstra, fusion de fichiers triés (`heapq.merge`), top-k
+  (`heapq.nlargest`)… Le tas est partout où l'on doit traiter « le plus urgent d'abord ».
+docs:
+  - title: Module heapq
+    url: https://docs.python.org/fr/3/library/heapq.html

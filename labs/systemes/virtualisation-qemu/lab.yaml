@@ -29,9 +29,115 @@ description: |
   (SSH vers une VM avec le mot de passe CirrOS).
 
   Réponses à écrire dans `/root/reponses.txt`, au format `cle=valeur`.
+cours: |
+  ## Virtualisation : les notions de base
+
+  Un **hyperviseur** fait tourner plusieurs machines virtuelles (VM) sur un même serveur physique.
+
+  | Type   | Principe                                    | Exemples                                  |
+  |--------|---------------------------------------------|-------------------------------------------|
+  | type 1 | directement sur le matériel                 | VMware ESXi, Hyper-V, Proxmox VE (KVM), Xen |
+  | type 2 | application sur un système hôte             | VirtualBox, VMware Workstation            |
+
+  Sous Linux, **KVM** (module du noyau) utilise les extensions matérielles du processeur (Intel VT-x,
+  AMD-V) et **QEMU** émule le reste de la machine (disques, cartes réseau, BIOS). Proxmox, libvirt
+  (virt-manager) et OpenStack pilotent tous QEMU/KVM. Sans KVM (comme ici), QEMU émule le processeur en
+  logiciel (**TCG**) : ça marche, mais très lentement.
+
+  ## Images disque
+
+  | Format | Caractéristiques                                              |
+  |--------|---------------------------------------------------------------|
+  | raw    | octet pour octet, simple et rapide, pas de snapshot           |
+  | qcow2  | allocation à la demande, snapshots, compression, backing file |
+  | vmdk   | format VMware                                                 |
+  | vhdx   | format Hyper-V                                                |
+
+  ```
+  cirros.img (base, lecture seule) ◀── vm1.qcow2 (overlay : seulement les blocs modifiés)
+                                   ◀── vm2.qcow2
+  ```
+
+  Un **overlay** (backing file) permet de créer des dizaines de VM à partir d'une image de référence en
+  quelques secondes et quelques Mo. La base ne doit **jamais** être modifiée, sinon tous les overlays sont
+  corrompus.
+
+  | Besoin                       | Commande                                                         |
+  |------------------------------|------------------------------------------------------------------|
+  | Informations                 | `qemu-img info [--backing-chain] disque.qcow2`                   |
+  | Créer un disque vide         | `qemu-img create -f qcow2 data.qcow2 2G`                         |
+  | Créer un overlay             | `qemu-img create -f qcow2 -b base.img -F qcow2 vm1.qcow2`        |
+  | Agrandir                     | `qemu-img resize vm1.qcow2 1G` (puis agrandir la partition dans la VM) |
+  | Convertir                    | `qemu-img convert -O vmdk vm.qcow2 vm.vmdk` (`-c` compresse)     |
+  | Snapshots hors ligne         | `qemu-img snapshot -l/-c/-a/-d nom disque.qcow2`                 |
+  | Vérifier                     | `qemu-img check disque.qcow2`                                    |
+
+  ## Lancer une VM avec QEMU
+
+  ```
+  qemu-system-x86_64 -name vm1 -accel tcg -m 256 \
+    -drive file=vm1.qcow2,if=virtio,format=qcow2 \            disque paravirtualisé
+    -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 \       NAT + redirection de port
+    -device virtio-net-pci,netdev=n0 \                        carte réseau
+    -serial unix:/srv/vms/vm1.console,server,nowait \         console série
+    -monitor unix:/srv/vms/vm1.monitor,server,nowait \        moniteur de contrôle
+    -display none -daemonize -pidfile vm1.pid
+  ```
+
+  Les périphériques **virtio** sont paravirtualisés : l'invité sait qu'il est virtualisé et dialogue
+  efficacement avec l'hyperviseur (sous Windows, il faut installer les pilotes virtio).
+
+  ## Réseau des VM
+
+  | Mode QEMU        | Équivalent courant          | Usage                                      |
+  |------------------|-----------------------------|--------------------------------------------|
+  | `user`           | NAT                         | sortie vers l'extérieur, entrée par redirection de port |
+  | `tap` + bridge   | pont (bridge)               | VM directement sur le LAN, comme une machine physique |
+  | `socket`         | réseau privé interne        | relier des VM entre elles                  |
+
+  ## Le moniteur QEMU
+
+  `info status`, `info block`, `info network`, `savevm <nom>` / `loadvm <nom>` (snapshot avec la RAM),
+  `system_powerdown` (bouton d'arrêt ACPI), `quit` (arrachage de la prise).
+
+  ## Snapshot ≠ sauvegarde
+
+  Un snapshot vit **dans** le disque de la VM : si le disque ou le stockage est perdu, les snapshots le
+  sont aussi. Il sert à revenir en arrière après une mise à jour ratée, et doit être supprimé ensuite (une
+  chaîne de snapshots dégrade les performances et grossit sans fin).
+
+  ## Pièges courants
+
+  - Modifier ou déplacer une image de base utilisée par des overlays.
+  - Agrandir le disque virtuel sans agrandir la partition et le système de fichiers dans la VM.
+  - Arrêter une VM par `quit` ou `kill` : équivalent d'une coupure de courant.
+  - Convertir une image pendant que la VM tourne : copie incohérente.
+
+  ## Bonnes pratiques en entreprise
+
+  - Modèles (templates) de VM à jour, déployés par clonage ; nommage et inventaire des VM.
+  - Sauvegarde des VM par l'outil de l'hyperviseur (Proxmox Backup Server, Veeam), restauration testée.
+  - Surveiller la sur-allocation (mémoire, disques à allocation dynamique qui remplissent le stockage).
+docs:
+  - title: Documentation de QEMU
+    url: https://www.qemu.org/docs/master/
+  - title: qemu-img(1) - gestion des images disque (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man1/qemu-img.1.html
+  - title: Wikipédia - Hyperviseur
+    url: https://fr.wikipedia.org/wiki/Hyperviseur
 exercises:
   - id: qemu-inspecter-image
     title: Inspecter l'image de base
+    cours: |
+      `qemu-img info <image>` affiche le **format** (`file format`), la **taille virtuelle** (`virtual size`,
+      la taille du disque vue par la VM) et la **taille sur disque** (`disk size`, la place réellement
+      occupée sur l'hôte).
+
+      Avec un format à allocation dynamique comme qcow2, la taille sur disque est bien plus petite que la
+      taille virtuelle : seuls les blocs écrits occupent de la place. `ls -lh` montre la taille du fichier.
+
+      Pour convertir des octets en Mio : diviser par 1024 deux fois (`qemu-img info` indique souvent la valeur
+      exacte en octets entre parenthèses).
     description: |
       Avant tout, examine l'image fournie avec `qemu-img info`. Quel est son **format** ? Quelle est
       sa **taille virtuelle** (taille du disque vu par la VM), à comparer avec la place réellement
@@ -47,6 +153,15 @@ exercises:
 
   - id: qemu-overlay-vm1
     title: Disque système de vm1 en overlay
+    cours: |
+      `qemu-img create -f qcow2` crée un disque qcow2. Avec `-b <image de base>`, le nouveau disque devient
+      un **overlay** : il lit les blocs non modifiés dans la base et n'écrit que dans son propre fichier.
+      L'option `-F` indique le format de la base (obligatoire dans les versions récentes, par sécurité).
+
+      `qemu-img resize <disque> <taille>` agrandit le disque virtuel ; dans la VM, il faudra ensuite agrandir
+      la partition et le système de fichiers (CirrOS le fait au démarrage).
+
+      `qemu-img info --backing-chain` affiche toute la chaîne overlay → base.
     description: |
       On ne modifie jamais l'image de base : chaque VM reçoit un **overlay** qcow2 qui n'enregistre que
       les différences. Crée `/srv/vms/vm1.qcow2`, dont le *backing file* est l'image CirrOS (format de
@@ -66,6 +181,14 @@ exercises:
 
   - id: qemu-disque-donnees
     title: Disque de données
+    cours: |
+      Séparer **système** et **données** dans deux disques virtuels est une bonne pratique : on peut
+      réinstaller ou remplacer le système sans toucher aux données, les sauvegarder différemment, ou déplacer
+      le disque de données vers une autre VM.
+
+      `qemu-img create -f qcow2 <fichier> <taille>` crée un disque vide (sans `-b`, il est autonome). Grâce à
+      l'allocation à la demande, un disque de 2 Gio ne pèse que quelques centaines de Ko tant que rien n'y
+      est écrit : c'est le *thin provisioning*, à surveiller car le stockage réel peut se remplir.
     description: |
       vm1 hébergera des données : crée un second disque **indépendant** (sans backing file)
       `/srv/vms/vm1-data.qcow2` de **2 Gio** au format qcow2. Constate avec `ls -lh` que le fichier
@@ -80,6 +203,18 @@ exercises:
 
   - id: qemu-demarrer-vm1
     title: Démarrer vm1 en arrière-plan
+    cours: |
+      Une ligne de commande QEMU décrit la machine pièce par pièce :
+
+      - `-drive file=...,if=virtio,format=qcow2` : un disque par option, dans l'ordre (`vda`, `vdb`...) ;
+      - `-netdev <type>,id=<nom>` crée le côté hôte d'un réseau, `-device virtio-net-pci,netdev=<nom>` la carte
+        dans la VM (`mac=` fixe son adresse MAC) ;
+      - `hostfwd=tcp:<ip hôte>:<port>-:<port invité>` redirige un port de l'hôte vers la VM (mode user) ;
+      - `-serial` et `-monitor` avec `unix:<chemin>,server,nowait` exposent la console et le moniteur sur des
+        sockets ;
+      - `-daemonize` passe en arrière-plan, `-pidfile` note le PID.
+
+      Le démarrage en émulation prend du temps : suis-le sur la console série.
     description: |
       Démarre vm1 **en tâche de fond** (`-daemonize`, `-display none`) avec :
 
@@ -114,6 +249,16 @@ exercises:
 
   - id: qemu-disques-invites
     title: Vérifier le matériel vu par l'invité
+    cours: |
+      Dans la VM, plusieurs fichiers et commandes décrivent le matériel virtuel :
+
+      - `/proc/partitions` liste les disques et partitions avec leur taille en blocs de 1 Kio ;
+      - `ip -br link` liste les interfaces réseau (`lo` est l'interface de bouclage, pas une carte) ;
+      - `free -m` affiche la mémoire.
+
+      Les disques virtio s'appellent `vda`, `vdb`... dans l'ordre des options `-drive`. Côté hôte, le moniteur
+      QEMU (`info block`, `info network`) donne la vision de l'hyperviseur : comparer les deux est un bon
+      réflexe de dépannage.
     description: |
       Connecte-toi à vm1 et vérifie ce que voit le système invité : `cat /proc/partitions`,
       `ip link`, `free -m`. Le disque système `vda` doit faire 1 Gio et le disque de données `vdb`
@@ -131,6 +276,15 @@ exercises:
 
   - id: qemu-snapshot
     title: Snapshot avant mise à jour
+    cours: |
+      Un **snapshot interne** qcow2 est stocké dans le fichier disque lui-même.
+
+      - depuis le moniteur, `savevm <nom>` enregistre l'état complet de la VM **en marche** (disques + RAM +
+        état des périphériques) ; `loadvm <nom>` y revient ; `info snapshots` les liste ;
+      - hors ligne, `qemu-img snapshot -c/-l/-a/-d` crée, liste, applique ou supprime un snapshot de disque
+        (`-U` permet de lire un disque utilisé par une VM en marche, sans le modifier).
+
+      Un snapshot n'est pas une sauvegarde : il disparaît avec le disque.
     description: |
       Avant une intervention risquée, prends un **snapshot interne à chaud** de vm1 nommé
       `avant-maj` depuis le moniteur (il inclut l'état de la RAM). Crée ensuite dans la VM le fichier
@@ -150,6 +304,15 @@ exercises:
 
   - id: qemu-reseau-entre-vm
     title: Deuxième VM et réseau privé entre VM
+    cours: |
+      Le backend réseau `socket` de QEMU relie directement les cartes de plusieurs VM, comme un câble :
+
+      - une VM **écoute** (`listen=<ip>:<port>`), l'autre s'y **connecte** (`connect=<ip>:<port>`) ;
+      - chaque carte doit avoir une adresse MAC différente.
+
+      Dans les VM, la nouvelle interface (`eth1`) n'a pas d'adresse : `ip addr add <adresse>/<préfixe> dev
+      eth1` et `ip link set eth1 up` (avec `sudo`). Les deux VM doivent être dans le même sous-réseau.
+      En production, on utiliserait plutôt un bridge Linux (ou Open vSwitch) avec des interfaces tap.
     description: |
       Crée `/srv/vms/vm2.qcow2` (overlay de l'image CirrOS) et démarre **vm2** sur le même modèle que
       vm1, mais :
@@ -183,6 +346,14 @@ exercises:
 
   - id: qemu-arret-export
     title: Arrêt propre et export de vm2
+    cours: |
+      Arrêter proprement une VM, c'est demander au système invité de s'éteindre : `system_powerdown` dans
+      le moniteur simule l'appui sur le bouton d'alimentation (signal ACPI), ou `poweroff` dans la VM. Le
+      processus QEMU se termine une fois l'invité éteint (surveille-le avec `ps` ou le fichier PID).
+
+      `qemu-img convert -O <format> <source> <destination>` convertit un disque. Appliqué à un overlay, il
+      produit une image **autonome** contenant aussi les blocs de la base. `-c` compresse une sortie qcow2.
+      On ne convertit jamais le disque d'une VM en marche.
     description: |
       vm2 doit être livrée à une équipe qui utilise VMware. Arrête-la **proprement** (arrêt ACPI avec
       `system_powerdown` dans le moniteur, ou `sudo poweroff` dans la VM) et attends la fin du processus.

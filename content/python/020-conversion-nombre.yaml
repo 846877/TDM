@@ -54,3 +54,58 @@ solution: |
       if "." in texte:
           return float(texte)
       return int(texte)
+cours: |
+  ## Les types de base
+
+  Toute valeur a un **type**, qu'on obtient avec `type()` :
+
+  ```python
+  type(42)        # <class 'int'>
+  type(4.2)       # <class 'float'>
+  type("42")      # <class 'str'>
+  type(True)      # <class 'bool'>
+  ```
+
+  `isinstance(x, int)` teste le type de façon plus souple (et gère l'héritage).
+
+  ## Conversions explicites
+
+  | Appel | Résultat |
+  |-------|----------|
+  | `int("12")` | `12` |
+  | `int("12.5")` | `ValueError` ! |
+  | `int(12.9)` | `12` (troncature, pas arrondi) |
+  | `float("12.5")` | `12.5` |
+  | `float("12")` | `12.0` |
+  | `str(3.5)` | `"3.5"` |
+
+  `int()` sur une chaîne n'accepte que des chiffres (avec éventuellement un signe et des
+  espaces autour). `float()` n'accepte que le **point** comme séparateur décimal : la
+  virgule française provoque une `ValueError`.
+
+  ## Nettoyer avant de convertir
+
+  Les méthodes de chaîne renvoient une nouvelle chaîne :
+
+  ```python
+  "  bonjour \n".strip()       # "bonjour"
+  "1 000".replace(" ", "")     # "1000"
+  "a-b-c".replace("-", "+")    # "a+b+c"
+  ```
+
+  Elles se **chaînent** : `texte.strip().lower()`.
+
+  ## Décider du type
+
+  Pour choisir entre `int` et `float`, il faut une règle observable sur le texte, par
+  exemple la présence d'un séparateur décimal (`"." in texte`). Attention : `"2.0"` doit
+  rester un `float` même si sa valeur est entière. C'est le **texte** qui décide, pas la
+  valeur.
+
+  Les tests vérifient aussi le type renvoyé (`type(resultat) is int`), pas seulement la
+  valeur, car `2 == 2.0` vaut `True` en Python.
+docs:
+  - title: Documentation Python — int(), float(), type()
+    url: https://docs.python.org/fr/3/library/functions.html#float
+  - title: Méthodes des chaînes (strip, replace…)
+    url: https://docs.python.org/fr/3/library/stdtypes.html#string-methods

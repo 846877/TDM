@@ -36,3 +36,59 @@ solution: |
 initial: |
   vlan 10
   name DATA
+cours: |
+  ## Un câble, deux réseaux
+
+  Dans les bureaux, le PC est souvent branché **derrière** le téléphone IP, qui contient un petit
+  switch à trois ports. Le port du switch d'étage reçoit donc deux trafics :
+
+  - les **données** du PC, **non étiquetées**, placées dans le VLAN d'accès ;
+  - la **voix**, **étiquetée 802.1Q** avec le numéro du VLAN voix (et une priorité CoS 5).
+
+  Le port reste un **port d'accès** : on ajoute simplement `switchport voice vlan`. Le switch
+  indique au téléphone quel VLAN utiliser grâce à **CDP** (téléphones Cisco) ou **LLDP-MED**.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# vlan 40
+  SW1(config-vlan)# name DONNEES
+  SW1(config-vlan)# vlan 140
+  SW1(config-vlan)# name TELEPHONIE
+  SW1(config-vlan)# exit
+  SW1(config)# interface range fa0/25 - 36
+  SW1(config-if-range)# switchport mode access
+  SW1(config-if-range)# switchport access vlan 40
+  SW1(config-if-range)# switchport voice vlan 140
+  SW1# show interfaces fa0/25 switchport | include VLAN
+  Access Mode VLAN: 40 (DONNEES)
+  Voice VLAN: 140 (TELEPHONIE)
+  ```
+
+  ### Pourquoi séparer la voix ?
+
+  - **qualité** : on applique facilement une priorité (QoS) au VLAN voix ;
+  - **sécurité** : les PC n'atteignent pas directement le serveur de téléphonie ;
+  - **adressage** : un pool DHCP dédié, avec l'option 150 (serveur TFTP du standard).
+
+  ### Compléments habituels
+
+  - `spanning-tree portfast` : le téléphone obtient son adresse sans attendre 30 s ;
+  - alimentation **PoE** du téléphone par le switch (`show power inline`) ;
+  - port-security avec au moins **2** adresses MAC (PC + téléphone, voire 3 selon les modèles).
+
+  ### Pièges fréquents
+
+  - Configurer le port en **trunk** pour « faire passer la voix » : inutile et moins sûr.
+  - VLAN voix non créé sur le switch.
+  - CDP désactivé : les téléphones Cisco ne découvrent plus leur VLAN.
+
+  ### Pour le CCNA
+
+  Le fonctionnement du VLAN voix (données non étiquetées, voix étiquetée) est explicitement au
+  programme.
+docs:
+  - title: "Wikipédia — Voix sur IP"
+    url: https://fr.wikipedia.org/wiki/Voix_sur_IP
+  - title: "Wikipédia — IEEE 802.1Q"
+    url: https://fr.wikipedia.org/wiki/IEEE_802.1Q

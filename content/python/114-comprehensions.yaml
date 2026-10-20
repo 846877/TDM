@@ -83,3 +83,61 @@ solution: |
 
   def matrice_identite(n):
       return [[1 if i == j else 0 for j in range(n)] for i in range(n)]
+cours: |
+  ## La syntaxe
+
+  Une compréhension construit une collection en une expression :
+
+  ```python
+  [expression for element in iterable]
+  [expression for element in iterable if condition]
+  {cle: valeur for element in iterable}      # dictionnaire
+  {expression for element in iterable}       # ensemble
+  ```
+
+  Exemples :
+
+  ```python
+  ports = [22, 80, 443, 8080]
+  [p for p in ports if p < 1024]            # [22, 80, 443]
+  [f"port {p}" for p in ports]              # ["port 22", ...]
+  {p: p > 1024 for p in ports}              # {22: False, ..., 8080: True}
+  {len(m) for m in ["a", "bb", "cc"]}       # {1, 2}
+  ```
+
+  ## Filtre ou expression conditionnelle ?
+
+  Deux positions possibles pour une condition, avec deux sens différents :
+
+  - `[x for x in l if x > 0]` : **filtre**, certains éléments disparaissent ;
+  - `[x if x > 0 else 0 for x in l]` : **transformation**, tous les éléments sont conservés.
+
+  ## Compréhensions imbriquées
+
+  Une compréhension peut en contenir une autre, ce qui produit une liste de listes :
+
+  ```python
+  [[ligne * col for col in range(3)] for ligne in range(3)]
+  # [[0, 0, 0], [0, 1, 2], [0, 2, 4]]
+  ```
+
+  **Piège classique** : `[[0] * 3] * 3` crée trois références vers **la même** ligne ;
+  modifier une case modifie toute la colonne. La compréhension crée de vraies lignes
+  indépendantes.
+
+  ## Inverser un dictionnaire
+
+  On itère sur `d.items()` et on échange les rôles dans l'expression `cle: valeur`. Si deux
+  clés avaient la même valeur, la dernière gagnerait (les clés sont uniques).
+
+  ## Bon usage
+
+  Les compréhensions sont plus rapides et plus lisibles qu'une boucle avec `append`… tant
+  qu'elles restent courtes. Au-delà de deux `for` ou d'une condition complexe, une boucle
+  classique est plus claire. N'utilise pas une compréhension pour ses effets de bord
+  (`[print(x) for x in l]`).
+docs:
+  - title: Tutoriel — listes en compréhension
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#list-comprehensions
+  - title: Tutoriel — compréhensions imbriquées
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#nested-list-comprehensions

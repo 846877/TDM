@@ -152,3 +152,61 @@ solution: |
 
       def dessiner(self) -> str:
           return "\n".join(e.dessiner() for e in self._elements)
+cours: |
+  ## Le duck typing
+
+  « Si ça marche comme un canard et que ça cancane comme un canard, c'est un canard. » En
+  Python, une fonction n'exige pas une classe précise mais un **comportement** : `len()`
+  marche sur tout objet ayant `__len__`, `for` sur tout objet ayant `__iter__`.
+
+  ## `typing.Protocol` : le typage structurel
+
+  Un protocole décrit ce comportement sans imposer d'héritage :
+
+  ```python
+  from typing import Protocol, runtime_checkable
+
+  @runtime_checkable
+  class Fermable(Protocol):
+      def fermer(self) -> None: ...
+
+  class Connexion:              # n'hérite PAS de Fermable
+      def fermer(self) -> None:
+          print("fermé")
+
+  isinstance(Connexion(), Fermable)   # True : la méthode existe
+  ```
+
+  Les outils de vérification statique (mypy, pyright) utilisent les protocoles pour
+  contrôler le code avant exécution. `@runtime_checkable` permet en plus `isinstance`,
+  mais attention : la vérification ne regarde que la **présence** des méthodes, pas leur
+  signature.
+
+  ## Les ABC de `collections.abc`
+
+  `Sized`, `Iterable`, `Container`, `Sequence`, `Mapping`… sont des classes abstraites qui
+  reconnaissent automatiquement les classes implémentant les bonnes méthodes :
+  `isinstance([], Sized)` est vrai, et ta propre classe avec `__len__` aussi.
+
+  ## Méthodes spéciales du conteneur
+
+  - `__len__` → `len(obj)` ;
+  - `__iter__` → `for`, `list(obj)` ;
+  - `__contains__` → `x in obj` (sinon Python parcourt via `__iter__`).
+
+  ## Chaînage
+
+  Une méthode qui renvoie `self` permet d'enchaîner les appels :
+  `canevas.ajouter(a).ajouter(b)`. C'est le style des *fluent interfaces* (comme les
+  *query builders*).
+
+  ## Composite
+
+  Un conteneur de dessinables qui est lui-même dessinable illustre le patron **Composite** :
+  on traite de la même façon un objet simple et un groupe d'objets (comme un dossier qui
+  contient des fichiers et des dossiers).
+docs:
+  - title: typing.Protocol
+    url: https://docs.python.org/fr/3/library/typing.html#typing.Protocol
+  - title: Module collections.abc
+    url: https://docs.python.org/fr/3/library/collections.abc.html

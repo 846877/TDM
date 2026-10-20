@@ -1,0 +1,144 @@
+title: Points et tuples
+level: debutant
+order: 41
+tags: [tuples, déballage, fonctions]
+summary: Représenter des coordonnées avec des tuples et les déballer.
+description: |
+  Un point du plan est représenté par un tuple `(x, y)`.
+
+  1. `distance(a, b)` renvoie la distance entre deux points, arrondie à 2 décimales
+     (`√((xb − xa)² + (yb − ya)²)` ; la racine carrée s'obtient avec `** 0.5`).
+  2. `milieu(a, b)` renvoie le tuple du point milieu.
+  3. `deplacer(point, dx, dy)` renvoie un **nouveau** tuple déplacé.
+  4. `plus_proche(origine, points)` renvoie le point de la liste le plus proche de `origine`
+     (le premier en cas d'égalité), ou `None` si la liste est vide.
+
+  ```python
+  distance((0, 0), (3, 4))                 # 5.0
+  milieu((0, 0), (4, 2))                   # (2.0, 1.0)
+  deplacer((1, 1), 2, -3)                  # (3, -2)
+  plus_proche((0, 0), [(5, 5), (1, 2), (-1, -2)])   # (1, 2)
+  ```
+starter: |
+  def distance(a, b):
+      pass
+
+
+  def milieu(a, b):
+      pass
+
+
+  def deplacer(point, dx, dy):
+      pass
+
+
+  def plus_proche(origine, points):
+      pass
+tests: |
+  def test_distance():
+      "distance"
+      assert solution.distance((0, 0), (3, 4)) == 5.0
+      assert solution.distance((1, 1), (1, 1)) == 0
+      assert solution.distance((-1, 2), (4, -3)) == 7.07, solution.distance((-1, 2), (4, -3))
+
+  def test_milieu():
+      "milieu renvoie un tuple"
+      r = solution.milieu((0, 0), (4, 2))
+      assert r == (2.0, 1.0) and isinstance(r, tuple), f"obtenu {r!r}"
+      assert solution.milieu((1, 1), (2, 2)) == (1.5, 1.5)
+
+  def test_deplacer():
+      "deplacer renvoie un nouveau tuple"
+      p = (1, 1)
+      r = solution.deplacer(p, 2, -3)
+      assert r == (3, -2) and isinstance(r, tuple), f"obtenu {r!r}"
+      assert p == (1, 1)
+
+  def test_plus_proche():
+      "plus_proche"
+      assert solution.plus_proche((0, 0), [(5, 5), (1, 2), (-1, -2)]) == (1, 2)
+      assert solution.plus_proche((10, 10), [(0, 0), (9, 9), (11, 11)]) == (9, 9)
+      assert solution.plus_proche((0, 0), []) is None
+solution: |
+  def distance(a, b):
+      xa, ya = a
+      xb, yb = b
+      return round(((xb - xa) ** 2 + (yb - ya) ** 2) ** 0.5, 2)
+
+
+  def milieu(a, b):
+      (xa, ya), (xb, yb) = a, b
+      return ((xa + xb) / 2, (ya + yb) / 2)
+
+
+  def deplacer(point, dx, dy):
+      x, y = point
+      return (x + dx, y + dy)
+
+
+  def plus_proche(origine, points):
+      meilleur = None
+      for p in points:
+          if meilleur is None or distance(origine, p) < distance(origine, meilleur):
+              meilleur = p
+      return meilleur
+cours: |
+  ## Le tuple : un petit paquet de valeurs
+
+  Un tuple regroupe plusieurs valeurs qui forment un tout : des coordonnées, une couleur RGB,
+  une adresse et un port.
+
+  ```python
+  point = (3, 4)
+  serveur = ("192.168.1.10", 22)
+  point[0]          # 3
+  len(serveur)      # 2
+  ```
+
+  Contrairement à une liste, un tuple est **immuable** : `point[0] = 7` lève une
+  `TypeError`. Pour « déplacer » un point, on crée un **nouveau** tuple. Cette immuabilité
+  est une garantie : une fonction à qui tu passes un tuple ne peut pas le modifier dans ton
+  dos. Elle permet aussi d'utiliser un tuple comme clé de dictionnaire ou dans un ensemble.
+
+  ## Le déballage (unpacking)
+
+  ```python
+  x, y = point                       # x = 3, y = 4
+  ip, port = serveur
+  (x1, y1), (x2, y2) = (0, 0), (5, 5)   # déballage imbriqué
+  premier, *reste = [1, 2, 3, 4]     # premier = 1, reste = [2, 3, 4]
+  ```
+
+  Nommer les composantes rend les formules lisibles : `(x2 - x1) ** 2` se lit mieux que
+  `(b[0] - a[0]) ** 2`.
+
+  On peut aussi déballer dans une boucle :
+
+  ```python
+  for ip, port in [("10.0.0.1", 22), ("10.0.0.2", 80)]:
+      print(f"{ip}:{port}")
+  ```
+
+  ## Racine carrée
+
+  `x ** 0.5` calcule la racine carrée ; `math.sqrt(x)` aussi, et `math.dist(a, b)` calcule
+  directement la distance entre deux points.
+
+  ## Comparer avec une fonction auxiliaire
+
+  Pour trouver le plus proche, on réutilise `distance` : chaque fonction fait une chose, et
+  les suivantes s'appuient sur les précédentes. Avec le motif du « champion provisoire » et
+  une comparaison **stricte** (`<`), c'est le premier ex-aequo qui l'emporte.
+
+  `min(points, key=...)` ferait la même chose en une ligne : tu le verras avec les
+  fonctions `lambda`.
+
+  ## Tuples nommés
+
+  Pour plus de lisibilité, `collections.namedtuple("Point", "x y")` permet d'écrire `p.x`
+  au lieu de `p[0]`, tout en restant un tuple.
+docs:
+  - title: Tutoriel — tuples et séquences
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#tuples-and-sequences
+  - title: Module math (sqrt, dist)
+    url: https://docs.python.org/fr/3/library/math.html

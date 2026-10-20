@@ -1,0 +1,116 @@
+title: Multiple Spanning Tree (MST)
+level: intermediaire
+order: 16
+device: switch
+hostname: SW-DIST1
+tags: [stp, mst, 802.1s, répartition de charge]
+summary: Regrouper les VLAN dans deux instances de spanning tree et répartir la charge.
+description: |
+  Avec PVST+, chaque VLAN a son propre spanning tree : 200 VLAN = 200 instances à calculer.
+  **MST** (802.1s) regroupe les VLAN dans quelques **instances**.
+
+  Sur `SW-DIST1` (les VLAN 10, 20, 30 et 40 existent) :
+
+  1. passe en mode MST : `spanning-tree mode mst` ;
+  2. définis la **région** (identique sur tous les switchs) :
+     - `spanning-tree mst configuration`, puis `name TDM`, `revision 1`,
+     - instance `1` : VLAN `10,20` ; instance `2` : VLAN `30,40` ;
+  3. répartis la charge avec `SW-DIST2` : `SW-DIST1` est racine **primaire** de l'instance 1
+     et racine **secondaire** de l'instance 2 (`spanning-tree mst 1 root primary`).
+
+  Contrôle avec `show spanning-tree mst configuration`.
+initial: |
+  vlan 10
+  vlan 20
+  vlan 30
+  vlan 40
+checks:
+  - desc: Mode MST
+    expr: d.stp_mode == "mst"
+  - desc: Région TDM, révision 1
+    expr: d.mst_name == "TDM" and d.mst_revision == 1
+  - desc: Instance 1 = VLAN 10 et 20, instance 2 = VLAN 30 et 40
+    expr: 'd.mst_instances == {1: {10, 20}, 2: {30, 40}}'
+  - desc: Racine primaire de l'instance 1 (priorité 24576 ou moins)
+    expr: d.mst_priority.get(1, 32768) <= 24576
+  - desc: Racine secondaire de l'instance 2 (priorité 28672)
+    expr: d.mst_priority.get(2) == 28672
+solution: |
+  configure terminal
+  spanning-tree mode mst
+  spanning-tree mst configuration
+  name TDM
+  revision 1
+  instance 1 vlan 10,20
+  instance 2 vlan 30,40
+  exit
+  spanning-tree mst 1 root primary
+  spanning-tree mst 2 root secondary
+  end
+cours: |
+  ## Pourquoi MST ?
+
+  Le spanning tree empêche les boucles de niveau 2 en bloquant des liens redondants. Les variantes :
+
+  | Protocole      | Norme     | Instances                    | Convergence |
+  |----------------|-----------|------------------------------|-------------|
+  | STP            | 802.1D    | une pour tous les VLAN       | 30 à 50 s   |
+  | PVST+          | Cisco     | une **par VLAN**             | 30 à 50 s   |
+  | Rapid PVST+    | Cisco     | une par VLAN, rapide         | ~1 s        |
+  | **MST**        | 802.1s    | quelques instances, rapide   | ~1 s        |
+
+  Une instance par VLAN permet de répartir la charge, mais coûte du processeur et des BPDU. MST
+  garde la répartition avec seulement quelques instances, et c'est un **standard** compatible avec
+  les autres constructeurs.
+
+  ### La région MST
+
+  Des switchs appartiennent à la même **région** si et seulement si ces trois éléments sont
+  **identiques** : le **nom**, le **numéro de révision** et la **table VLAN → instance**. La moindre
+  différence crée deux régions, qui communiquent alors comme des domaines STP séparés (et la
+  répartition de charge ne fonctionne plus comme prévu).
+
+  L'instance **0** (IST) existe toujours et contient tous les VLAN non affectés ; c'est elle qui
+  dialogue avec l'extérieur de la région.
+
+  ### Configuration
+
+  ```
+  SW1(config)# spanning-tree mode mst
+  SW1(config)# spanning-tree mst configuration
+  SW1(config-mst)# name CAMPUS-NORD
+  SW1(config-mst)# revision 3
+  SW1(config-mst)# instance 1 vlan 100-199
+  SW1(config-mst)# instance 2 vlan 200-299
+  SW1(config-mst)# show pending
+  SW1(config-mst)# exit
+  SW1(config)# spanning-tree mst 1 priority 4096
+  SW1(config)# spanning-tree mst 2 priority 8192
+  SW1# show spanning-tree mst configuration
+  ```
+
+  Les modifications de la région ne sont appliquées qu'à la **sortie** du sous-mode `config-mst`.
+  `root primary` fixe la priorité à 24576 (ou moins si une autre racine est déjà plus basse),
+  `root secondary` à 28672.
+
+  ### Répartir la charge
+
+  Avec deux switchs de distribution, on rend chacun racine d'une instance : les liens d'accès
+  vers SW1 portent les VLAN de l'instance 1, ceux vers SW2 les VLAN de l'instance 2, et chaque
+  switch sert de secours à l'autre.
+
+  ### Pièges fréquents
+
+  - Oublier d'incrémenter ou d'aligner la révision : deux régions au lieu d'une.
+  - Créer les instances sur un seul switch.
+  - Mélanger MST et PVST+ sans comprendre l'interaction (PVST simulation à la frontière).
+
+  ### Pour le CCNP ENCOR
+
+  MST, l'élection du pont racine par instance et la notion de région sont au programme
+  d'ENCOR ; le CCNA se concentre sur Rapid PVST+.
+docs:
+  - title: Cisco — Understand the Multiple Spanning Tree Protocol (802.1s)
+    url: https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/24248-147.html
+  - title: Wikipédia — Spanning Tree Protocol
+    url: https://fr.wikipedia.org/wiki/Spanning_Tree_Protocol

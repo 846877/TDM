@@ -26,9 +26,113 @@ description: |
   - Phrase de passe du dépôt : `Sauvegarde2024!` (dans la vraie vie : dans un coffre-fort de mots de passe
     **et** imprimée dans le classeur du PRA, avec la clé exportée par `borg key export`).
   - Astuce : `export BORG_REPO=ssh://borg@srv-sauvegarde/srv/borg/srv-fichiers BORG_PASSPHRASE='Sauvegarde2024!'`
+cours: |
+  ## Les questions avant les outils
+
+  Une politique de sauvegarde répond d'abord à deux questions métier :
+
+  - **RPO** (*Recovery Point Objective*) : combien de données peut-on perdre ? Une sauvegarde par nuit =
+    jusqu'à 24 h de travail perdu.
+  - **RTO** (*Recovery Time Objective*) : combien de temps peut-on rester arrêté ? Restaurer 2 To depuis
+    un stockage distant peut prendre une journée.
+
+  ## La règle 3-2-1
+
+  ```
+  3 copies des données       (production + 2 sauvegardes)
+  2 supports différents      (disque local, serveur de sauvegarde, bande, cloud)
+  1 copie hors site          (et idéalement 1 copie hors ligne ou immuable, contre les rançongiciels)
+  ```
+
+  Un miroir n'est **pas** une sauvegarde : une suppression ou un chiffrement par rançongiciel est répliqué
+  dans la minute. Il faut des **versions** (historique) et une **rétention**.
+
+  ## Types de sauvegardes
+
+  | Type             | Contenu                                    | Restauration                        |
+  |------------------|--------------------------------------------|-------------------------------------|
+  | complète         | tout                                       | une seule archive                   |
+  | incrémentale     | ce qui a changé depuis la **dernière** sauvegarde | complète + toutes les incrémentales |
+  | différentielle   | ce qui a changé depuis la dernière **complète** | complète + dernière différentielle |
+  | déduplication (Borg, Restic, Veeam) | blocs jamais vus | chaque archive paraît complète, seuls les nouveaux blocs sont stockés |
+
+  ## rsync
+
+  | Option             | Effet                                                         |
+  |--------------------|---------------------------------------------------------------|
+  | `-a`               | archive : récursif, droits, propriétaires, dates, liens       |
+  | `-z`               | compression pendant le transfert                              |
+  | `--delete`         | miroir exact (supprime ce qui a disparu de la source)          |
+  | `-n` / `--dry-run` | simulation                                                    |
+  | `-AX`              | ACL et attributs étendus                                      |
+  | `--link-dest=DIR`  | fichiers inchangés = liens physiques vers DIR (instantanés)   |
+
+  ## BorgBackup
+
+  Borg découpe les fichiers en blocs, les **déduplique**, les **compresse** et les **chiffre** côté client
+  avant de les envoyer : le serveur de sauvegarde ne voit jamais les données en clair.
+
+  ```
+  srv-fichiers ──SSH (clé restreinte à "borg serve")──▶ srv-sauvegarde:/srv/borg/srv-fichiers
+     borg create ::srv-fichiers-2026-10-18_0100 /srv/donnees      (dépôt chiffré, repokey)
+  ```
+
+  | Besoin                     | Commande                                                      |
+  |----------------------------|---------------------------------------------------------------|
+  | Créer le dépôt             | `borg init --encryption=repokey ssh://borg@srv/srv/borg/x`    |
+  | Sauvegarder                | `borg create --stats --compression zstd ::nom-{now} /srv`     |
+  | Lister archives / contenu  | `borg list`, `borg list ::archive`                            |
+  | Restaurer                  | `cd / && borg extract ::archive chemin/relatif`               |
+  | Comparer deux archives     | `borg diff ::a1 a2`                                           |
+  | Rétention                  | `borg prune --keep-daily 7 --keep-weekly 4 --keep-monthly 6`  |
+  | Libérer l'espace           | `borg compact`                                                |
+  | Vérifier                   | `borg check`                                                  |
+  | Exporter la clé            | `borg key export` (à imprimer et ranger avec le PRA)          |
+
+  Les variables `BORG_REPO`, `BORG_PASSPHRASE` et `BORG_RSH` évitent de tout répéter. Sans la clé **et**
+  la phrase de passe, un dépôt `repokey` est définitivement illisible.
+
+  ## tar en incrémental
+
+  ```bash
+  tar -czf complete.tar.gz --listed-incremental=etat.snar /srv/donnees    # niveau 0
+  tar -czf incr1.tar.gz    --listed-incremental=etat.snar /srv/donnees    # seulement les changements
+  ```
+
+  ## Pièges courants
+
+  - Sauvegarde jamais **restaurée** : on découvre le jour J que l'archive est vide ou illisible.
+  - Phrase de passe ou clé de chiffrement perdue : sauvegarde inutilisable.
+  - Serveur de sauvegarde accessible en écriture/suppression depuis le serveur sauvegardé : un attaquant
+    efface tout. D'où la clé restreinte, le mode `append-only` et les copies hors ligne.
+  - Bases de données copiées « à chaud » fichier par fichier : incohérentes. On sauvegarde un **dump**
+    (`mysqldump`, `pg_dump`) ou on utilise les outils dédiés.
+  - Oublier les **droits et ACL** : la restauration rend les fichiers inaccessibles ou trop ouverts.
+
+  ## Bonnes pratiques en entreprise
+
+  - Politique écrite : quoi, quand, rétention, où, qui vérifie ; journal et alerte sur chaque échec.
+  - Test de restauration **planifié** (un fichier par mois, un serveur complet par an) et documenté.
+  - Le PRA contient la procédure de restauration, les clés, et l'ordre de redémarrage des services.
+docs:
+  - title: Documentation de BorgBackup
+    url: https://borgbackup.readthedocs.io/
+  - title: rsync(1) - toutes les options (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man1/rsync.1.html
+  - title: Wikipédia - Sauvegarde
+    url: https://fr.wikipedia.org/wiki/Sauvegarde_(informatique)
 exercises:
   - id: miroir-local
     title: Miroir local avec rsync
+    cours: |
+      `rsync` copie et synchronise des arborescences en ne transférant que ce qui a changé.
+
+      - `-a` (archive) conserve droits, propriétaires, dates et liens symboliques ;
+      - `--delete` supprime de la destination ce qui n'existe plus dans la source : le miroir devient exact ;
+      - le `/` final de la source signifie « le contenu du dossier ».
+
+      `diff -r <dossier1> <dossier2>` compare deux arborescences (aucune sortie = identiques). `stat -c %Y`
+      affiche la date de modification en secondes, utile pour vérifier qu'elle est conservée.
     description: |
       Sur srv-fichiers, crée un miroir de `/srv/donnees/` dans `/backup/miroir/` avec rsync (mode archive :
       droits, propriétaires et dates conservés). Le miroir doit être **exact** : un fichier supprimé de la
@@ -42,6 +146,16 @@ exercises:
 
   - id: miroir-distant
     title: Miroir distant par SSH
+    cours: |
+      rsync sait copier à travers SSH : une destination de la forme `utilisateur@hôte:/chemin/` suffit.
+
+      Pour une tâche automatique (cron), la connexion doit se faire **sans mot de passe** : une clé SSH sans
+      passphrase, générée pour root sur le serveur source, autorisée sur un compte **dédié** et peu privilégié
+      du serveur de sauvegarde (jamais root). `ssh-copy-id` installe la clé ; `-z` compresse le transfert.
+
+      Avec `--delete`, une erreur de chemin peut vider la destination : un `--dry-run` d'abord.
+
+      Utilise une clé SSH dédiée à la sauvegarde, limitée dans `authorized_keys`, plutôt que la clé personnelle de l'administrateur.
     description: |
       1. Sur srv-fichiers, génère une clé SSH pour root (`/root/.ssh/id_ed25519`, sans passphrase : elle
          servira à des tâches automatiques) et autorise-la pour le compte `miroir` de srv-sauvegarde.
@@ -56,6 +170,16 @@ exercises:
 
   - id: depot-borg
     title: Dépôt Borg chiffré et clé restreinte
+    cours: |
+      Un dépôt Borg est un dossier contenant des blocs chiffrés et dédupliqués. On l'initialise une fois avec
+      `borg init` en choisissant un mode de chiffrement : `repokey` stocke la clé (protégée par la phrase de
+      passe) dans le dépôt lui-même.
+
+      Côté serveur, la ligne d'`authorized_keys` du compte borg peut **imposer** une commande : avec
+      `command="borg serve --restrict-to-path <dossier>"`, la clé ne sert qu'à parler à Borg, dans ce seul
+      dossier, et `restrict` interdit le reste (tunnels, terminal).
+
+      `borg key export` produit une copie de la clé à conserver hors du serveur.
     description: |
       1. Autorise la clé de root (srv-fichiers) pour le compte `borg` de srv-sauvegarde, **restreinte** à
          Borg : dans `/home/borg/.ssh/authorized_keys`, préfixe la clé par
@@ -79,6 +203,16 @@ exercises:
 
   - id: premiere-archive
     title: Première sauvegarde avec exclusions
+    cours: |
+      `borg create` prend un nom d'archive (après `::`) et des chemins à sauvegarder :
+
+      - `{now:%Y-%m-%d_%H%M}` est remplacé par la date et l'heure : chaque archive a un nom unique ;
+      - `--compression zstd` (rapide et efficace) ou `lz4`, `zlib`, `lzma` ;
+      - `--exclude '<motif>'` écarte des fichiers (motif entre guillemets pour que le shell ne l'interprète
+        pas) ; plusieurs `--exclude` sont possibles ;
+      - `--stats` affiche la taille originale, compressée et dédupliquée.
+
+      Avec `BORG_REPO` exporté, `::nom` suffit à désigner l'archive.
     description: |
       Crée une archive nommée `srv-fichiers-{now:%Y-%m-%d_%H%M}` de `/srv/donnees`, **compressée en zstd**,
       en **excluant** les fichiers temporaires `*.tmp` et le dossier `/srv/donnees/cache` (inutiles et
@@ -95,6 +229,16 @@ exercises:
 
   - id: script-retention
     title: Script de sauvegarde avec rétention
+    cours: |
+      Une sauvegarde automatique a besoin d'une **rétention**, sinon le dépôt grossit sans fin.
+
+      - `borg prune` supprime les archives qui ne correspondent à aucune règle `--keep-daily`,
+        `--keep-weekly`, `--keep-monthly`... (une archive par jour, semaine, mois) ;
+      - `--glob-archives '<motif>'` limite la rétention aux archives d'un même préfixe ;
+      - depuis Borg 1.2, l'espace n'est réellement libéré qu'après `borg compact`.
+
+      Le script contient la phrase de passe : seul root doit pouvoir le lire (`chmod 700`). `set -e` évite de
+      lancer prune si la sauvegarde a échoué.
     description: |
       Écris `/usr/local/bin/sauvegarde-borg.sh` (exécutable) sur srv-fichiers qui :
       1. définit `BORG_REPO` et `BORG_PASSPHRASE` (fichier lisible par root seul : droits `700`) ;
@@ -116,6 +260,16 @@ exercises:
 
   - id: restauration
     title: Restaurer un fichier supprimé
+    cours: |
+      `borg extract` recrée les fichiers **dans le dossier courant**, avec leur chemin enregistré sans le `/`
+      initial. Pour restaurer à l'emplacement d'origine, on se place donc dans `/` ; pour restaurer à côté
+      (et comparer avant d'écraser), dans un dossier de travail.
+
+      - `borg list --short --last 1` donne le nom de la dernière archive ;
+      - un chemin donné à `extract` limite la restauration à ce fichier ou dossier ;
+      - `--dry-run` montre ce qui serait restauré.
+
+      Vérifie toujours le contenu, le propriétaire et les droits du fichier restauré.
     description: |
       Ticket urgent : le contrat de Marie Dupont a été supprimé par erreur. Simule l'incident en supprimant
       `/srv/donnees/rh/contrats/contrat-dupont.txt` sur srv-fichiers, puis **restaure-le à son
@@ -132,6 +286,15 @@ exercises:
 
   - id: integrite-planification
     title: Contrôle d'intégrité et planification
+    cours: |
+      `borg check` vérifie la cohérence du dépôt (et, avec `--verify-data`, relit et déchiffre tous les blocs,
+      plus long). `> fichier 2>&1` enregistre la sortie standard **et** les erreurs.
+
+      Dans une crontab, chaque ligne a 5 champs de date puis la commande : minute, heure, jour du mois, mois,
+      jour de la semaine. Les chemins doivent être absolus et les variables d'environnement nécessaires
+      définies dans le script (cron fournit un environnement minimal).
+
+      Fais tourner le script une première fois à la main avec la même commande que cron, puis vérifie le journal produit.
     description: |
       1. Vérifie l'intégrité du dépôt (`borg check`) et enregistre la sortie dans `/root/borg-check.log`.
       2. Planifie dans la crontab de root (srv-fichiers) : `sauvegarde-borg.sh` tous les jours à **1 h 00**
@@ -144,3 +307,103 @@ exercises:
         run: ssh srv-fichiers 'crontab -l' | grep -Eq '^ *0 +0?1 +\* +\* +\* +.*sauvegarde-borg\.sh'
       - desc: Miroir rsync planifié à 12 h 30
         run: ssh srv-fichiers 'crontab -l' | grep -Eq '^ *30 +12 +\* +\* +\* +.*rsync'
+
+  - id: tar-incrementale
+    title: Sauvegarde complète et incrémentale avec tar
+    cours: |
+      Avec `--listed-incremental=<fichier>`, tar tient un **fichier d'état** (« snapshot ») qui mémorise ce
+      qui a été sauvegardé :
+
+      - s'il n'existe pas, tar fait une sauvegarde **complète** (niveau 0) et le crée ;
+      - s'il existe, tar ne sauvegarde que les fichiers nouveaux ou modifiés depuis, et met l'état à jour.
+
+      Les dossiers apparaissent toujours dans l'archive incrémentale (tar y enregistre la liste de leur
+      contenu, ce qui permet aussi de rejouer les suppressions à la restauration). Pour restaurer : la
+      complète, puis chaque incrémentale dans l'ordre, avec `--listed-incremental=/dev/null`.
+    description: |
+      Sur un petit serveur sans Borg, on fait encore des sauvegardes **complètes** puis **incrémentales**
+      avec tar. Sur srv-fichiers, dans `/backup/tar/` :
+      1. crée la sauvegarde complète `complete.tar.gz` de `/srv/donnees`, avec le fichier d'état
+         `/backup/tar/etat.snar` (`--listed-incremental`) ;
+      2. crée ensuite le fichier `/srv/donnees/commun/compte-rendu.txt` (contenu libre) ;
+      3. crée la sauvegarde incrémentale `incr1.tar.gz` avec le **même** fichier d'état : elle ne doit
+         contenir que ce qui a changé.
+
+      Compare `tar -tzf` des deux archives.
+    hint: "mkdir -p /backup/tar ; tar -czf /backup/tar/complete.tar.gz --listed-incremental=/backup/tar/etat.snar /srv/donnees ; echo CR > /srv/donnees/commun/compte-rendu.txt ; tar -czf /backup/tar/incr1.tar.gz --listed-incremental=/backup/tar/etat.snar /srv/donnees"
+    checks:
+      - desc: La sauvegarde complète contient les contrats
+        run: ssh srv-fichiers 'tar -tzf /backup/tar/complete.tar.gz' | grep -q 'srv/donnees/rh/contrats/contrat-martin.txt'
+      - desc: L'incrémentale contient le nouveau fichier mais pas les fichiers inchangés
+        run: |
+          ssh srv-fichiers 'tar -tzf /backup/tar/incr1.tar.gz' > /tmp/incr1.txt
+          grep -q 'srv/donnees/commun/compte-rendu.txt' /tmp/incr1.txt && ! grep -q 'contrat-martin.txt' /tmp/incr1.txt
+      - desc: Le fichier d'état existe
+        run: ssh srv-fichiers 'test -s /backup/tar/etat.snar'
+
+  - id: rsync-instantanes
+    title: Instantanés rsync avec liens physiques
+    cours: |
+      Un **lien physique** est un second nom pour le même fichier (même inode) : il ne prend pas de place
+      supplémentaire.
+
+      Avec `--link-dest=<dossier de la veille>`, rsync compare chaque fichier à celui de la veille : s'il est
+      identique, il crée un lien physique au lieu de copier ; sinon, il copie la nouvelle version. Chaque
+      instantané est un dossier complet, navigable et restaurable par simple copie, mais seuls les fichiers
+      modifiés consomment de l'espace.
+
+      `stat -c %i` ou `ls -li` affiche les inodes ; `du -sh` sur les deux dossiers ensemble montre le gain.
+    description: |
+      Technique très répandue (Time Machine, rsnapshot) : chaque jour, un dossier complet, mais les fichiers
+      **inchangés** ne sont pas recopiés, ce sont des **liens physiques** vers la veille (`--link-dest`).
+
+      Sur srv-fichiers :
+      1. `rsync -a /srv/donnees/ /backup/instantanes/jour1/` ;
+      2. modifie `/srv/donnees/commun/planning.txt` (ajoute une ligne) ;
+      3. crée `/backup/instantanes/jour2/` avec `--link-dest=/backup/instantanes/jour1`.
+
+      Dans jour2, le bilan (inchangé) doit avoir le **même inode** que dans jour1, et le planning (modifié)
+      un inode différent. Vérifie avec `ls -li` et `du -sh /backup/instantanes/*`.
+    hint: "rsync -a --link-dest=/backup/instantanes/jour1 /srv/donnees/ /backup/instantanes/jour2/"
+    checks:
+      - desc: jour1 et jour2 sont des copies complètes
+        run: ssh srv-fichiers 'test -f /backup/instantanes/jour1/compta/bilan-2025.txt && test -f /backup/instantanes/jour2/compta/bilan-2025.txt'
+      - desc: Le fichier inchangé est un lien physique vers la veille
+        run: |
+          ssh srv-fichiers 'test "$(stat -c %i /backup/instantanes/jour1/compta/bilan-2025.txt)" = "$(stat -c %i /backup/instantanes/jour2/compta/bilan-2025.txt)"'
+      - desc: Le fichier modifié est une nouvelle copie, à jour
+        run: |
+          ssh srv-fichiers 'test "$(stat -c %i /backup/instantanes/jour1/commun/planning.txt)" != "$(stat -c %i /backup/instantanes/jour2/commun/planning.txt)" && cmp -s /srv/donnees/commun/planning.txt /backup/instantanes/jour2/commun/planning.txt'
+
+  - id: borg-ancienne-version
+    title: Récupérer une ancienne version
+    cours: |
+      Chaque archive Borg est une photo complète à une date : on peut donc récupérer n'importe quelle version
+      conservée par la rétention.
+
+      - `borg list` affiche les archives avec leur date de création ;
+      - `borg diff ::<archive1> <archive2>` liste les fichiers ajoutés, supprimés ou modifiés entre deux
+        archives ;
+      - `borg extract` dans un **dossier de travail** restaure sans écraser le fichier actuel, pour que
+        l'utilisateur compare et choisisse ;
+      - `borg extract --stdout` envoie un fichier sur la sortie standard.
+
+      C'est le cas le plus fréquent en support : « j'ai écrasé mon fichier hier ».
+    description: |
+      Un utilisateur a écrasé le contenu de `/srv/donnees/compta/factures-octobre.csv` et veut **comparer**
+      avec la version d'origine, sans perdre la nouvelle.
+      1. Simule l'incident : remplace le contenu du fichier par `fichier ecrase par erreur`, puis crée une
+         nouvelle archive Borg (comme le ferait la sauvegarde de la nuit).
+      2. Avec `borg list`, repère une archive **antérieure** à la modification, puis extrais-en le fichier
+         dans `/root/restau/` (pas à son emplacement d'origine).
+
+      `borg diff ::archive1 archive2` montre ce qui a changé entre deux archives.
+    hint: "mkdir -p /root/restau && cd /root/restau && borg extract ::<archive-ancienne> srv/donnees/compta/factures-octobre.csv"
+    checks:
+      - desc: La version d'origine est restaurée dans /root/restau
+        run: ssh srv-fichiers 'grep -qx "Factures fournisseurs octobre" /root/restau/srv/donnees/compta/factures-octobre.csv'
+      - desc: Le fichier en production garde la nouvelle version
+        run: ssh srv-fichiers 'grep -qx "fichier ecrase par erreur" /srv/donnees/compta/factures-octobre.csv'
+      - desc: Une archive postérieure à la modification existe
+        run: |
+          ssh srv-fichiers 'export BORG_PASSPHRASE="Sauvegarde2024!" BORG_RSH="ssh -o BatchMode=yes"; R=ssh://borg@srv-sauvegarde/srv/borg/srv-fichiers; a=$(borg list --short --last 1 $R); cd /tmp && borg extract --stdout "$R::$a" srv/donnees/compta/factures-octobre.csv' | grep -qx 'fichier ecrase par erreur'

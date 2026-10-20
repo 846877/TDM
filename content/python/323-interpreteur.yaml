@@ -290,3 +290,51 @@ solution: |
           if len(arguments) < minimum or (maximum is not None and len(arguments) > maximum):
               raise SyntaxError(f"mauvais nombre d'arguments pour {nom}")
           return fonction(*arguments)
+cours: |
+  ## Architecture d'un interpréteur
+
+  1. **Lexer** : texte → jetons (nombres, identifiants, opérateurs, mots-clés, fins
+     d'instruction). Les opérateurs à deux caractères (`==`, `<=`) doivent être reconnus
+     **avant** ceux d'un caractère (`=`, `<`).
+  2. **Parser** : jetons → structure (ou évaluation directe), selon une grammaire où chaque
+     niveau de priorité est une fonction.
+  3. **Évaluation** dans un **environnement** : un dictionnaire `nom → valeur` qui persiste
+     entre les exécutions.
+
+  ## Priorité et associativité
+
+  Chaque règle de la grammaire appelle la règle de priorité supérieure. Pour un opérateur
+  associatif **à gauche** (`-`, `/`), une boucle `while` accumule. Pour un opérateur
+  associatif **à droite** comme la puissance (`2^3^2 = 2^(3^2)`), la règle s'appelle
+  **récursivement** pour son opérande droit. Le placement de l'unaire dans la grammaire
+  décide si `-2^2` vaut −4 (comme en mathématiques et en Python) ou 4.
+
+  ## Affectation : regarder un jeton plus loin
+
+  `x = 3` et `x == 3` commencent par le même jeton. On décide en regardant le **jeton
+  suivant** (*lookahead*) : identifiant suivi de `=` → affectation, sinon expression.
+
+  ## Erreurs
+
+  Un bon interpréteur distingue les erreurs **de syntaxe** (jeton inattendu, parenthèse
+  manquante) des erreurs **d'exécution** (variable inconnue, division par zéro) et lève des
+  exceptions précises. Vérifie qu'à la fin d'une instruction, tous ses jetons ont été
+  consommés.
+
+  ## Évaluer directement ou construire un arbre ?
+
+  Ce mini-langage peut s'évaluer pendant l'analyse. Les vrais langages construisent un
+  **AST** (arbre syntaxique abstrait), puis le parcourent : cela permet les fonctions, les
+  boucles (réévaluer un corps plusieurs fois), l'optimisation. Python fait cela :
+  `ast.parse("x = 2 + 3")` montre son arbre.
+
+  ## Pourquoi c'est formateur
+
+  Écrire un interpréteur démystifie les langages : priorité des opérateurs, portée des
+  variables, messages d'erreur. Les mêmes techniques servent à analyser des fichiers de
+  configuration, des requêtes de recherche, ou des règles de pare-feu.
+docs:
+  - title: Module ast (l'arbre syntaxique de Python)
+    url: https://docs.python.org/fr/3/library/ast.html
+  - title: Crafting Interpreters (livre en ligne, anglais)
+    url: https://craftinginterpreters.com/

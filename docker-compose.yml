@@ -18,6 +18,7 @@ services:
       - ./content:/app/content
       - ./labs/devops:/app/labs/devops
       - ./labs/systemes:/app/labs/systemes
+      - ./labs/systemes-windows:/app/labs/systemes-windows
       - tdm-data:/app/.data
     restart: unless-stopped
 

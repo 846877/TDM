@@ -1,0 +1,115 @@
+title: "Ticket : le trunk ne fait pas passer les VLAN"
+level: intermediaire
+order: 25
+device: switch
+hostname: SW-ACCES1
+tags: [dépannage, trunk, vlan natif, dtp]
+summary: Remettre en état un trunk mal configuré vers la distribution.
+description: |
+  **Ticket n° 4203** — « Les postes du VLAN 30 (visio) n'ont plus de réseau, et des messages
+  *Native VLAN mismatch* apparaissent en console. »
+
+  Le switch de distribution est configuré ainsi sur son port d'en face : trunk forcé,
+  VLAN natif `99`, VLAN autorisés `10,20,30,99`, DTP désactivé.
+
+  Observe `show interfaces trunk`, `show interfaces g0/1 switchport` et la configuration de `Gi0/1`,
+  puis aligne `SW-ACCES1` sur la distribution :
+
+  - trunk **forcé** et DTP désactivé ;
+  - VLAN natif `99` ;
+  - VLAN autorisés `10,20,30,99` ;
+  - port actif.
+initial: |
+  vlan 10
+  vlan 20
+  vlan 30
+  vlan 99
+  interface g0/1
+  switchport mode dynamic auto
+  switchport trunk allowed vlan 10,20
+  shutdown
+checks:
+  - desc: Gi0/1 en trunk forcé, sans DTP
+    expr: intf("g0/1").mode == "trunk" and intf("g0/1").nonegotiate
+  - desc: VLAN natif 99
+    expr: intf("g0/1").native_vlan == 99
+  - desc: VLAN autorisés exactement 10, 20, 30 et 99
+    expr: intf("g0/1").allowed_vlans() == {10, 20, 30, 99}
+  - desc: Gi0/1 active
+    expr: not intf("g0/1").shutdown
+solution: |
+  configure terminal
+  interface g0/1
+  switchport mode trunk
+  switchport nonegotiate
+  switchport trunk native vlan 99
+  switchport trunk allowed vlan 10,20,30,99
+  no shutdown
+  end
+cours: |
+  ## Les causes classiques d'un trunk défaillant
+
+  | Symptôme                                      | Cause probable                           |
+  |-----------------------------------------------|------------------------------------------|
+  | le port n'apparaît pas dans `show interfaces trunk` | mode access, ou DTP `auto` des deux côtés |
+  | un VLAN ne passe pas                          | VLAN absent de la liste autorisée, ou inexistant sur un switch |
+  | `%CDP-4-NATIVE_VLAN_MISMATCH`                 | VLAN natifs différents                   |
+  | port `err-disabled`                           | BPDU Guard, port-security...             |
+  | `administratively down`                       | `shutdown`                               |
+
+  ### Les modes DTP
+
+  | Côté A \ Côté B    | trunk  | dynamic desirable | dynamic auto | access |
+  |--------------------|--------|-------------------|--------------|--------|
+  | **trunk**          | trunk  | trunk             | trunk        | ✗ (incohérent) |
+  | **dynamic desirable** | trunk | trunk          | trunk        | access |
+  | **dynamic auto**   | trunk  | trunk             | **access**   | access |
+
+  Deux ports en `dynamic auto` attendent chacun que l'autre propose : le lien reste en access. De
+  plus, si l'autre côté a désactivé DTP (`nonegotiate`), aucune négociation n'aboutit : il faut
+  **forcer** `switchport mode trunk`.
+
+  ### Le VLAN natif
+
+  Les trames du VLAN natif circulent **sans étiquette**. Si SW1 a le natif 1 et SW2 le natif 99,
+  une trame non étiquetée du VLAN 1 de SW1 arrive dans le VLAN 99 de SW2 : les deux VLAN fusionnent
+  silencieusement. CDP détecte l'incohérence et la signale ; STP peut bloquer le port (PVID
+  inconsistent).
+
+  ### Les commandes de diagnostic
+
+  ```
+  SW1# show interfaces trunk
+  SW1# show interfaces gi0/2 switchport
+  Administrative Mode: dynamic auto
+  Operational Mode: static access
+  Administrative Trunking Encapsulation: dot1q
+  Trunking Native Mode VLAN: 1 (default)
+  Trunking VLANs Enabled: 10,20
+  SW1# show vlan brief
+  SW1# show cdp neighbors gi0/2 detail
+  ```
+
+  `Administrative Mode` = ce qui est configuré ; `Operational Mode` = ce qui fonctionne réellement.
+
+  ### Corriger la liste des VLAN autorisés
+
+  `switchport trunk allowed vlan 10,20,30,99` **remplace** la liste ; pour ajouter sans tout
+  retaper : `switchport trunk allowed vlan add 30`. Une erreur sur cette commande en production
+  peut couper tous les VLAN d'un étage.
+
+  ### Pièges fréquents
+
+  - Corriger un seul côté et oublier l'autre.
+  - Taper `allowed vlan 30` au lieu de `allowed vlan add 30`.
+  - Oublier que le VLAN doit aussi **exister** sur chaque switch (ou être appris par VTP).
+
+  ### Pour le CCNA
+
+  Le tableau des combinaisons DTP et le diagnostic avec `show interfaces trunk` et
+  `show interfaces switchport` sont des incontournables.
+docs:
+  - title: Wikipédia (EN) — Dynamic Trunking Protocol
+    url: https://en.wikipedia.org/wiki/Dynamic_Trunking_Protocol
+  - title: Wikipédia — IEEE 802.1Q
+    url: https://fr.wikipedia.org/wiki/IEEE_802.1Q

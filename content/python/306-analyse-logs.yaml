@@ -86,3 +86,58 @@ solution: |
       top = sorted(ips.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
       return {"total": total, "top_ips": top, "codes": dict(codes), "octets": octets,
               "erreurs_5xx": sorted(erreurs)}
+cours: |
+  ## Le format *combined*
+
+  Chaque requête HTTP produit une ligne :
+
+  ```
+  IP - utilisateur [date] "MÉTHODE chemin PROTOCOLE" code taille "referer" "user-agent"
+  ```
+
+  C'est le format par défaut d'Apache et nginx. Les champs entre guillemets peuvent contenir
+  des espaces : un simple `split()` ne suffit pas. Une regex avec des **groupes nommés** est
+  la bonne approche :
+
+  ```python
+  import re
+  LIGNE = re.compile(
+      r'(?P<ip>\S+) \S+ \S+ \[(?P<date>[^\]]+)\] '
+      r'"(?P<requete>[^"]*)" (?P<code>\d{3}) (?P<taille>\d+|-)'
+  )
+  ```
+
+  `[^\]]+` signifie « tout sauf un crochet fermant », `[^"]*` « tout sauf un guillemet » :
+  c'est plus sûr et plus rapide que `.*?`. La requête se découpe ensuite en méthode, chemin
+  et protocole.
+
+  ## Robustesse
+
+  Les vrais logs contiennent des lignes tronquées, des requêtes malformées (scanners,
+  attaques), des `-` à la place de la taille. Une ligne qui ne correspond pas au motif est
+  ignorée ; ne laisse jamais une ligne bizarre faire planter tout le rapport.
+
+  ## Agréger
+
+  - `Counter` pour les IP et les codes ;
+  - une somme pour les octets (un `-` compte 0) ;
+  - un `set` pour les chemins en erreur, trié à la fin ;
+  - `code // 100 == 5` teste la famille 5xx.
+
+  ## Top k avec départage
+
+  `Counter.most_common` ne départage pas par ordre alphabétique : trie les paires avec une
+  clé `(-nombre, ip)`. Remarque : l'ordre « IP croissante » demandé ici est l'ordre des
+  **chaînes** ; un ordre numérique réel utiliserait `ipaddress.ip_address(ip)` comme clé.
+
+  ## Usage réel
+
+  Ce genre de script sert à détecter un scan (une IP avec des centaines de 404), une
+  attaque par force brute, une régression (pic de 500 après un déploiement) ou la bande
+  passante consommée. Pour de gros fichiers, lis ligne par ligne (générateur) plutôt que de
+  tout charger.
+docs:
+  - title: Module re
+    url: https://docs.python.org/fr/3/library/re.html
+  - title: nginx — format de log (log_format combined)
+    url: https://nginx.org/en/docs/http/ngx_http_log_module.html

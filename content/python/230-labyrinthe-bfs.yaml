@@ -161,3 +161,53 @@ solution: |
   arrivee = next(((l, c) for l in range(lignes) for c in range(colonnes) if grille[l][c] == "E"), None)
   print(f"distance: {distances[arrivee] if arrivee in distances else 'impossible'}")
   print(f"accessibles: {len(distances)}")
+cours: |
+  ## Une grille est un graphe
+
+  Chaque case libre est un sommet, et deux cases adjacentes (haut, bas, gauche, droite) sont
+  reliées par une arête. Inutile de construire le graphe explicitement : on calcule les
+  voisins à la volée.
+
+  ```python
+  DIRECTIONS = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+  for dl, dc in DIRECTIONS:
+      nl, nc = l + dl, c + dc
+      if 0 <= nl < nb_lignes and 0 <= nc < nb_colonnes and grille[nl][nc] != "#":
+          ...
+  ```
+
+  Le test des bornes **avant** l'accès à `grille[nl][nc]` est essentiel ; et attention : en
+  Python, `grille[-1]` ne lève pas d'erreur, il renvoie la dernière ligne ! Un oubli de test
+  sur les indices négatifs crée des passages « à travers les bords ».
+
+  ## BFS et distances
+
+  Dans un graphe où chaque pas coûte 1, le parcours en largeur découvre les cases par
+  distance croissante. On stocke la distance de chaque case découverte (dictionnaire ou
+  tableau 2D initialisé à `-1`) : `dist[voisin] = dist[case] + 1`. La première fois qu'on
+  atteint la sortie, sa distance est minimale. Le même tableau sert de marqueur « déjà vu ».
+
+  ## Compter les cases accessibles
+
+  Si on poursuit le BFS jusqu'à épuisement de la file (sans s'arrêter à la sortie), le nombre
+  de cases découvertes est le nombre de cases accessibles : un seul parcours répond aux deux
+  questions.
+
+  ## Lecture de la grille
+
+  Lis les dimensions sur la première ligne, puis les lignes de la grille. Repère la position
+  de `S` (et de `E`) en parcourant la grille avec `enumerate`.
+
+  ## Complexité
+
+  O(L × C) : chaque case entre au plus une fois dans la file. Une grille de 60 × 80 (4 800
+  cases) est traitée instantanément ; un DFS récursif risquerait en revanche de dépasser la
+  limite de récursion, et ne donnerait pas le plus court chemin.
+
+  Applications : jeux vidéo, robots, routage dans une grille de circuits, propagation (« pot
+  de peinture » des logiciels de dessin).
+docs:
+  - title: collections.deque
+    url: https://docs.python.org/fr/3/library/collections.html#collections.deque
+  - title: Wikipédia — Algorithme de parcours en largeur
+    url: https://fr.wikipedia.org/wiki/Algorithme_de_parcours_en_largeur

@@ -59,3 +59,56 @@ solution: |
   print(f"Moyenne : {total / n:.2f}")
   print(f"Meilleur : {meilleur_nom} ({meilleure_note})")
   print(f"Admis : {admis}/{n}")
+cours: |
+  ## Stocker des enregistrements
+
+  Chaque ligne décrit un élève (un prénom, une note). On peut les stocker dans une liste de
+  **tuples** :
+
+  ```python
+  eleves = []
+  eleves.append(("Alice", 12))
+  nom, note = eleves[0]
+  ```
+
+  ou traiter les statistiques **au fil de la lecture**, sans tout stocker : somme courante,
+  meilleur provisoire, compteur d'admis. La seconde approche consomme moins de mémoire,
+  utile sur de gros fichiers.
+
+  ## Le premier meilleur
+
+  « Le premier élève ayant la note la plus haute » : avec le motif du champion provisoire, on
+  ne remplace le champion que si la nouvelle note est **strictement** supérieure. Avec `>=`,
+  c'est le **dernier** ex-aequo qui gagnerait.
+
+  `max()` accepte un paramètre `key` qui indique sur quoi comparer, et renvoie le premier
+  maximum rencontré :
+
+  ```python
+  serveurs = [("web1", 40), ("db1", 85), ("web2", 85)]
+  max(serveurs, key=lambda s: s[1])   # ("db1", 85)
+  ```
+
+  (`lambda` crée une petite fonction anonyme ; on la reverra en détail.)
+
+  ## Compter ceux qui vérifient une condition
+
+  Une variable `admis` incrémentée dans un `if`. En une ligne :
+  `sum(1 for nom, note in eleves if note >= 10)`.
+
+  ## Formater les décimales
+
+  `f"{x:.2f}"` affiche **exactement** deux décimales (`12.333…` → `12.33`, `12` →
+  `12.00`). C'est un formatage d'affichage : la valeur réelle n'est pas modifiée,
+  contrairement à `round`.
+
+  ## Lire `prenom note`
+
+  `prenom, note = input().split()` puis `note = int(note)`. Attention : une note reste du
+  texte tant que tu ne l'as pas convertie, et `"9" > "17"` est vrai en comparaison de
+  chaînes !
+docs:
+  - title: Tutoriel — formatage de chaînes
+    url: https://docs.python.org/fr/3/tutorial/inputoutput.html
+  - title: Documentation Python — max() (avec key)
+    url: https://docs.python.org/fr/3/library/functions.html#max

@@ -18,11 +18,18 @@ Il expose une API HTTP protégée par un jeton (variable TDM_VAGRANT_TOKEN ou fi
 ``<dossier>`` est un chemin relatif à ``--root`` contenant un Vagrantfile. Pour /ssh, l'agent ouvre
 un relais TCP accessible depuis Docker vers le port SSH de la VM (que VirtualBox n'écoute que sur
 127.0.0.1).
+
+Labs embarqués (``lab=tdm:<nom>``) : les labs Windows livrés avec TDM (``labs/systemes-windows``,
+option ``--bundled``). Avant chaque ``vagrant up``, l'agent copie le lab (et le dossier partagé
+``_commun``) dans un dossier persistant (``--work-dir``, par défaut ``%LOCALAPPDATA%\\TDM\\vagrant``) et
+lance Vagrant depuis cette copie : l'état ``.vagrant`` et la clé SSH générée y survivent, même quand
+l'application Windows se décompresse dans un dossier temporaire différent à chaque lancement.
 """
 
 from __future__ import annotations
 
 import argparse
+import filecmp
 import hmac
 import json
 import os
@@ -38,6 +45,51 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+BUNDLED_PREFIX = "tdm:"
+SHARED_DIR = "_commun"  # fichiers partagés par les labs embarqués (copiés à côté de chaque lab)
+MANIFEST = ".tdm-manifest"
+_BUNDLED_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+
+
+def default_work_dir() -> Path:
+    """Copie persistante des labs embarqués : %LOCALAPPDATA%\\TDM\\vagrant (ou ~/.local/share/TDM/vagrant)."""
+    explicit = os.environ.get("TDM_VAGRANT_WORK_DIR")
+    if explicit:
+        return Path(explicit).expanduser()
+    base = os.environ.get("LOCALAPPDATA") or Path.home() / ".local" / "share"
+    return Path(base) / "TDM" / "vagrant"
+
+
+def default_bundled_dir() -> Path:
+    explicit = os.environ.get("TDM_WINDOWS_LABS_DIR")
+    return Path(explicit).expanduser() if explicit else ROOT_DIR / "labs" / "systemes-windows"
+
+
+def sync_tree(src: Path, dest: Path) -> list[str]:
+    """Copie ``src`` dans ``dest`` sans toucher à ce qui n'en vient pas (``.vagrant``, clé SSH générée...).
+
+    Seuls les fichiers modifiés sont réécrits ; les fichiers copiés lors d'une synchronisation précédente
+    et disparus de ``src`` sont supprimés (liste tenue dans ``.tdm-manifest``). Renvoie les fichiers copiés.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    manifest = dest / MANIFEST
+    previous = set(manifest.read_text(encoding="utf-8").splitlines()) if manifest.exists() else set()
+    current, copied = set(), []
+    for path in sorted(src.rglob("*")):
+        rel = path.relative_to(src)
+        if not path.is_file() or rel.parts[0] in (".vagrant", ".tdm", MANIFEST) or "__pycache__" in rel.parts:
+            continue
+        current.add(rel.as_posix())
+        target = dest / rel
+        if target.exists() and filecmp.cmp(path, target, shallow=False):
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
+        copied.append(rel.as_posix())
+    for stale in previous - current:
+        (dest / stale).unlink(missing_ok=True)
+    manifest.write_text("\n".join(sorted(current)), encoding="utf-8")
+    return copied
 
 
 class Job:
@@ -69,8 +121,11 @@ class Job:
 
 
 class Agent:
-    def __init__(self, root: Path, vagrant: str, relay: bool = True):
-        self.root = root.resolve()
+    def __init__(self, root: Path | None, vagrant: str, relay: bool = True, bundled: Path | None = None,
+                 work_dir: Path | None = None):
+        self.root = root.resolve() if root else None  # None : seulement les labs embarqués
+        self.bundled = (bundled or default_bundled_dir()).resolve()
+        self.work_dir = (work_dir or default_work_dir()).resolve()
         self.vagrant = vagrant
         self.use_relay = relay  # False quand la plateforme tourne sur la même machine (application Windows)
         self.jobs: dict[str, Job] = {}
@@ -80,14 +135,36 @@ class Agent:
     def lab_dir(self, lab: str) -> Path:
         if not shutil.which(self.vagrant):
             raise ValueError("Vagrant n'est pas installé (ou pas dans le PATH).")
-        if not self.root.is_dir():
-            raise ValueError(f"dossier des labs Vagrant introuvable : {self.root}")
+        if lab.startswith(BUNDLED_PREFIX):
+            return self.bundled_dirs(lab)[1]
+        if self.root is None or not self.root.is_dir():
+            raise ValueError(f"dossier des labs Vagrant introuvable : {self.root or 'TDM_VAGRANT_DIR non défini'}")
         path = (self.root / lab).resolve()
         if self.root not in path.parents and path != self.root:
             raise ValueError("chemin hors du dossier des labs")
         if not (path / "Vagrantfile").exists():
             raise ValueError(f"pas de Vagrantfile dans {lab}")
         return path
+
+    def bundled_dirs(self, lab: str) -> tuple[Path, Path]:
+        """Lab embarqué ``tdm:<nom>`` : (dossier source livré avec TDM, copie de travail persistante)."""
+        name = lab[len(BUNDLED_PREFIX):]
+        if not _BUNDLED_NAME.match(name):
+            raise ValueError("nom de lab embarqué invalide")
+        source = self.bundled / name
+        if not (source / "Vagrantfile").exists():
+            raise ValueError(f"lab embarqué introuvable : {name}")
+        return source, self.work_dir / name
+
+    def prepare(self, lab: str) -> None:
+        """Copie (ou met à jour) un lab embarqué dans sa copie de travail avant `vagrant up`."""
+        if not lab.startswith(BUNDLED_PREFIX):
+            return
+        source, work = self.bundled_dirs(lab)
+        sync_tree(source, work)
+        shared = self.bundled / SHARED_DIR
+        if shared.is_dir():
+            sync_tree(shared, self.work_dir / SHARED_DIR)
 
     def _vagrant(self, path: Path, *args: str, timeout: float = 120) -> subprocess.CompletedProcess:
         return subprocess.run([self.vagrant, *args], cwd=path, capture_output=True, text=True, encoding="utf-8",
@@ -99,6 +176,10 @@ class Agent:
             job = self.jobs.get(lab)
             if job and job.running:
                 return
+            if action == "up":
+                self.prepare(lab)
+            elif not (path / "Vagrantfile").exists():
+                return  # lab embarqué jamais démarré : rien à arrêter
             self.jobs[lab] = Job(action, [[self.vagrant, *c] for c in commands], path)
 
     def status(self, lab: str) -> dict:
@@ -107,6 +188,8 @@ class Agent:
         log = "\n".join(list(job.log)[-15:]) if job else ""
         if job and job.running:
             return {"status": "starting" if job.action == "up" else "stopping", "log": log}
+        if not (path / "Vagrantfile").exists():
+            return {"status": "stopped", "log": log}  # lab embarqué pas encore copié
         result = self._vagrant(path, "status", "--machine-readable")
         states = re.findall(r"^\d*,[^,]*,state,([^,\n]+)", result.stdout, re.MULTILINE)
         running = bool(states) and all(s == "running" for s in states)
@@ -116,6 +199,8 @@ class Agent:
 
     def ssh(self, lab: str, machine: str = "") -> dict:
         path = self.lab_dir(lab)
+        if not (path / "Vagrantfile").exists():
+            raise ValueError("le lab n'est pas démarré")
         args = ["ssh-config"] + ([machine] if machine else [])
         result = self._vagrant(path, *args)
         if result.returncode != 0:
@@ -189,7 +274,8 @@ def make_handler(agent: Agent, token: str):
         def _handle(self, method: str) -> None:
             url = urlparse(self.path)
             if url.path == "/health":
-                return self._reply(200, {"status": "ok", "root": str(agent.root)})
+                return self._reply(200, {"status": "ok", "root": str(agent.root), "bundled": str(agent.bundled),
+                                         "work_dir": str(agent.work_dir)})
             supplied = self.headers.get("Authorization", "").removeprefix("Bearer ")
             if not token or not hmac.compare_digest(supplied, token):
                 return self._reply(401, {"detail": "jeton invalide"})
@@ -239,16 +325,22 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=int(env.get("TDM_VAGRANT_AGENT_PORT", 7777)))
     parser.add_argument("--token", default=env.get("TDM_VAGRANT_TOKEN"))
     parser.add_argument("--vagrant", default=shutil.which("vagrant") or "vagrant")
+    parser.add_argument("--bundled", default=env.get("TDM_WINDOWS_LABS_DIR") or str(default_bundled_dir()),
+                        help="dossier des labs embarqués (labs/systemes-windows)")
+    parser.add_argument("--work-dir", default=env.get("TDM_VAGRANT_WORK_DIR") or str(default_work_dir()),
+                        help="copie persistante des labs embarqués")
     args = parser.parse_args()
     if not args.root or not Path(args.root).is_dir():
-        print("Indique le dossier des labs Vagrant avec --root (ou TDM_VAGRANT_DIR dans .env).", file=sys.stderr)
-        return 1
+        # Les labs Windows embarqués fonctionnent quand même : on prévient seulement.
+        print("Dossier de tes labs Vagrant introuvable (--root ou TDM_VAGRANT_DIR dans .env) : "
+              "seuls les labs embarqués de TDM seront disponibles.", file=sys.stderr)
     if not args.token:
         print("Jeton manquant : définis TDM_VAGRANT_TOKEN (start.bat le crée dans .env).", file=sys.stderr)
         return 1
-    agent = Agent(Path(args.root), args.vagrant)
+    agent = Agent(Path(args.root) if args.root else None, args.vagrant, bundled=Path(args.bundled), work_dir=Path(args.work_dir))
     server = ThreadingHTTPServer(("0.0.0.0", args.port), make_handler(agent, args.token))
-    print(f"Agent Vagrant TDM prêt sur le port {args.port} (labs : {agent.root})")
+    print(f"Agent Vagrant TDM prêt sur le port {args.port} (labs : {agent.root} ; "
+          f"labs embarqués : {agent.bundled}, copiés dans {agent.work_dir})")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

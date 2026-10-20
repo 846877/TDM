@@ -1,0 +1,107 @@
+title: Mes premières routes statiques
+level: debutant
+order: 24
+device: router
+hostname: R1
+tags: [routage, static, route par défaut]
+summary: Route par saut suivant, route par interface de sortie et route par défaut.
+description: |
+  `R1` connaît seulement ses réseaux directement connectés (vérifie avec `show ip route` :
+  lignes `C` et `L`). Apprends-lui le chemin vers les autres réseaux :
+
+  | Destination        | Comment y aller                                       |
+  |--------------------|-------------------------------------------------------|
+  | `192.168.2.0/24`   | via le routeur voisin `10.0.0.2` (saut suivant)       |
+  | `192.168.3.0/24`   | par l'interface série point à point `S0/0/0`          |
+  | tout le reste      | route par défaut via `10.0.0.2`                       |
+
+  `ip route <réseau> <masque> <saut suivant | interface de sortie>`
+initial: |
+  interface g0/0
+  ip address 192.168.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.0.0.1 255.255.255.252
+  no shutdown
+  interface s0/0/0
+  ip address 10.0.1.1 255.255.255.252
+  no shutdown
+checks:
+  - desc: Route vers 192.168.2.0/24 via 10.0.0.2
+    expr: route("192.168.2.0", "255.255.255.0", "10.0.0.2")
+  - desc: Route vers 192.168.3.0/24 par l'interface S0/0/0
+    expr: route("192.168.3.0", "255.255.255.0", "s0/0/0")
+    hint: "ip route 192.168.3.0 255.255.255.0 s0/0/0"
+  - desc: Route par défaut via 10.0.0.2
+    expr: route("0.0.0.0", "0.0.0.0", "10.0.0.2")
+solution: |
+  configure terminal
+  ip route 192.168.2.0 255.255.255.0 10.0.0.2
+  ip route 192.168.3.0 255.255.255.0 s0/0/0
+  ip route 0.0.0.0 0.0.0.0 10.0.0.2
+  end
+cours: |
+  ## Qu'est-ce qu'une table de routage ?
+
+  Un routeur décide de l'interface de sortie de chaque paquet en consultant sa **table de
+  routage** (`show ip route`). Au départ, il n'y trouve que :
+
+  - `C` : les réseaux **connectés** à ses interfaces actives ;
+  - `L` : ses propres adresses (*local*, en /32).
+
+  Pour tout autre réseau, il faut lui apprendre le chemin : manuellement (**routes statiques**)
+  ou par un protocole de routage dynamique (OSPF, EIGRP...).
+
+  ### Les trois formes de route statique
+
+  ```
+  R2(config)# ip route 172.20.0.0 255.255.0.0 10.9.9.2
+  R2(config)# ip route 172.21.0.0 255.255.0.0 serial0/1/0
+  R2(config)# ip route 172.22.0.0 255.255.0.0 g0/2 10.9.8.2
+  ```
+
+  | Forme                    | Quand l'utiliser                                         |
+  |--------------------------|----------------------------------------------------------|
+  | saut suivant (`10.9.9.2`) | cas général ; le routeur doit savoir joindre ce saut    |
+  | interface de sortie      | liens **point à point** (série) uniquement               |
+  | interface + saut suivant | Ethernet : la forme la plus explicite (« entièrement spécifiée ») |
+
+  Sur un lien Ethernet, une route par interface seule oblige le routeur à faire une requête ARP
+  pour **chaque destination** (il compte sur le *proxy ARP* du voisin) : à éviter.
+
+  ### La route par défaut
+
+  `ip route 0.0.0.0 0.0.0.0 <saut suivant>` correspond à **toutes** les destinations : elle est
+  utilisée quand aucune route plus précise n'existe. Elle apparaît comme
+  `Gateway of last resort is ...` et `S*` dans la table.
+
+  Le routeur choisit toujours la route la **plus spécifique** (le plus long préfixe) : un paquet
+  vers 192.168.2.7 prend la route /24 plutôt que la route par défaut /0.
+
+  ### Vérifier
+
+  ```
+  R2# show ip route static
+  S*    0.0.0.0/0 [1/0] via 10.9.9.2
+  S     172.20.0.0/16 [1/0] via 10.9.9.2
+  R2# ping 172.20.1.1
+  ```
+
+  `[1/0]` = distance administrative 1 (route statique) / métrique 0.
+
+  ### Pièges fréquents
+
+  - Une route n'est utile que si le **retour** existe aussi : le routeur d'en face doit connaître
+    le chemin vers ton réseau.
+  - Un saut suivant qui n'est pas sur un réseau connecté : la route reste inactive.
+  - Une interface de sortie éteinte : la route disparaît de la table.
+
+  ### Pour le CCNA
+
+  Lire une table de routage (codes, distance/métrique, plus long préfixe) et écrire les trois
+  formes de routes statiques, en IPv4 comme en IPv6, est au programme.
+docs:
+  - title: Wikipédia — Table de routage
+    url: https://fr.wikipedia.org/wiki/Table_de_routage
+  - title: Wikipédia (EN) — Static routing
+    url: https://en.wikipedia.org/wiki/Static_routing

@@ -48,3 +48,54 @@ solution: |
               if not pile or pile.pop() != paires[c]:
                   return False
       return not pile
+cours: |
+  ## La pile (LIFO)
+
+  Une **pile** est une structure « dernier entré, premier sorti » (*Last In, First Out*),
+  comme une pile d'assiettes. En Python, une liste fait une excellente pile :
+
+  ```python
+  pile = []
+  pile.append("a")   # empiler
+  pile.append("b")
+  pile[-1]           # "b" : consulter le sommet
+  pile.pop()         # "b" : dépiler
+  pile.pop()         # "a"
+  pile.pop()         # IndexError : pile vide !
+  ```
+
+  `append` et `pop()` (sans argument) sont en O(1). Par contre `pop(0)` et `insert(0, x)`
+  sont en O(n) : pour une file (FIFO), on utilise `collections.deque`.
+
+  ## Pourquoi une pile ici ?
+
+  Compter les ouvrantes et les fermantes ne suffit pas : `"([)]"` contient autant de
+  chaque, mais l'imbrication est fausse. La règle est : **la fermante doit correspondre à la
+  dernière ouvrante non encore fermée**. « La dernière » : c'est exactement ce que donne le
+  sommet de la pile.
+
+  ## Associer les paires
+
+  Un dictionnaire associe chaque fermante à son ouvrante :
+
+  ```python
+  paires = {")": "(", "]": "[", "}": "{"}
+  ```
+
+  ## Les trois façons d'échouer
+
+  1. une fermante arrive alors que la pile est **vide** ;
+  2. une fermante ne correspond pas au **sommet** ;
+  3. à la fin, la pile n'est **pas vide** (des ouvrantes jamais fermées).
+
+  Oublier le troisième cas est le bug classique : `"(("` doit être refusé. Les autres
+  caractères (lettres, opérateurs) sont simplement ignorés.
+
+  ## Où retrouve-t-on cet algorithme ?
+
+  Vérification de syntaxe dans les éditeurs et compilateurs, validation de JSON/XML,
+  évaluation d'expressions, bouton « annuler » (historique des actions), pile d'appels des
+  fonctions… Complexité : O(n) en temps, O(n) en mémoire dans le pire cas.
+docs:
+  - title: Tutoriel — utiliser les listes comme des piles
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#using-lists-as-stacks

@@ -6,7 +6,15 @@ import secrets
 import time
 from typing import Any
 
-from .ios import Device, Session, apply_commands, expand_range, mask_to_prefix, parse_vlan_list
+from .ios import (
+    Device,
+    Session,
+    apply_commands,
+    expand_range,
+    mask_to_prefix,
+    normalize_iface,
+    parse_vlan_list,
+)
 
 SESSION_TTL = 6 * 3600
 MAX_SESSIONS = 500
@@ -76,6 +84,16 @@ def check(exercise: dict[str, Any], device: Device) -> dict[str, Any]:
         "ports": lambda spec: [device.intf(n) for n in expand_range(spec)],
         "acl": lambda name: [e for e in device.acls.get(str(name), []) if e != "__ext__"],
         "line": lambda kind: device.lines[kind],
+        # ajouts : routage avancé, sécurité, VPN, QoS
+        "bgp": device.bgp,
+        "rmap": device.rmap,
+        "plist": device.plist,
+        "vrf_route": device.has_vrf_route,
+        "acl6": lambda name: device.ipv6_acls.get(name, []),
+        "pmap": lambda name: device.policy_maps.get(name, {}),
+        "cmap": lambda name: device.class_maps.get(name, {}),
+        "ifname": lambda name: normalize_iface(name) or name,
+        "mac": lambda text: text.lower(),
     }
     results = []
     for item in exercise.get("checks", []):

@@ -52,3 +52,60 @@ solution: |
   no auto-summary
   passive-interface g0/0
   end
+cours: |
+  ## EIGRP en bref
+
+  **EIGRP** est un protocole à vecteur de distance **avancé**, conçu par Cisco (publié en RFC
+  7868). Il garde les avantages des vecteurs de distance (simplicité) en corrigeant leurs
+  défauts :
+
+  - mises à jour **partielles** et seulement en cas de changement ;
+  - algorithme **DUAL** : un chemin de secours sans boucle (*feasible successor*) est calculé à
+    l'avance et utilisé instantanément ;
+  - métrique **composite** : bande passante minimale et délai cumulé (par défaut) ;
+  - partage de charge sur des chemins de coûts inégaux (`variance`).
+
+  Les voisins doivent partager le même **numéro d'AS**.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# router eigrp 200
+  R1(config-router)# eigrp router-id 6.6.6.6
+  R1(config-router)# network 172.16.40.0 0.0.0.255
+  R1(config-router)# network 10.0.0.4 0.0.0.3
+  R1(config-router)# no auto-summary
+  R1(config-router)# passive-interface gi0/0
+  R1# show ip eigrp neighbors
+  H   Address     Interface  Hold Uptime    SRTT  RTO  Q  Seq
+  0   10.0.0.6    Gi0/1      13   00:12:41  1     100  0  27
+  R1# show ip eigrp topology
+  R1# show ip route eigrp
+  D    172.16.50.0/24 [90/3072] via 10.0.0.6, GigabitEthernet0/1
+  ```
+
+  - le masque générique de `network` est facultatif (sans lui, réseau par classe) ;
+  - `D` dans la table = EIGRP interne (AD 90) ; `D EX` = externe (AD 170) ;
+  - `show ip eigrp topology` affiche successeurs et successeurs possibles.
+
+  ### Successeur et successeur possible
+
+  Le **successeur** est le meilleur chemin. Un voisin devient **successeur possible** si sa
+  propre distance vers la destination (*reported distance*) est inférieure à notre meilleure
+  distance totale (*feasible distance*) : c'est la garantie mathématique qu'il ne fait pas
+  passer par nous.
+
+  ### Pièges fréquents
+
+  - Numéro d'AS différent entre voisins : pas d'adjacence.
+  - `auto-summary` actif avec des réseaux discontinus.
+  - Interface vers un voisin mise en passive.
+
+  ### Pour le CCNA / CCNP ENCOR
+
+  EIGRP a quitté le CCNA mais reste au programme d'ENCOR (métrique, DUAL, variance, stub).
+docs:
+  - title: "Cisco — Enhanced Interior Gateway Routing Protocol (EIGRP)"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/16406-eigrp-toc.html
+  - title: "RFC 7868 — Cisco's Enhanced Interior Gateway Routing Protocol"
+    url: https://www.rfc-editor.org/rfc/rfc7868

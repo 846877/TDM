@@ -233,3 +233,58 @@ solution: |
   def rendre(modele, contexte):
       noeuds, _, _ = _analyser(JETONS.split(modele), 0, set())
       return _rendre(noeuds, contexte)
+cours: |
+  ## À quoi sert un moteur de templates ?
+
+  Séparer la **présentation** (le modèle) des **données** (le contexte) : pages HTML,
+  e-mails, fichiers de configuration générés (Ansible et Salt utilisent Jinja pour produire
+  des `nginx.conf` ou des configurations d'équipements réseau à partir d'inventaires).
+
+  ## Découper le modèle en jetons
+
+  Une regex repère les balises et laisse le texte entre elles :
+
+  ```python
+  import re
+  BALISE = re.compile(r"\{\{(.*?)\}\}|\{%(.*?)%\}")
+  ```
+
+  `re.split` avec des groupes capturants conserve les séparateurs, et `re.finditer` donne
+  les positions : on obtient une suite « texte / expression / instruction ».
+
+  ## Construire un arbre
+
+  Les blocs (`for`, `if`) s'imbriquent : on les analyse **récursivement**. La fonction
+  d'analyse lit les jetons jusqu'à rencontrer une balise de fin attendue (`endfor`,
+  `endif`, ou `else`) et renvoie la liste des nœuds lus. Une **pile** ou la récursion
+  détecte les blocs mal fermés (`ValueError`).
+
+  Séparer l'analyse (une fois) du rendu (à chaque appel) est le choix de tous les moteurs
+  sérieux : le modèle compilé peut être réutilisé.
+
+  ## Résoudre un chemin `a.b.0`
+
+  À chaque segment : essayer la clé de dictionnaire, puis l'indice de liste, puis l'attribut
+  (`getattr`). Un échec à n'importe quelle étape donne une valeur vide plutôt qu'une
+  exception (choix de conception « tolérant » de Jinja).
+
+  ## Portée des variables
+
+  Dans une boucle, la variable de boucle ne doit pas écraser définitivement le contexte
+  extérieur : on rend le corps avec un **nouveau** contexte (`{**contexte, nom: element}`)
+  ou un `ChainMap`.
+
+  ## Filtres
+
+  Un dictionnaire `nom → fonction` (`str.upper`, `len`…) ; un filtre inconnu est une erreur
+  du modèle.
+
+  ## Sécurité
+
+  Un moteur qui insère des données dans du HTML doit **échapper** `<`, `>`, `&` (sinon :
+  injection XSS). Et n'utilise jamais `eval` pour évaluer les expressions d'un modèle.
+docs:
+  - title: Module string (Template)
+    url: https://docs.python.org/fr/3/library/string.html#template-strings
+  - title: Documentation Jinja (anglais)
+    url: https://jinja.palletsprojects.com/

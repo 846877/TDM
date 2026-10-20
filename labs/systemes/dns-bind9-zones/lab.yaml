@@ -37,9 +37,137 @@ description: |
   - vérifier : `named-checkconf -z` et `named-checkzone durand.lan /etc/bind/db.durand.lan`
   - démarrer : `named -u bind` ; recharger : `rndc reload` ; journaux : `named -u bind -g` au premier plan
     pour voir les erreurs, ou `rndc status`.
+cours: |
+  ## Le DNS, annuaire hiérarchique
+
+  Le DNS est une base de données **distribuée** et **hiérarchique**. Chaque niveau délègue le suivant :
+
+  ```
+                       . (racine)
+                 ┌─────┴──────┐
+               lan.        example.
+                 │
+            durand.lan.            ← zone gérée par ns1 (primaire) et ns2 (secondaire)
+           ┌─────┴─────┐
+     srv-web     lyon.durand.lan.  ← sous-zone DÉLÉGUÉE à ns-lyon
+  ```
+
+  Deux rôles à ne pas confondre :
+
+  | Rôle                        | Ce qu'il fait                                                      |
+  |-----------------------------|--------------------------------------------------------------------|
+  | **Serveur faisant autorité** | détient une zone et y répond avec le drapeau `aa`                 |
+  | **Résolveur récursif**      | cherche la réponse pour les clients (racine → TLD → zone) et la met en cache |
+
+  En entreprise, un même BIND fait souvent les deux pour le réseau interne, mais on **n'ouvre jamais la
+  récursion à Internet** (attaques par amplification).
+
+  ## Fichier de zone
+
+  ```
+  $TTL 3600
+  @       IN SOA  ns1.durand.lan. hostmaster.durand.lan. (
+                  2026101801 ; série AAAAMMJJNN, à INCRÉMENTER à chaque modification
+                  3600       ; refresh : le secondaire vérifie la série toutes les heures
+                  900        ; retry   : en cas d'échec
+                  604800     ; expire  : le secondaire abandonne la zone après 7 jours sans primaire
+                  300 )      ; TTL des réponses négatives (NXDOMAIN)
+  @       IN NS    ns1.durand.lan.
+  @       IN NS    ns2.durand.lan.
+  @       IN MX 10 srv-mail
+  ns1     IN A     10.30.0.53
+  srv-web IN A     10.30.0.10
+  www     IN CNAME srv-web
+  ```
+
+  - `@` désigne l'origine de la zone (`durand.lan.`).
+  - Un nom **sans point final** est relatif : `srv-mail` devient `srv-mail.durand.lan.`. Un nom écrit
+    `srv-mail.durand.lan` sans point devient `srv-mail.durand.lan.durand.lan.` : l'erreur la plus fréquente.
+  - Le contact du SOA s'écrit avec un point à la place du `@` (`hostmaster.durand.lan.`).
+
+  | Type    | Rôle                                       | Exemple                               |
+  |---------|--------------------------------------------|---------------------------------------|
+  | A/AAAA  | nom → IPv4 / IPv6                          | `srv-web IN A 10.30.0.10`             |
+  | CNAME   | alias (jamais sur `@`, jamais avec d'autres types) | `www IN CNAME srv-web`         |
+  | MX      | serveur de messagerie + priorité           | `@ IN MX 10 srv-mail`                 |
+  | NS      | serveurs faisant autorité                  | `@ IN NS ns1`                         |
+  | PTR     | adresse → nom (zone `in-addr.arpa`)        | `10 IN PTR srv-web.durand.lan.`       |
+  | TXT     | texte (SPF, DKIM, vérifications)           | `@ IN TXT "v=spf1 mx -all"`           |
+  | SRV     | service : priorité poids port cible        | `_ldap._tcp IN SRV 0 100 389 srv-ad`  |
+
+  La zone inverse de `10.30.0.0/24` s'appelle `0.30.10.in-addr.arpa` : les octets sont **à l'envers**.
+
+  ## Primaire, secondaire et transferts
+
+  ```
+  ns1 (primary) ── NOTIFY ──▶ ns2 (secondary)
+       ▲                        │ compare la série du SOA
+       └──── AXFR / IXFR ───────┘ si elle a augmenté, transfère la zone
+  ```
+
+  `named.conf.local` d'un primaire :
+
+  ```
+  zone "durand.lan" {
+      type primary;
+      file "/etc/bind/db.durand.lan";
+      allow-transfer { 10.30.0.54; };
+      also-notify { 10.30.0.54; };
+  };
+  ```
+
+  ## Mémo des commandes
+
+  | Besoin                         | Commande                                           |
+  |--------------------------------|----------------------------------------------------|
+  | Vérifier la configuration      | `named-checkconf -z`                               |
+  | Vérifier une zone              | `named-checkzone durand.lan /etc/bind/db.durand.lan` |
+  | Recharger                      | `rndc reload` (ou `rndc reload durand.lan`)        |
+  | État du serveur                | `rndc status`                                      |
+  | Démarrer au premier plan       | `named -u bind -g` (affiche les erreurs)           |
+  | Interroger un serveur précis   | `dig @10.30.0.53 srv-web.durand.lan`               |
+  | Sans récursion                 | `dig +norec ...` (voir ce que le serveur sait lui-même) |
+  | Suivre la délégation           | `dig +trace nom`                                   |
+  | Vider le cache                 | `rndc flush`                                       |
+
+  ## Pièges courants
+
+  - Oublier d'**incrémenter la série** : le secondaire garde l'ancienne zone indéfiniment.
+  - Oublier le **point final** des noms complets.
+  - Fichier de zone illisible par l'utilisateur `bind`, ou secondaire qui écrit dans un dossier où il n'a
+    pas le droit (`/var/cache/bind` est fait pour ça).
+  - Le TTL : après une modification, les résolveurs gardent l'ancienne réponse jusqu'à expiration. Avant une
+    migration, on baisse le TTL quelques jours avant.
+
+  ## Bonnes pratiques en entreprise
+
+  - Au moins **deux** serveurs DNS, sur deux machines (idéalement deux salles).
+  - Transferts limités aux secondaires (voire signés par TSIG), récursion limitée au réseau interne,
+    version masquée.
+  - Avec Active Directory, le DNS est souvent porté par les contrôleurs de domaine : BIND peut alors faire
+    une **redirection conditionnelle** vers eux pour la zone AD.
+  - Toute modification passe par un contrôle `named-checkzone` avant rechargement.
+docs:
+  - title: Manuel de référence BIND 9 (ISC)
+    url: https://bind9.readthedocs.io/
+  - title: named.conf(5) - syntaxe de la configuration (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/named.conf.5.html
+  - title: Wikipédia - Domain Name System
+    url: https://fr.wikipedia.org/wiki/Domain_Name_System
 exercises:
   - id: zone-directe
     title: Zone directe durand.lan sur ns1
+    cours: |
+      Une zone se déclare dans `named.conf.local` avec un bloc `zone "<nom>" { type primary; file "..."; };`
+      puis se décrit dans son fichier de zone.
+
+      Le fichier commence par `$TTL` (durée de cache par défaut), puis l'enregistrement **SOA** (serveur
+      primaire, contact, et cinq nombres : série, refresh, retry, expire, TTL négatif), puis les **NS** et les
+      enregistrements de la zone.
+
+      Avant de démarrer : `named-checkzone <zone> <fichier>` et `named-checkconf -z`. Démarré avec `-g`, named
+      reste au premier plan et affiche les erreurs ; sinon il passe en arrière-plan. `dig +norec` permet de
+      vérifier que la réponse porte le drapeau `aa` (autorité).
     description: |
       Sur **ns1**, déclare la zone `durand.lan` de type `primary` dans `/etc/bind/named.conf.local`, avec le
       fichier `/etc/bind/db.durand.lan` contenant :
@@ -63,6 +191,16 @@ exercises:
 
   - id: enregistrements
     title: Alias, messagerie et services
+    cours: |
+      Chaque type d'enregistrement a sa syntaxe après `IN` :
+
+      - `CNAME <cible>` : un alias ; un nom qui porte un CNAME ne peut porter aucun autre enregistrement ;
+      - `MX <priorité> <serveur>` : la priorité la plus **basse** est essayée en premier ;
+      - `TXT "<texte>"` : le texte entre guillemets ;
+      - `SRV <priorité> <poids> <port> <cible>` sur un nom de la forme `_service._protocole`.
+
+      Après chaque modification : augmenter la série du SOA, `named-checkzone`, puis `rndc reload`. Teste
+      chaque enregistrement avec `dig +short @<serveur> <nom> <type>`.
     description: |
       Complète la zone (et **incrémente le numéro de série** à chaque modification, puis `rndc reload`) :
       - **CNAME** : `www` et `intranet` pointent vers `srv-web` ;
@@ -85,6 +223,15 @@ exercises:
 
   - id: zone-inverse
     title: Zone inverse
+    cours: |
+      La résolution inverse (adresse → nom) utilise des zones spéciales sous `in-addr.arpa`, où les octets du
+      réseau sont écrits **à l'envers** : le réseau `192.168.1.0/24` correspond à `1.168.192.in-addr.arpa`.
+
+      Dans cette zone, chaque enregistrement **PTR** porte le dernier octet de l'adresse et pointe vers un nom
+      **complet terminé par un point**. La zone a besoin de son propre SOA et de ses NS, comme une zone
+      directe. `dig -x <adresse>` construit la question inverse pour toi.
+
+      N'oublie pas d'incrémenter le numéro de série de la zone à chaque modification, sinon les serveurs secondaires garderont l'ancienne version.
     description: |
       Crée sur ns1 la zone inverse `0.30.10.in-addr.arpa` (fichier `/etc/bind/db.10.30.0`) avec un
       enregistrement **PTR** pour chacune des six machines du plan d'adressage. Les journaux de sécurité, la
@@ -101,6 +248,16 @@ exercises:
 
   - id: secondaire
     title: Serveur secondaire et transferts de zone
+    cours: |
+      Un serveur **secondaire** n'a pas de fichier de zone à écrire : il récupère la zone auprès du primaire
+      (transfert **AXFR**) et la conserve dans un fichier qu'il écrit lui-même.
+
+      - côté primaire : `allow-transfer { <adresses>; };` limite qui peut transférer ; `notify yes;` et
+        `also-notify { ... };` préviennent le secondaire d'une modification ;
+      - côté secondaire : `type secondary;`, `primaries { <adresse du primaire>; };` et un `file` dans un
+        dossier où l'utilisateur `bind` peut écrire.
+
+      `dig @<serveur> <zone> AXFR` tente un transfert complet : utile pour tester un refus.
     description: |
       1. Sur **ns1**, n'autorise les transferts de zone (`allow-transfer`) **que vers ns2** (10.30.0.54) et
          prévient ns2 des modifications (`also-notify`, `notify yes`).
@@ -124,6 +281,15 @@ exercises:
 
   - id: dns-mise-a-jour-zone
     title: Mise à jour et numéro de série
+    cours: |
+      Le secondaire décide de transférer la zone en comparant le **numéro de série** du SOA : s'il n'a pas
+      augmenté, rien ne se passe, même si le contenu a changé.
+
+      La convention `AAAAMMJJNN` (date + numéro de modification du jour) garantit une série croissante et
+      lisible. `rndc reload` recharge les zones modifiées ; le primaire envoie alors un **NOTIFY** et le
+      secondaire transfère en quelques secondes. Sans notification, il attendrait le délai `refresh` du SOA.
+
+      `dig +short <zone> SOA` affiche le SOA en une ligne : la série est le troisième champ.
     description: |
       Un nouveau serveur de sauvegarde arrive : ajoute `srv-backup` → `10.30.0.40` (A **et** PTR) sur ns1,
       incrémente les numéros de série des deux zones et recharge (`rndc reload`).
@@ -153,6 +319,16 @@ exercises:
 
   - id: delegation
     title: Déléguer la sous-zone de Lyon
+    cours: |
+      **Déléguer** une sous-zone, c'est dire « pour tout ce qui est sous ce nom, adressez-vous à tel serveur ».
+      Dans la zone parente, on écrit des enregistrements **NS** sur le nom de la sous-zone.
+
+      Si le serveur délégué porte un nom **à l'intérieur** de la sous-zone, il faut aussi fournir son adresse
+      dans la zone parente : c'est l'enregistrement de **colle** (glue), sans lequel on tournerait en rond.
+
+      Une réponse de délégation n'a pas le drapeau `aa` : la section AUTHORITY contient les NS et la section
+      ADDITIONAL la colle. Pour aller jusqu'à la réponse finale, le serveur doit faire de la **récursion**
+      (`allow-recursion`).
     description: |
       L'agence de Lyon gère elle-même `lyon.durand.lan` sur `ns-lyon` (10.30.0.60). Dans la zone
       `durand.lan` de ns1, **délègue** cette sous-zone :
@@ -174,6 +350,16 @@ exercises:
 
   - id: forward
     title: Redirection conditionnelle
+    cours: |
+      Une zone de type **forward** transmet toutes les questions d'un domaine à des serveurs précis, au lieu
+      de les résoudre depuis la racine. C'est la **redirection conditionnelle** de Windows Server.
+
+      - `forwarders { <adresses>; };` liste les serveurs à interroger ;
+      - `forward only;` interdit de chercher ailleurs s'ils ne répondent pas (`forward first;` essaierait
+        ensuite la résolution normale).
+
+      Cas typiques : domaine Active Directory, zone privée d'un partenaire joint par VPN.
+      `named-checkconf -p` affiche la configuration complète interprétée par BIND.
     description: |
       Les postes doivent joindre l'extranet du fournisseur, dont la zone privée `fournisseur.example` est
       hébergée sur `10.30.0.60`. Sur ns1, ajoute une zone de type **forward** (`forward only;`,
@@ -187,6 +373,16 @@ exercises:
 
   - id: dns-durcissement
     title: Durcissement
+    cours: |
+      Quelques réglages de sécurité de base dans le bloc `options { };` de `named.conf.options` :
+
+      - `version "<texte>";` remplace la version renvoyée à la requête `version.bind` (classe CHAOS) ;
+      - `allow-transfer { none; };` interdit tout transfert (à mettre sur les secondaires, ou par défaut puis
+        à rouvrir zone par zone) ;
+      - `allow-recursion` / `allow-query` limitent qui peut interroger le serveur.
+
+      Une option posée dans une zone l'emporte sur celle du bloc `options`. Vérifie toujours avec
+      `named-checkconf -z` avant `rndc reload`.
     description: |
       Dernières règles de sécurité sur **ns1 et ns2** :
       - masquer la version de BIND : `version "non communiquee";` (les attaquants cherchent les versions
@@ -204,3 +400,64 @@ exercises:
         run: dig +time=3 +tries=1 @10.30.0.54 durand.lan AXFR | grep -qi 'transfer failed'
       - desc: named-checkconf -z sans erreur sur ns1 et ns2
         run: ssh ns1 named-checkconf -z >/dev/null && ssh ns2 named-checkconf -z >/dev/null
+
+  - id: dns-ipv6
+    title: Adresse IPv6 du serveur web
+    cours: |
+      Un enregistrement **AAAA** associe un nom à une adresse **IPv6** (128 bits, écrite en hexadécimal par
+      groupes de 16 bits séparés par `:`). Les adresses `fd00::/8` sont des adresses **privées** (ULA),
+      l'équivalent IPv6 de `10.0.0.0/8`.
+
+      Un même nom peut porter un A **et** un AAAA : les clients modernes essaient d'abord l'IPv6. Les zéros
+      consécutifs se compriment avec `::` (une seule fois par adresse).
+
+      Comme toute modification : série, `named-checkzone`, `rndc reload`, puis `dig AAAA`. Le secondaire
+      doit suivre grâce au NOTIFY.
+    description: |
+      Le réseau interne passe progressivement en IPv6. Ajoute à la zone `durand.lan` de ns1 un
+      enregistrement **AAAA** : `srv-web` → `fd00:30::10` (en plus de son adresse IPv4).
+
+      N'oublie pas la série : ns2 doit aussi répondre.
+    hint: "srv-web IN AAAA fd00:30::10  puis série + 1 et rndc reload"
+    checks:
+      - desc: ns1 répond fd00:30::10 pour srv-web en AAAA
+        run: test "$(dig +short +time=3 @10.30.0.53 srv-web.durand.lan AAAA)" = fd00:30::10
+      - desc: L'enregistrement A est toujours présent
+        run: test "$(dig +short +time=3 @10.30.0.53 srv-web.durand.lan A)" = 10.30.0.10
+      - desc: ns2 a reçu l'enregistrement AAAA (attente jusqu'à 30 s)
+        timeout: 60
+        run: |
+          for i in $(seq 1 15); do
+            test "$(dig +short +time=2 @10.30.0.54 srv-web.durand.lan AAAA)" = fd00:30::10 && exit 0
+            sleep 2
+          done
+          exit 1
+
+  - id: dns-journal-requetes
+    title: Journaliser les requêtes
+    cours: |
+      BIND classe ses messages par **catégories** (`queries`, `security`, `xfer-in`...) et les écrit dans
+      des **canaux** (fichier, syslog). Le bloc `logging { };` se place au premier niveau de la configuration
+      (par exemple dans `named.conf.options`, en dehors du bloc `options`) :
+
+      - `channel <nom> { file "<chemin>" versions <n> size <taille>; print-time yes; };` définit un fichier
+        avec rotation intégrée ;
+      - `category <catégorie> { <canal>; };` y envoie une catégorie.
+
+      Le fichier doit être dans un dossier où l'utilisateur `bind` peut écrire. Les requêtes journalisées
+      aident à diagnostiquer « qui interroge quoi », mais génèrent beaucoup de volume.
+    description: |
+      Pour un diagnostic, journalise sur **ns1** toutes les requêtes reçues dans le fichier
+      `/var/cache/bind/requetes.log` (3 versions de 5 Mo maximum, avec l'heure), grâce à un bloc
+      `logging { };` (canal fichier + catégorie `queries`).
+
+      Recharge la configuration (`rndc reconfig`), puis depuis admin : `dig @10.30.0.53 srv-fichiers.durand.lan`.
+    hint: "logging { channel requetes { file \"/var/cache/bind/requetes.log\" versions 3 size 5m; print-time yes; }; category queries { requetes; }; };"
+    checks:
+      - desc: La configuration est valide
+        run: ssh ns1 named-checkconf -z >/dev/null
+      - desc: Les requêtes sont écrites dans requetes.log
+        run: |
+          dig +short +time=3 @10.30.0.53 srv-fichiers.durand.lan >/dev/null
+          sleep 1
+          ssh ns1 'grep -q "query: srv-fichiers.durand.lan" /var/cache/bind/requetes.log'

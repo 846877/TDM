@@ -179,3 +179,56 @@ solution: |
           break
       else:
           print("COMMANDE INCONNUE")
+cours: |
+  ## Transactions
+
+  Une transaction regroupe des modifications qui doivent être appliquées **toutes ou
+  aucune**. `ROLLBACK` annule, `COMMIT` valide. Avec des transactions imbriquées, chaque
+  `ROLLBACK` n'annule que le niveau le plus récent.
+
+  ## Deux stratégies
+
+  ### 1. Le journal d'annulation (*undo log*)
+
+  Une **pile** de journaux, un par transaction ouverte. Avant chaque modification d'une clé,
+  on note dans le journal courant son **ancienne valeur** (ou son absence), seulement la
+  première fois qu'elle est modifiée dans cette transaction. `ROLLBACK` rejoue le journal
+  pour restaurer ; `COMMIT` jette tous les journaux. Les écritures sont directes, donc les
+  lectures sont simples.
+
+  ```python
+  ABSENT = object()               # sentinelle : la clé n'existait pas
+  journal = {}                    # cle -> ancienne valeur
+  journal.setdefault(cle, donnees.get(cle, ABSENT))
+  ```
+
+  ### 2. Les couches (*copy-on-write*)
+
+  Chaque transaction est une couche de modifications au-dessus de la précédente ; une
+  lecture cherche de la couche la plus haute vers la base. Élégant, mais les lectures et les
+  suppressions demandent plus de soin.
+
+  ## `COUNT` en O(1)
+
+  Compter les clés ayant une valeur donnée en parcourant tout le dictionnaire coûte O(n). On
+  maintient un **index inverse** `valeur → nombre de clés` (un `Counter`), mis à jour à chaque
+  changement : décrémenter l'ancienne valeur, incrémenter la nouvelle. L'index doit lui aussi
+  être correctement restauré lors d'un `ROLLBACK` — passer par une unique fonction
+  d'écriture bas niveau garantit la cohérence.
+
+  ## Robustesse de l'interpréteur
+
+  Commandes insensibles à la casse (`upper()` sur la commande seulement, pas sur les
+  valeurs), mauvais nombre d'arguments, transaction absente : chaque cas a son message.
+
+  ## Dans le monde réel
+
+  Les bases de données (PostgreSQL, SQLite) utilisent un **journal** (WAL) pour garantir
+  l'atomicité et la durabilité même en cas de coupure de courant. Redis propose `MULTI` /
+  `EXEC`. Les propriétés ACID (Atomicité, Cohérence, Isolation, Durabilité) résument ces
+  garanties.
+docs:
+  - title: Tutoriel — les dictionnaires
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#dictionaries
+  - title: Wikipédia — Propriétés ACID
+    url: https://fr.wikipedia.org/wiki/Propri%C3%A9t%C3%A9s_ACID

@@ -1,0 +1,262 @@
+title: Coroutines à base de générateurs
+level: expert
+order: 37
+tags: [générateurs, coroutines, send, décorateurs]
+summary: Piloter des générateurs avec send, throw et close pour construire des pipelines poussés.
+description: |
+  Les générateurs ne font pas que produire des valeurs : `send`, `throw` et `close` permettent
+  de leur en **envoyer**.
+
+  1. `amorcer(fonction_generatrice)` : décorateur qui renvoie une fonction créant le
+     générateur **et** l'avançant jusqu'à son premier `yield` (inutile alors d'appeler
+     `next` avant le premier `send`). Il conserve le nom de la fonction (`functools.wraps`).
+  2. `surveillance(seuil)` (décorée par `@amorcer`) reçoit des mesures par `send` et répond :
+     - `"ALERTE <mesure>"` si la mesure dépasse strictement `seuil`, sinon `None` ;
+     - si on lui injecte une `ValueError` avec `throw`, elle remet ses compteurs à zéro et
+       répond `"RAZ"` ; toute autre exception se propage ;
+     - si on lui envoie `None`, elle se termine en **renvoyant** (`return`) le bilan
+       `{"mesures": n, "alertes": k}` depuis la dernière remise à zéro (l'appelant le récupère
+       dans `StopIteration.value`).
+  3. Un pipeline **poussé** : chaque étape est une coroutine amorcée qui reçoit des éléments et
+     les transmet à sa `cible` ; quand on la ferme (`close`), elle ferme sa cible à son tour.
+     - `filtre(predicat, cible)` ne transmet que les éléments qui satisfont `predicat` ;
+     - `transforme(fonction, cible)` transmet `fonction(element)` ;
+     - `collecte(liste)` ajoute chaque élément reçu à `liste` et, à sa fermeture, y ajoute la
+       chaîne `"FIN"` ;
+     - `diffuser(iterable, cible)` (fonction ordinaire) envoie tous les éléments puis ferme la
+       cible.
+
+  ```python
+  s = surveillance(80)
+  s.send(75)        # None
+  s.send(91.5)      # "ALERTE 91.5"
+  sortie = []
+  diffuser(range(10), filtre(lambda x: x % 2, transforme(lambda x: x * 10, collecte(sortie))))
+  sortie            # [10, 30, 50, 70, 90, "FIN"]
+  ```
+starter: |
+  import functools
+
+
+  def amorcer(fonction_generatrice):
+      pass
+
+
+  def surveillance(seuil):
+      pass
+
+
+  def filtre(predicat, cible):
+      pass
+
+
+  def transforme(fonction, cible):
+      pass
+
+
+  def collecte(liste):
+      pass
+
+
+  def diffuser(iterable, cible):
+      pass
+tests: |
+  import inspect
+
+  def test_amorcer():
+      "amorcer"
+      @solution.amorcer
+      def echo(prefixe):
+          """Renvoie ce qu'on lui envoie."""
+          recu = None
+          while True:
+              recu = yield f"{prefixe}{recu}"
+      assert echo.__name__ == "echo" and echo.__doc__ == "Renvoie ce qu'on lui envoie."
+      g = echo(">")
+      assert inspect.getgeneratorstate(g) == inspect.GEN_SUSPENDED, "le générateur doit être déjà amorcé"
+      assert g.send("a") == ">a"
+      assert g.send(1) == ">1"
+
+  def test_surveillance():
+      "surveillance : alertes"
+      s = solution.surveillance(80)
+      assert inspect.getgeneratorstate(s) == inspect.GEN_SUSPENDED
+      assert s.send(75) is None
+      assert s.send(91.5) == "ALERTE 91.5"
+      assert s.send(80) is None
+      assert s.send(81) == "ALERTE 81"
+      try:
+          s.send(None)
+      except StopIteration as fin:
+          assert fin.value == {"mesures": 4, "alertes": 2}, fin.value
+      else:
+          raise AssertionError("send(None) doit terminer le générateur")
+
+  def test_surveillance_throw():
+      "surveillance : throw"
+      s = solution.surveillance(10)
+      s.send(50)
+      s.send(5)
+      assert s.throw(ValueError("capteur recalibré")) == "RAZ"
+      assert s.send(11) == "ALERTE 11"
+      try:
+          s.send(None)
+      except StopIteration as fin:
+          assert fin.value == {"mesures": 1, "alertes": 1}, fin.value
+      s2 = solution.surveillance(10)
+      try:
+          s2.throw(KeyError("inattendu"))
+      except KeyError:
+          pass
+      else:
+          raise AssertionError("une autre exception doit se propager")
+
+  def test_pipeline():
+      "pipeline poussé"
+      sortie = []
+      solution.diffuser(range(10), solution.filtre(lambda x: x % 2,
+                        solution.transforme(lambda x: x * 10, solution.collecte(sortie))))
+      assert sortie == [10, 30, 50, 70, 90, "FIN"], sortie
+
+  def test_pipeline_logs():
+      "pipeline sur des lignes de journal"
+      lignes = ["INFO ok", "ERROR disque plein", "WARN lent", "ERROR timeout"]
+      sortie = []
+      solution.diffuser(lignes, solution.filtre(lambda l: l.startswith("ERROR"),
+                        solution.transforme(lambda l: l.split(" ", 1)[1].upper(), solution.collecte(sortie))))
+      assert sortie == ["DISQUE PLEIN", "TIMEOUT", "FIN"]
+
+  def test_fermeture_propagee():
+      "close se propage le long du pipeline"
+      sortie = []
+      fin = solution.collecte(sortie)
+      milieu = solution.transforme(str, fin)
+      milieu.send(1)
+      milieu.close()
+      assert sortie == ["1", "FIN"]
+      assert inspect.getgeneratorstate(fin) == inspect.GEN_CLOSED
+      vide = []
+      solution.diffuser([], solution.collecte(vide))
+      assert vide == ["FIN"]
+solution: |
+  import functools
+
+
+  def amorcer(fonction_generatrice):
+      @functools.wraps(fonction_generatrice)
+      def demarrer(*args, **kwargs):
+          generateur = fonction_generatrice(*args, **kwargs)
+          next(generateur)
+          return generateur
+      return demarrer
+
+
+  @amorcer
+  def surveillance(seuil):
+      mesures = alertes = 0
+      reponse = None
+      while True:
+          try:
+              mesure = yield reponse
+          except ValueError:
+              mesures = alertes = 0
+              reponse = "RAZ"
+              continue
+          if mesure is None:
+              return {"mesures": mesures, "alertes": alertes}
+          mesures += 1
+          if mesure > seuil:
+              alertes += 1
+              reponse = f"ALERTE {mesure}"
+          else:
+              reponse = None
+
+
+  @amorcer
+  def filtre(predicat, cible):
+      try:
+          while True:
+              element = yield
+              if predicat(element):
+                  cible.send(element)
+      finally:
+          cible.close()
+
+
+  @amorcer
+  def transforme(fonction, cible):
+      try:
+          while True:
+              cible.send(fonction((yield)))
+      finally:
+          cible.close()
+
+
+  @amorcer
+  def collecte(liste):
+      try:
+          while True:
+              liste.append((yield))
+      finally:
+          liste.append("FIN")
+
+
+  def diffuser(iterable, cible):
+      for element in iterable:
+          cible.send(element)
+      cible.close()
+cours: |
+  ## Un générateur peut recevoir
+
+  `valeur = yield resultat` fait deux choses : le générateur **produit** `resultat`, se
+  suspend, puis, quand on le relance avec `g.send(x)`, l'expression `yield` **vaut** `x`. Le
+  générateur devient une **coroutine** : un objet avec un état interne qu'on alimente.
+
+  ```python
+  def moyenne():
+      total = n = 0
+      m = None
+      while True:
+          x = yield m
+          total += x; n += 1
+          m = total / n
+
+  g = moyenne()
+  next(g)          # amorçage : avance jusqu'au premier yield
+  g.send(10)       # 10.0
+  g.send(20)       # 15.0
+  ```
+
+  L'**amorçage** est obligatoire : on ne peut envoyer une valeur (autre que `None`) qu'à un
+  générateur suspendu sur un `yield`. Un décorateur qui appelle `next` à la création évite de
+  l'oublier ; `functools.wraps` lui garde le nom et la docstring de la fonction décorée.
+
+  ## `throw` et `close`
+
+  - `g.throw(exc)` lève `exc` **à l'endroit du `yield`** suspendu. Le générateur peut la
+    capturer avec `try/except` et répondre (le `yield` suivant devient la valeur de `throw`),
+    ou la laisser se propager vers l'appelant.
+  - `g.close()` lève `GeneratorExit` au même endroit. Le générateur doit se terminer (un
+    `finally` permet de libérer des ressources ou de prévenir l'étape suivante).
+  - Un `return valeur` termine le générateur ; l'appelant reçoit `StopIteration` dont
+    l'attribut `.value` contient `valeur`. C'est ainsi que `yield from` récupère le résultat
+    d'un sous-générateur.
+
+  ## Pipelines tirés et poussés
+
+  Un pipeline de générateurs classique est **tiré** : la dernière étape demande des valeurs
+  (`for x in etape(source)`). Avec des coroutines, il est **poussé** : la source envoie
+  chaque élément dans la première étape, qui le transmet à sa cible par `send`. C'est pratique
+  quand les données arrivent de l'extérieur (socket, `tail -f`, événements) ou pour diffuser
+  vers **plusieurs** cibles à la fois.
+
+  ## Et `async` ?
+
+  Les coroutines natives (`async def`, `await`) sont les héritières directes de ce mécanisme :
+  asyncio fonctionnait à l'origine avec `yield from`. Comprendre `send` et `throw`, c'est
+  comprendre ce que fait une boucle d'événements quand elle relance une tâche.
+docs:
+  - title: Référence — expressions yield et méthodes des générateurs
+    url: https://docs.python.org/fr/3/reference/expressions.html
+  - title: Module functools (wraps)
+    url: https://docs.python.org/fr/3/library/functools.html

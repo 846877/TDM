@@ -26,9 +26,127 @@ description: |
   Cmdlets utiles : `Get-Help`, `Get-Member`, `Import-Csv`, `Export-Csv`, `Where-Object`, `Select-Object`,
   `ForEach-Object`, `Group-Object`, `Sort-Object`, `ConvertFrom-Json`, `ConvertTo-Html`, `Copy-Item`,
   `Test-Path`, `try { } catch { }`.
+cours: |
+  ## Pourquoi PowerShell
+
+  **PowerShell** est le shell et le langage d'automatisation de Microsoft. Tout ce qui s'administre en
+  Windows Server (Active Directory, DNS, DHCP, partages, Exchange, Microsoft 365, Hyper-V) se pilote par
+  des **cmdlets** PowerShell. La version 7 (« PowerShell Core ») est multiplateforme : les bases apprises
+  ici sous Linux sont les mêmes sous Windows.
+
+  ## Des objets, pas du texte
+
+  La grande différence avec bash : le pipeline transporte des **objets** avec des propriétés, pas des
+  lignes de texte. Pas besoin de `cut` ou `awk` pour extraire une colonne.
+
+  ```
+  Import-Csv nouveaux.csv -Delimiter ';'      → objets {Prenom, Nom, Service}
+    | Where-Object Service -eq 'Compta'       → filtre sur une propriété
+    | Sort-Object Nom                         → tri
+    | Select-Object Prenom, Nom               → ne garde que deux propriétés
+    | Export-Csv sortie.csv -Encoding utf8    → réécrit en CSV
+  ```
+
+  Les cmdlets suivent la forme **Verbe-Nom** (`Get-Process`, `New-ADUser`, `Set-Content`). Trois commandes
+  pour s'en sortir seul :
+
+  | Commande                    | Usage                                              |
+  |-----------------------------|----------------------------------------------------|
+  | `Get-Command *csv*`         | trouver une cmdlet                                 |
+  | `Get-Help Export-Csv -Examples` | exemples d'utilisation                         |
+  | `objet \| Get-Member`        | propriétés et méthodes d'un objet                  |
+
+  ## Syntaxe essentielle
+
+  ```powershell
+  $nom = "Marie"                      # variable
+  "Bonjour $nom"                      # interpolation (guillemets doubles seulement)
+  $liste = @(1, 2, 3)                 # tableau
+  $h = @{ Nom = 'srv01'; RAM = 16 }   # table de hachage
+  if ($x -gt 10) { ... } elseif (...) { ... } else { ... }
+  foreach ($ligne in Get-Content f.txt) { ... }
+  1..5 | ForEach-Object { $_ * 2 }    # $_ = objet courant du pipeline
+  ```
+
+  Les opérateurs de comparaison sont des mots : `-eq`, `-ne`, `-gt`, `-lt`, `-like` (jokers),
+  `-match` (regex), `-contains`. Par défaut ils **ignorent la casse** ; les versions `-ceq`, `-cmatch`
+  la respectent.
+
+  ## Propriétés calculées
+
+  `Select-Object` accepte une table `@{n='NomColonne'; e={ expression }}` pour créer une colonne :
+
+  ```powershell
+  Get-ChildItem | Select-Object Name, @{n='Ko'; e={ [math]::Round($_.Length / 1KB) }}
+  ```
+
+  ## Scripts, paramètres et modules
+
+  ```powershell
+  param(
+      [Parameter(Mandatory)][string]$Nom,
+      [ValidateRange(1, 100)][int]$Nombre = 10
+  )
+  ```
+
+  - Un script `.ps1` se lance avec `./script.ps1 -Nom X` ; sous Windows, la **stratégie d'exécution**
+    (`Get-ExecutionPolicy`) peut bloquer les scripts non signés.
+  - Un **module** `.psm1` regroupe des fonctions réutilisables : `Import-Module ./Outils.psm1 -Force`.
+  - Les validations (`Mandatory`, `ValidateRange`, `ValidateSet`) évitent d'écrire soi-même les contrôles.
+
+  ## Gestion des erreurs
+
+  Beaucoup d'erreurs sont **non bloquantes** : la cmdlet affiche en rouge puis continue. Un `try/catch` ne
+  les attrape que si on les rend bloquantes avec `-ErrorAction Stop` :
+
+  ```powershell
+  try { Copy-Item $f $dest -ErrorAction Stop }
+  catch { "Échec : $f ($($_.Exception.Message))" | Add-Content erreurs.log }
+  ```
+
+  ## Formats de données
+
+  | Format | Lire                                   | Écrire                          |
+  |--------|----------------------------------------|---------------------------------|
+  | CSV    | `Import-Csv f.csv -Delimiter ';'`      | `Export-Csv f.csv -Encoding utf8` |
+  | JSON   | `Get-Content f.json -Raw \| ConvertFrom-Json` | `ConvertTo-Json -Depth 5`  |
+  | HTML   | -                                      | `ConvertTo-Html \| Set-Content r.html` |
+  | Texte  | `Get-Content`                          | `Set-Content`, `Add-Content`, `Out-File` |
+
+  ## Pièges courants
+
+  - Excel français produit des CSV séparés par `;` : sans `-Delimiter ';'`, tout arrive dans une seule
+    colonne.
+  - Encodage : les accents cassés viennent souvent d'un fichier ANSI lu comme UTF-8 (ou l'inverse).
+  - `Format-Table` ne sert qu'à l'**affichage** : après lui, les objets sont perdus ; ne pas le mettre avant
+    un `Export-Csv`.
+  - `=` affecte, `-eq` compare : `if ($a = 1)` est toujours vrai.
+
+  ## Bonnes pratiques en entreprise
+
+  - Tester avec `-WhatIf` (simulation) les cmdlets qui modifient (`Remove-Item`, `Set-ADUser`...).
+  - Journaliser ce que fait un script (`Start-Transcript`) et ne jamais y écrire de mot de passe en clair.
+  - Nommer les fonctions avec des verbes approuvés (`Get-Verb`) et les ranger dans des modules versionnés.
+  - Un script d'import (comptes AD depuis un CSV RH) se teste d'abord sur une seule ligne.
+docs:
+  - title: Documentation PowerShell (Microsoft Learn, français)
+    url: https://learn.microsoft.com/fr-fr/powershell/
+  - title: Wikipédia - Windows PowerShell
+    url: https://fr.wikipedia.org/wiki/Windows_PowerShell
 exercises:
   - id: premier-script
     title: Premier script avec paramètre
+    cours: |
+      Un script PowerShell déclare ses paramètres dans un bloc `param()` placé **en tête** du fichier. Chaque
+      paramètre est une variable (`$Nom`), éventuellement typée (`[string]`, `[int]`) et décorée d'attributs.
+
+      L'attribut `[Parameter(Mandatory)]` rend le paramètre obligatoire : si on l'oublie, PowerShell le
+      demande au lieu d'échouer silencieusement.
+
+      Pour afficher du texte, une chaîne seule sur une ligne est envoyée dans le pipeline de sortie (ou
+      `Write-Output`). Les **guillemets doubles** remplacent les variables par leur valeur, les simples non.
+
+      Exécute le script avec plusieurs valeurs de paramètre, et sans paramètre, pour vérifier qu'il se comporte proprement dans tous les cas.
     description: |
       Crée le script `/srv/ps/scripts/bonjour.ps1` qui déclare un paramètre **obligatoire** `-Nom` (bloc
       `param()` avec `[Parameter(Mandatory)]`) et affiche `Bonjour <Nom>`.
@@ -44,6 +162,17 @@ exercises:
 
   - id: filtrer-csv
     title: Filtrer un fichier CSV
+    cours: |
+      `Import-Csv` transforme chaque ligne d'un CSV en objet dont les propriétés portent le nom des colonnes.
+      Le paramètre `-Delimiter` indique le séparateur.
+
+      - `Where-Object <Propriété> -eq <valeur>` garde les objets qui correspondent ;
+      - `Select-Object <P1>,<P2>` ne conserve que certaines propriétés (et donc certaines colonnes) ;
+      - `Export-Csv <fichier> -Encoding utf8` écrit le résultat, avec une ligne d'en-tête.
+
+      Pour vérifier à chaque étape, arrête le pipeline avant l'export et regarde ce qui s'affiche.
+
+      `Import-Csv` crée un objet par ligne dont les propriétés portent le nom des colonnes : `Get-Member` les liste si tu as un doute.
     description: |
       Importe `nouveaux.csv` (attention au séparateur `;`) et exporte dans `/srv/ps/sortie/compta.csv` les
       arrivées du service **Compta** uniquement, avec seulement les colonnes `Prenom` et `Nom`, en UTF-8 et
@@ -56,6 +185,19 @@ exercises:
 
   - id: logins
     title: Générer les identifiants
+    cours: |
+      Pour fabriquer une colonne qui n'existe pas, `Select-Object` accepte une **propriété calculée** :
+      `@{n='Nom'; e={ expression utilisant $_ }}`.
+
+      Outils sur les chaînes (méthodes .NET) :
+      - `.Substring(0,1)` premier caractère, `.ToLower()` minuscules ;
+      - `.Normalize([Text.NormalizationForm]::FormD)` sépare chaque lettre accentuée en lettre + accent, et
+        `-replace '\p{Mn}', ''` supprime ces accents ;
+      - `-replace '[^a-z]', ''` retire tout ce qui n'est pas une lettre de a à z.
+
+      L'ordre des opérations compte : réfléchis à quand passer en minuscules.
+
+      Teste ta fonction sur des noms à accents, à espaces ou à tirets : ce sont eux qui font échouer les scripts d'identifiants en production.
     description: |
       La règle de nommage des comptes est : **première lettre du prénom + nom**, en minuscules, **sans
       accents** et sans aucun caractère autre que `a-z` (apostrophes, tirets et espaces supprimés).
@@ -75,6 +217,17 @@ exercises:
 
   - id: module
     title: Une fonction réutilisable dans un module
+    cours: |
+      Un **module** (`.psm1`) contient des fonctions chargées avec `Import-Module`. Une fonction s'écrit
+      `function Verbe-Nom { param(...) ... }` et renvoie ce qui est émis dans son corps.
+
+      - un paramètre peut avoir une valeur par défaut : `[int]$Longueur = 12` ;
+      - `[ValidateRange(min, max)]` refuse les valeurs hors bornes avant même d'exécuter la fonction ;
+      - `Get-Random -InputObject <tableau> -Count N` tire N éléments ; un tableau de caractères s'obtient avec
+        `'abc'.ToCharArray()` ;
+      - `-join ''` colle les éléments d'un tableau en une chaîne.
+
+      Pour **garantir** chaque catégorie de caractères, un tirage purement aléatoire ne suffit pas.
     description: |
       Crée le module `/srv/ps/scripts/Outils.psm1` contenant la fonction `New-MotDePasse` :
       - paramètre `-Longueur` (entier, **12 par défaut**, validé entre **8 et 64** avec `[ValidateRange()]`) ;
@@ -96,6 +249,17 @@ exercises:
 
   - id: inventaire-json
     title: Rapport d'inventaire en HTML
+    cours: |
+      `ConvertFrom-Json` transforme un texte JSON en objets PowerShell. `Get-Content -Raw` lit le fichier
+      d'un seul bloc (sans `-Raw`, on obtient un tableau de lignes, ce qui casse le JSON multiligne).
+
+      Ensuite, le pipeline classique s'applique : `Where-Object` avec `-lt` (plus petit que),
+      `Sort-Object <Propriété>` (croissant, `-Descending` pour décroissant), `Select-Object`.
+
+      `ConvertTo-Html` produit une page HTML avec un tableau des objets reçus ; on l'enregistre avec
+      `Set-Content` ou `Out-File`. Le paramètre `-Title` donne un titre à la page.
+
+      Ouvre le fichier produit dans un navigateur pour vérifier le rendu : un rapport illisible ne sera pas lu.
     description: |
       Lis `inventaire.json` (`Get-Content -Raw | ConvertFrom-Json`) et produis le rapport
       `/srv/ps/sortie/disques.html` (avec `ConvertTo-Html`) listant les machines ayant **moins de 20 Go**
@@ -112,6 +276,14 @@ exercises:
 
   - id: securite
     title: Analyse des échecs de connexion
+    cours: |
+      Dans les journaux Windows, l'**ID d'événement 4624** signale une ouverture de session réussie et
+      **4625** un échec (mauvais mot de passe, compte inexistant). Beaucoup de 4625 sur un même compte
+      évoquent une attaque par force brute ou un mot de passe enregistré périmé.
+
+      `Group-Object <Propriété>` regroupe les objets et produit pour chaque groupe un `Name` (la valeur) et un
+      `Count` (le nombre). On renomme ensuite ces propriétés avec des propriétés calculées dans
+      `Select-Object`. Sous Windows, les mêmes données viennent de `Get-WinEvent`.
     description: |
       Dans `journal-securite.csv`, l'événement **4625** est un échec d'ouverture de session. Compte les
       échecs par utilisateur (`Group-Object`) et exporte dans `/srv/ps/sortie/echecs.csv` deux colonnes,
@@ -124,6 +296,16 @@ exercises:
 
   - id: erreurs
     title: Gérer les erreurs sans s'arrêter
+    cours: |
+      PowerShell distingue les erreurs **bloquantes** (qui arrêtent l'exécution et sont attrapées par
+      `catch`) des erreurs **non bloquantes** (affichées, puis la commande continue). La plupart des
+      cmdlets produisent des erreurs non bloquantes.
+
+      - `-ErrorAction Stop` transforme l'erreur d'une commande en erreur bloquante ;
+      - `try { } catch { }` exécute le bloc `catch` en cas d'erreur, puis le script continue après ;
+      - dans `catch`, `$_` contient l'erreur (`$_.Exception.Message`) ;
+      - `Test-Path` teste l'existence d'un chemin et `New-Item -ItemType Directory -Force` crée un dossier ;
+      - `Add-Content` ajoute une ligne à un fichier.
     description: |
       Écris `/srv/ps/scripts/copie.ps1` qui lit la liste de fichiers de `/srv/ps/a-copier.txt` et copie
       chacun dans `/srv/ps/sortie/copies/` (à créer s'il n'existe pas). Si un fichier est absent, le script
@@ -140,3 +322,89 @@ exercises:
           for f in facture-001.pdf contrat-a.docx planning.xlsx; do test -f /srv/ps/sortie/copies/$f || exit 1; done
       - desc: Les fichiers manquants sont journalisés
         run: grep -q 'facture-002.pdf' /srv/ps/sortie/erreurs.log && grep -q 'contrat-b.docx' /srv/ps/sortie/erreurs.log && ! grep -q 'planning.xlsx' /srv/ps/sortie/erreurs.log
+
+  - id: ps-mesures
+    title: Totaux et moyennes avec Measure-Object
+    cours: |
+      `Measure-Object` calcule des statistiques sur une propriété des objets reçus :
+
+      - `-Sum`, `-Average`, `-Minimum`, `-Maximum` (et `-Line`, `-Word`, `-Character` pour du texte) ;
+      - le résultat est un objet avec les propriétés `Count`, `Sum`, `Average`...
+
+      Pour insérer une propriété d'objet dans une chaîne, il faut une **sous-expression** :
+      `"Total=$($m.Sum)"` (sans `$( )`, PowerShell n'insérerait que `$m` suivi du texte `.Sum`).
+
+      `Set-Content` écrit un tableau de chaînes à raison d'une par ligne.
+
+      `Measure-Object` accepte plusieurs options à la fois (`-Sum -Average -Maximum`) et renvoie un seul objet avec toutes les valeurs.
+    description: |
+      La direction veut connaître la mémoire du parc. À partir de `inventaire.json`, calcule avec
+      `Measure-Object` la **somme** et la **moyenne** de la propriété `RamGo`, et écris dans
+      `/srv/ps/sortie/ram.txt` deux lignes :
+
+      ```
+      Total=<somme>
+      Moyenne=<moyenne>
+      ```
+    hint: "$m = Get-Content inventaire.json -Raw | ConvertFrom-Json | Measure-Object RamGo -Sum -Average ; \"Total=$($m.Sum)\",\"Moyenne=$($m.Average)\" | Set-Content sortie/ram.txt"
+    checks:
+      - desc: Total=136
+        run: grep -Eq '^Total *= *136(\.0+)? *$' /srv/ps/sortie/ram.txt
+      - desc: Moyenne=17
+        run: grep -Eq '^Moyenne *= *17(\.0+)? *$' /srv/ps/sortie/ram.txt
+
+  - id: ps-json-etat
+    title: Enrichir des objets et exporter en JSON
+    cours: |
+      Deux façons d'ajouter une propriété à des objets existants :
+
+      - `Add-Member -NotePropertyName <nom> -NotePropertyValue <valeur>` sur chaque objet (avec
+        `-PassThru` pour qu'il continue dans le pipeline) ;
+      - `Select-Object *, @{n='<nom>'; e={ ... }}` : `*` garde toutes les propriétés d'origine et la
+        propriété calculée s'ajoute.
+
+      Dans un bloc `e={ }`, un `if (...) { 'A' } else { 'B' }` renvoie la valeur choisie.
+      `ConvertTo-Json` sérialise les objets ; pour des objets imbriqués, augmente `-Depth` (2 par défaut).
+    description: |
+      Ajoute à chaque machine de `inventaire.json` une propriété `Etat` valant `Critique` si
+      `DisqueLibreGo` est **inférieur à 20**, `OK` sinon, et enregistre le résultat (toutes les machines,
+      avec leurs propriétés d'origine) dans `/srv/ps/sortie/inventaire-etat.json` avec `ConvertTo-Json`.
+
+      Deux façons : `Add-Member -NotePropertyName Etat -NotePropertyValue ...` dans un `ForEach-Object`, ou
+      une propriété calculée avec `Select-Object *, @{n='Etat'; e={ ... }}`.
+    hint: "... | Select-Object *, @{n='Etat'; e={ if ($_.DisqueLibreGo -lt 20) { 'Critique' } else { 'OK' } }} | ConvertTo-Json | Set-Content sortie/inventaire-etat.json"
+    checks:
+      - desc: Huit machines, toutes avec Nom et Etat
+        run: |
+          pwsh -NoProfile -Command '$m = @(Get-Content /srv/ps/sortie/inventaire-etat.json -Raw | ConvertFrom-Json); if ($m.Count -eq 8 -and @($m | Where-Object { $_.Nom -and $_.Etat }).Count -eq 8) { exit 0 } else { exit 1 }'
+      - desc: Exactement PC-RH-02, PC-COMPTA-01 et SRV-FICHIERS sont critiques
+        run: |
+          pwsh -NoProfile -Command '$c = (@(Get-Content /srv/ps/sortie/inventaire-etat.json -Raw | ConvertFrom-Json) | Where-Object Etat -eq "Critique" | ForEach-Object Nom | Sort-Object) -join ","; if ($c -eq "PC-COMPTA-01,PC-RH-02,SRV-FICHIERS") { exit 0 } else { Write-Output $c; exit 1 }'
+
+  - id: ps-archives-anciennes
+    title: Déplacer les fichiers anciens
+    cours: |
+      `Get-ChildItem` liste les fichiers et dossiers (`-File` ne garde que les fichiers, `-Recurse` descend
+      dans les sous-dossiers). Chaque fichier a des propriétés `Name`, `Length`, `LastWriteTime`...
+
+      Les dates sont des objets `[datetime]` : `(Get-Date).AddYears(-3)` donne la date d'il y a trois ans, et
+      `-lt` compare deux dates. `Move-Item -Destination` déplace ce qu'il reçoit du pipeline.
+
+      Le paramètre **`-WhatIf`**, disponible sur les cmdlets qui modifient quelque chose, affiche ce qui
+      serait fait sans rien faire : un réflexe indispensable avant tout déplacement ou suppression en masse.
+    description: |
+      Le dossier `/srv/ps/archives` contient des documents de différentes années. Déplace dans
+      `/srv/ps/sortie/anciens/` (à créer) tous les fichiers dont la **date de dernière modification**
+      (`LastWriteTime`) remonte à **plus de 3 ans**. Les fichiers récents restent en place.
+
+      Commence par afficher la liste avec `Get-ChildItem` et `Where-Object`, et teste le déplacement avec
+      `-WhatIf` avant de le faire pour de bon.
+    hint: "New-Item -ItemType Directory -Force sortie/anciens ; Get-ChildItem /srv/ps/archives -File | Where-Object LastWriteTime -lt (Get-Date).AddYears(-3) | Move-Item -Destination sortie/anciens"
+    checks:
+      - desc: Les trois fichiers anciens ont été déplacés
+        run: |
+          for f in rapport-2015.txt devis-2017.txt bilan-2018.txt; do
+            test -f /srv/ps/sortie/anciens/$f && test ! -e /srv/ps/archives/$f || exit 1
+          done
+      - desc: Les fichiers récents sont restés en place
+        run: test -f /srv/ps/archives/planning-recent.txt && test -f /srv/ps/archives/notes-recentes.txt && test ! -e /srv/ps/sortie/anciens/planning-recent.txt

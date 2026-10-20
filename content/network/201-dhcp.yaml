@@ -34,3 +34,59 @@ solution: |
   default-router 192.168.10.1
   dns-server 8.8.8.8
   end
+cours: |
+  ## DHCP en quatre messages
+
+  **DHCP** distribue automatiquement l'adresse IP, le masque, la passerelle et les serveurs DNS.
+  L'échange suit le schéma **DORA** (UDP 67 côté serveur, 68 côté client) :
+
+  1. **Discover** — le client diffuse une recherche de serveur ;
+  2. **Offer** — le serveur propose une adresse ;
+  3. **Request** — le client la demande formellement (en broadcast, pour informer les autres
+     serveurs) ;
+  4. **Ack** — le serveur confirme et le **bail** commence. À mi-bail, le client tente de le
+     renouveler.
+
+  Un routeur Cisco peut jouer le rôle de serveur DHCP pour un petit site.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# ip dhcp excluded-address 172.16.40.1 172.16.40.20
+  R1(config)# ip dhcp excluded-address 172.16.40.250 172.16.40.254
+  R1(config)# ip dhcp pool BUREAUX-40
+  R1(dhcp-config)# network 172.16.40.0 255.255.255.0
+  R1(dhcp-config)# default-router 172.16.40.1
+  R1(dhcp-config)# dns-server 172.16.100.53 1.1.1.1
+  R1(dhcp-config)# domain-name exemple.lan
+  R1(dhcp-config)# lease 2
+  R1# show ip dhcp binding
+  IP address       Client-ID/Hardware address   Lease expiration     Type
+  172.16.40.21     0100.50b6.1c2a.11            Oct 21 2026 10:14 AM Automatic
+  R1# show ip dhcp pool
+  ```
+
+  - les **exclusions** (en mode global) protègent les adresses fixes : passerelle, serveurs,
+    imprimantes ;
+  - `network` détermine la plage et le masque distribués ;
+  - `default-router` est la passerelle donnée aux clients — l'adresse du routeur dans ce
+    réseau ;
+  - `lease` en jours (heures et minutes possibles).
+
+  Le pool ne sert que les clients du réseau correspondant à une interface du routeur (ou relayés
+  avec ce `giaddr`).
+
+  ### Pièges fréquents
+
+  - Oublier les exclusions : conflit d'adresse avec la passerelle ou une imprimante.
+  - `default-router` faux : les clients ont une adresse mais ne sortent pas de leur réseau.
+  - Mettre les exclusions dans le pool (elles se configurent en mode global).
+
+  ### Pour le CCNA
+
+  Configurer un serveur DHCP IOS, le vérifier et expliquer DORA sont au programme.
+docs:
+  - title: "RFC 2131 — Dynamic Host Configuration Protocol"
+    url: https://www.rfc-editor.org/rfc/rfc2131
+  - title: "Wikipédia — Dynamic Host Configuration Protocol"
+    url: https://fr.wikipedia.org/wiki/Dynamic_Host_Configuration_Protocol

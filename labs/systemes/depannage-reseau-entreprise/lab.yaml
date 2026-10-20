@@ -30,9 +30,101 @@ description: |
     `nft -f /etc/nftables.conf` ; `sysctl -p /etc/sysctl.d/99-routeur.conf`.
   - Outils : `ip a`, `ip r`, `ping`, `traceroute`, `mtr`, `dig`, `getent hosts`, `curl -v`, `ss -ltnp`,
     `nft list ruleset`, `tcpdump -ni <interface>`.
+cours: |
+  ## Une méthode plutôt que de l'intuition
+
+  Face à « ça ne marche pas », le technicien efficace ne change pas des réglages au hasard : il **isole** la
+  panne couche par couche, prouve chaque hypothèse par une mesure, corrige **la cause**, puis vérifie et
+  documente.
+
+  ```
+  7 Application   le service répond-il ?          curl -v, ss -ltnp, journaux du service
+  ─ Nom           le nom donne-t-il la bonne IP ? getent hosts, dig @serveur, /etc/hosts, resolv.conf
+  4 Transport     le port est-il joignable ?      nc -zv, filtrage (nft list ruleset)
+  3 Réseau        route aller ET retour ?         ip route, ip_forward, traceroute, NAT
+  2 Liaison       la passerelle répond-elle ?     ping passerelle, ip neigh
+  1 Physique      lien actif ?                    ip -br link (UP / LOWER_UP)
+  ```
+
+  ## Les questions qui font gagner du temps
+
+  1. **Qui est touché ?** Un seul poste (configuration locale) ou tout le monde (infrastructure) ?
+  2. **Depuis quand ?** Qu'est-ce qui a changé (migration, mise à jour, prestataire) ?
+  3. **Par adresse ou par nom ?** Si `curl http://10.20.0.10` marche et `curl http://intranet` non, c'est
+     le DNS (ou `/etc/hosts`).
+  4. **Où le paquet s'arrête-t-il ?** `traceroute`, puis `tcpdump` sur chaque interface du chemin : le
+     paquet entre-t-il ? ressort-il ? la réponse revient-elle ?
+
+  ## tcpdump : la preuve par le paquet
+
+  ```bash
+  tcpdump -ni lan icmp                      # le ping arrive-t-il sur le routeur ?
+  tcpdump -ni serveurs host 10.20.0.10      # ressort-il vers le serveur ?
+  tcpdump -ni wan port 80                   # quelle adresse source sur Internet ?
+  ```
+
+  Un paquet qui entre sur une interface et ne ressort pas sur l'autre : routage désactivé, route absente
+  ou filtrage. Une requête qui sort mais dont la réponse ne revient jamais : route retour, NAT, ou filtrage
+  côté distant.
+
+  ## Où se cachent les pannes classiques
+
+  | Symptôme                                        | Pistes                                            |
+  |-------------------------------------------------|---------------------------------------------------|
+  | rien au-delà du réseau local                    | passerelle par défaut absente ou fausse           |
+  | la passerelle répond, pas les réseaux derrière  | routage désactivé (`ip_forward`), route manquante |
+  | ping OK, service KO                             | service arrêté, écoute sur 127.0.0.1, pare-feu, droits de fichiers |
+  | DNS OK sur le serveur, KO depuis le LAN         | filtrage du port 53 (UDP **et** TCP) sur le chemin |
+  | un poste résout mal                             | `/etc/hosts`, `resolv.conf`, ordre de `nsswitch.conf` |
+  | plus d'Internet pour personne                   | NAT (masquerade) absent ou sur la mauvaise interface |
+  | tout remarche... jusqu'au redémarrage           | correction faite en mémoire mais pas dans les fichiers |
+
+  ## Mémo des fichiers de configuration
+
+  | Fichier / commande                    | Rôle                                              |
+  |---------------------------------------|---------------------------------------------------|
+  | `ip route`, `ip route replace default via X` | passerelle (non persistant)                |
+  | `/etc/sysctl.d/*.conf`, `sysctl -p <f>`| paramètres noyau persistants (`ip_forward`)       |
+  | `/etc/nftables.conf`, `nft -c -f`     | pare-feu persistant, test sans appliquer          |
+  | `nft -a list ruleset`                 | règles actives avec leurs numéros (`handle`)      |
+  | `/etc/resolv.conf`, `/etc/hosts`, `/etc/nsswitch.conf` | résolution de noms côté poste    |
+  | `nginx -t`, `/var/log/nginx/error.log`| validation et erreurs du serveur web              |
+
+  ## Pièges courants
+
+  - Conclure qu'une machine « marche » parce qu'on s'y connecte par un réseau d'administration séparé.
+  - Corriger le symptôme (vider tout le pare-feu, `chmod 777`) au lieu de la cause : on crée une faille.
+  - Plusieurs pannes empilées : après chaque correction, **retester** depuis le point de vue de
+    l'utilisateur.
+  - Oublier la persistance.
+
+  ## Bonnes pratiques en entreprise
+
+  - Noter dans le ticket : symptôme, tests réalisés (commande + résultat), cause, correction, vérification.
+  - Toute intervention réseau a un plan de retour arrière et une documentation à jour (schéma, plan
+    d'adressage, matrice des flux).
+  - Un rapport d'incident (post-mortem) sans chercher de coupable, avec les actions pour que ça ne se
+    reproduise pas (ici : documentation obligatoire des changements, revue des modifications).
+docs:
+  - title: ip-route(8) - table de routage (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man8/ip-route.8.html
+  - title: Wiki officiel de nftables
+    url: https://wiki.nftables.org/
+  - title: Wikipédia - Modèle OSI
+    url: https://fr.wikipedia.org/wiki/Mod%C3%A8le_OSI
 exercises:
   - id: panne-passerelle-poste
     title: "Ticket 1 : « Je n'ai plus rien, à part l'imprimante »"
+    cours: |
+      Un poste qui joint son réseau local mais rien au-delà a presque toujours un problème de **passerelle**
+      (absente, fausse, hors du sous-réseau). Le réflexe : comparer avec une machine qui fonctionne, sur le
+      même réseau.
+
+      - `ip route` affiche la table ; la ligne `default via ...` est la passerelle ;
+      - `ip route replace` crée ou remplace une route en une commande ;
+      - `ip route get <destination>` montre la route qui serait utilisée.
+
+      Après correction, reteste depuis le poste lui-même (`ssh poste ping ...`).
     description: |
       L'utilisatrice de **poste** joint les machines de son propre réseau, mais plus rien au-delà, même
       l'interface « serveurs » du routeur. admin, sur le même réseau, n'a pas ce problème. Compare la
@@ -46,6 +138,16 @@ exercises:
 
   - id: panne-routage
     title: "Ticket 2 : « Les serveurs sont injoignables »"
+    cours: |
+      Quand la passerelle répond mais pas les machines derrière elle, la question est : **le routeur fait-il
+      suivre les paquets ?**
+
+      - lance `tcpdump -ni <interface d'entrée>` puis `tcpdump -ni <interface de sortie>` sur le routeur
+        pendant un ping : le paquet entre-t-il ? ressort-il ?
+      - un Linux ne transmet les paquets d'une interface à l'autre que si un paramètre noyau l'y autorise ;
+        `sysctl <paramètre>` lit sa valeur, `sysctl -w` la change en mémoire.
+
+      Note la différence entre la correction immédiate et la configuration lue au démarrage (ticket 8).
     description: |
       Depuis admin, `ping 10.20.0.254` répond mais `ping 10.20.0.10` non, alors que srv-web est allumé et
       a la bonne adresse. Le routeur reçoit-il les paquets ? Les fait-il suivre ? (`tcpdump` sur ses
@@ -60,6 +162,14 @@ exercises:
 
   - id: panne-intranet-web
     title: "Ticket 3 : « L'intranet ne s'affiche pas »"
+    cours: |
+      Un service qui ne répond pas alors que la machine répond au ping : vérifie **où** il écoute.
+      `ss -ltnp` affiche l'adresse d'écoute : `127.0.0.1:80` n'est joignable que depuis la machine elle-même,
+      `0.0.0.0:80` (ou `*:80`) depuis tout le réseau. La directive `listen` de nginx le décide.
+
+      Ensuite, une erreur HTTP (403, 500...) se lit dans le **journal d'erreurs** du service. Un « Permission
+      denied » signifie que le processus (utilisateur `www-data`) ne peut pas lire un fichier : corrige le
+      droit manquant, rien de plus. `nginx -t` avant chaque rechargement.
     description: |
       srv-web répond au ping, mais `curl -v http://10.20.0.10/` échoue. Il y a **deux** problèmes
       successifs sur srv-web : trouve le premier (`ss -ltnp`), corrige, reteste… et regarde le journal
@@ -76,6 +186,17 @@ exercises:
 
   - id: panne-enregistrement-dns
     title: "Ticket 4 : « intranet.durand.lan pointe dans le vide »"
+    cours: |
+      Interroger le serveur DNS **directement** (`dig @127.0.0.1 <nom>` sur le serveur) isole le contenu de la
+      zone de tout problème réseau.
+
+      Dans dnsmasq, les enregistrements se définissent par `address=/<nom>/<ip>`, `host-record=<nom>,<ip>` ou
+      les lignes de `/etc/hosts` du serveur ; une ancienne valeur peut traîner dans un des fichiers de
+      `/etc/dnsmasq.d/`. `grep -r <nom> /etc/dnsmasq.d/ /etc/hosts` retrouve toutes les définitions.
+
+      dnsmasq ne relit sa configuration qu'au redémarrage.
+
+      Teste ensuite depuis un poste client avec `dig` en interrogeant explicitement le serveur DNS, puis sans le préciser, pour vérifier la chaîne complète. Pense aussi au cache : un poste peut garder l'ancienne réponse le temps du TTL.
     description: |
       Directement sur srv-dns, `dig @127.0.0.1 intranet.durand.lan` répond… avec une ancienne adresse.
       Le serveur intranet est désormais **srv-web (10.20.0.10)**. Corrige la zone et redémarre dnsmasq.
@@ -89,6 +210,16 @@ exercises:
 
   - id: panne-filtrage-dns
     title: "Ticket 5 : « Le DNS marche sur le serveur mais pas chez nous »"
+    cours: |
+      Le DNS fonctionne localement, le ping passe, mais les requêtes expirent : un **filtrage** sur le chemin
+      bloque le port 53. Un *timeout* (pas de réponse) évoque un `drop` ; un refus immédiat, un `reject`.
+
+      - `nft -a list ruleset` affiche les règles avec leur **handle** (numéro) ;
+      - `nft delete rule <famille> <table> <chaîne> handle <n>` supprime une règle précise sans toucher au
+        reste.
+
+      Ne vide jamais tout le pare-feu pour « tester » : tu ouvrirais le réseau à tout le monde. N'oublie pas
+      que DNS utilise UDP et TCP.
     description: |
       Sur srv-dns la résolution fonctionne, mais depuis le LAN `dig @10.20.0.53 intranet.durand.lan`
       expire (*timed out*), alors que le ping de 10.20.0.53 passe. Le coupable est sur le chemin.
@@ -102,6 +233,16 @@ exercises:
 
   - id: panne-resolution-poste
     title: "Ticket 6 : « Sur mon PC l'intranet ne marche toujours pas »"
+    cours: |
+      Une application ne demande pas directement au DNS : elle passe par la bibliothèque de résolution, qui
+      suit l'ordre de `/etc/nsswitch.conf` (ligne `hosts:`), en général **`/etc/hosts` d'abord**, puis le DNS
+      décrit dans `/etc/resolv.conf` (`nameserver`, `search`).
+
+      - `getent hosts <nom>` reproduit le comportement des applications ;
+      - `dig <nom>` n'interroge que le DNS : s'il répond juste et `getent` faux, regarde `/etc/hosts` ;
+      - un nom court ne se résout que si le domaine de recherche est configuré.
+
+      Compare les fichiers avec ceux d'admin, qui fonctionne.
     description: |
       Tout fonctionne depuis admin, mais pas depuis **poste** : `getent hosts intranet.durand.lan` y
       renvoie une mauvaise adresse, et les autres noms ne résolvent pas. Il y a **deux** erreurs de
@@ -119,6 +260,14 @@ exercises:
 
   - id: panne-nat-internet
     title: "Ticket 7 : « Plus personne n'a Internet »"
+    cours: |
+      Les adresses privées (RFC 1918) ne sont pas routées sur Internet : un serveur Internet ne sait pas
+      répondre à `192.168.20.5`. Le routeur doit remplacer l'adresse source par son adresse publique :
+      **SNAT / masquerade**, en `postrouting`, sur l'interface de **sortie** vers Internet.
+
+      `tcpdump -ni wan` montre l'adresse source réelle des paquets qui sortent. `nft list table ip nat`
+      affiche les règles de traduction : vérifie chaque critère (nom exact de l'interface avec `ip -br link`).
+      Le serveur de test renvoie l'adresse source qu'il voit : c'est ta preuve.
     description: |
       `curl http://198.51.100.80` n'aboutit ni depuis admin ni depuis poste. Avec `tcpdump` sur
       l'interface `wan` du routeur, regarde l'adresse source des paquets qui sortent, et pourquoi
@@ -132,6 +281,17 @@ exercises:
 
   - id: panne-persistance
     title: "Ticket 8 : « Et au prochain redémarrage ? »"
+    cours: |
+      Les commandes `sysctl -w`, `nft add/delete` et `ip route` modifient la configuration **en mémoire**.
+      Au démarrage, le système relit les fichiers :
+
+      - `/etc/sysctl.d/*.conf` (appliqués par `sysctl -p <fichier>` ou `sysctl --system`) ;
+      - `/etc/nftables.conf` (chargé par le service nftables) ; il doit commencer par `flush ruleset`, et
+        `nft -c -f` le valide sans l'appliquer.
+
+      `nft list ruleset` produit une configuration rechargeable. Recharger les fichiers après les avoir
+      écrits prouve qu'ils sont bons. Le rapport final résume chaque cause : c'est ce que liront ton chef et
+      le prochain technicien.
     description: |
       Tes corrections sur le routeur sont actives en mémoire, mais un redémarrage rechargerait
       `/etc/sysctl.d/99-routeur.conf` et `/etc/nftables.conf`… tels que JPL les a laissés. Rends tes

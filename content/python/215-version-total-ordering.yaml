@@ -127,3 +127,50 @@ solution: |
 
       def __repr__(self):
           return f"Version('{self}')"
+cours: |
+  ## Comparer des versions : pas des chaînes !
+
+  `"1.10.0" < "1.9.0"` est **vrai** en comparaison de chaînes (caractère `1` < `9`).
+  Il faut comparer numériquement, composante par composante. Les **tuples** se comparent
+  justement ainsi (ordre lexicographique) :
+
+  ```python
+  (1, 10, 0) > (1, 9, 0)    # True
+  (2, 0) < (2, 0, 1)        # True : le plus court est plus petit à préfixe égal
+  ```
+
+  D'où l'idée : construire une **clé de comparaison** sous forme de tuple, et comparer les
+  clés. Pour qu'une pré-version passe avant la version finale à numéros égaux, on ajoute à
+  la clé un élément qui ordonne ces deux cas (par exemple un booléen ou un 0/1, puis le
+  suffixe).
+
+  ## `total_ordering`
+
+  Écrire les six méthodes de comparaison est fastidieux et source d'incohérences.
+  `@functools.total_ordering` génère `__le__`, `__gt__` et `__ge__` à partir de `__eq__` et
+  d'**une** méthode d'ordre (`__lt__`).
+
+  ## `NotImplemented`
+
+  Face à un type inconnu, une méthode de comparaison doit **renvoyer** `NotImplemented`.
+  Python essaie alors l'opération réfléchie sur l'autre objet ; si personne ne sait faire,
+  `==` retombe sur la comparaison d'identité (donc `False`) et `<` lève `TypeError`.
+
+  ## `__hash__` et `__eq__`
+
+  Règle : deux objets égaux doivent avoir le même hash. Définir `__eq__` met
+  automatiquement `__hash__` à `None` (objet non hachable). Pour pouvoir utiliser des
+  versions dans un `set` ou comme clés, définis `__hash__` en hachant **la même clé**
+  que celle qui sert à `__eq__` (ainsi `"1.2"` et `"1.2.0"` ont le même hash).
+
+  ## Valider le format
+
+  Une regex avec `fullmatch` décrit précisément le format accepté (1 à 3 nombres séparés
+  par des points, suffixe optionnel non vide après un tiret) et refuse tout le reste.
+
+  En production : `packaging.version.Version` implémente la norme PEP 440.
+docs:
+  - title: functools.total_ordering
+    url: https://docs.python.org/fr/3/library/functools.html#functools.total_ordering
+  - title: Gestion sémantique de version (semver.org)
+    url: https://semver.org/lang/fr/

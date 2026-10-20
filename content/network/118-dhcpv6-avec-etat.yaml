@@ -1,0 +1,113 @@
+title: DHCPv6 avec état
+level: intermediaire
+order: 18
+device: router
+hostname: R-SERVEURS6
+tags: [ipv6, dhcpv6, nd, slaac]
+summary: Le serveur distribue lui-même les adresses IPv6, et le routeur s'adresse côté opérateur par SLAAC.
+description: |
+  Pour la traçabilité, la DSI veut savoir quelle adresse IPv6 a chaque poste du VLAN des
+  serveurs : les adresses seront distribuées par **DHCPv6 avec état**.
+
+  1. active le routage IPv6 ;
+  2. pool `AVEC-ETAT` :
+     - préfixe distribué `2001:db8:20:1::/64` (`address prefix 2001:db8:20:1::/64`),
+     - DNS `2001:db8:20:ff::53`, domaine `tdm.local` ;
+  3. sur `G0/0` (LAN, déjà adressée) : drapeau **M** (`ipv6 nd managed-config-flag`)
+     et serveur DHCPv6 `AVEC-ETAT` ;
+  4. sur `G0/1` (vers l'opérateur) : le routeur obtient lui-même son adresse par SLAAC
+     (`ipv6 address autoconfig`), puis active l'interface.
+initial: |
+  interface g0/0
+  ipv6 address 2001:db8:20:1::1/64
+  no shutdown
+checks:
+  - desc: Routage IPv6 activé
+    expr: d.ipv6_routing
+  - desc: Pool AVEC-ETAT distribuant 2001:db8:20:1::/64
+    expr: d.dhcpv6_pools["AVEC-ETAT"]["address_prefix"] == "2001:db8:20:1::/64"
+  - desc: DNS et domaine dans le pool
+    expr: d.dhcpv6_pools["AVEC-ETAT"]["dns"] == ["2001:db8:20:ff::53"] and d.dhcpv6_pools["AVEC-ETAT"]["domain"] == "tdm.local"
+  - desc: Drapeau M et serveur DHCPv6 sur G0/0
+    expr: intf("g0/0").ipv6_nd_managed and intf("g0/0").ipv6_dhcp_server == "AVEC-ETAT"
+  - desc: G0/1 en SLAAC et activée
+    expr: intf("g0/1").ipv6_autoconfig and not intf("g0/1").shutdown
+solution: |
+  configure terminal
+  ipv6 unicast-routing
+  ipv6 dhcp pool AVEC-ETAT
+  address prefix 2001:db8:20:1::/64
+  dns-server 2001:db8:20:ff::53
+  domain-name tdm.local
+  exit
+  interface g0/0
+  ipv6 nd managed-config-flag
+  ipv6 dhcp server AVEC-ETAT
+  interface g0/1
+  ipv6 address autoconfig
+  no shutdown
+  end
+cours: |
+  ## DHCPv6 avec état
+
+  Le drapeau **M** (*Managed*) des annonces de routeur demande aux postes d'obtenir leur
+  **adresse** auprès d'un serveur DHCPv6, qui garde la trace de chaque attribution (d'où
+  « avec état »). Les échanges ressemblent à DORA :
+
+  | DHCPv4    | DHCPv6     |
+  |-----------|------------|
+  | Discover  | Solicit    |
+  | Offer     | Advertise  |
+  | Request   | Request    |
+  | Ack       | Reply      |
+
+  Les clients écoutent l'adresse multicast `ff02::1:2` (tous les serveurs et relais DHCPv6) ;
+  les ports sont UDP 546 (client) et 547 (serveur). Un client est identifié par son **DUID**, pas
+  par son adresse MAC : il faut s'en souvenir pour les réservations.
+
+  ### La passerelle ne vient pas du DHCPv6
+
+  Point essentiel : DHCPv6 ne distribue **pas** de passerelle par défaut. Les postes la prennent
+  toujours dans les **annonces de routeur**. Sans RA, pas de route par défaut, même avec une
+  adresse DHCPv6.
+
+  ### Configuration
+
+  ```
+  R1(config)# ipv6 dhcp pool SRV6
+  R1(config-dhcpv6)# address prefix 2001:db8:77:5::/64 lifetime 172800 86400
+  R1(config-dhcpv6)# dns-server 2001:db8:77:ff::53
+  R1(config-dhcpv6)# domain-name exemple.lan
+  R1(config)# interface g0/2
+  R1(config-if)# ipv6 nd managed-config-flag
+  R1(config-if)# ipv6 nd prefix default no-autoconfig
+  R1(config-if)# ipv6 dhcp server SRV6
+  R1# show ipv6 dhcp binding
+  ```
+
+  `ipv6 nd prefix default no-autoconfig` retire le drapeau **A** du préfixe : les postes ne
+  fabriquent plus en plus une adresse SLAAC à côté de l'adresse DHCPv6.
+
+  Avec un serveur central (Windows Server, Kea), le routeur sert de **relais** :
+  `ipv6 dhcp relay destination 2001:db8:77:ff::10` sur l'interface du LAN.
+
+  ### Le routeur client
+
+  `ipv6 address autoconfig` fait du routeur un client SLAAC sur son interface opérateur ; avec
+  l'option `default`, il installe aussi une route par défaut vers le routeur qui annonce.
+  Beaucoup d'opérateurs délèguent en plus un préfixe complet par **DHCPv6-PD**.
+
+  ### Pièges fréquents
+
+  - Croire que le pool donne la passerelle : c'est la RA.
+  - Laisser le drapeau A : chaque poste a deux adresses (SLAAC + DHCPv6).
+  - Oublier `ipv6 unicast-routing` : pas de RA, donc pas de drapeau M transmis.
+
+  ### Pour le CCNA
+
+  Savoir quelle méthode correspond aux drapeaux M/O et que la passerelle vient toujours de la RA.
+docs:
+  - title: RFC 8415 — Dynamic Host Configuration Protocol for IPv6 (DHCPv6)
+    url: https://www.rfc-editor.org/rfc/rfc8415
+  - title: Wikipédia (EN) — DHCPv6
+    url: https://en.wikipedia.org/wiki/DHCPv6

@@ -1,0 +1,10 @@
+# Lab « Objets Active Directory et AGDLP » : SRV-DC01 (Windows Server 2022, 2 Go), promu automatiquement
+# contrôleur du domaine durand.lan au premier démarrage (compter 15 à 20 minutes).
+require_relative "../_commun/tdm"
+
+Vagrant.configure("2") do |config|
+  TDM.lab(config, __dir__) do |lab|
+    lab.server "dc01", hostname: "SRV-DC01", ip: "192.168.10.10", domain: :forest, primary: true,
+               scenario: "scenario.ps1"
+  end
+end

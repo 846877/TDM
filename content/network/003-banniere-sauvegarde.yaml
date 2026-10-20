@@ -24,3 +24,61 @@ solution: |
   banner motd #Acces Interdit aux personnes non autorisees#
   end
   copy running-config startup-config
+cours: |
+  ## La bannière MOTD
+
+  La bannière *Message Of The Day* s'affiche à toute personne qui se connecte, **avant**
+  l'authentification. Elle sert d'**avertissement légal** : dans beaucoup de pays, poursuivre un
+  intrus est plus simple si l'accès était explicitement interdit. On n'y met jamais d'information
+  utile à un attaquant (modèle, version, nom de l'entreprise, « Bienvenue »).
+
+  ```
+  R1(config)# banner motd $
+  Enter TEXT message.  End with the character '$'.
+  Acces reserve au personnel habilite. Toute connexion est journalisee.
+  $
+  ```
+
+  Le premier caractère après `motd` est le **délimiteur** : le texte s'arrête à sa prochaine
+  occurrence. Il ne doit donc pas apparaître dans le message (`#`, `$`, `^C` sont courants).
+
+  ### Configuration courante et configuration de démarrage
+
+  | Fichier           | Emplacement | Rôle                                       |
+  |-------------------|-------------|--------------------------------------------|
+  | `running-config`  | RAM         | configuration **active**, modifiée à chaque commande |
+  | `startup-config`  | NVRAM       | chargée au **démarrage**                    |
+
+  Une coupure de courant fait perdre tout ce qui n'a pas été sauvegardé.
+
+  ```
+  R1# copy running-config startup-config
+  Destination filename [startup-config]?
+  Building configuration...
+  [OK]
+  R1# write memory          ! équivalent historique
+  R1# show startup-config
+  ```
+
+  ### L'inverse : revenir en arrière
+
+  Tant qu'on n'a pas sauvegardé, `reload` (sans enregistrer) restaure la dernière configuration
+  sauvegardée. C'est une technique de secours classique après une erreur. `erase
+  startup-config` puis `reload` remet l'équipement à zéro.
+
+  ### Pièges fréquents
+
+  - Utiliser le délimiteur dans le texte : la bannière est coupée et la suite est interprétée
+    comme des commandes.
+  - Oublier de sauvegarder avant de partir.
+  - Écrire « Bienvenue » : juridiquement, c'est une invitation.
+
+  ### Pour le CCNA
+
+  Connaître la différence entre running-config et startup-config, et savoir sauvegarder, est
+  indispensable.
+docs:
+  - title: "Wikipédia (EN) — Message of the day"
+    url: https://en.wikipedia.org/wiki/Message_of_the_day
+  - title: "Wikipédia — Cisco IOS"
+    url: https://fr.wikipedia.org/wiki/Cisco_IOS

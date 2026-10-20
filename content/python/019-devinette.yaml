@@ -73,3 +73,56 @@ solution: |
           trouve = True
   pluriel = "s" if essais > 1 else ""
   print(f"Gagné en {essais} essai{pluriel} !")
+cours: |
+  ## La boucle `while`
+
+  `while condition:` répète son bloc **tant que** la condition est vraie. On l'utilise quand
+  on ne sait pas à l'avance combien de tours seront nécessaires.
+
+  ```python
+  solde = 100
+  annees = 0
+  while solde < 200:
+      solde *= 1.05
+      annees += 1
+  print(annees)   # 15
+  ```
+
+  **Piège n°1 : la boucle infinie.** Si rien dans le corps ne rend la condition fausse, le
+  programme ne s'arrête jamais. Vérifie qu'une variable de la condition évolue à chaque tour.
+
+  ## Sortir avec `break`
+
+  `break` quitte immédiatement la boucle la plus proche. Un motif fréquent :
+
+  ```python
+  while True:
+      commande = input()
+      if commande == "quitter":
+          break
+      print("Commande :", commande)
+  ```
+
+  `continue`, lui, passe directement au tour suivant.
+
+  ## Compteur et accord
+
+  Un compteur s'initialise avant la boucle et s'incrémente à chaque essai (`essais += 1`).
+  Pour accorder un mot au pluriel, une expression conditionnelle est pratique :
+
+  ```python
+  s = "s" if nombre > 1 else ""
+  print(f"{nombre} fichier{s}")
+  ```
+
+  ## Lire plusieurs lignes
+
+  Chaque appel à `input()` lit la ligne suivante de l'entrée. Ici, la première ligne a un
+  rôle particulier (le secret) : lis-la **avant** la boucle. Les comparaisons doivent se
+  faire entre **nombres** : `"9" < "10"` est faux en comparant des chaînes (ordre
+  alphabétique), alors que `9 < 10` est vrai. Convertis donc chaque saisie avec `int()`.
+docs:
+  - title: Tutoriel — while, break et continue
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html
+  - title: Référence — l'instruction while
+    url: https://docs.python.org/fr/3/reference/compound_stmts.html#the-while-statement

@@ -96,3 +96,54 @@ solution: |
 
   def rotation_horaire(m):
       return [list(reversed(colonne)) for colonne in zip(*m)]
+cours: |
+  ## Matrices en listes de listes
+
+  `m[i][j]` est l'élément ligne `i`, colonne `j`. Dimensions : `len(m)` lignes, `len(m[0])`
+  colonnes (si `m` n'est pas vide).
+
+  ```python
+  m = [[1, 2, 3],
+       [4, 5, 6]]
+  m[1][2]                 # 6
+  [ligne[0] for ligne in m]   # première colonne : [1, 4]
+  ```
+
+  ## Créer une matrice correctement
+
+  ```python
+  zeros = [[0] * 3 for _ in range(2)]   # correct : 2 lignes indépendantes
+  piege = [[0] * 3] * 2                 # FAUX : 2 fois la même ligne
+  ```
+
+  ## `zip` et le déballage `*`
+
+  `zip(a, b, c)` regroupe les éléments de même rang. Avec `*m`, on passe chaque ligne
+  comme un argument séparé : `zip(*m)` regroupe donc les **colonnes**. Le résultat est
+  composé de tuples ; convertis-les en listes si nécessaire.
+
+  ## Produit matriciel
+
+  Pour `A` (n×p) et `B` (p×q), le produit `C` est n×q et `C[i][j]` est le produit scalaire
+  de la ligne `i` de A par la colonne `j` de B. Trois boucles imbriquées : complexité
+  **O(n·p·q)**, soit O(n³) pour des matrices carrées. La condition de compatibilité : le
+  nombre de colonnes de A égale le nombre de lignes de B. Vérifie-la avant de calculer et
+  lève `ValueError` sinon.
+
+  ## Rotations
+
+  Une rotation d'un quart de tour se décompose en deux opérations simples : une
+  **transposition** et un **retournement** (des lignes, ou de chaque ligne). Dessine une
+  matrice 3×3 sur papier et essaie les deux ordres pour trouver la bonne combinaison pour le
+  sens horaire.
+
+  ## Ne pas modifier les entrées
+
+  Construis toujours de nouvelles listes (compréhensions, `zip`) plutôt que de modifier
+  `m` sur place. Une copie superficielle (`m[:]`) ne copie pas les lignes internes :
+  `copy.deepcopy` le fait. En pratique, pour du calcul numérique sérieux, on utilise NumPy.
+docs:
+  - title: Documentation Python — zip()
+    url: https://docs.python.org/fr/3/library/functions.html#zip
+  - title: Tutoriel — compréhensions imbriquées
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#nested-list-comprehensions

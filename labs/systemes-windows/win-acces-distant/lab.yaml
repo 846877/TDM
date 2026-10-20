@@ -1,0 +1,460 @@
+title: Accès distant - Bureau à distance, PowerShell Remoting et OpenSSH
+level: debutant
+order: 4
+tags: [windows, rdp, bureau à distance, winrm, powershell remoting, openssh, pare-feu, nla]
+summary: Administrer un serveur Windows à distance depuis son poste - WinRM et PowerShell Remoting, Bureau à distance sécurisé, OpenSSH par clé.
+vagrant: bundled
+machine: pc01
+description: |
+  **Contexte.** Le technicien d'*Ateliers Durand* ne va plus en salle serveur pour chaque intervention :
+  depuis son poste `PC01`, il veut administrer `SRV01` en **PowerShell à distance**, ouvrir un **Bureau à
+  distance** quand l'interface graphique est nécessaire, et utiliser **SSH** comme sur ses serveurs Linux.
+  Le support de premier niveau (compte `hdesk`) doit aussi pouvoir se connecter, avec des droits limités.
+
+  **Machines** (prévoir **8 Go de RAM libres**) :
+
+  | VM | Système | Adresse LAN | Rôle |
+  |----|---------|-------------|------|
+  | `PC01` (terminal) | Windows 11 (3 Go) | 192.168.10.101 | poste du technicien |
+  | `SRV01` | Windows Server 2022 (2 Go) | 192.168.10.10 | serveur à administrer |
+
+  Les deux machines sont **hors domaine** (groupe de travail) : il faudra s'authentifier avec un compte
+  local du serveur, `SRV01\vagrant` (mot de passe `vagrant`). Sur SRV01, le Bureau à distance est
+  désactivé et le groupe local `Support` (membre : `hdesk`, mot de passe `Support2024!`) existe déjà.
+
+  Ton terminal est sur PC01 : toutes les actions sur SRV01 se font **à distance** (c'est le but).
+cours: |
+  ## Trois façons d'administrer à distance
+
+  | | Bureau à distance (RDP) | PowerShell Remoting (WinRM) | OpenSSH |
+  |---|---|---|---|
+  | Port | TCP/UDP 3389 | TCP 5985 (HTTP), 5986 (HTTPS) | TCP 22 |
+  | Ce qu'on obtient | une session graphique complète | une console PowerShell ou une commande | une console (PowerShell, cmd) |
+  | Client | `mstsc` | `Enter-PSSession`, `Invoke-Command` | `ssh` (intégré à Windows 10/11) |
+  | Groupe pour un non-admin | Remote Desktop Users (`S-1-5-32-555`) | Remote Management Users (`S-1-5-32-580`) | selon `sshd_config` |
+  | Usage typique | logiciels graphiques, assistance | automatisation, parc entier | habitudes Linux, outils multi-OS |
+
+  ## PowerShell Remoting
+
+  Le service **WinRM** écoute sur 5985 et reçoit des commandes PowerShell. Il est activé par défaut
+  sur Windows Server (`Enable-PSRemoting` l'active ailleurs). Dans un **domaine**, Kerberos authentifie
+  serveur et client : `Enter-PSSession SRV01` suffit. **Hors domaine**, le client ne peut pas vérifier
+  l'identité du serveur : il faut l'ajouter aux **TrustedHosts** du client (ou passer en HTTPS) :
+
+  ```powershell
+  Set-Item WSMan:\localhost\Client\TrustedHosts -Value '192.168.10.10,SRV01' -Force
+  $cred = Get-Credential SRV01\vagrant
+  Enter-PSSession -ComputerName 192.168.10.10 -Credential $cred      # session interactive : [192.168.10.10]: PS>
+  Invoke-Command -ComputerName 192.168.10.10 -Credential $cred -ScriptBlock { Get-Service Spooler }
+  ```
+
+  `Invoke-Command` accepte une liste d'ordinateurs : la même commande sur 50 serveurs, en parallèle.
+  Les objets reviennent **sérialisés** (des copies sans méthodes) avec une propriété `PSComputerName`.
+  `Test-WSMan 192.168.10.10` teste que WinRM répond.
+
+  ## Bureau à distance
+
+  Activation : *Paramètres* › *Système* › *Bureau à distance*, ou `sconfig` sur un Server Core, ou :
+
+  ```powershell
+  Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
+  Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'      # « Bureau à distance » sur un Windows français
+  ```
+
+  La **NLA** (*Network Level Authentication*, valeur `UserAuthentication` de `RDP-Tcp`) exige que
+  l'utilisateur s'authentifie **avant** d'ouvrir une session graphique : moins de ressources consommées
+  par les attaquants et protection contre plusieurs failles. Elle doit rester activée. Un Windows
+  Server autorise deux sessions d'administration simultanées ; au-delà, il faut le rôle RDS et des
+  licences. On n'expose **jamais** le 3389 directement sur Internet (VPN ou passerelle RD).
+
+  Un fichier `.rdp` enregistre les paramètres de connexion (`full address:s:`, `username:s:`...) :
+  pratique à déposer sur le bureau des utilisateurs.
+
+  ## OpenSSH sous Windows
+
+  Windows 10/11 et Server 2019+ embarquent le client `ssh` ; le serveur `sshd` est une fonctionnalité
+  facultative (`Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0`). Particularités :
+
+  - configuration dans `C:\ProgramData\ssh\sshd_config` ;
+  - pour les **administrateurs**, les clés autorisées sont dans
+    `C:\ProgramData\ssh\administrators_authorized_keys` (droits : Administrators et SYSTEM seulement),
+    pas dans `~\.ssh\authorized_keys` ;
+  - le shell par défaut est `cmd.exe`, sauf si `HKLM:\SOFTWARE\OpenSSH\DefaultShell` indique PowerShell
+    (c'est le cas dans ce lab).
+
+  ```powershell
+  ssh-keygen -t ed25519 -f $HOME\.ssh\id_ed25519
+  ssh vagrant@192.168.10.10 hostname
+  ```
+
+  ## Pièges courants
+
+  - `Access is denied` en WinRM avec un compte local non intégré : sur un serveur hors domaine, seul un
+    administrateur local (avec `LocalAccountTokenFilterPolicy`) ou un membre de *Remote Management
+    Users* peut se connecter.
+  - Oublier le **pare-feu** après avoir activé RDP.
+  - Remplacer (`Set-Content`) au lieu de compléter (`Add-Content`) un fichier de clés autorisées : on
+    coupe les autres accès (dans ce lab, celui de la plateforme !).
+  - Modifier `sshd_config` sans relancer le service (`Restart-Service sshd`), ou avec une faute de syntaxe :
+    le service ne redémarre plus. Toujours garder une session ouverte pendant qu'on teste.
+docs:
+  - title: Exécution de commandes à distance (PowerShell Remoting)
+    url: https://learn.microsoft.com/fr-fr/powershell/scripting/learn/remoting/running-remote-commands
+  - title: Prise en main d'OpenSSH pour Windows
+    url: https://learn.microsoft.com/fr-fr/windows-server/administration/openssh/openssh_install_firstuse
+  - title: Bureau à distance - autoriser l'accès à votre PC
+    url: https://learn.microsoft.com/fr-fr/windows-server/remote/remote-desktop-services/clients/remote-desktop-allow-access
+exercises:
+  - id: win-rdp-trustedhosts
+    title: Faire confiance au serveur pour WinRM
+    description: |
+      Depuis PC01, `Enter-PSSession 192.168.10.10 -Credential SRV01\vagrant` échoue : le poste n'est pas
+      dans un domaine et refuse de s'authentifier auprès d'un serveur qu'il ne peut pas vérifier.
+
+      Ajoute `192.168.10.10` et `SRV01` aux **TrustedHosts** du client WinRM de PC01, puis vérifie que
+      WinRM répond sur le serveur (`Test-WSMan`).
+    hint: Set-Item WSMan:\localhost\Client\TrustedHosts -Value '192.168.10.10,SRV01' -Force
+    cours: |
+      Le fournisseur `WSMan:` expose la configuration de WinRM comme un lecteur :
+      `Get-Item WSMan:\localhost\Client\TrustedHosts` affiche la liste des hôtes de confiance (vide par
+      défaut). On la remplace avec `Set-Item ... -Value 'a,b' -Force`, ou on la complète avec
+      `-Concatenate`.
+
+      Mettre `*` (tous les hôtes) est une mauvaise pratique : TrustedHosts désactive la vérification
+      d'identité du serveur, donc un attaquant qui se fait passer pour lui pourrait récupérer les
+      identifiants. Dans un domaine, on n'en a pas besoin (Kerberos) ; hors domaine, l'alternative propre
+      est WinRM en **HTTPS** avec un certificat.
+
+      `Test-WSMan 192.168.10.10` vérifie que le service répond (sans authentification) : c'est le
+      « ping » de WinRM.
+    checks:
+      - desc: 192.168.10.10 et SRV01 sont dans les TrustedHosts de PC01
+        run: |
+          $t = (Get-Item WSMan:\localhost\Client\TrustedHosts).Value -split ',' | ForEach-Object { $_.Trim() }
+          $t -contains '192.168.10.10' -and $t -contains 'SRV01'
+      - desc: Pas de joker * dans les TrustedHosts
+        run: |
+          $v = (Get-Item WSMan:\localhost\Client\TrustedHosts).Value
+          [bool]$v -and $v -notmatch '\*'
+      - desc: WinRM de SRV01 répond
+        run: |
+          [bool](Test-WSMan 192.168.10.10)
+    solution: |
+      Set-Item WSMan:\localhost\Client\TrustedHosts -Value '192.168.10.10,SRV01' -Force
+
+  - id: win-rdp-invoke
+    title: État du serveur sans s'y connecter
+    description: |
+      Avec `Invoke-Command` (compte `SRV01\vagrant`, mot de passe `vagrant`), récupère depuis PC01 l'état de
+      SRV01 et enregistre-le **sur PC01** dans `C:\Admin\etat-srv01.csv` (séparateur `;`) avec les colonnes
+      `Nom` (nom de l'ordinateur), `Demarrage` (date du dernier démarrage) et `LibreGo` (espace libre de
+      `C:` en Go, arrondi à 1 décimale).
+    hint: |
+      $cred = Get-Credential SRV01\vagrant
+      Invoke-Command 192.168.10.10 -Credential $cred { [pscustomobject]@{ Nom = $env:COMPUTERNAME; Demarrage = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime; LibreGo = [math]::Round((Get-PSDrive C).Free / 1GB, 1) } }
+    cours: |
+      `Invoke-Command -ComputerName <serveurs> -Credential $cred -ScriptBlock { ... }` exécute le bloc **sur
+      le serveur** et renvoie le résultat au poste. Construire un `[pscustomobject]@{ ... }` dans le bloc
+      permet de choisir exactement les colonnes.
+
+      Les objets reviennent avec des propriétés ajoutées : `PSComputerName`, `RunspaceId`,
+      `PSShowComputerName`. On les écarte avec `Select-Object Nom, Demarrage, LibreGo` avant l'export.
+
+      Pour ne pas taper le mot de passe : `Get-Credential` ouvre une invite ; dans un script de lab on peut
+      construire l'objet avec `New-Object PSCredential('SRV01\vagrant', (ConvertTo-SecureString 'vagrant'
+      -AsPlainText -Force))`. En production, on utilise des comptes de service, un coffre (module
+      *SecretManagement*) ou Kerberos.
+    checks:
+      - desc: C:\Admin\etat-srv01.csv contient Nom, Demarrage, LibreGo
+        run: |
+          $c = Import-Csv C:\Admin\etat-srv01.csv -Delimiter ';'
+          ($c[0].PSObject.Properties.Name -join ',') -eq 'Nom,Demarrage,LibreGo'
+      - desc: Les valeurs viennent bien de SRV01
+        run: |
+          $c = @(Import-Csv C:\Admin\etat-srv01.csv -Delimiter ';')[0]
+          $c.Nom -eq 'SRV01' -and [double]($c.LibreGo -replace ',', '.') -gt 0 -and [bool]$c.Demarrage
+    solution: |
+      New-Item C:\Admin -ItemType Directory -Force | Out-Null
+      $cred = New-Object PSCredential('SRV01\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force))
+      Invoke-Command 192.168.10.10 -Credential $cred {
+        [pscustomobject]@{ Nom = $env:COMPUTERNAME; Demarrage = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+                           LibreGo = [math]::Round((Get-PSDrive C).Free / 1GB, 1) }
+      } | Select-Object Nom, Demarrage, LibreGo | Export-Csv C:\Admin\etat-srv01.csv -Delimiter ';' -NoTypeInformation
+
+  - id: win-rdp-activer
+    title: Activer le Bureau à distance sur le serveur
+    description: |
+      Le nouveau logiciel de paie ne se configure qu'en interface graphique. Depuis PC01, en PowerShell à
+      distance (`Enter-PSSession`), **active le Bureau à distance** sur SRV01 et **ouvre le pare-feu**
+      pour lui.
+    hint: Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0 ; Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
+    cours: |
+      Deux réglages, toujours ensemble :
+
+      1. autoriser les connexions : valeur `fDenyTSConnections` = `0` dans
+         `HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server` (1 = refusé) ;
+      2. ouvrir le **pare-feu** : groupe de règles *Remote Desktop* (TCP et UDP 3389).
+
+      ```powershell
+      Enter-PSSession 192.168.10.10 -Credential SRV01\vagrant
+      [192.168.10.10]: PS> Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
+      [192.168.10.10]: PS> Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
+      [192.168.10.10]: PS> exit
+      ```
+
+      Le nom du groupe dépend de la langue (*Bureau à distance* en français) ; il a un identifiant
+      invariant, `-Group '@FirewallAPI.dll,-28752'`. Sur Server Core, `sconfig` › *Bureau à distance* fait
+      la même chose. Pas besoin de redémarrer : le service *TermService* tient compte du changement.
+    checks:
+      - desc: Les connexions Bureau à distance sont autorisées sur SRV01
+        machine: srv01
+        run: |
+          (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server').fDenyTSConnections -eq 0
+      - desc: Le pare-feu de SRV01 laisse passer TCP 3389
+        machine: srv01
+        run: |
+          [bool](Get-NetFirewallRule -Enabled True -Direction Inbound -Action Allow | Get-NetFirewallPortFilter |
+            Where-Object { $_.Protocol -eq 'TCP' -and $_.LocalPort -contains '3389' })
+      - desc: Le port 3389 de SRV01 répond depuis PC01
+        run: |
+          (Test-NetConnection 192.168.10.10 -Port 3389 -WarningAction SilentlyContinue).TcpTestSucceeded
+    solution: |
+      $cred = New-Object PSCredential('SRV01\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force))
+      Invoke-Command 192.168.10.10 -Credential $cred {
+        Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
+        Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752'
+      }
+
+  - id: win-rdp-nla
+    title: Exiger l'authentification au niveau du réseau (NLA)
+    description: |
+      L'audit relève que SRV01 accepte des connexions Bureau à distance **sans NLA**. Active-la (valeur
+      `UserAuthentication` = 1 de la clé `...\Terminal Server\WinStations\RDP-Tcp`), toujours à distance.
+    hint: Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 1
+    cours: |
+      Sans NLA, le serveur affiche l'écran d'ouverture de session **avant** toute authentification : un
+      attaquant peut consommer des sessions, tenter des mots de passe à l'infini dans l'interface, ou
+      exploiter une faille du service (BlueKeep, en 2019, visait justement les serveurs sans NLA).
+
+      Avec la NLA, le client `mstsc` s'authentifie d'abord (CredSSP) et la session graphique n'est créée
+      qu'ensuite. Réglage graphique : *Propriétés système* › *Utilisation à distance* › case « N'autoriser
+      que la connexion des ordinateurs exécutant le Bureau à distance avec authentification NLA ».
+      Registre :
+
+      ```powershell
+      Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 1
+      ```
+
+      Dans un domaine, une GPO impose ce réglage sur tout le parc.
+    checks:
+      - desc: La NLA est exigée sur SRV01
+        machine: srv01
+        run: |
+          (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp').UserAuthentication -eq 1
+    solution: |
+      $cred = New-Object PSCredential('SRV01\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force))
+      Invoke-Command 192.168.10.10 -Credential $cred {
+        Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 1
+      }
+
+  - id: win-rdp-groupe
+    title: Bureau à distance pour le support
+    description: |
+      Les membres du groupe local `Support` de SRV01 doivent pouvoir ouvrir une session Bureau à distance,
+      **sans** être administrateurs. Ajoute le **groupe** `Support` (pas l'utilisateur) au groupe intégré
+      *Remote Desktop Users* de SRV01.
+    hint: Invoke-Command ... { Add-LocalGroupMember -SID S-1-5-32-555 -Member Support }
+    cours: |
+      Ouvrir une session à distance demande le droit « Autoriser l'ouverture de session par les services
+      Bureau à distance », accordé par défaut aux groupes **Administrators** et **Remote Desktop Users**
+      (*Utilisateurs du Bureau à distance*, SID `S-1-5-32-555`).
+
+      On y place un **groupe** métier (`Support`) plutôt que des utilisateurs : la gestion se fait ensuite
+      dans `Support` seulement. Graphique : *Propriétés système* › *Utilisation à distance* ›
+      *Sélectionnez des utilisateurs*.
+
+      Rappel : un serveur hors rôle RDS n'accepte que **deux** sessions simultanées, réservées à
+      l'administration. Pour des utilisateurs bureautiques, il faut un serveur **RDS** avec des licences
+      d'accès client (CAL RDS).
+    checks:
+      - desc: Le groupe Support est membre de Remote Desktop Users sur SRV01
+        machine: srv01
+        run: |
+          [bool](Get-LocalGroupMember -SID S-1-5-32-555 | Where-Object { $_.Name -like '*\Support' -and $_.ObjectClass -eq 'Group' })
+      - desc: hdesk n'est pas administrateur de SRV01
+        machine: srv01
+        run: |
+          [bool](Get-LocalUser hdesk) -and -not (Get-LocalGroupMember -SID S-1-5-32-544 | Where-Object Name -like '*\hdesk')
+    solution: |
+      $cred = New-Object PSCredential('SRV01\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force))
+      Invoke-Command 192.168.10.10 -Credential $cred { Add-LocalGroupMember -SID S-1-5-32-555 -Member Support }
+
+  - id: win-rdp-fichier
+    title: Raccourci de connexion pour le support
+    description: |
+      Prépare pour le support un fichier de connexion `C:\Admin\SRV01.rdp` sur PC01 qui ouvre directement
+      une session sur `192.168.10.10` avec l'utilisateur `SRV01\hdesk`. Teste-le depuis l'interface de PC01
+      si tu veux (`mstsc C:\Admin\SRV01.rdp`).
+    hint: "Set-Content C:\\Admin\\SRV01.rdp 'full address:s:192.168.10.10', 'username:s:SRV01\\hdesk'"
+    cours: |
+      Un fichier `.rdp` est un simple texte, une option par ligne au format `nom:type:valeur` (`s` = chaîne,
+      `i` = entier) :
+
+      ```
+      full address:s:192.168.10.10
+      username:s:SRV01\hdesk
+      screen mode id:i:2
+      redirectprinters:i:0
+      ```
+
+      On le crée depuis `mstsc` (*Afficher les options* › *Enregistrer sous*) ou à la main. Les options
+      utiles : redirection des imprimantes, du presse-papiers, des lecteurs (`drivestoredirect:s:`),
+      passerelle RD (`gatewayhostname:s:`). Le mot de passe n'y est **jamais** stocké en clair.
+
+      `mstsc /v:192.168.10.10 /admin` ouvre une connexion directe ; `/admin` prend une session
+      d'administration même si le serveur RDS est plein. Dans ce lab, le PC hôte joint aussi les VM par
+      `mstsc /v:127.0.0.1:33389` grâce à la redirection de port de Vagrant.
+    checks:
+      - desc: Le fichier C:\Admin\SRV01.rdp cible 192.168.10.10 avec SRV01\hdesk
+        run: |
+          $l = Get-Content C:\Admin\SRV01.rdp | ForEach-Object { $_.Trim() }
+          $l -contains 'full address:s:192.168.10.10' -and $l -contains 'username:s:SRV01\hdesk'
+    solution: |
+      New-Item C:\Admin -ItemType Directory -Force | Out-Null
+      Set-Content C:\Admin\SRV01.rdp 'full address:s:192.168.10.10', 'username:s:SRV01\hdesk', 'screen mode id:i:2'
+
+  - id: win-rdp-remote-mgmt
+    title: PowerShell à distance pour le support
+    description: |
+      Le support doit pouvoir lancer des commandes de consultation à distance sur SRV01 avec son compte
+      `hdesk`, sans être administrateur. Ajoute `hdesk` au groupe intégré *Remote Management Users* de
+      SRV01, puis vérifie depuis PC01 :
+      `Invoke-Command 192.168.10.10 -Credential SRV01\hdesk { whoami }`.
+    hint: Invoke-Command ... { Add-LocalGroupMember -SID S-1-5-32-580 -Member hdesk }
+    cours: |
+      Par défaut, seuls les administrateurs peuvent se connecter à WinRM. Le groupe **Remote Management
+      Users** (*Utilisateurs de gestion à distance*, `S-1-5-32-580`) ouvre la porte aux autres : ils
+      obtiennent une session PowerShell avec **leurs** droits (lire les journaux, l'état des services...
+      mais pas arrêter un service système).
+
+      Pour aller plus loin, **JEA** (*Just Enough Administration*) crée des points de terminaison où un
+      compte non administrateur ne peut lancer qu'une liste précise de commandes (par exemple redémarrer le
+      spouleur d'impression) : c'est la bonne façon de déléguer au support (voir les labs avancés).
+
+      Test : `Invoke-Command 192.168.10.10 -Credential SRV01\hdesk { whoami; Get-Service Spooler }`.
+    checks:
+      - desc: hdesk est membre de Remote Management Users sur SRV01
+        machine: srv01
+        run: |
+          [bool](Get-LocalGroupMember -SID S-1-5-32-580 | Where-Object Name -like '*\hdesk')
+      - desc: hdesk ouvre une session PowerShell distante depuis PC01
+        run: |
+          $cred = New-Object PSCredential('SRV01\hdesk', (ConvertTo-SecureString 'Support2024!' -AsPlainText -Force))
+          (Invoke-Command 192.168.10.10 -Credential $cred { whoami }) -match 'hdesk'
+    solution: |
+      $cred = New-Object PSCredential('SRV01\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force))
+      Invoke-Command 192.168.10.10 -Credential $cred { Add-LocalGroupMember -SID S-1-5-32-580 -Member hdesk }
+
+  - id: win-rdp-ssh-cle
+    title: SSH par clé vers le serveur
+    description: |
+      Tu veux te connecter à SRV01 en SSH **sans mot de passe**, comme sur tes serveurs Linux.
+
+      1. Sur PC01, génère une paire de clés **ed25519** sans phrase de passe :
+         `C:\Users\vagrant\.ssh\id_ed25519` ;
+      2. **ajoute** (sans rien effacer !) la clé publique à la fin de
+         `C:\ProgramData\ssh\administrators_authorized_keys` sur SRV01 (`vagrant` est administrateur) ;
+      3. teste : `ssh -o BatchMode=yes vagrant@192.168.10.10 hostname` doit répondre `SRV01`.
+
+      ⚠️ Ce fichier contient déjà la clé de la plateforme TDM : l'écraser couperait les vérifications sur
+      SRV01 (il faudrait réinitialiser le lab).
+    hint: ssh-keygen -t ed25519 -f $HOME\.ssh\id_ed25519 -N '""' ; $pub = Get-Content $HOME\.ssh\id_ed25519.pub ; Invoke-Command ... { Add-Content C:\ProgramData\ssh\administrators_authorized_keys $using:pub }
+    cours: |
+      L'authentification par **clé** remplace le mot de passe : la clé privée reste sur le poste, la clé
+      publique est déposée sur le serveur.
+
+      ```powershell
+      ssh-keygen -t ed25519 -f $HOME\.ssh\id_ed25519 -N '""'      # -N '""' : pas de phrase de passe (lab)
+      $pub = Get-Content $HOME\.ssh\id_ed25519.pub
+      Invoke-Command 192.168.10.10 -Credential SRV01\vagrant {
+        Add-Content C:\ProgramData\ssh\administrators_authorized_keys $using:pub
+      }
+      ssh vagrant@192.168.10.10 hostname
+      ```
+
+      `$using:pub` transmet une variable locale dans le bloc distant. Particularité Windows : pour un compte
+      **administrateur**, sshd ne lit que `administrators_authorized_keys`, dont les droits doivent être
+      limités à Administrators et SYSTEM (sinon la clé est ignorée). Pour un utilisateur standard, c'est
+      `C:\Users\<nom>\.ssh\authorized_keys`, comme sous Linux. Il n'y a pas de `ssh-copy-id` sous Windows :
+      d'où la copie manuelle.
+    checks:
+      - desc: La paire de clés ed25519 existe sur PC01
+        run: |
+          (Test-Path C:\Users\vagrant\.ssh\id_ed25519) -and ((Get-Content C:\Users\vagrant\.ssh\id_ed25519.pub -Raw) -match '^ssh-ed25519 ')
+      - desc: SRV01 accepte la clé (connexion SSH sans mot de passe)
+        run: |
+          $o = ssh.exe -i C:\Users\vagrant\.ssh\id_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL vagrant@192.168.10.10 hostname 2>$null
+          $LASTEXITCODE -eq 0 -and ($o -join ' ') -match 'SRV01'
+      - desc: La clé de la plateforme est toujours là (le fichier a été complété, pas écrasé)
+        machine: srv01
+        run: |
+          $k = Get-Content C:\ProgramData\ssh\administrators_authorized_keys
+          @($k | Where-Object { $_ -match 'tdm-lab$' }).Count -ge 1 -and @($k | Where-Object { $_ -match '^ssh-ed25519 ' }).Count -ge 1
+    solution: |
+      New-Item C:\Users\vagrant\.ssh -ItemType Directory -Force | Out-Null
+      if (-not (Test-Path C:\Users\vagrant\.ssh\id_ed25519)) { ssh-keygen.exe -q -t ed25519 -f C:\Users\vagrant\.ssh\id_ed25519 -N '""' }
+      $pub = (Get-Content C:\Users\vagrant\.ssh\id_ed25519.pub -Raw).Trim()
+      $cred = New-Object PSCredential('SRV01\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force))
+      Invoke-Command 192.168.10.10 -Credential $cred { Add-Content C:\ProgramData\ssh\administrators_authorized_keys $using:pub -Encoding Ascii }
+
+  - id: win-rdp-sshd-durcir
+    title: Durcir le serveur SSH
+    description: |
+      Maintenant que la connexion par clé fonctionne, interdis l'authentification **par mot de passe** sur
+      le serveur SSH de SRV01 (`PasswordAuthentication no` dans `C:\ProgramData\ssh\sshd_config`, **avant**
+      les blocs `Match`) et redémarre le service `sshd`.
+
+      Garde une session PowerShell distante ouverte pendant tes essais : si sshd ne redémarre plus, c'est par
+      là que tu répareras.
+    hint: Invoke-Command ... { (Get-Content $f) -replace '^#?\s*PasswordAuthentication\s+\w+', 'PasswordAuthentication no' | Set-Content $f ; Restart-Service sshd }
+    cours: |
+      Les mots de passe se devinent, les clés non. Une fois l'accès par clé validé, on ferme l'accès par
+      mot de passe :
+
+      ```
+      PasswordAuthentication no
+      ```
+
+      Dans `sshd_config`, la **première** valeur trouvée l'emporte, et un bloc `Match` s'applique jusqu'à la
+      fin du fichier : la directive doit donc être placée **avant** `Match Group administrators` (le fichier
+      Windows en contient un par défaut, à la fin). La ligne existe souvent en commentaire
+      (`#PasswordAuthentication yes`) : il suffit de la remplacer.
+
+      Après modification, `Restart-Service sshd`, puis **tester dans une nouvelle connexion** sans fermer
+      l'ancienne. Un `sshd -t` (test de syntaxe, dans `C:\Windows\System32\OpenSSH\`) évite les mauvaises
+      surprises. Les journaux de sshd sont dans l'Observateur d'événements, *Applications and Services Logs*
+      › *OpenSSH* › *Operational*.
+    checks:
+      - desc: PasswordAuthentication no est actif (avant tout bloc Match)
+        machine: srv01
+        run: |
+          $active = Get-Content C:\ProgramData\ssh\sshd_config | Where-Object { $_ -match '^\s*[^#\s]' }
+          $avant = @(); foreach ($l in $active) { if ($l -match '^\s*Match\s') { break }; $avant += $l.Trim() }
+          $pa = @($avant | Where-Object { $_ -match '^PasswordAuthentication\s' })
+          $pa.Count -ge 1 -and $pa[0] -match '^PasswordAuthentication\s+no$'
+      - desc: Le service sshd tourne
+        machine: srv01
+        run: |
+          (Get-Service sshd).Status -eq 'Running'
+      - desc: La connexion par clé fonctionne toujours depuis PC01
+        run: |
+          $o = ssh.exe -i C:\Users\vagrant\.ssh\id_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL vagrant@192.168.10.10 hostname 2>$null
+          $LASTEXITCODE -eq 0 -and ($o -join ' ') -match 'SRV01'
+    solution: |
+      $cred = New-Object PSCredential('SRV01\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force))
+      Invoke-Command 192.168.10.10 -Credential $cred {
+        $f = 'C:\ProgramData\ssh\sshd_config'
+        $c = Get-Content $f | Where-Object { $_ -notmatch '^\s*#?\s*PasswordAuthentication\s' }
+        Set-Content $f (@('PasswordAuthentication no') + $c) -Encoding Ascii
+        Restart-Service sshd
+      }

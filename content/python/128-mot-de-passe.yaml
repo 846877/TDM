@@ -99,3 +99,56 @@ solution: |
           valides += 1
           print("OK")
   print(f"Valides : {valides}/{total}")
+cours: |
+  ## `any` et `all`
+
+  `any(iterable)` renvoie `True` si **au moins un** élément est vrai ; `all(iterable)` si
+  **tous** le sont. Combinés à une expression génératrice, ils expriment une règle en une
+  ligne lisible :
+
+  ```python
+  ports = [22, 80, 443]
+  any(p < 1024 for p in ports)    # True
+  all(p > 0 for p in ports)       # True
+  any([])                          # False
+  all([])                          # True (aucun contre-exemple)
+  ```
+
+  Ils s'arrêtent dès que la réponse est connue (court-circuit).
+
+  ## Accumuler les problèmes
+
+  Plutôt que de s'arrêter à la première règle violée, on peut **collecter** tous les
+  problèmes dans une liste, puis décider à la fin :
+
+  ```python
+  problemes = []
+  if condition_1_non_respectee:
+      problemes.append("message 1")
+  if condition_2_non_respectee:
+      problemes.append("message 2")
+  ```
+
+  Ici, des `if` **indépendants** (pas d'`elif`) : chaque règle est vérifiée. La liste
+  garde l'ordre des vérifications, et `", ".join(problemes)` produit le message final.
+  Une liste vide signifie « tout est bon ».
+
+  Une variante élégante : une **liste de règles** `(fonction_de_test, message)` parcourue
+  dans une boucle. Ajouter une règle ne demande alors qu'une ligne.
+
+  ## « Caractère spécial »
+
+  Définis-le précisément à partir des méthodes de `str` : ni lettre, ni chiffre, ni espace.
+  `str.isalnum()` et `str.isspace()` aident.
+
+  ## Ce que dit la sécurité
+
+  Les recommandations actuelles (ANSSI, NIST) privilégient la **longueur** et l'entropie
+  plutôt que des règles de composition rigides, et la vérification contre des listes de
+  mots de passe compromis. Côté serveur, on ne stocke jamais un mot de passe en clair : on
+  stocke un hachage lent et salé (bcrypt, scrypt, Argon2, ou `hashlib.scrypt`).
+docs:
+  - title: Documentation Python — any() et all()
+    url: https://docs.python.org/fr/3/library/functions.html#any
+  - title: ANSSI — Recommandations relatives à l'authentification
+    url: https://cyber.gouv.fr/publications/recommandations-relatives-lauthentification-multifacteur-et-aux-mots-de-passe

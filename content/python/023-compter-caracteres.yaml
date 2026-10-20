@@ -64,3 +64,55 @@ solution: |
   print(f"Chiffres : {chiffres}")
   print(f"Espaces : {espaces}")
   print(f"Autres : {autres}")
+cours: |
+  ## Les méthodes de test des chaînes
+
+  Les méthodes `is...()` renvoient un booléen. Sur un seul caractère, elles permettent de le
+  classer :
+
+  | Méthode | Vrai pour |
+  |---------|-----------|
+  | `isalpha()` | lettres, **accents compris** (`"é".isalpha()` → `True`) |
+  | `isdigit()` | chiffres `0` à `9` (et quelques chiffres Unicode) |
+  | `isspace()` | espace, tabulation, retour à la ligne |
+  | `isalnum()` | lettre ou chiffre |
+  | `isupper()` / `islower()` | majuscules / minuscules |
+
+  Sur une chaîne entière, elles sont vraies si **tous** les caractères vérifient le test
+  (et la chaîne n'est pas vide) : `"2026".isdigit()` vaut `True`, `"20 26".isdigit()`
+  `False`.
+
+  ## Plusieurs compteurs dans une même boucle
+
+  ```python
+  voyelles = consonnes = 0
+  for c in "Bonjour":
+      if c.lower() in "aeiouy":
+          voyelles += 1
+      elif c.isalpha():
+          consonnes += 1
+  ```
+
+  Avec `if / elif / else`, chaque caractère tombe dans **exactement une** catégorie : la
+  branche `else` récupère « tout le reste » (ponctuation, symboles…). C'est une garantie
+  utile : la somme des compteurs est égale à la longueur du texte, ce que tu peux vérifier
+  avec `len()`.
+
+  ## Lire une ligne complète
+
+  `input()` lit toute la ligne, espaces compris (seul le retour à la ligne final est retiré).
+  N'utilise pas `strip()` ici : tu perdrais des espaces à compter.
+
+  ## Affichage
+
+  Respecte exactement le format : `Lettres : 15` comporte une espace avant et après les
+  deux-points (typographie française). Une f-string par ligne rend cela simple et lisible.
+
+  Le module `string` fournit des constantes comme `string.ascii_letters`,
+  `string.digits` ou `string.punctuation`, utiles si tu veux une définition stricte
+  (sans accents).
+docs:
+  - title: Méthodes str.isalpha, str.isdigit, str.isspace
+    url: https://docs.python.org/fr/3/library/stdtypes.html#str.isalpha
+  - title: Tutoriel — les chaînes de caractères
+    url: https://docs.python.org/fr/3/tutorial/introduction.html

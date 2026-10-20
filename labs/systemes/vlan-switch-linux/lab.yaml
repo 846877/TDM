@@ -23,14 +23,121 @@ description: |
   | `sw-p3` | `pc-rh1`       | 192.168.20.11/24  | 192.168.20.254  | 20 (RH)          |
   | `sw-p4` | `srv-fichiers` | 192.168.30.10/24  | 192.168.30.254  | 30 (SERVEURS)    |
   | `sw-p5` | `pc-nouveau`   | 192.168.10.13/24  | 192.168.10.254  | 20 (bureau RH)   |
+  | `sw-p6` | `pc-invite`    | 192.168.40.10/24  | 192.168.40.254  | 40 (INVITÉS)     |
+  | `sw-p7` | `prise-reunion`| 192.168.10.99/24  | 192.168.10.254  | aucun (prise libre) |
   | `sw-p8` | `routeur`      | à configurer      |                 | trunk 10,20,30,99 |
 
   Commandes : `ip netns exec pc-compta1 ping 192.168.10.12` (ou `ip -n pc-compta1 addr`),
   `bridge link`, `bridge vlan show`, `bridge vlan add/del dev <port> vid <n> [pvid] [untagged]`, et
   `vlans-port sw-p1` qui résume les VLAN d'un port (`10PU` = VLAN 10 natif non étiqueté, `20T` = étiqueté).
+cours: |
+  ## Pourquoi des VLAN
+
+  Sur un switch non configuré, tous les ports forment **un seul domaine de diffusion** : un broadcast
+  (ARP, DHCP) atteint tout le monde, et n'importe quel poste peut parler directement à n'importe quel autre.
+  Un **VLAN** découpe un switch physique en plusieurs switchs logiques étanches : segmentation par service,
+  réduction des broadcasts, et surtout contrôle des flux entre segments (qui passent obligatoirement par un
+  routeur ou un pare-feu).
+
+  ## Ports d'accès et trunk
+
+  ```
+                           switch sw0
+   pc-compta1 ──[p1 accès VLAN 10]──┐
+   pc-compta2 ──[p2 accès VLAN 10]──┤
+   pc-rh1     ──[p3 accès VLAN 20]──┼──[p8 TRUNK 10,20,30 étiquetés]══▶ routeur
+   srv-fichiers─[p4 accès VLAN 30]──┘                                    eth0.10 192.168.10.254
+                                                                         eth0.20 192.168.20.254
+                                                                         eth0.30 192.168.30.254
+  ```
+
+  - Un **port d'accès** appartient à un VLAN ; le poste envoie des trames **normales** (non étiquetées),
+    le switch les place dans le VLAN du port (PVID).
+  - Un **trunk** transporte plusieurs VLAN sur un même câble : chaque trame porte une **étiquette 802.1Q**
+    de 4 octets insérée dans l'en-tête Ethernet, avec le numéro de VLAN (12 bits : 1 à 4094).
+  - Le **VLAN natif** d'un trunk circule sans étiquette : on évite d'y mettre du trafic (attaques par
+    double étiquetage), d'où la suppression du VLAN 1.
+
+  ```
+  | MAC dest | MAC src | 802.1Q : TPID 0x8100 | PCP | DEI | VID=10 | type | données | FCS |
+  ```
+
+  ## Correspondance Cisco / Linux
+
+  | Cisco IOS                                         | Linux (bridge VLAN-aware)                          |
+  |---------------------------------------------------|----------------------------------------------------|
+  | `vlan 10` / `name COMPTA`                         | implicite                                          |
+  | `switchport mode access` + `switchport access vlan 10` | `bridge vlan add dev sw-p1 vid 10 pvid untagged` |
+  | `switchport mode trunk` + `allowed vlan 10,20,30` | `bridge vlan add dev sw-p8 vid 10` (étiqueté)     |
+  | `interface vlan 99` + `ip address`                | `ip link add link sw0 name sw0.99 type vlan id 99` |
+  | `interface Gi0/0.10` + `encapsulation dot1Q 10`   | `ip link add link eth0 name eth0.10 type vlan id 10` |
+  | `show vlan brief`, `show interfaces trunk`         | `bridge vlan show`                                |
+  | `show mac address-table`                          | `bridge fdb show`                                  |
+  | `shutdown`                                        | `ip link set sw-p7 down`                           |
+
+  ## Routage inter-VLAN
+
+  Deux postes de VLAN différents sont dans des **réseaux IP différents** : il leur faut une passerelle.
+  Deux architectures :
+
+  - **router-on-a-stick** : un routeur relié par un trunk, une sous-interface par VLAN (ce lab) ; simple,
+    mais tout le trafic inter-VLAN passe par un seul câble ;
+  - **switch de niveau 3** : le switch route lui-même via des interfaces VLAN (SVI), bien plus performant ;
+    c'est la norme dans les réseaux d'entreprise.
+
+  C'est au point de routage qu'on **filtre** (ACL, pare-feu) : la segmentation n'a d'intérêt que si les
+  flux entre VLAN sont limités au strict nécessaire.
+
+  ## Mémo des commandes
+
+  | Besoin                         | Commande                                              |
+  |--------------------------------|-------------------------------------------------------|
+  | Créer le switch                | `ip link add sw0 type bridge vlan_filtering 1`        |
+  | Brancher un port               | `ip link set sw-p1 master sw0`                        |
+  | Voir les VLAN des ports        | `bridge vlan show`                                    |
+  | Retirer le VLAN 1              | `bridge vlan del dev sw-p1 vid 1`                     |
+  | Commande dans un poste         | `ip netns exec pc-rh1 ping 192.168.20.254`            |
+  | Capture avec étiquettes        | `tcpdump -i sw-p8 -e -nn`                             |
+
+  ## Pièges courants
+
+  - Oublier `vlan_filtering 1` : le bridge ignore les VLAN et tout communique.
+  - Laisser le VLAN 1 sur les ports d'accès : le poste reste joignable dans deux VLAN.
+  - VLAN autorisé sur le port d'accès mais pas sur le trunk (ou l'inverse) : « le poste ne joint pas sa
+    passerelle ».
+  - Croire qu'une adresse IP du « bon » sous-réseau suffit : au niveau 2, le VLAN prime.
+
+  ## Bonnes pratiques en entreprise
+
+  - Un plan VLAN documenté : numéros, noms, sous-réseaux, passerelles (souvent VLAN = 3e octet).
+  - Un VLAN d'administration dédié pour les équipements réseau, des VLAN séparés pour serveurs, ToIP,
+    imprimantes, invités, caméras.
+  - Ports inutilisés éteints et placés dans un VLAN « parking » ; 802.1X pour l'affectation dynamique.
+  - VLAN invités sans aucun accès interne, sortie Internet uniquement.
+docs:
+  - title: bridge(8) - gestion des bridges et VLAN (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man8/bridge.8.html
+  - title: ip-netns(8) - espaces de noms réseau
+    url: https://manpages.ubuntu.com/manpages/noble/man8/ip-netns.8.html
+  - title: Wikipédia - Réseau local virtuel (VLAN)
+    url: https://fr.wikipedia.org/wiki/R%C3%A9seau_local_virtuel
+  - title: Wikipédia - IEEE 802.1Q
+    url: https://fr.wikipedia.org/wiki/IEEE_802.1Q
 exercises:
   - id: switch
     title: Créer le switch
+    cours: |
+      Sous Linux, un **bridge** est un switch logiciel : les interfaces qu'on lui rattache deviennent ses
+      ports. Avec l'option `vlan_filtering 1`, il gère les VLAN 802.1Q port par port, comme un switch
+      administrable.
+
+      - `ip link add <nom> type bridge vlan_filtering 1` crée le bridge ;
+      - `ip link set <port> master <bridge>` branche un port ;
+      - `ip link set <interface> up` active une interface ;
+      - `bridge link` liste les ports branchés.
+
+      Par défaut, chaque port est placé dans le VLAN 1, natif et non étiqueté : tout le monde communique
+      tant qu'on n'a rien configuré.
     description: |
       Crée le bridge `sw0` **avec le filtrage VLAN activé** (`vlan_filtering 1`), branche-lui les ports
       `sw-p1` à `sw-p5` et `sw-p8`, et active-le.
@@ -48,6 +155,15 @@ exercises:
 
   - id: acces
     title: Ports d'accès
+    cours: |
+      Un **port d'accès** ne porte qu'un VLAN, et les trames y circulent **sans étiquette** :
+
+      - `bridge vlan add dev <port> vid <n> pvid untagged` : `pvid` (VLAN natif) place dans le VLAN `n` les
+        trames non étiquetées reçues du poste, `untagged` retire l'étiquette des trames envoyées au poste ;
+      - `bridge vlan del dev <port> vid 1` retire le VLAN par défaut.
+
+      `bridge vlan show` liste les VLAN de chaque port ; l'outil du lab `vlans-port <port>` les résume
+      (`P` = PVID, `U` = non étiqueté, `T` = étiqueté).
     description: |
       Configure les ports d'accès (l'équivalent de `switchport mode access` + `switchport access vlan`) :
       chaque port porte **un seul VLAN**, natif (`pvid`) et non étiqueté (`untagged`), et le VLAN 1 par
@@ -66,6 +182,14 @@ exercises:
 
   - id: nouveau-poste
     title: Un poste dans le mauvais VLAN
+    cours: |
+      Un VLAN est un domaine de **niveau 2** : deux postes dans des VLAN différents ne se voient pas, même
+      s'ils ont des adresses du même sous-réseau. Inversement, un poste qui change de VLAN doit souvent
+      changer d'adressage, car chaque VLAN correspond en général à un sous-réseau IP.
+
+      Commandes dans un espace de noms : `ip -n <netns> addr flush dev eth0` efface les adresses,
+      `ip -n <netns> addr add ...` en ajoute une, `ip -n <netns> route add default via ...` fixe la passerelle.
+      Dans la vraie vie, le DHCP du nouveau VLAN s'en chargerait.
     description: |
       Le poste `pc-nouveau` est installé dans le bureau RH (port `sw-p5`) mais a été préparé avec une
       adresse de la compta.
@@ -83,6 +207,14 @@ exercises:
 
   - id: trunk
     title: Lien trunk vers le routeur
+    cours: |
+      Un **trunk** transporte plusieurs VLAN sur un même lien : chaque trame porte une étiquette 802.1Q avec
+      son numéro de VLAN. Côté bridge Linux, un VLAN ajouté **sans** `pvid` ni `untagged` est transporté
+      étiqueté.
+
+      Bonne pratique : n'autoriser sur un trunk que les VLAN nécessaires (`allowed vlan` chez Cisco) et ne
+      laisser aucun VLAN natif utilisé, pour éviter les fuites entre VLAN et les attaques par double
+      étiquetage. Une boucle shell `for v in ...; do ...; done` évite les répétitions.
     description: |
       Le port `sw-p8` relie le switch au routeur. Configure-le en **trunk 802.1Q** transportant les VLAN
       **10, 20 et 30 étiquetés** (`switchport mode trunk` + `switchport trunk allowed vlan 10,20,30`), et
@@ -97,6 +229,17 @@ exercises:
 
   - id: router-on-a-stick
     title: Routage inter-VLAN (router-on-a-stick)
+    cours: |
+      Pour router entre VLAN avec un seul lien, le routeur crée une **sous-interface VLAN** par VLAN sur son
+      interface trunk : elle reçoit et émet les trames étiquetées avec son numéro, et porte l'adresse de
+      passerelle du sous-réseau.
+
+      - `ip link add link <parent> name <parent>.<vid> type vlan id <vid>` crée la sous-interface ;
+      - l'adresse s'ajoute avec `ip addr add`, l'interface s'active avec `ip link set ... up` ;
+      - un système Linux ne route que si `net.ipv4.ip_forward` vaut 1 (`sysctl -w`).
+
+      Toutes ces commandes sont à lancer **dans** l'espace de noms du routeur (`ip -n routeur ...` ou
+      `ip netns exec routeur ...`).
     description: |
       Dans l'espace de noms `routeur`, crée sur `eth0` une **sous-interface VLAN** par VLAN (comme
       `interface Gi0/0.10` + `encapsulation dot1Q 10` sur un routeur Cisco), nommées `eth0.10`, `eth0.20` et
@@ -119,6 +262,13 @@ exercises:
 
   - id: vlan-admin
     title: VLAN d'administration du switch
+    cours: |
+      Le switch lui-même a besoin d'une adresse pour être administré (SSH, SNMP, supervision). On la place
+      dans un **VLAN d'administration** dédié, que les utilisateurs ne peuvent pas joindre.
+
+      Sur un bridge Linux, le bridge est aussi un « port » vers la machine hôte : `bridge vlan add dev sw0 vid
+      <n> self` l'ajoute au VLAN, puis une interface VLAN créée **sur le bridge** (`sw0.<n>`) porte l'adresse.
+      Le VLAN doit aussi être autorisé sur le trunk pour atteindre le routeur.
     description: |
       Un switch administrable possède une adresse dans un **VLAN d'administration** (`interface vlan 99`).
       Fais de même :
@@ -139,6 +289,15 @@ exercises:
 
   - id: capture-trunk
     title: Observer les trames étiquetées
+    cours: |
+      Par défaut, `tcpdump` n'affiche pas les en-têtes Ethernet. L'option `-e` les montre, avec l'étiquette
+      802.1Q (`vlan 10, p 0, ethertype IPv4`). `-nn` désactive toute résolution de noms et de ports.
+
+      Un paquet routé entre deux VLAN traverse le trunk **deux fois** : du switch vers le routeur avec
+      l'étiquette du VLAN source, puis du routeur vers le switch avec celle du VLAN de destination. C'est la
+      limite du router-on-a-stick : le trunk transporte deux fois le trafic inter-VLAN.
+
+      Filtre la capture avec `vlan` pour ne voir que les trames étiquetées, et `-e` pour afficher les en-têtes Ethernet.
     description: |
       Capture le trafic du port trunk `sw-p8` **avec les en-têtes Ethernet** dans `/root/trunk.pcap`
       pendant que `pc-compta1` pingue `srv-fichiers`. Relis-la avec `tcpdump -enr /root/trunk.pcap` : chaque
@@ -153,6 +312,17 @@ exercises:
 
   - id: vlan-filtrage
     title: Filtrer entre les VLAN
+    cours: |
+      nftables s'organise en **tables** (famille `inet` = IPv4 + IPv6), **chaînes** (attachées à un hook :
+      `input`, `forward`, `output`) et **règles**. Le hook `forward` voit les paquets **routés** par la machine,
+      donc le trafic entre VLAN.
+
+      - une chaîne de base se crée avec `{ type filter hook forward priority 0; policy drop; }` (pense aux
+        guillemets dans le shell) ;
+      - `ct state established,related accept` laisse passer les réponses des connexions autorisées ;
+      - `iifname` / `oifname` désignent les interfaces d'entrée et de sortie (ici les sous-interfaces VLAN).
+
+      `nft list ruleset` affiche toute la configuration.
     description: |
       Router tous les VLAN entre eux annule une partie de l'intérêt de la segmentation. Sur le **routeur**,
       avec nftables (`ip netns exec routeur nft ...`), crée une table `inet filtre` avec une chaîne
@@ -168,3 +338,86 @@ exercises:
         run: ip netns exec pc-compta1 ping -c2 -W1 192.168.30.10 >/dev/null && ip netns exec pc-rh1 ping -c2 -W1 192.168.30.10 >/dev/null
       - desc: compta et RH ne se joignent plus
         run: "! ip netns exec pc-compta1 ping -c2 -W1 192.168.20.11 >/dev/null 2>&1 && ! ip netns exec pc-rh1 ping -c2 -W1 192.168.10.11 >/dev/null 2>&1"
+
+  - id: vlan-table-mac
+    title: Lire la table MAC du switch
+    cours: |
+      Un switch **apprend** les adresses MAC : quand une trame arrive sur un port, il note « cette MAC source
+      est derrière ce port, dans ce VLAN ». Il peut ensuite envoyer les trames destinées à cette MAC sur ce
+      seul port, au lieu de les diffuser partout.
+
+      - `bridge fdb show br <bridge>` affiche la table (MAC, port, VLAN) ;
+      - les entrées `permanent` correspondent aux interfaces du bridge lui-même ;
+      - les entrées apprises expirent après quelques minutes sans trafic.
+
+      En dépannage, la table MAC répond à la question « sur quelle prise est branché ce poste ? ».
+    description: |
+      Un switch apprend sur quel port se trouve chaque adresse MAC (table **FDB** : *forwarding database*,
+      `show mac address-table` chez Cisco). Fais pinguer `srv-fichiers` par `pc-compta1`, puis consulte la
+      table avec `bridge fdb show br sw0`.
+
+      Ajoute à `/root/reponses.txt` :
+      - `port_srv_fichiers=` le port derrière lequel le switch a appris la MAC de `srv-fichiers`
+        (sa MAC : `ip -n srv-fichiers link show eth0`) ;
+      - `vlan_srv_fichiers=` le VLAN dans lequel elle a été apprise.
+    hint: "ip -n srv-fichiers link show eth0 | grep ether ; bridge fdb show br sw0 | grep <mac>"
+    checks:
+      - desc: Port et VLAN de srv-fichiers
+        run: |
+          grep -Eqi '^port_srv_fichiers *= *sw-p4 *$' /root/reponses.txt && grep -Eqi '^vlan_srv_fichiers *= *30 *$' /root/reponses.txt
+
+  - id: vlan-port-inutilise
+    title: Désactiver une prise libre
+    cours: |
+      Un port de switch actif et dans un VLAN de production est une porte ouverte : n'importe qui peut y
+      brancher un portable et obtenir un accès au réseau.
+
+      Mesures classiques : éteindre les ports inutilisés (`shutdown`), les placer dans un VLAN « parking »
+      sans routage, et activer 802.1X ou la sécurité de port (limitation des adresses MAC).
+
+      Sous Linux, `ip link set <port> down` éteint une interface ; `ip link set <port> nomaster` la débranche
+      d'un bridge. Le drapeau `UP` disparaît alors de `ip link show`.
+    description: |
+      La prise murale de la salle de réunion (port `sw-p7`) n'est attribuée à personne, mais quelqu'un y a
+      branché un appareil (`prise-reunion`). Bonne pratique : un port inutilisé est **éteint** et n'appartient
+      à aucun VLAN de production (`shutdown` chez Cisco).
+
+      **Éteins** le port `sw-p7` et assure-toi qu'il n'est pas branché sur le switch ou, s'il l'est, qu'il ne
+      porte aucun VLAN.
+    hint: ip link set sw-p7 down
+    checks:
+      - desc: Le port sw-p7 est éteint
+        run: "! ip -o link show sw-p7 | grep -q '[<,]UP[,>]'"
+      - desc: sw-p7 ne porte aucun VLAN
+        run: test -z "$(vlans-port sw-p7)"
+
+  - id: vlan-invites
+    title: VLAN invités isolé
+    cours: |
+      Un VLAN invités suit le même modèle que les autres : port d'accès, VLAN autorisé sur le trunk,
+      sous-interface et adresse de passerelle sur le routeur.
+
+      Sa particularité est le **filtrage** : les invités ne doivent atteindre qu'Internet (ici, rien d'autre
+      que leur passerelle). Une chaîne `forward` en politique `drop` bloque déjà tout ce qui n'est pas
+      explicitement autorisé : c'est l'intérêt de la liste blanche, un nouveau réseau est isolé par défaut.
+
+      Le ping vers la passerelle n'est pas concerné par la chaîne `forward` : il s'adresse au routeur lui-même
+      (chaîne `input`).
+    description: |
+      La salle d'attente reçoit un VLAN **40 (INVITÉS)** : `192.168.40.0/24`, passerelle `192.168.40.254`.
+      1. Branche `sw-p6` sur le switch en accès VLAN 40.
+      2. Ajoute le VLAN 40 étiqueté sur le trunk `sw-p8`.
+      3. Crée la sous-interface `eth0.40` du routeur en `192.168.40.254/24`.
+
+      Le poste `pc-invite` doit joindre sa passerelle, mais **aucun** réseau interne (le pare-feu de
+      l'exercice précédent s'en charge si tu n'y ajoutes rien pour le VLAN 40).
+    hint: "ip link set sw-p6 master sw0 ; bridge vlan del dev sw-p6 vid 1 ; bridge vlan add dev sw-p6 vid 40 pvid untagged ; bridge vlan add dev sw-p8 vid 40 ; ip -n routeur link add link eth0 name eth0.40 type vlan id 40 ..."
+    checks:
+      - desc: sw-p6 en accès VLAN 40 sur sw0
+        run: ip link show sw-p6 | grep -q 'master sw0' && test "$(vlans-port sw-p6)" = 40PU
+      - desc: Le trunk transporte le VLAN 40 étiqueté
+        run: echo " $(vlans-port sw-p8) " | grep -q ' 40T '
+      - desc: pc-invite joint sa passerelle
+        run: ip netns exec pc-invite ping -c2 -W1 192.168.40.254 >/dev/null
+      - desc: pc-invite ne joint ni les serveurs ni la compta
+        run: "! ip netns exec pc-invite ping -c2 -W1 192.168.30.10 >/dev/null 2>&1 && ! ip netns exec pc-invite ping -c2 -W1 192.168.10.11 >/dev/null 2>&1"

@@ -1,0 +1,165 @@
+title: Manipuler une liste
+level: debutant
+order: 40
+tags: [listes, enumerate, méthodes]
+summary: Ajouter, retirer, rechercher et compter dans une liste.
+description: |
+  1. `positions(elements, valeur)` renvoie la liste des **indices** où `valeur` apparaît.
+  2. `sans_valeur(elements, valeur)` renvoie une **nouvelle** liste sans aucune occurrence de
+     `valeur` (la liste d'origine n'est pas modifiée).
+  3. `deuxieme_plus_grand(nombres)` renvoie la deuxième plus grande valeur **distincte**, ou
+     `None` s'il n'y en a pas.
+  4. `inserer_trie(nombres, x)` insère `x` **dans la liste reçue** (déjà triée) à la bonne
+     place pour qu'elle reste triée, et ne renvoie rien. Utilise `liste.insert(indice, x)`.
+
+  ```python
+  positions(["ok", "ko", "ok"], "ok")      # [0, 2]
+  sans_valeur([1, 2, 1, 3], 1)             # [2, 3]
+  deuxieme_plus_grand([4, 9, 9, 2])        # 4
+  l = [1, 3, 8]
+  inserer_trie(l, 5)                       # l vaut maintenant [1, 3, 5, 8]
+  ```
+
+  N'utilise pas `sorted()` ni `.sort()`.
+starter: |
+  def positions(elements, valeur):
+      pass
+
+
+  def sans_valeur(elements, valeur):
+      pass
+
+
+  def deuxieme_plus_grand(nombres):
+      pass
+
+
+  def inserer_trie(nombres, x):
+      pass
+tests: |
+  def test_positions():
+      "positions"
+      assert solution.positions(["ok", "ko", "ok"], "ok") == [0, 2]
+      assert solution.positions([1, 2, 3], 7) == []
+      assert solution.positions([], 1) == []
+
+  def test_sans_valeur():
+      "sans_valeur renvoie une nouvelle liste"
+      origine = [1, 2, 1, 3, 1]
+      r = solution.sans_valeur(origine, 1)
+      assert r == [2, 3], f"obtenu {r!r}"
+      assert origine == [1, 2, 1, 3, 1], "la liste d'origine a été modifiée !"
+
+  def test_deuxieme():
+      "deuxieme_plus_grand"
+      assert solution.deuxieme_plus_grand([4, 9, 9, 2]) == 4
+      assert solution.deuxieme_plus_grand([-1, -5, -3]) == -3
+      assert solution.deuxieme_plus_grand([7, 7]) is None
+      assert solution.deuxieme_plus_grand([]) is None
+
+  def test_inserer_milieu():
+      "inserer_trie au milieu"
+      l = [1, 3, 8]
+      r = solution.inserer_trie(l, 5)
+      assert l == [1, 3, 5, 8], f"obtenu {l!r}"
+      assert r is None, "la fonction modifie la liste et ne renvoie rien"
+
+  def test_inserer_bords():
+      "inserer_trie au début, à la fin, dans une liste vide"
+      l = [2, 4]
+      solution.inserer_trie(l, 1)
+      solution.inserer_trie(l, 9)
+      solution.inserer_trie(l, 4)
+      assert l == [1, 2, 4, 4, 9], f"obtenu {l!r}"
+      vide = []
+      solution.inserer_trie(vide, 3)
+      assert vide == [3]
+solution: |
+  def positions(elements, valeur):
+      resultat = []
+      for i, e in enumerate(elements):
+          if e == valeur:
+              resultat.append(i)
+      return resultat
+
+
+  def sans_valeur(elements, valeur):
+      return [e for e in elements if e != valeur]
+
+
+  def deuxieme_plus_grand(nombres):
+      premier = second = None
+      for x in nombres:
+          if premier is None or x > premier:
+              premier, second = x, premier
+          elif x != premier and (second is None or x > second):
+              second = x
+      return second
+
+
+  def inserer_trie(nombres, x):
+      i = 0
+      while i < len(nombres) and nombres[i] < x:
+          i += 1
+      nombres.insert(i, x)
+cours: |
+  ## Les méthodes des listes
+
+  | Méthode | Effet |
+  |---------|-------|
+  | `l.append(x)` | ajoute `x` à la fin |
+  | `l.insert(i, x)` | insère `x` à l'indice `i` (les suivants sont décalés) |
+  | `l.extend(autre)` | ajoute tous les éléments de `autre` |
+  | `l.remove(x)` | retire la **première** occurrence de `x` (`ValueError` si absent) |
+  | `l.pop()` / `l.pop(i)` | retire et renvoie le dernier / l'élément `i` |
+  | `l.index(x)` | indice de la première occurrence (`ValueError` si absent) |
+  | `l.count(x)` | nombre d'occurrences |
+  | `x in l` | présence (vrai/faux) |
+
+  Ces méthodes **modifient** la liste et renvoient `None` (sauf `pop`, `index`, `count`).
+  Écrire `l = l.append(3)` est donc une erreur : `l` vaudrait `None`.
+
+  ## `enumerate` : l'indice et la valeur
+
+  ```python
+  for i, service in enumerate(["ssh", "http", "dns"]):
+      print(i, service)     # 0 ssh / 1 http / 2 dns
+  ```
+
+  C'est plus clair et plus sûr que `for i in range(len(l)): ... l[i]`.
+  `enumerate(l, start=1)` commence la numérotation à 1.
+
+  ## Modifier une liste pendant qu'on la parcourt : danger
+
+  ```python
+  l = [1, 1, 2]
+  for x in l:
+      if x == 1:
+          l.remove(x)     # décale les éléments : le second 1 est sauté !
+  print(l)                # [1, 2]
+  ```
+
+  La solution sûre : construire une **nouvelle** liste avec les éléments à garder.
+
+  ## Modifier « sur place » ou renvoyer une nouvelle liste ?
+
+  Une fonction qui reçoit une liste peut la modifier directement : l'appelant voit le
+  changement, car il n'y a qu'**une seule** liste en mémoire. C'est voulu pour une fonction
+  comme `inserer_trie`, et c'est un effet de bord indésirable ailleurs. Par convention en
+  Python, une fonction qui modifie sur place renvoie `None` (comme `list.sort()`), et une
+  fonction qui crée un résultat le renvoie (comme `sorted()`).
+
+  ## Valeurs distinctes
+
+  Pour la « deuxième plus grande valeur distincte », il faut ignorer les doublons du maximum.
+  Un parcours unique qui maintient les deux meilleures valeurs est en O(n), sans trier.
+
+  ## Insertion dans une liste triée
+
+  Trouver la position d'insertion en parcourant depuis le début coûte O(n). Le module
+  `bisect` le fait par dichotomie en O(log n) (`bisect.insort`).
+docs:
+  - title: Tutoriel — compléments sur les listes
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#more-on-lists
+  - title: Documentation Python — enumerate()
+    url: https://docs.python.org/fr/3/library/functions.html#enumerate

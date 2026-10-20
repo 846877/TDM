@@ -31,6 +31,10 @@ SETTINGS_TEMPLATE = """# Réglages de l'application TDM. Relance TDM après une 
 # Dossier qui contient tes labs Vagrant (un Vagrantfile par lab).
 TDM_VAGRANT_DIR={vagrant_dir}
 
+# Les labs Windows livrés avec TDM (Systèmes & réseaux > Windows) sont copiés et lancés depuis
+# %LOCALAPPDATA%\TDM\vagrant. Décommente pour choisir un autre dossier (disque avec de la place) :
+# TDM_VAGRANT_WORK_DIR=D:\VM\TDM
+
 # Exécution du code Python des exercices : local (rapide) ou docker (isolé, Docker Desktop requis).
 TDM_SANDBOX=local
 """
@@ -105,9 +109,15 @@ def free_port(preferred: int) -> int:
 def start_vagrant_agent(settings: dict[str, str]) -> None:
     import vagrant_agent
 
+    from app import config
+
     token = secrets.token_hex(16)
     vagrant = shutil.which("vagrant") or "vagrant"
-    agent = vagrant_agent.Agent(Path(settings.get("TDM_VAGRANT_DIR") or guess_vagrant_dir()), vagrant, relay=False)
+    # Les labs Windows embarqués sont dans le dossier temporaire de l'exe (_MEIPASS) : l'agent les copie
+    # dans %LOCALAPPDATA%\TDM\vagrant avant chaque `vagrant up`, pour que l'état des VM survive.
+    agent = vagrant_agent.Agent(Path(settings.get("TDM_VAGRANT_DIR") or guess_vagrant_dir()), vagrant, relay=False,
+                                bundled=config.WINDOWS_LABS_DIR,
+                                work_dir=Path(settings.get("TDM_VAGRANT_WORK_DIR") or data_dir() / "vagrant"))
     server = ThreadingHTTPServer(("127.0.0.1", 0), vagrant_agent.make_handler(agent, token))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     os.environ.update({

@@ -29,3 +29,53 @@ tests: |
 solution: |
   def inverser(texte):
       return texte[::-1]
+cours: |
+  ## Indices
+
+  Chaque caractère d'une chaîne a une position, en partant de **0**. Les indices négatifs
+  comptent depuis la fin :
+
+  ```python
+  mot = "python"
+  mot[0]     # "p"
+  mot[5]     # "n"
+  mot[-1]    # "n"  (dernier)
+  mot[-2]    # "o"
+  len(mot)   # 6
+  ```
+
+  `mot[6]` lève une `IndexError` : le dernier indice valide est `len(mot) - 1`.
+
+  ## Le slicing (tranches)
+
+  `sequence[debut:fin:pas]` extrait une partie de la séquence ; `debut` est inclus, `fin`
+  exclue, et chaque élément est facultatif :
+
+  ```python
+  mot[0:3]    # "pyt"
+  mot[2:]     # "thon"   (jusqu'au bout)
+  mot[:2]     # "py"     (depuis le début)
+  mot[::2]    # "pto"    (un caractère sur deux)
+  mot[1::2]   # "yhn"
+  ```
+
+  Le **pas** peut aussi être négatif : la tranche est alors parcourue de la fin vers le
+  début. Expérimente dans la console avec différentes valeurs pour comprendre.
+
+  ## Construire une chaîne pas à pas
+
+  Sans slicing, on peut construire le résultat dans une boucle. Ajouter un caractère
+  **devant** une chaîne (`c + resultat`) ou **derrière** (`resultat + c`) ne donne pas le
+  même ordre. Comme les chaînes sont immuables, chaque `+` crée une nouvelle chaîne : pour
+  de très longs textes, on préfère accumuler dans une liste puis utiliser
+  `"".join(liste)`.
+
+  Il existe aussi la fonction `reversed(sequence)`, qui renvoie un itérateur sur les
+  éléments à l'envers : il faut ensuite le reconvertir en chaîne avec `"".join(...)`.
+
+  **Cas limites** à tester : la chaîne vide `""` et une chaîne d'un seul caractère.
+docs:
+  - title: Tutoriel — chaînes de caractères et indices
+    url: https://docs.python.org/fr/3/tutorial/introduction.html
+  - title: Opérations communes sur les séquences (tranches)
+    url: https://docs.python.org/fr/3/library/stdtypes.html#common-sequence-operations

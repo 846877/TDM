@@ -78,3 +78,57 @@ solution: |
               destination.write(ligne.upper() + "\n")
               ecrites += 1
       return ecrites
+cours: |
+  ## Ouvrir un fichier
+
+  ```python
+  with open("rapport.txt", "w", encoding="utf-8") as f:
+      f.write("ligne 1\n")
+  with open("rapport.txt", encoding="utf-8") as f:
+      contenu = f.read()
+  ```
+
+  - Modes : `"r"` lecture (défaut), `"w"` écriture (**écrase** le fichier), `"a"` ajout à
+    la fin, `"x"` création exclusive, `"b"` binaire.
+  - Le bloc `with` ferme automatiquement le fichier, même en cas d'exception.
+  - Précise toujours `encoding="utf-8"` : sinon l'encodage dépend du système (Windows !).
+
+  ## Lire
+
+  - `f.read()` : tout le contenu en une chaîne ;
+  - `f.readline()` : une ligne (avec son `\n`) ;
+  - `for ligne in f:` : ligne par ligne, **sans tout charger en mémoire** (idéal pour des
+    logs de plusieurs Go).
+
+  Chaque ligne lue conserve son `\n` final, d'où les `strip()` / `rstrip("\n")`.
+  Un fichier se lit une seule fois : après un `read()`, le curseur est à la fin (voir
+  `f.seek(0)`).
+
+  ## Écrire
+
+  `f.write(texte)` n'ajoute **pas** de retour à la ligne : c'est à toi d'écrire `\n`.
+  `print(texte, file=f)` en ajoute un.
+
+  ## Le principe : recevoir un fichier, pas un nom
+
+  Une fonction qui reçoit un **objet fichier** est découplée du système de fichiers : on
+  peut lui passer un vrai fichier, `sys.stdin`, ou un `io.StringIO` :
+
+  ```python
+  import io
+  faux = io.StringIO("a b\nc\n")
+  faux.readline()     # "a b\n"
+  sortie = io.StringIO()
+  sortie.write("ok\n")
+  sortie.getvalue()   # "ok\n"
+  ```
+
+  C'est l'idée du **duck typing** : peu importe le type exact, tant que l'objet a les
+  méthodes attendues. Cela rend le code facile à tester, sans créer de fichiers temporaires.
+
+  **Compter** : les caractères incluent les `\n`, les mots se comptent avec `split()`.
+docs:
+  - title: Tutoriel — lecture et écriture de fichiers
+    url: https://docs.python.org/fr/3/tutorial/inputoutput.html#reading-and-writing-files
+  - title: Module io (StringIO)
+    url: https://docs.python.org/fr/3/library/io.html

@@ -39,3 +39,60 @@ solution: |
   ip nat inside source list 1 interface g0/1 overload
   ip route 0.0.0.0 0.0.0.0 203.0.113.1
   end
+cours: |
+  ## Pourquoi le NAT ?
+
+  Les adresses privées (RFC 1918 : `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) ne sont pas
+  routées sur Internet. Le **NAT** remplace l'adresse source privée par une adresse publique à
+  la sortie. Avec le **PAT** (*Port Address Translation*, `overload`), des centaines de postes
+  partagent **une seule** adresse publique : le routeur distingue les sessions par le port
+  source.
+
+  ### Vocabulaire
+
+  | Terme           | Signification                                  |
+  |-----------------|------------------------------------------------|
+  | inside local    | adresse privée du poste (`172.16.40.21`)       |
+  | inside global   | adresse publique qui le représente (`198.51.100.2`) |
+  | outside global  | adresse du serveur sur Internet                |
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# interface gi0/0
+  R1(config-if)# ip nat inside
+  R1(config-if)# interface gi0/2
+  R1(config-if)# ip nat outside
+  R1(config-if)# exit
+  R1(config)# access-list 5 permit 172.16.40.0 0.0.0.255
+  R1(config)# ip nat inside source list 5 interface gi0/2 overload
+  R1(config)# ip route 0.0.0.0 0.0.0.0 198.51.100.1
+  R1# show ip nat translations
+  Pro Inside global        Inside local        Outside local    Outside global
+  tcp 198.51.100.2:51544   172.16.40.21:51544  93.184.216.34:443 93.184.216.34:443
+  R1# show ip nat statistics
+  ```
+
+  Les quatre éléments indispensables :
+
+  1. l'interface **inside** (côté LAN) et l'interface **outside** (côté Internet) ;
+  2. une ACL qui sélectionne les adresses à traduire (ici, en permit) ;
+  3. la règle de traduction avec `overload` ;
+  4. une route par défaut vers l'opérateur.
+
+  ### Pièges fréquents
+
+  - inside/outside inversés : aucune traduction.
+  - Wildcard faux dans l'ACL : une partie des postes n'est pas traduite.
+  - Oublier `overload` : un seul poste à la fois peut sortir.
+  - `clear ip nat translation *` est parfois nécessaire avant de modifier une règle.
+
+  ### Pour le CCNA
+
+  NAT statique, dynamique et PAT, ainsi que la lecture de `show ip nat translations`, sont au
+  programme.
+docs:
+  - title: "Cisco — NAT Frequently Asked Questions"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/network-address-translation-nat/26704-nat-faq-00.html
+  - title: "Wikipédia — Network address translation"
+    url: https://fr.wikipedia.org/wiki/Network_address_translation

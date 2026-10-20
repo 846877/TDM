@@ -28,9 +28,116 @@ description: |
   - Les interfaces de gw s'appellent `lan`, `serveurs`, `wan` et `mgmt`. Le routage IP y est activé.
   - Pas de systemd : `dnsmasq` (`pkill dnsmasq; dnsmasq`), `nft -f /etc/nftables.conf`, `smbd`,
     `kill -HUP $(cat /run/sshd.pid)`.
+cours: |
+  ## Monter l'infrastructure d'une PME : l'ordre compte
+
+  Une petite entreprise a besoin des mêmes briques qu'une grande, en plus simple. On les monte dans
+  l'ordre des **dépendances** : sans adresse, pas de nom ; sans nom, pas de service confortable ; sans
+  pare-feu, pas de publication sur Internet.
+
+  ```
+                      Internet (WAN 203.0.113.0/24)
+                               │ .2 (IP publique)
+                      ┌────────┴────────┐
+                      │       gw        │  DHCP + DNS (dnsmasq), NAT, DNAT, pare-feu (nftables)
+                      └──┬───────────┬──┘
+           lan .254      │           │    serveurs .254
+     192.168.100.0/24    │           │    10.100.0.0/24
+        ┌──────┬─────────┘           └──────┬──────────┐
+      admin  poste                         srv        nas
+                                   (web, Samba, SSH)  (sauvegardes)
+  ```
+
+  | Étape | Brique              | Question à laquelle elle répond                         |
+  |-------|---------------------|---------------------------------------------------------|
+  | 1     | DHCP                | comment un poste obtient-il son adresse ?               |
+  | 2     | DNS interne         | comment trouve-t-il `srv.pme.lan` ?                     |
+  | 3     | NAT (masquerade)    | comment sort-il sur Internet avec une adresse privée ?  |
+  | 4     | Pare-feu            | qui a le droit de parler à qui ?                        |
+  | 5     | DNAT                | comment Internet atteint-il le site hébergé en interne ? |
+  | 6     | Partage de fichiers | où les salariés rangent-ils leurs documents ?           |
+  | 7     | Durcissement SSH    | comment l'administration reste-t-elle sûre ?            |
+  | 8     | Sauvegarde          | que se passe-t-il si le serveur meurt ?                 |
+  | 9     | Recette             | tout cela survit-il à un redémarrage ? est-ce documenté ? |
+
+  ## Une passerelle Linux : les quatre chaînes utiles
+
+  ```
+  paquet entrant ─▶ prerouting (DNAT) ─▶ routage ─┬─▶ input   (vers gw lui-même)
+                                                  └─▶ forward (traverse gw) ─▶ postrouting (SNAT/masquerade) ─▶ sortie
+  ```
+
+  ```
+  flush ruleset
+  table ip nat {
+    chain prerouting  { type nat hook prerouting priority dstnat; ... }
+    chain postrouting { type nat hook postrouting priority srcnat; oifname "wan" masquerade }
+  }
+  table inet filtre {
+    chain input   { type filter hook input priority filter; policy drop; ... }
+    chain forward { type filter hook forward priority filter; policy drop; ... }
+  }
+  ```
+
+  Une politique `drop` par défaut impose de **lister ce qui est permis** : la règle
+  `ct state established,related accept` en tête laisse passer toutes les réponses, puis chaque flux
+  autorisé est décrit par interface d'entrée, de sortie, protocole et port. C'est la **matrice des flux**
+  du cahier des charges traduite en règles.
+
+  ## Mémo des vérifications
+
+  | Brique      | Test                                                       |
+  |-------------|------------------------------------------------------------|
+  | DHCP        | bail du poste, `/var/lib/misc/dnsmasq.leases` sur gw       |
+  | DNS         | `dig @192.168.100.254 srv.pme.lan`, `dig -x 10.100.0.10`   |
+  | NAT         | `curl http://203.0.113.80` (renvoie l'IP source vue d'Internet) |
+  | Pare-feu    | `nft list ruleset`, tests autorisés **et** interdits        |
+  | DNAT        | `ssh internet curl http://203.0.113.2/`                    |
+  | Samba       | `testparm -s`, `smbclient //10.100.0.10/commun -U alice`   |
+  | SSH         | `sshd -t`, `sshd -T \| grep -i passwordauth`               |
+  | Sauvegarde  | lancer le script à la main, comparer source et NAS         |
+
+  ## Pièges courants
+
+  - Se couper l'accès : un pare-feu `policy drop` appliqué sans règle pour SSH sur `mgmt`, ou un
+    `sshd_config` invalide rechargé sans `sshd -t`.
+  - Tester seulement ce qui doit marcher : un pare-feu se recette aussi par ce qui doit **échouer**.
+  - Laisser dnsmasq répondre sur le WAN : un résolveur ouvert sur Internet sert aux attaques par
+    amplification.
+  - Une sauvegarde par cron qui bloque sur « Are you sure you want to continue connecting? ».
+  - Configurer en mémoire et oublier les fichiers : tout disparaît au redémarrage.
+
+  ## Bonnes pratiques en entreprise
+
+  - Un **dossier d'exploitation** remis au client : plan d'adressage, schéma, matrice des flux,
+    comptes de service, procédure de sauvegarde et de restauration, contacts.
+  - Une recette formelle signée : liste des tests, résultat attendu, résultat obtenu.
+  - Règle 3-2-1 pour les sauvegardes, et un test de restauration planifié.
+  - Comptes nominatifs, mots de passe dans un coffre, et pas de mot de passe par défaut.
+docs:
+  - title: dnsmasq(8) - DHCP et DNS légers (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man8/dnsmasq.8.html
+  - title: Wiki officiel de nftables
+    url: https://wiki.nftables.org/
+  - title: smb.conf(5) - configuration de Samba (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/smb.conf.5.html
+  - title: rsync(1) - synchronisation de fichiers (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man1/rsync.1.html
 exercises:
   - id: pme-dhcp
     title: Distribution d'adresses (DHCP)
+    cours: |
+      dnsmasq fait serveur DHCP dès qu'une ligne `dhcp-range` existe. Les directives utiles :
+
+      - `interface=` limite l'écoute à une interface (répète la ligne pour en ajouter) ;
+      - `dhcp-range=<début>,<fin>,<masque>,<durée>` ; la durée s'écrit `12h`, `30m`... ;
+      - `dhcp-option=option:router,<ip>` et `dhcp-option=option:dns-server,<ip>` ;
+      - `domain=` donne le suffixe DNS transmis aux clients.
+
+      `dnsmasq --test` valide la syntaxe. Sans systemd, on relance par `pkill dnsmasq` puis `dnsmasq`. Les
+      baux attribués s'écrivent dans `/var/lib/misc/dnsmasq.leases`.
+
+      Teste avec un vrai client qui demande un bail, puis vérifie qu'il reçoit aussi la passerelle et le DNS.
     description: |
       Configure **dnsmasq sur gw** (fichier `/etc/dnsmasq.d/pme.conf`) pour distribuer, **uniquement sur
       l'interface `lan`** :
@@ -54,6 +161,17 @@ exercises:
 
   - id: pme-dns
     title: Noms internes (DNS)
+    cours: |
+      dnsmasq sert d'abord ce qu'il connaît localement (`/etc/hosts`, `host-record`, `address`...), puis
+      transmet le reste aux serveurs amont.
+
+      - `local=/<domaine>/` : ne jamais transmettre ce domaine à l'extérieur ;
+      - `host-record=<nom>,<ip>` crée l'enregistrement A **et** le PTR inverse ;
+      - `cname=<alias>,<cible>` crée un alias vers un nom connu de dnsmasq ;
+      - avec `domain=`, les clients DHCP sont enregistrés sous `<leur nom>.<domaine>`.
+
+      Pour répondre aux serveurs, dnsmasq doit aussi écouter sur leur interface. Teste avec `dig` en
+      précisant le serveur, et `dig -x` pour l'inverse.
     description: |
       Toujours avec dnsmasq sur gw, sers la zone **`pme.lan`** (sans transmettre ces noms à l'extérieur) :
 
@@ -83,6 +201,16 @@ exercises:
 
   - id: pme-nat
     title: Accès à Internet (NAT)
+    cours: |
+      Les adresses RFC 1918 ne sont pas routées sur Internet. La passerelle remplace donc l'adresse source des
+      paquets sortants par sa propre adresse publique et mémorise la correspondance (suivi de connexions)
+      pour les réponses.
+
+      Dans nftables, cela se fait dans une table de famille `ip`, chaîne de type `nat` accrochée au hook
+      `postrouting`. Le mot-clé `masquerade` prend automatiquement l'adresse de l'interface de sortie,
+      pratique quand elle change ; `snat to <ip>` fixe une adresse précise.
+
+      `nft -c -f <fichier>` valide sans appliquer. Le serveur de test affiche l'adresse source qu'il voit.
     description: |
       Les réseaux LAN et serveurs utilisent des adresses privées. Sur gw, mets en place la **traduction
       d'adresses source** (masquerade) pour tout ce qui sort par `wan`, dans une table nftables écrite dans
@@ -96,6 +224,17 @@ exercises:
 
   - id: pme-parefeu
     title: Pare-feu de la passerelle
+    cours: |
+      Une politique **fermée par défaut** (`policy drop`) ne laisse passer que ce qui est écrit. On distingue :
+
+      - **input** : ce qui est destiné à la passerelle elle-même (DNS, DHCP, SSH d'administration) ;
+      - **forward** : ce qui la traverse d'un réseau à l'autre.
+
+      Ordre conseillé : boucle locale, `ct state established,related accept`, ICMP, puis les flux autorisés
+      décrits par `iifname`, `oifname`, protocole et `dport` (les ensembles `{ 22, 80, 445 }` évitent de
+      répéter les règles).
+
+      Ajoute la règle SSH sur `mgmt` **avant** d'appliquer, et teste aussi un flux qui doit être refusé.
     description: |
       Le fournisseur d'accès route (à tort) les réseaux internes de la PME vers gw : aujourd'hui,
       `internet` peut joindre directement srv ! Écris une politique de filtrage **par défaut fermée**
@@ -123,6 +262,15 @@ exercises:
 
   - id: pme-publication-web
     title: Publier le site web (DNAT)
+    cours: |
+      Pour publier un serveur interne, la passerelle réécrit l'adresse de **destination** des paquets qui
+      arrivent sur son adresse publique : c'est le DNAT (ou « redirection de port »), dans une chaîne de type
+      `nat` accrochée au hook `prerouting`.
+
+      Le DNAT a lieu **avant** le routage : dans la chaîne forward, le paquet a déjà pour destination
+      l'adresse interne. Il faut donc l'y autoriser explicitement. `ct status dnat` restreint la règle aux
+      connexions qui ont réellement été traduites, ce qui évite d'ouvrir l'accès direct aux adresses
+      internes.
     description: |
       Le site public est hébergé sur srv (nginx, port 80). Publie-le sur l'**adresse publique** de gw
       (`203.0.113.2`, port 80) par une **translation de destination** (DNAT), et autorise ce flux (et lui
@@ -136,6 +284,17 @@ exercises:
 
   - id: pme-partage-fichiers
     title: Serveur de fichiers (Samba)
+    cours: |
+      Samba s'appuie sur les comptes Linux, mais garde **sa propre base de mots de passe** : un compte doit
+      exister côté système (`useradd`) puis être ajouté à Samba (`smbpasswd -a`, `-s` pour lire le mot de
+      passe sur l'entrée standard).
+
+      - un groupe porte les droits ; dans `smb.conf`, `valid users = @<groupe>` le désigne ;
+      - côté disque, le bit **setgid** (`2770`) sur le dossier fait hériter le groupe aux nouveaux fichiers ;
+      - `guest ok = no` interdit l'accès anonyme.
+
+      `testparm -s` valide la configuration ; `smbclient -L` et `smbclient //hôte/partage -U <compte>`
+      testent l'accès.
     description: |
       Sur srv, crée le groupe `employes` et les comptes **`alice`** (`Alice2024!`) et **`bob`**
       (`Bob2024!`), membres de ce groupe. Partage **`commun`** (`/srv/commun`, propriétaire `root:employes`,
@@ -154,6 +313,19 @@ exercises:
 
   - id: pme-ssh-durci
     title: Durcir l'accès SSH au serveur
+    cours: |
+      Un fichier dans `/etc/ssh/sshd_config.d/` est inclus au début de la configuration ; pour chaque
+      directive, **la première valeur lue l'emporte**.
+
+      Les directives à connaître : `PermitRootLogin` (valeur `prohibit-password` = par clé seulement),
+      `PasswordAuthentication`, `KbdInteractiveAuthentication`, `MaxAuthTries`, `X11Forwarding`,
+      `ClientAliveInterval` / `ClientAliveCountMax`.
+
+      `sshd -t` valide, `sshd -T` affiche la configuration effective (en minuscules). Le signal HUP fait
+      relire la configuration sans couper les sessions ouvertes : garde toujours une session ouverte pendant
+      le test.
+
+      Garde toujours une session ouverte pendant que tu modifies sshd : si la nouvelle configuration te bloque, tu pourras encore corriger.
     description: |
       Sur srv, durcis sshd dans un fichier `/etc/ssh/sshd_config.d/durcissement.conf` :
       root seulement par clé, **aucune** authentification par mot de passe, 3 essais maximum, pas de
@@ -170,6 +342,16 @@ exercises:
 
   - id: pme-sauvegarde
     title: Sauvegarde automatique vers le NAS
+    cours: |
+      Une tâche planifiée ne peut ni taper un mot de passe ni répondre à une question : l'authentification se
+      fait par **clé sans phrase de passe**, et la clé d'hôte du serveur distant doit être connue d'avance
+      (`ssh-keyscan` alimente `known_hosts`).
+
+      - `rsync -a` conserve droits, dates et propriétaires ; `--delete` supprime à destination ce qui a
+        disparu de la source (miroir) ; la **barre oblique finale** de la source copie son contenu ;
+      - dans une crontab, les champs sont minute, heure, jour du mois, mois, jour de la semaine.
+
+      Lance le script à la main une première fois : c'est le meilleur test.
     description: |
       Le partage `commun` doit être copié chaque nuit sur le NAS :
 
@@ -196,6 +378,16 @@ exercises:
 
   - id: pme-recette
     title: Recette finale et persistance
+    cours: |
+      La **recette** prouve que l'installation répond au cahier des charges, et qu'elle survivra au premier
+      redémarrage. Le fichier `/etc/nftables.conf` doit contenir tout le jeu de règles et commencer par
+      `flush ruleset`, pour qu'un rechargement remplace proprement l'existant au lieu de s'y ajouter.
+
+      `nft list ruleset` affiche les règles actives dans un format directement réutilisable dans le fichier.
+      Le **dossier d'exploitation** est remis au client : il permet à n'importe quel technicien de reprendre
+      l'installation sans toi.
+
+      Une recette se fait avec une liste écrite de tests, cochée un par un : c'est le document que tu remettras au client.
     description: |
       Avant de partir, assure-toi que tout survivrait à un redémarrage de gw : le jeu de règles complet
       (NAT, DNAT, filtrage) est dans `/etc/nftables.conf`, dont la syntaxe est valide. Les vérifications

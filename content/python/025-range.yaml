@@ -76,3 +76,53 @@ solution: |
 
   def somme_impairs(n):
       return sum(range(1, n + 1, 2))
+cours: |
+  ## `range` en détail
+
+  `range` existe sous trois formes :
+
+  ```python
+  range(fin)                 # 0, 1, ..., fin - 1
+  range(debut, fin)          # debut, ..., fin - 1
+  range(debut, fin, pas)     # debut, debut + pas, ... (sans atteindre fin)
+  ```
+
+  La borne `fin` est **toujours exclue**. Avec un pas négatif, on descend, et la borne de fin
+  doit être **plus petite** que le début :
+
+  ```python
+  list(range(10, 0, -3))   # [10, 7, 4, 1]
+  list(range(0, 10, -1))   # []  (on ne peut pas descendre de 0 vers 10)
+  ```
+
+  Un pas de 0 lève une `ValueError`.
+
+  ## `range` est paresseux
+
+  `range(1_000_000)` n'occupe presque pas de mémoire : les nombres sont calculés à la
+  demande. Pour voir les valeurs ou obtenir une vraie liste, on utilise `list(range(...))`.
+  Un `range` supporte pourtant `len()`, l'indexation et `in` en temps constant :
+
+  ```python
+  r = range(0, 100, 5)
+  len(r)       # 20
+  r[3]         # 15
+  35 in r      # True
+  ```
+
+  ## Raisonner sur les bornes
+
+  Les erreurs « à un près » (*off-by-one*) sont les bugs les plus fréquents. Méthode :
+
+  - écris le premier et le dernier élément que tu veux obtenir ;
+  - le premier argument est le premier élément, la borne de fin est le dernier **plus un
+    pas** (plus 1 si on monte, moins 1 si on descend) ;
+  - teste avec une petite valeur et compare à la liste écrite à la main.
+
+  Pour une suite de multiples ou de nombres impairs, choisir le bon **pas** évite un test
+  `if` dans la boucle. Et `sum(range(...))` additionne directement les valeurs.
+docs:
+  - title: Type range
+    url: https://docs.python.org/fr/3/library/stdtypes.html#ranges
+  - title: Tutoriel — la fonction range()
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html#the-range-function

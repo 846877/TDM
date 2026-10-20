@@ -34,9 +34,99 @@ description: |
   (`ssh dc1 test -f /run/lab-pret`, puis `ssh srv-fichiers test -f /etc/lab-initialise`).
   Services sans systemd : `winbindd`, `smbd` (`smbcontrol all reload-config`), `sssd -D`
   (`pkill sssd; sssd -D`). Journaux : `/var/log/samba/`, `/var/log/sssd/`.
+cours: |
+  ## Partir du symptôme
+
+  « Je ne peux pas me connecter » cache des causes très différentes. La première tâche est de **localiser**
+  la couche en cause :
+
+  ```
+  le compte         (annuaire)  désactivé, expiré, verrouillé, mauvais groupe, mot de passe à changer
+  le nom            (DNS)       enregistrement faux ou absent, client qui n'utilise pas le DNS du domaine
+  l'authentification (Kerberos) horloge, royaume, ticket, SPN
+  la machine        (membre)    canal sécurisé rompu, winbind/SSSD arrêté, NSS, droits du partage
+  ```
+
+  ## Lire les messages Kerberos
+
+  `kinit <compte>` depuis un poste est le test le plus direct : son message nomme souvent la cause.
+
+  | Message (extrait)                                  | Cause probable                     |
+  |----------------------------------------------------|------------------------------------|
+  | `Client's credentials have been revoked`           | compte désactivé ou verrouillé     |
+  | `Client's entry in database has expired`           | compte expiré (`accountExpires`)   |
+  | `Password has expired`                             | mot de passe à changer             |
+  | `Preauthentication failed`                         | mauvais mot de passe               |
+  | `Clock skew too great`                             | écart d'horloge > 5 minutes        |
+  | `Cannot find KDC for realm`                        | DNS (enregistrements SRV) ou krb5.conf |
+
+  ## Attributs de compte à connaître
+
+  | Attribut              | Signification                                                      |
+  |-----------------------|--------------------------------------------------------------------|
+  | `userAccountControl`  | drapeaux : 512 = compte normal actif, 514 = désactivé (bit 2), 66048 = mot de passe sans expiration |
+  | `accountExpires`      | date d'expiration (0 ou 9223372036854775807 = jamais)              |
+  | `lockoutTime`         | non nul = verrouillé                                               |
+  | `pwdLastSet`          | 0 = changement obligatoire à la prochaine connexion                |
+  | `memberOf`            | groupes du compte                                                  |
+
+  ## Le canal sécurisé d'un membre
+
+  Chaque machine jointe possède un **compte ordinateur** dont elle change le mot de passe tous les 30 jours.
+  Restaurer une VM depuis un vieil instantané lui rend un ancien mot de passe : l'annuaire ne la reconnaît
+  plus (« la relation d'approbation entre cette station de travail et le domaine a échoué » sous Windows).
+  Remède : rejoindre le domaine (ou `Test-ComputerSecureChannel -Repair` sous Windows), sans toucher au reste
+  de la configuration.
+
+  ## Mémo de diagnostic
+
+  | Où             | Commande                                           | Ce qu'elle prouve                   |
+  |----------------|----------------------------------------------------|-------------------------------------|
+  | admin          | `kinit compte`, `klist`                            | compte et Kerberos                  |
+  | admin          | `dig @10.62.0.10 nom.durand.lan`, `dig SRV _ldap._tcp.durand.lan` | DNS du domaine        |
+  | dc1            | `samba-tool user show/getgroups compte`            | état du compte, groupes             |
+  | dc1            | `samba-tool dns query 127.0.0.1 durand.lan nom ALL -U ...` | contenu de la zone          |
+  | srv-fichiers   | `net ads testjoin`, `wbinfo -t`, `wbinfo -p`       | canal sécurisé, winbind             |
+  | srv-fichiers   | `getent passwd compte`, `testparm -s`              | NSS, configuration des partages     |
+  | poste01        | `sssd -i -d 3`, `/var/log/sssd/`, `id compte`      | SSSD, contrôle d'accès              |
+  | admin          | `smbclient //srv/partage -U 'DURAND\compte%mdp' -c ls` | accès réel au partage          |
+
+  ## Pièges courants
+
+  - Corriger un compte et oublier les **caches** : SSSD (`sss_cache -E`), tickets Kerberos (`kdestroy`),
+    cache DNS des postes.
+  - Ajouter un enregistrement DNS au lieu de **corriger** l'ancien : deux réponses, pannes aléatoires.
+  - Recréer un compte supprimé : nouveau SID, tous les droits sont perdus. Préférer la corbeille AD ou la
+    restauration.
+  - Supprimer et recréer la configuration Samba d'un serveur pour « repartir de zéro » : partages et
+    droits perdus.
+
+  ## Bonnes pratiques en entreprise
+
+  - Délégation fine : un intérimaire n'a pas les droits de modifier les groupes ou de désactiver des comptes.
+  - Audit des modifications de l'annuaire et revue régulière des comptes désactivés ou expirés.
+  - Procédure de restauration des serveurs membres qui inclut la vérification du canal sécurisé.
+  - Pour chaque appel : cause, correction, et action pour éviter la récidive.
+docs:
+  - title: Samba Wiki - dépannage d'un membre de domaine
+    url: https://wiki.samba.org/index.php/Troubleshooting_Samba_Domain_Members
+  - title: samba-tool(8) - administration du domaine (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man8/samba-tool.8.html
+  - title: sssd(8) - démon SSSD (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man8/sssd.8.html
 exercises:
   - id: ad-compte-desactive
     title: "Appel 1 : Marie Dupont ne peut plus ouvrir de session"
+    cours: |
+      Commence par reproduire le problème avec un outil qui donne un message précis : `kinit <compte>` depuis
+      admin. Kerberos distingue un mauvais mot de passe d'un compte bloqué.
+
+      Sur le contrôleur, `samba-tool user show <compte>` affiche tous les attributs. Dans
+      `userAccountControl`, le drapeau `ACCOUNTDISABLE` (valeur 2) signifie que le compte est désactivé :
+      512 = normal, 514 = normal + désactivé.
+
+      `samba-tool user --help` liste les sous-commandes de gestion d'un compte. Après correction, refais le
+      `kinit` pour prouver le résultat.
     description: |
       Marie (`mdupont`) a le bon mot de passe, mais toute authentification échoue. Reproduis depuis
       admin avec `kinit mdupont` et lis le message d'erreur Kerberos, puis examine son compte sur dc1
@@ -49,6 +139,17 @@ exercises:
 
   - id: ad-compte-expire
     title: "Appel 2 : Julien Martin non plus, mais pas pour la même raison"
+    cours: |
+      Un compte peut avoir une **date de fin** (attribut `accountExpires`, en intervalles de 100 ns depuis
+      1601 !), pratique pour les CDD, stagiaires et prestataires. Une fois la date passée, toute
+      authentification est refusée, avec un message Kerberos différent de la désactivation.
+
+      Les valeurs `0` et `9223372036854775807` signifient « n'expire jamais ». `samba-tool user setexpiry`
+      règle une expiration en jours ou la supprime.
+
+      Vérifie aussi l'expiration du **mot de passe**, une autre notion (stratégie de mots de passe).
+
+      Note dans le ticket la cause exacte et la nouvelle date d'expiration : le prochain technicien gagnera du temps si le cas revient.
     description: |
       `kinit jmartin` échoue aussi, avec un autre message. Julien est en CDI : son compte ne doit pas
       avoir de date de fin. Trouve l'attribut en cause (`accountExpires`) et corrige-le.
@@ -63,6 +164,15 @@ exercises:
 
   - id: ad-dns-enregistrement
     title: "Appel 3 : « \\\\srv-fichiers est introuvable »"
+    cours: |
+      « Introuvable par le nom mais joignable par l'adresse » : c'est le DNS. Compare la réponse du DNS du
+      domaine avec l'adresse réelle du serveur (`ip -br addr` sur la machine).
+
+      Dans le DNS intégré de Samba, `samba-tool dns query` liste les enregistrements d'un nom, et
+      `samba-tool dns update` **remplace** une valeur par une autre (ancienne puis nouvelle valeur), ce qui
+      évite de laisser un doublon. Ces commandes demandent une authentification `-U`.
+
+      Les postes Windows mettent les réponses en cache : `ipconfig /flushdns` après une correction.
     description: |
       Les partages sont injoignables par leur nom, alors que `ping 10.62.0.20` répond. Interroge le DNS
       du domaine (`dig @10.62.0.10 srv-fichiers.durand.lan`), compare avec l'adresse réelle du serveur et
@@ -74,6 +184,18 @@ exercises:
 
   - id: ad-appartenance-groupe
     title: "Appel 4 : le nouveau technicien est dans le mauvais service"
+    cours: |
+      Les droits sont portés par les **groupes** : un compte placé dans le mauvais groupe obtient les droits
+      d'un autre service, ce qui est à la fois une panne et un problème de sécurité.
+
+      - `samba-tool user getgroups <compte>` liste ses groupes ;
+      - `samba-tool group addmembers` / `removemembers` modifient l'appartenance ;
+      - `samba-tool group listmembers <groupe>` vérifie côté groupe.
+
+      Un changement de groupe n'est pris en compte qu'au prochain ticket Kerberos de l'utilisateur
+      (déconnexion/reconnexion, ou `kdestroy` puis `kinit`).
+
+      Contrôle le résultat avec `samba-tool group listmembers <groupe>` avant de rappeler l'utilisateur, puis demande-lui de rouvrir sa session.
     description: |
       Thomas Bernard (`tbernard`), technicien, voit les dossiers RH mais ne peut pas administrer les postes.
       Vérifie ses groupes (`samba-tool user getgroups tbernard`) : il doit être dans **GG_Informatique**
@@ -87,6 +209,16 @@ exercises:
 
   - id: ad-relation-approbation
     title: "Appel 5 : le serveur de fichiers refuse tout le monde"
+    cours: |
+      Un serveur membre s'authentifie auprès du domaine avec le mot de passe de son **compte ordinateur**,
+      qu'il change périodiquement. Après la restauration d'un vieil instantané, ce mot de passe est périmé : le
+      canal sécurisé est rompu et le serveur ne peut plus valider les utilisateurs.
+
+      - `net ads testjoin` teste la jonction ; `wbinfo -t` teste le canal sécurisé de winbind ;
+      - rejoindre le domaine (`net ads join` avec un compte administrateur) remet le compte ordinateur en
+        phase, sans toucher à `smb.conf` ni aux partages.
+
+      Redémarre ensuite winbind si nécessaire et reteste.
     description: |
       Sur srv-fichiers, même les comptes valides sont refusés. Le serveur a été restauré depuis un
       instantané ancien : le mot de passe de son **compte ordinateur** ne correspond plus à celui de
@@ -102,6 +234,17 @@ exercises:
 
   - id: ad-winbind-nss
     title: "Appel 6 : les comptes du domaine inconnus de Linux"
+    cours: |
+      Pour que Linux affiche des noms de comptes du domaine (propriétaires de fichiers, `getent`, `id`), deux
+      éléments sont nécessaires :
+
+      - le démon **winbindd**, qui dialogue avec les contrôleurs et convertit SID ↔ UID/GID (`wbinfo -p`
+        vérifie qu'il répond) ;
+      - la source `winbind` dans les lignes `passwd:` et `group:` de `/etc/nsswitch.conf`.
+
+      `ps aux | grep winbind` et `grep -E '^(passwd|group)' /etc/nsswitch.conf` font le point en deux commandes.
+
+      Une fois corrigé, `getent passwd <utilisateur du domaine>` doit renvoyer une ligne complète : c'est le test qui compte pour les applications. Vérifie aussi que le service redémarre seul au prochain démarrage du serveur.
     description: |
       Sur srv-fichiers, `ls -l /srv/partages` affiche des numéros au lieu des groupes et
       `getent passwd mdupont` ne renvoie rien. Deux éléments manquent pour que Linux voie les comptes du
@@ -117,6 +260,15 @@ exercises:
 
   - id: ad-partage-compta
     title: "Appel 7 : la comptabilité n'accède pas à son partage"
+    cours: |
+      Quand l'authentification réussit mais l'accès au partage est refusé, regarde les **deux niveaux** de
+      droits : le partage (`valid users`, `read only`...) puis le système de fichiers.
+
+      - `testparm -s` affiche la configuration effective (et signale les erreurs) ;
+      - dans `valid users`, `@` désigne un groupe, dont le nom doit exister côté Linux (`getent group`) ;
+      - `smbcontrol all reload-config` applique sans couper les autres utilisateurs.
+
+      Teste avec le compte concerné **et** avec un compte d'un autre service, qui doit rester refusé.
     description: |
       Marie s'authentifie, mais `\\srv-fichiers\compta` lui répond « accès refusé ». Teste depuis admin
       (`smbclient //srv-fichiers/compta -U 'DURAND\mdupont%Compta!2024pass' -c ls`), lis la section du
@@ -133,6 +285,16 @@ exercises:
 
   - id: ad-poste-sssd
     title: "Appel 8 : le technicien ne peut pas ouvrir de session sur poste01"
+    cours: |
+      SSSD est strict sur sa configuration : si `sssd.conf` a de mauvais droits ou une erreur, il refuse de
+      démarrer. `sssd -i -d 3` le lance au premier plan avec un niveau de débogage et affiche la raison ; les
+      journaux détaillés sont dans `/var/log/sssd/`.
+
+      Une fois démarré, le **contrôle d'accès** (`access_provider = simple`, `simple_allow_groups`) décide qui
+      peut ouvrir une session : un nom de groupe faux et personne n'entre. Les noms de groupes AD sont en
+      minuscules côté Linux.
+
+      Après modification, redémarre SSSD et vide son cache (`sss_cache -E`).
     description: |
       Sur poste01, `id tbernard` ne renvoie rien et `ssh tbernard@poste01` échoue. Le poste est bien
       joint au domaine (`klist -k`). Trouve pourquoi **SSSD** ne démarre pas (`sssd -i -d 3` pour le voir

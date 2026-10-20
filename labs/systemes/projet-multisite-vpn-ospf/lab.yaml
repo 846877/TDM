@@ -31,9 +31,109 @@ description: |
   - `ssh <machine>` depuis admin passe par un réseau d'administration séparé (10.99.7.0/24).
   - FRRouting tourne sur les routeurs (`vtysh`). WireGuard : `wg-quick up wg0` (bascule seul sur
     **wireguard-go** si le noyau n'a pas le module).
+cours: |
+  ## Relier des sites : les trois couches du problème
+
+  Un réseau multisite superpose trois mécanismes indépendants, à mettre en place et à dépanner **dans
+  l'ordre** :
+
+  ```
+  3. Routage    OSPF annonce « 10.2.0.0/24 est derrière 172.31.255.2 »   (qui sait aller où ?)
+  2. Transport  WireGuard chiffre et encapsule dans de l'UDP 51820        (comment traverser Internet ?)
+  1. Local      VLAN et passerelles sur chaque site                       (chaque réseau a-t-il sa passerelle ?)
+  ```
+
+  Si la couche 1 ne marche pas, inutile de regarder OSPF ; si le tunnel n'échange aucun paquet, OSPF ne
+  formera jamais d'adjacence.
+
+  ## Router-on-a-stick
+
+  ```
+  pc-siege (VLAN 10) ┐                       lan.10  10.1.10.254
+  srv-siege (VLAN 20) ├─ switch ─ lien tagué ─ lan ─┤ lan.20  10.1.20.254   r-siege
+  invite   (VLAN 30) ┘                       lan.30  10.1.30.254
+  ```
+
+  Un seul câble physique transporte plusieurs VLAN, distingués par l'étiquette 802.1Q. Sous Linux, chaque
+  VLAN devient une sous-interface (`ip link add link lan name lan.10 type vlan id 10`) qui porte
+  l'adresse de passerelle de ce réseau. Le routage entre VLAN passe alors par le routeur, qui peut le
+  **filtrer**.
+
+  ## WireGuard comme lien de routage
+
+  | Directive        | Rôle                                                                  |
+  |------------------|-----------------------------------------------------------------------|
+  | `Address`        | adresse du routeur dans le réseau de transit du tunnel (/30)          |
+  | `ListenPort`     | port UDP d'écoute                                                     |
+  | `Endpoint`       | adresse publique et port du pair                                      |
+  | `AllowedIPs`     | adresses acceptées depuis ce pair **et** envoyées vers lui (routage cryptographique) |
+  | `Table = off`    | `wg-quick` n'installe aucune route : c'est OSPF qui décide            |
+
+  Avec un seul pair par tunnel, `AllowedIPs = 0.0.0.0/0` laisse passer toutes les destinations, y compris
+  le multicast OSPF (224.0.0.5) ; la table de routage, alimentée par OSPF, fait le reste.
+
+  ## OSPF en bref
+
+  OSPF est un protocole **à état de liens** : chaque routeur décrit ses liens, tous construisent la même
+  carte du réseau et calculent le plus court chemin (algorithme de Dijkstra). Il réagit en quelques
+  secondes à une panne et passe à l'échelle (aires).
+
+  ```
+  router ospf
+   ospf router-id 1.1.1.1
+   passive-interface lan.10            ← annonce le réseau, mais aucun hello vers les postes
+   network 172.31.255.0/30 area 0
+   network 10.1.10.0/24 area 0
+  interface wg0
+   ip ospf network point-to-point      ← pas d'élection DR/BDR, adjacence plus rapide
+  ```
+
+  | Commande vtysh                 | Ce qu'elle montre                               |
+  |--------------------------------|-------------------------------------------------|
+  | `show ip ospf neighbor`        | voisins et état (`Full` = adjacence établie)    |
+  | `show ip ospf interface wg0`   | type de réseau, timers, interface passive ou non |
+  | `show ip route ospf`           | routes apprises (préfixe `O`)                   |
+  | `write memory`                 | enregistre dans `/etc/frr/frr.conf`             |
+
+  ## Pièges courants
+
+  - OSPF activé sur l'interface WAN : le routeur tente des adjacences sur Internet et annonce des
+    réseaux internes à des inconnus.
+  - Timers hello/dead ou type de réseau différents des deux côtés : les voisins restent en `Init` ou
+    `ExStart`.
+  - Annoncer le réseau invités : il devient routable depuis tous les sites.
+  - Filtrer l'agence sans penser aux réponses (`ct state established,related`) ou au trafic inter-VLAN
+    du siège.
+  - Tout configurer à la main et ne rien rendre persistant.
+
+  ## Bonnes pratiques en entreprise
+
+  - Plan d'adressage hiérarchique (10.<site>.<vlan>.0/24) qui permet de résumer les routes par site.
+  - Un réseau de transit dédié par tunnel, des router-id stables et documentés.
+  - Filtrage aux frontières entre sites selon une matrice des flux, journalisation des refus.
+  - Supervision de l'état des adjacences et des tunnels (dernière poignée de main WireGuard).
+docs:
+  - title: WireGuard - démarrage rapide
+    url: https://www.wireguard.com/quickstart/
+  - title: FRRouting - documentation OSPFv2
+    url: https://docs.frrouting.org/en/latest/ospfd.html
+  - title: wg-quick(8) - configuration d'un tunnel WireGuard (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man8/wg-quick.8.html
+  - title: Wiki officiel de nftables
+    url: https://wiki.nftables.org/
 exercises:
   - id: ms-vlan-siege
     title: Routage inter-VLAN au siège (router-on-a-stick)
+    cours: |
+      Une sous-interface VLAN se crée sur l'interface physique qui reçoit les trames étiquetées :
+      `ip link add link <parent> name <parent>.<id> type vlan id <id>`. Elle se comporte ensuite comme une
+      interface ordinaire : on lui donne une adresse (`ip addr add`) et on l'active (`ip link set ... up`).
+
+      Chaque sous-interface porte l'adresse de **passerelle** de son VLAN. Le routage entre les deux VLAN
+      se fait alors sur le routeur, à condition que le routage IP soit activé.
+
+      `ip -d link show lan.10` affiche l'identifiant de VLAN ; `traceroute -n` depuis un poste montre le
+      passage par la passerelle.
     description: |
       Sur **r-siege**, crée les sous-interfaces 802.1Q **`lan.10`** et **`lan.20`** sur le lien `lan`, avec
       les adresses `10.1.10.254/24` et `10.1.20.254/24`. pc-siege (VLAN 10) doit alors joindre sa
@@ -50,6 +150,16 @@ exercises:
 
   - id: ms-tunnel-wireguard
     title: Tunnel WireGuard entre les sites
+    cours: |
+      WireGuard identifie chaque extrémité par une **paire de clés** : `wg genkey` produit la clé privée,
+      `wg pubkey` en dérive la clé publique, qu'on donne à l'autre côté. La clé privée ne quitte jamais la
+      machine (fichiers en `600`, d'où un `umask 077` avant de les créer).
+
+      Le fichier `wg0.conf` contient une section `[Interface]` (clé privée, adresse, port) et une section
+      `[Peer]` par pair (clé publique, `Endpoint`, `AllowedIPs`).
+
+      `wg show` affiche la dernière poignée de main (*latest handshake*) et les octets échangés : la preuve
+      que le tunnel est établi.
     description: |
       Sur chaque routeur, génère une paire de clés et écris `/etc/wireguard/wg0.conf` (droits `600`) :
       adresse du tunnel, `ListenPort = 51820`, et un `[Peer]` avec la clé publique et l'`Endpoint` WAN
@@ -69,6 +179,16 @@ exercises:
 
   - id: ms-ospf
     title: OSPF dans le tunnel
+    cours: |
+      Dans `vtysh`, on entre en mode configuration (`configure terminal`), puis dans `router ospf`.
+
+      - `ospf router-id` fixe l'identifiant du routeur (une adresse IPv4 conventionnelle, unique) ;
+      - `network <préfixe> area <n>` active OSPF sur les interfaces dont l'adresse est dans ce préfixe **et**
+        annonce le réseau ;
+      - `passive-interface <if>` annonce le réseau sans envoyer de hello sur l'interface ;
+      - dans `interface wg0`, `ip ospf network point-to-point` adapte OSPF à un lien à deux extrémités.
+
+      Vérifie l'adjacence (`show ip ospf neighbor`) avant de chercher les routes.
     description: |
       Configure OSPF (aire 0) avec `vtysh` sur les deux routeurs :
 
@@ -94,6 +214,16 @@ exercises:
 
   - id: ms-bout-en-bout
     title: Communication de bout en bout entre les sites
+    cours: |
+      Un test « ça ping » ne suffit pas : il faut prouver **par où** passe le trafic.
+
+      - `traceroute -n` liste les routeurs traversés : on doit voir l'adresse de tunnel du routeur distant ;
+      - `tcpdump -ni wan` sur un routeur ne doit montrer que de l'UDP vers le port WireGuard : le contenu
+        est chiffré ;
+      - `tcpdump -ni wg0` montre au contraire les paquets en clair, avant chiffrement.
+
+      Si ça bloque, remonte les couches : routes (`ip route get`), adjacence OSPF, poignée de main
+      WireGuard, passerelle du poste.
     description: |
       Vérifie que pc-agence joint pc-siege et consulte le serveur du siège, et que le trafic passe bien
       **dans le tunnel** (`traceroute -n` montre l'adresse de tunnel du routeur distant ;
@@ -109,6 +239,16 @@ exercises:
 
   - id: ms-filtrage-intersites
     title: Filtrage des flux venant de l'agence
+    cours: |
+      Un tunnel relie les sites, mais ne doit pas tout ouvrir : l'agence ne doit atteindre que ce dont elle a
+      besoin. Dans la chaîne forward de r-siege (politique `drop`) :
+
+      - les réponses passent grâce à `ct state established,related accept` ;
+      - les jokers d'interface (`"lan.*"`) et les ensembles (`{ "lan.10", "wg0" }`) évitent de multiplier
+        les règles ;
+      - l'ordre compte : la première règle qui correspond décide.
+
+      Teste ce qui doit passer (web, ping vers le VLAN 20, trafic inter-VLAN) **et** ce qui doit être refusé.
     description: |
       La sécurité demande que l'agence n'accède au siège **qu'au serveur web** de srv-siege (TCP 80) et
       au ping vers le VLAN serveurs ; les postes du siège (VLAN 10) ne doivent pas être joignables
@@ -128,6 +268,18 @@ exercises:
 
   - id: ms-vlan-invites
     title: VLAN invités isolé
+    cours: |
+      Un réseau invités doit offrir Internet (plus tard) mais **rien** d'interne. Deux protections
+      complémentaires :
+
+      - **filtrage** : une règle qui rejette ce qui vient de `lan.30` vers les autres réseaux, placée
+        **avant** toute règle plus large qui l'autoriserait ;
+      - **routage** : ne pas annoncer le réseau en OSPF, pour que l'agence ne sache même pas qu'il existe.
+
+      Vérifie que l'invité joint sa passerelle, et que les pings vers le VLAN 10, le VLAN 20 et l'agence
+      échouent.
+
+      Teste l'isolement des deux côtés : un invité ne doit pas joindre le LAN, et le LAN ne doit pas pouvoir initier de connexion vers les invités.
     description: |
       Le VLAN **30** accueille le Wi-Fi des visiteurs (hôte `invite`, 10.1.30.50). Crée `lan.30`
       (`10.1.30.254/24`) sur r-siege. Les invités doivent joindre leur passerelle mais **aucun** réseau
@@ -143,6 +295,16 @@ exercises:
 
   - id: ms-persistance
     title: Tout survit au redémarrage
+    cours: |
+      Les commandes `ip link add`, les règles chargées par `nft` et la configuration tapée dans `vtysh` vivent
+      **en mémoire**.
+
+      - un script de démarrage doit être **idempotent** : relancé, il ne doit ni échouer ni dupliquer
+        (`ip link show <if> >/dev/null 2>&1 || ip link add ...`, `ip addr replace` au lieu de `add`) ;
+      - `write memory` dans vtysh enregistre la configuration FRR dans `/etc/frr/frr.conf` ;
+      - `nft -c -f /etc/nftables.conf` valide le fichier sans l'appliquer.
+
+      Lance ton script deux fois de suite : la deuxième exécution doit réussir sans rien changer.
     description: |
       Rends la configuration persistante sur les routeurs (le démarrage relance automatiquement
       `/usr/local/bin/vlans-siege.sh` s'il est exécutable, `wg-quick up wg0` et `nft -f /etc/nftables.conf`) :

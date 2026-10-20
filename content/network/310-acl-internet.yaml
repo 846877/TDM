@@ -55,3 +55,65 @@ solution: |
   interface g0/1
   ip access-group INTERNET-IN in
   end
+cours: |
+  ## Filtrer ce qui arrive d'Internet
+
+  Sur l'interface qui fait face à Internet, une ACL **d'entrée** rejette le trafic illégitime
+  avant qu'il n'atteigne le réseau ou le routeur.
+
+  ### 1. Anti-usurpation
+
+  Un paquet venant d'Internet ne peut pas avoir comme **source** une adresse privée, de bouclage
+  ou appartenant à notre propre bloc : c'est forcément une usurpation (*spoofing*). On refuse en
+  tête :
+
+  - `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` (RFC 1918) ;
+  - `127.0.0.0/8` (boucle locale) ;
+  - éventuellement `0.0.0.0/8`, `169.254.0.0/16`, `224.0.0.0/4` et notre propre préfixe public.
+
+  ### 2. Laisser revenir les réponses
+
+  Les postes internes ouvrent des connexions vers Internet ; les réponses doivent pouvoir
+  revenir. Pour TCP, le mot-clé **`established`** autorise les segments qui ont le bit ACK ou RST
+  (donc pas l'ouverture d'une nouvelle connexion depuis l'extérieur).
+
+  ### 3. Ouvrir seulement les services publiés
+
+  ### Exemple (autres valeurs)
+
+  ```
+  R1(config)# ip access-list extended DEPUIS-INTERNET
+  R1(config-ext-nacl)# deny ip 10.0.0.0 0.255.255.255 any
+  R1(config-ext-nacl)# deny ip 172.16.0.0 0.15.255.255 any
+  R1(config-ext-nacl)# deny ip 192.168.0.0 0.0.255.255 any
+  R1(config-ext-nacl)# deny ip 127.0.0.0 0.255.255.255 any
+  R1(config-ext-nacl)# permit tcp any any established
+  R1(config-ext-nacl)# permit tcp any host 198.51.100.10 eq 443
+  R1(config-ext-nacl)# permit icmp any any echo-reply
+  R1(config-ext-nacl)# deny ip any any log
+  R1(config)# interface gi0/2
+  R1(config-if)# ip access-group DEPUIS-INTERNET in
+  ```
+
+  ### Limites
+
+  `established` ne concerne que TCP : les réponses **UDP** (DNS) et ICMP doivent être autorisées
+  explicitement, ce qui est imprécis. Un pare-feu à états (Zone-Based Firewall, pare-feu dédié)
+  suit les sessions et fait mieux. L'ACL d'entrée reste une première barrière utile, et le
+  filtrage anti-usurpation est une bonne pratique (BCP 38, RFC 2827).
+
+  ### Pièges fréquents
+
+  - Oublier les réponses DNS (UDP 53) : les noms ne se résolvent plus.
+  - Bloquer les protocoles de routage ou BGP avec l'opérateur.
+  - Appliquer l'ACL en sortie au lieu de l'entrée.
+
+  ### Pour le CCNA
+
+  L'usage des ACL étendues pour protéger un réseau et leurs limites face à un pare-feu à états
+  sont au programme.
+docs:
+  - title: "RFC 1918 — Address Allocation for Private Internets"
+    url: https://www.rfc-editor.org/rfc/rfc1918
+  - title: "RFC 2827 — Network Ingress Filtering"
+    url: https://www.rfc-editor.org/rfc/rfc2827

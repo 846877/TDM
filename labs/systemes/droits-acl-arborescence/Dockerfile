@@ -18,5 +18,9 @@ RUN mkdir -p /srv/partages/archives/2019 /srv/partages/archives/outils \
     && chmod 777 /srv/partages/archives/2019 && chmod 666 /srv/partages/archives/2019/*.txt \
     && chown -R 1500:1500 /srv/partages/archives/2019 \
     && cp /usr/bin/id /srv/partages/archives/outils/diag && chmod 4755 /srv/partages/archives/outils/diag
+# Procédures du service informatique à publier dans le dossier commun.
+RUN mkdir -p /srv/procedures/2026 \
+    && echo "Procedure de sauvegarde" > /srv/procedures/2026/sauvegarde.txt \
+    && echo "Procedure d'arrivee d'un salarie" > /srv/procedures/2026/arrivee.txt
 WORKDIR /srv/partages
 CMD ["sleep", "infinity"]

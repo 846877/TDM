@@ -154,3 +154,54 @@ solution: |
               if distances[u] + w < distances[v] - 1e-9:
                   distances[v] = distances[u] + w
       return any(distances[u] + w < distances[v] - 1e-9 for u, v, w in aretes)
+cours: |
+  ## Pourquoi pas Dijkstra ?
+
+  Dijkstra suppose qu'un sommet extrait a sa distance définitive. Avec un arc négatif, un
+  chemin passant par un sommet « lointain » peut finalement être moins cher : l'hypothèse
+  tombe. Bellman-Ford ne fait aucune hypothèse de ce genre.
+
+  ## L'algorithme
+
+  On initialise `dist[source] = 0` et l'infini ailleurs, puis on **relâche toutes les
+  arêtes**, n − 1 fois :
+
+  ```python
+  for _ in range(n - 1):
+      for u, v, w in aretes:
+          if dist[u] + w < dist[v]:
+              dist[v] = dist[u] + w
+              pred[v] = u
+  ```
+
+  Pourquoi n − 1 ? Un plus court chemin sans cycle a au plus n − 1 arêtes, et après le
+  passage k, toutes les distances des chemins d'au plus k arêtes sont correctes. On peut
+  s'arrêter plus tôt si un passage ne change rien.
+
+  `math.inf + w` vaut toujours `inf` : les sommets inaccessibles restent à l'infini, mais
+  teste quand même `dist[u] != inf` pour éviter de propager des prédécesseurs absurdes.
+
+  ## Détecter un cycle négatif
+
+  Après n − 1 passages, si une arête peut **encore** être relâchée, il existe un cycle de
+  poids négatif accessible depuis la source : les distances pourraient diminuer à l'infini.
+
+  ## Arbitrage de devises
+
+  Avec des taux de change, un cycle profitable vérifie `t1 × t2 × … × tk > 1`. Le logarithme
+  transforme les produits en sommes : `log(t1) + … + log(tk) > 0`, soit
+  `Σ −log(ti) < 0`. Avec des poids `−log(taux)`, un arbitrage est donc un **cycle
+  négatif** ! Pour détecter un cycle n'importe où (pas seulement depuis une source), on part
+  de toutes les distances à 0 (comme une source virtuelle reliée à tous les sommets). Une
+  petite tolérance (`1e-12`) évite les faux positifs dus aux flottants.
+
+  ## Complexité et usage
+
+  O(V × E), plus lent que Dijkstra. Le protocole de routage **RIP** (à vecteur de distance)
+  repose sur la version distribuée de Bellman-Ford, et son problème du « comptage à
+  l'infini » en est une conséquence directe.
+docs:
+  - title: Wikipédia — Algorithme de Bellman-Ford
+    url: https://fr.wikipedia.org/wiki/Algorithme_de_Bellman-Ford
+  - title: Module math (inf, log)
+    url: https://docs.python.org/fr/3/library/math.html

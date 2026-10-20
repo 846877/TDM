@@ -18,9 +18,137 @@ description: |
 
   Rappels : `/etc/passwd` (comptes), `/etc/shadow` (mots de passe et dates d'expiration),
   `/etc/group` (groupes), `/etc/sudoers.d/` (délégations sudo, toujours éditées avec `visudo -f`).
+cours: |
+  ## Les comptes sous Linux
+
+  Linux identifie chaque utilisateur par un **UID** (numéro) et chaque groupe par un **GID**. Le nom
+  (`mdupont`) n'est qu'une étiquette : ce sont les numéros qui sont écrits sur le disque. C'est pour cela
+  qu'en entreprise on fixe les GID des groupes partagés (même GID sur tous les serveurs, sinon un fichier
+  `compta` d'un serveur apparaît sous un autre groupe sur le serveur voisin, par exemple après un `rsync`
+  ou sur un partage NFS).
+
+  | Plage d'UID   | Usage                                                     |
+  |---------------|-----------------------------------------------------------|
+  | 0             | `root`, tous les droits                                   |
+  | 1 - 999       | comptes système (services : `www-data`, `sshd`...)         |
+  | 1000 - 59999  | comptes « humains » (définis dans `/etc/login.defs`)       |
+  | 65534         | `nobody`                                                  |
+
+  ### Les quatre fichiers à connaître
+
+  ```
+  /etc/passwd   mdupont:x:1001:1001:Marie Dupont:/home/mdupont:/bin/bash
+                login  │  UID  GID  GECOS         dossier perso  shell
+                       └ « x » = le mot de passe est dans /etc/shadow
+
+  /etc/shadow   mdupont:$y$j9T$...:19800:0:90:7:::
+                login   empreinte  │    │  │  └ avertissement (jours)
+                                   │    │  └ durée max (jours)
+                                   │    └ durée min
+                                   └ dernier changement (jours depuis le 01/01/1970, 0 = à changer)
+
+  /etc/group    compta:x:2001:mdupont,bruno     (membres secondaires)
+  /etc/gshadow  mots de passe de groupe (rarement utilisés)
+  ```
+
+  Un utilisateur a **un groupe principal** (champ GID de `/etc/passwd`, en général un groupe à son nom
+  créé par `useradd`) et des **groupes secondaires** (liste de `/etc/group`). Les nouveaux groupes ne sont
+  pris en compte qu'à la **prochaine connexion** de l'utilisateur.
+
+  `getent passwd mdupont` interroge toutes les sources configurées dans `/etc/nsswitch.conf` (fichiers
+  locaux, mais aussi LDAP ou Active Directory) : prends l'habitude de l'utiliser plutôt que `grep` dans
+  `/etc/passwd`.
+
+  ## Mémo des commandes
+
+  | Besoin                                     | Commande                                          |
+  |--------------------------------------------|---------------------------------------------------|
+  | Créer un groupe avec un GID fixe            | `groupadd -g 2001 compta`                         |
+  | Créer un compte complet                     | `useradd -m -s /bin/bash -c "Nom" -G g1,g2 login` |
+  | Ajouter un groupe secondaire (sans écraser) | `usermod -aG groupe login` (le `-a` est vital)     |
+  | Définir un mot de passe (script)            | `echo 'login:MotDePasse' \| chpasswd`             |
+  | Forcer le changement au prochain login      | `chage -d 0 login` ou `passwd -e login`           |
+  | Politique d'expiration                      | `chage -M 90 -W 7 login`, `chage -l login`        |
+  | Date d'expiration du compte                 | `chage -E 2027-06-30 login`                       |
+  | Verrouiller / déverrouiller                 | `usermod -L login` / `usermod -U login`           |
+  | Voir l'état du mot de passe                 | `passwd -S login` (L = verrouillé, P = actif)     |
+  | Identité et groupes                         | `id login`, `id -nG login`                        |
+
+  `useradd` est l'outil bas niveau (scriptable, ne pose aucune question) ; `adduser` est un script
+  interactif propre à Debian/Ubuntu. Dans un script, utilise toujours `useradd`.
+
+  ## sudo : déléguer sans donner le mot de passe root
+
+  sudo lit `/etc/sudoers` puis les fichiers de `/etc/sudoers.d/`. Une règle se lit ainsi :
+
+  ```
+  %support   ALL      =  (root)        NOPASSWD:   /usr/bin/passwd [a-z]*, !/usr/bin/passwd root
+  qui        sur quel     en tant que   options     commandes autorisées (chemins absolus)
+  (% = groupe) hôte
+  ```
+
+  - Toujours éditer avec **`visudo`** (ou `visudo -f /etc/sudoers.d/fichier`) : il vérifie la syntaxe
+    avant d'enregistrer. Une faute dans sudoers peut bloquer toute l'administration du serveur.
+  - Les fichiers de `/etc/sudoers.d/` doivent être en `0440` et leur nom ne doit contenir ni `.` ni `~`
+    (sinon ils sont ignorés).
+  - `sudo -l -U login` liste ce qu'un utilisateur a le droit de faire ; `visudo -c` contrôle toute la
+    configuration.
+  - Une règle donnant un éditeur, `less`, `find` ou un interpréteur (`python`, `bash`) revient à donner
+    root : ces programmes permettent de lancer un shell.
+
+  ## Arrivées et départs
+
+  `/etc/skel` est le **modèle** copié dans chaque nouveau dossier personnel (`.bashrc`, charte, raccourcis).
+  Le paramétrage par défaut de `useradd` est dans `/etc/default/useradd` et `/etc/login.defs`
+  (`PASS_MAX_DAYS`, `UID_MIN`...).
+
+  Procédure de départ classique : verrouiller le mot de passe, faire expirer le compte (bloque aussi
+  l'accès par clé SSH, ce que le seul verrouillage ne fait pas), retirer des groupes sensibles, archiver
+  les données pour le manager ou les RH, puis supprimer le dossier. On garde souvent le compte (UID non
+  réattribué) pour que les fichiers restants ne deviennent pas la propriété d'un futur salarié.
+
+  ## Pièges courants
+
+  - `usermod -G compta login` **remplace** tous les groupes secondaires : il faut `-aG`.
+  - Oublier `-m` : le compte n'a pas de dossier personnel.
+  - Mettre un mot de passe en clair dans l'historique du shell : préfère `chpasswd` depuis un fichier
+    protégé ou `passwd` interactif.
+  - Supprimer un compte avec `userdel -r` sans avoir archivé ses données.
+
+  ## Bonnes pratiques en entreprise
+
+  - Un compte **nominatif** par personne (jamais de compte partagé « compta ») : c'est la base de la
+    traçabilité, exigée par la plupart des audits.
+  - Les droits passent par des **groupes**, jamais par des comptes individuels.
+  - Pas de connexion directe en root : on se connecte avec son compte puis `sudo`, chaque commande est
+    alors journalisée (`/var/log/auth.log`).
+  - Revue régulière des comptes (comptes actifs, comptes sans connexion depuis 90 jours, membres des
+    groupes d'administration).
+docs:
+  - title: useradd(8) - créer un compte
+    url: https://man7.org/linux/man-pages/man8/useradd.8.html
+  - title: shadow(5) - format de /etc/shadow
+    url: https://man7.org/linux/man-pages/man5/shadow.5.html
+  - title: sudoers(5) - syntaxe des délégations sudo (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/sudoers.5.html
+  - title: Ubuntu Server - documentation officielle
+    url: https://ubuntu.com/server/docs
 exercises:
   - id: groupes-services
     title: Groupes de services
+    cours: |
+      Un **groupe** regroupe des comptes pour leur donner des droits communs. Il est défini dans
+      `/etc/group` sous la forme `nom:x:GID:membres`.
+
+      - `groupadd` crée un groupe ; l'option `-g` impose son GID au lieu de laisser le système choisir le
+        prochain libre.
+      - `getent group <nom>` affiche la ligne du groupe (fonctionne aussi avec un annuaire LDAP/AD).
+      - `groupmod -g` change un GID existant, mais les fichiers déjà créés gardent l'ancien numéro : il faut
+        alors les corriger avec `find / -gid <ancien> -exec chgrp ...`.
+
+      Pourquoi des GID fixes ? Sur un partage réseau ou après une restauration, seuls les numéros
+      voyagent : deux serveurs avec des GID différents afficheraient des propriétaires différents pour le
+      même fichier.
     description: |
       La politique de l'entreprise impose des GID fixes (identiques sur tous les serveurs, pour les
       partages réseau). Crée les groupes suivants :
@@ -44,6 +172,21 @@ exercises:
 
   - id: utilisateurs-locaux
     title: Comptes des collaborateurs
+    cours: |
+      `useradd` crée le compte sans rien demander. Options utiles :
+
+      | Option | Effet                                                        |
+      |--------|--------------------------------------------------------------|
+      | `-m`   | crée le dossier personnel (copie de `/etc/skel`)             |
+      | `-s`   | shell de connexion                                           |
+      | `-c`   | commentaire GECOS (nom complet, téléphone...)                |
+      | `-G`   | groupes **secondaires**, séparés par des virgules            |
+      | `-g`   | groupe **principal** (par défaut un groupe au nom du login)  |
+      | `-u`   | UID imposé                                                   |
+
+      Pour un compte existant, `usermod` accepte les mêmes options (attention : `-G` seul remplace la
+      liste, il faut `-aG` pour ajouter). Contrôle avec `id <login>` et `getent passwd <login>` ; le
+      7e champ est le shell, le 6e le dossier personnel.
     description: |
       Crée les comptes suivants avec un **dossier personnel** dans `/home`, le shell `/bin/bash`, le nom
       complet en commentaire (champ GECOS) et le groupe de service en **groupe secondaire** :
@@ -73,6 +216,17 @@ exercises:
 
   - id: mots-de-passe
     title: Mots de passe et politique d'expiration
+    cours: |
+      Le mot de passe est stocké **haché** dans `/etc/shadow` (algorithme yescrypt `$y$` sur Ubuntu récent).
+
+      - `chpasswd` lit des lignes `login:motdepasse` sur l'entrée standard : idéal dans un script.
+      - `chage` gère le **vieillissement** : `-d` date du dernier changement (`0` = changement obligatoire
+        à la prochaine connexion), `-M` durée maximale, `-m` durée minimale, `-W` jours d'avertissement,
+        `-E` date d'expiration du compte.
+      - `chage -l <login>` affiche tout cela en clair.
+
+      Ces valeurs correspondent aux champs 3 à 8 de `/etc/shadow`. Pour appliquer la même politique à
+      plusieurs comptes, une boucle `for u in ...; do ...; done` évite les oublis.
     description: |
       1. Donne à `mdupont` le mot de passe provisoire `Bienvenue2024!` et **oblige-la à le changer** à sa
          première connexion.
@@ -97,6 +251,17 @@ exercises:
 
   - id: sudo-admins
     title: Délégation d'administration
+    cours: |
+      Une règle sudo pour un **groupe** commence par `%` : `%groupe HÔTES=(UTILISATEURS:GROUPES) COMMANDES`.
+      `ALL` signifie « tous ». Sans le mot-clé `NOPASSWD:`, sudo demande le mot de passe **de l'utilisateur**
+      (pas celui de root).
+
+      - `visudo -f /etc/sudoers.d/<nom>` ouvre le fichier et refuse d'enregistrer une syntaxe invalide.
+      - Les fichiers de `sudoers.d` doivent être en `440` (`chmod`) ; sudo ignore ceux qui contiennent un
+        point dans leur nom.
+      - `visudo -c` valide l'ensemble ; `sudo -l -U <login>` montre les droits effectifs d'un compte.
+
+      Réfléchis à ce que signifie `(ALL:ALL)` dans la sortie de `sudo -l`.
     description: |
       Les membres du groupe `informatique` doivent pouvoir exécuter **toutes** les commandes en tant que
       n'importe quel utilisateur via sudo (avec leur mot de passe).
@@ -118,6 +283,18 @@ exercises:
 
   - id: sudo-support
     title: Délégation limitée au support
+    cours: |
+      sudo peut limiter une délégation à **une commande et ses arguments** :
+
+      - un chemin absolu est obligatoire (`/usr/bin/passwd`, trouvé avec `command -v passwd`) ;
+      - les arguments acceptent des jokers de type shell (`*`, `?`, `[a-z]`) ;
+      - un `!` devant une commande l'**interdit** ; les règles d'une même ligne sont séparées par des
+        virgules et la dernière correspondance l'emporte ;
+      - `NOPASSWD:` supprime la demande de mot de passe pour les commandes qui suivent.
+
+      `sudo -l -U <login> <commande> <args>` répond si cette commande précise serait autorisée : c'est la
+      meilleure façon de tester une règle sans se connecter avec le compte. Pense aussi aux options d'une
+      commande : `passwd -d` supprimerait le mot de passe d'un compte.
     description: |
       Le support de premier niveau doit pouvoir **réinitialiser les mots de passe** des utilisateurs, et
       rien d'autre.
@@ -143,6 +320,18 @@ exercises:
 
   - id: depart
     title: Départ d'un salarié
+    cours: |
+      Plusieurs mécanismes empêchent une connexion, et ils ne couvrent pas les mêmes cas :
+
+      | Action                     | Commande                    | Bloque                         |
+      |----------------------------|-----------------------------|--------------------------------|
+      | Verrouiller le mot de passe | `usermod -L` / `passwd -l`  | connexion par mot de passe     |
+      | Expirer le compte          | `usermod -e 1` / `chage -E 0` | toute authentification PAM, clés SSH comprises |
+      | Shell interdit             | `usermod -s /usr/sbin/nologin` | ouverture d'un shell         |
+
+      Le verrouillage ajoute un `!` devant l'empreinte dans `/etc/shadow` (visible avec `passwd -S`).
+      Pour archiver un dossier sans chemin absolu dans l'archive, `tar -czf archive.tar.gz -C /home login`
+      se place dans `/home` avant d'archiver. Vérifie le contenu avec `tar -tzf` **avant** de supprimer.
     description: |
       Paul Leroy (`pleroy`) a quitté l'entreprise. Applique la procédure de départ :
 
@@ -169,6 +358,15 @@ exercises:
 
   - id: skel-stagiaire
     title: Modèle de compte et compte temporaire
+    cours: |
+      `/etc/skel` est copié dans le dossier personnel **au moment de la création** du compte par
+      `useradd -m` : modifier `/etc/skel` ensuite ne change rien pour les comptes existants.
+
+      La date d'expiration d'un compte (champ 8 de `/etc/shadow`, en jours depuis le 1er janvier 1970) se
+      règle à la création avec `useradd -e AAAA-MM-JJ` ou après coup avec `chage -E AAAA-MM-JJ`. Une fois
+      la date passée, le compte est refusé, mais ses fichiers restent.
+
+      Contrôle : `chage -l <login>` ligne « Account expires ».
     description: |
       1. Chaque nouveau compte doit recevoir la charte informatique : crée `/etc/skel/LISEZMOI.txt` contenant
          la phrase `Charte informatique` (le contenu de `/etc/skel` est copié dans chaque nouveau dossier
@@ -187,6 +385,17 @@ exercises:
 
   - id: audit
     title: Audit des comptes
+    cours: |
+      Pour produire un rapport fiable, on extrait les données avec une commande plutôt qu'à la main.
+
+      - `/etc/passwd` est un fichier texte à champs séparés par `:` ; `awk -F:` découpe chaque ligne et
+        `$1`, `$3`... désignent les champs (login, UID...).
+      - `awk` sait filtrer avec une condition avant le bloc : `awk -F: 'condition {print $1}'`.
+      - `sort` trie, `> fichier` écrit le résultat.
+      - Pour un groupe, le 4e champ de `getent group <nom>` contient les membres secondaires séparés par
+        des virgules ; `tr ',' '\n'` les met un par ligne.
+
+      Pense que `getent passwd` (sans argument) inclut aussi les comptes d'un éventuel annuaire.
     description: |
       La direction demande la liste des comptes « humains » du serveur. Écris dans `/root/audit-comptes.txt`
       les logins de **tous** les comptes dont l'UID est compris entre 1000 et 59999, un par ligne, triés par
@@ -203,3 +412,122 @@ exercises:
         run: |
           test -s /root/admins.txt &&
           test "$(getent group informatique | cut -d: -f4 | tr ',' '\n' | grep -v '^$' | sort)" = "$(sed 's/[[:space:]]*$//' /root/admins.txt | grep -v '^$' | sort)"
+
+  - id: cg-groupe-principal
+    title: Compte avec un groupe principal imposé
+    cours: |
+      Par défaut sur Ubuntu, `useradd` crée pour chaque compte un **groupe personnel** du même nom qui
+      devient son groupe principal (paramètre `USERGROUPS_ENAB` de `/etc/login.defs`).
+
+      - `-g <groupe>` impose un groupe principal existant (le groupe personnel n'est alors pas créé) ;
+      - `-u <UID>` impose l'UID ;
+      - `id` affiche `gid=` (groupe principal) puis `groups=` (tous les groupes, principal compris).
+
+      Le groupe principal est celui que reçoivent les fichiers créés par l'utilisateur (hors dossier setgid).
+      Ce choix est courant dans les entreprises qui veulent que tout fichier appartienne à un service.
+    description: |
+      Lucie Garnier rejoint la comptabilité. La politique veut que ses fichiers appartiennent directement au
+      groupe `compta` : crée le compte `lgarnier` (nom complet `Lucie Garnier`, dossier personnel, shell
+      bash) avec l'**UID 1500** et `compta` comme **groupe principal** (et non un groupe `lgarnier`).
+
+      Compare ensuite `id lgarnier` et `id mdupont` : repère la différence entre `gid=` et `groups=`.
+    hint: useradd -m -s /bin/bash -c "Lucie Garnier" -u 1500 -g compta lgarnier
+    checks:
+      - desc: lgarnier a l'UID 1500 et compta comme groupe principal
+        run: test "$(id -u lgarnier)" = 1500 && test "$(id -gn lgarnier)" = compta
+      - desc: Aucun groupe personnel lgarnier n'a été créé
+        run: "! getent group lgarnier >/dev/null"
+      - desc: Dossier personnel et shell bash
+        run: |
+          test -d /home/lgarnier && getent passwd lgarnier | cut -d: -f7 | grep -qx /bin/bash
+
+  - id: cg-renommage
+    title: Renommer un compte
+    cours: |
+      Recréer un compte pour un changement de nom serait une erreur : nouvel UID, fichiers orphelins,
+      droits perdus. `usermod` sait tout modifier en place :
+
+      | Option     | Effet                                                          |
+      |------------|----------------------------------------------------------------|
+      | `-l`       | nouveau login (le nom, pas l'UID)                              |
+      | `-d` + `-m`| nouveau dossier personnel, en **déplaçant** le contenu         |
+      | `-c`       | nouveau commentaire GECOS                                      |
+
+      Le groupe personnel ne suit pas automatiquement : `groupmod -n <nouveau> <ancien>` le renomme. Les
+      fichiers, eux, n'ont rien à changer puisqu'ils stockent des numéros. Pense aux autres références au login
+      (crontab, sudoers, alias de messagerie).
+    description: |
+      Claire Petit (`cpetit`) s'est mariée : elle s'appelle désormais **Claire Moreau**. Sans recréer le
+      compte (elle doit garder son UID 1600 et ses fichiers) :
+      1. renomme le login en `cmoreau` ;
+      2. renomme son groupe personnel `cpetit` en `cmoreau` ;
+      3. déplace son dossier personnel vers `/home/cmoreau` (avec son contenu) ;
+      4. mets à jour le nom complet (`Claire Moreau`).
+    hint: "usermod -l cmoreau -d /home/cmoreau -m -c \"Claire Moreau\" cpetit ; groupmod -n cmoreau cpetit"
+    checks:
+      - desc: cmoreau a gardé l'UID 1600 et cpetit n'existe plus
+        run: test "$(id -u cmoreau 2>/dev/null)" = 1600 && ! getent passwd cpetit >/dev/null
+      - desc: Le groupe s'appelle cmoreau
+        run: getent group cmoreau >/dev/null && ! getent group cpetit >/dev/null && test "$(id -gn cmoreau)" = cmoreau
+      - desc: Le dossier personnel a été déplacé avec son contenu
+        run: |
+          test "$(getent passwd cmoreau | cut -d: -f6)" = /home/cmoreau &&
+          test -f /home/cmoreau/notes.txt && test ! -e /home/cpetit &&
+          test "$(stat -c %U /home/cmoreau/notes.txt)" = cmoreau
+      - desc: Nom complet Claire Moreau
+        run: |
+          getent passwd cmoreau | cut -d: -f5 | grep -q "Claire Moreau"
+
+  - id: cg-login-defs
+    title: Politique par défaut des nouveaux comptes
+    cours: |
+      `/etc/login.defs` fixe les valeurs par défaut utilisées par `useradd`, `passwd` et `chage` :
+      `PASS_MAX_DAYS`, `PASS_MIN_DAYS`, `PASS_WARN_AGE`, `UID_MIN`, `UID_MAX`, `UMASK`, `ENCRYPT_METHOD`...
+
+      Ces valeurs sont copiées dans `/etc/shadow` **au moment de la création** du compte : modifier le fichier
+      ne change pas les comptes existants (il faut alors `chage`).
+
+      `sed -i 's/^MOT.*/MOT valeur/' fichier` remplace une ligne entière qui commence par un mot ; vérifie le
+      résultat avec `grep`. Les valeurs de création de compte (shell, dossier) sont, elles, dans
+      `/etc/default/useradd` (`useradd -D` les affiche).
+    description: |
+      Plutôt que d'appliquer `chage` à chaque création, règle la politique **par défaut** dans
+      `/etc/login.defs` : `PASS_MAX_DAYS` à **90** et `PASS_WARN_AGE` à **7**.
+
+      Crée ensuite le compte `nouveau1` (dossier personnel, bash) et vérifie avec `chage -l nouveau1` qu'il
+      a hérité de la politique. Les comptes existants, eux, ne changent pas.
+    hint: "sed -i 's/^PASS_MAX_DAYS.*/PASS_MAX_DAYS\\t90/' /etc/login.defs (idem PASS_WARN_AGE) puis useradd -m -s /bin/bash nouveau1"
+    checks:
+      - desc: login.defs contient PASS_MAX_DAYS 90 et PASS_WARN_AGE 7
+        run: |
+          grep -Eq '^PASS_MAX_DAYS[[:space:]]+90[[:space:]]*$' /etc/login.defs &&
+          grep -Eq '^PASS_WARN_AGE[[:space:]]+7[[:space:]]*$' /etc/login.defs
+      - desc: nouveau1 a hérité de 90 jours et 7 jours d'avertissement
+        run: |
+          awk -F: '$1=="nouveau1"{ok=($5=="90" && $6=="7")} END{exit !ok}' /etc/shadow
+
+  - id: cg-journal-sudo
+    title: Journal dédié des commandes sudo
+    cours: |
+      Les lignes `Defaults` de sudoers modifient le comportement global de sudo. Quelques options utiles :
+
+      - `logfile=<chemin>` : journal dédié, en plus de syslog (`/var/log/auth.log`) ;
+      - `log_input`, `log_output` : enregistrement complet des sessions (relues avec `sudoreplay`) ;
+      - `timestamp_timeout=<minutes>` : durée pendant laquelle le mot de passe n'est plus redemandé ;
+      - `passwd_tries=<n>` : nombre d'essais.
+
+      Une option peut viser un groupe (`Defaults:%support ...`). Comme toute modification de sudoers, passe
+      par `visudo -f` puis `visudo -c`, et donne les droits `440` au fichier.
+    description: |
+      L'auditeur veut un fichier qui ne contienne **que** les commandes passées avec sudo. Crée
+      `/etc/sudoers.d/journal` (avec `visudo -f`, droits 440) contenant l'option par défaut
+      `logfile=/var/log/sudo.log`.
+
+      Teste avec `sudo true` puis lis `/var/log/sudo.log` : chaque ligne indique qui, quand, depuis quel
+      dossier et quelle commande.
+    hint: "visudo -f /etc/sudoers.d/journal  →  Defaults logfile=/var/log/sudo.log"
+    checks:
+      - desc: La configuration sudo est valide et le fichier est en 440
+        run: visudo -c >/dev/null && test "$(stat -c %a /etc/sudoers.d/journal)" = 440
+      - desc: Les commandes sudo sont écrites dans /var/log/sudo.log
+        run: sudo true && grep -q 'COMMAND=/usr/bin/true' /var/log/sudo.log

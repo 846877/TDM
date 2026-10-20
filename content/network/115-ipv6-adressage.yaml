@@ -50,3 +50,58 @@ solution: |
   ipv6 address fe80::1 link-local
   no shutdown
   end
+cours: |
+  ## Les adresses IPv6
+
+  Une adresse IPv6 fait **128 bits**, écrite en 8 groupes de 4 chiffres hexadécimaux. Deux
+  règles d'abréviation : supprimer les zéros en tête de chaque groupe, et remplacer **une seule**
+  suite de groupes nuls par `::`.
+
+  `2001:0db8:0000:0050:0000:0000:0000:0001` → `2001:db8:0:50::1`
+
+  Les types à connaître :
+
+  | Type                 | Préfixe      | Rôle                                          |
+  |----------------------|--------------|-----------------------------------------------|
+  | globale unicast      | `2000::/3`   | routable sur Internet                          |
+  | **link-local**       | `fe80::/10`  | valable sur un seul lien ; présente sur toute interface IPv6 |
+  | unique locale        | `fc00::/7`   | équivalent des adresses privées                |
+  | multicast            | `ff00::/8`   | `ff02::1` tous les nœuds, `ff02::2` tous les routeurs |
+
+  Les réseaux d'utilisateurs sont presque toujours en **/64** (nécessaire pour SLAAC).
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# ipv6 unicast-routing
+  R1(config)# interface gi0/2
+  R1(config-if)# ipv6 address 2001:db8:cafe:5::1/64
+  R1(config-if)# ipv6 address fe80::5 link-local
+  R1(config-if)# no shutdown
+  R1# show ipv6 interface brief
+  GigabitEthernet0/2     [up/up]
+      FE80::5
+      2001:DB8:CAFE:5::1
+  ```
+
+  - sans configuration, la link-local est **générée** automatiquement (EUI-64 ou aléatoire) ;
+    la fixer (`fe80::5`) rend les tables de voisins et de routage lisibles ;
+  - `ipv6 unicast-routing` fait du routeur un routeur IPv6 : il transmet les paquets et envoie
+    des **annonces RA** qui permettent aux hôtes de s'auto-configurer ;
+  - `ipv6 address 2001:db8:cafe:5::/64 eui-64` construit l'identifiant d'interface à partir de
+    l'adresse MAC.
+
+  ### Pièges fréquents
+
+  - Utiliser `::` deux fois dans une adresse : ambigu, refusé.
+  - Oublier `ipv6 unicast-routing` : les hôtes ne reçoivent pas de RA, donc pas de passerelle.
+  - Se tromper de longueur de préfixe (/48 sur une interface au lieu de /64).
+
+  ### Pour le CCNA
+
+  L'abréviation des adresses, les types d'adresses IPv6 et leur configuration sont au programme.
+docs:
+  - title: "RFC 4291 — IP Version 6 Addressing Architecture"
+    url: https://www.rfc-editor.org/rfc/rfc4291
+  - title: "Wikipédia — Adresse IPv6"
+    url: https://fr.wikipedia.org/wiki/Adresse_IPv6
