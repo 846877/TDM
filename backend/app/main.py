@@ -282,10 +282,19 @@ def devops_labs(category: str = "devops"):
 
 
 @app.get("/api/devops/labs/{lab_id}")
-def devops_lab(lab_id: str):
+def devops_lab(lab_id: str, status: bool = True):
+    """``status=false`` : contenu seul, tout de suite (l'interface demande l'état ensuite, il peut être lent)."""
+    lab = _lab(lab_id)
+    if not status:
+        return devops.public(lab) | {"status": "checking", "log": ""}
+    return devops.public(lab) | devops_lab_status(lab_id)
+
+
+@app.get("/api/devops/labs/{lab_id}/status")
+def devops_lab_status(lab_id: str):
     lab = _lab(lab_id)
     status, log = devops.status_with_log(lab)
-    data = devops.public(lab) | {"status": status, "log": log}
+    data = {"status": status, "log": log}
     if "vagrant" not in lab:
         data["engine"] = docker_engine.kind()  # desktop, vm (moteur Docker de TDM) ou none
     return data

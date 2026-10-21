@@ -389,6 +389,17 @@ class Agent:
             # Les redirections de ports ne s'appliquent qu'au démarrage de la VM.
             self.engine_reload = self._created(work)
 
+    def _all_running(self, path: Path) -> bool:
+        """Toutes les VM du lab tournent-elles ? `VBoxManage list runningvms` répond en une fraction de
+        seconde, là où `vagrant status` prend plusieurs secondes sous Windows (il est gardé en secours)."""
+        running_ids = self._running_vm_ids()
+        if running_ids is not None:
+            ids = {f.read_text(encoding="utf-8").strip() for f in path.glob(".vagrant/machines/*/virtualbox/id")}
+            return bool(ids) and ids <= running_ids  # pas d'id : VM jamais créées (ou détruites)
+        result = self._vagrant(path, "status", "--machine-readable")
+        states = re.findall(r"^\d*,[^,]*,state,([^,\n]+)", result.stdout, re.MULTILINE)
+        return bool(states) and all(s == "running" for s in states)
+
     @staticmethod
     def _created(path: Path) -> bool:
         return any(path.glob(".vagrant/machines/*/virtualbox/id"))
@@ -615,9 +626,7 @@ class Agent:
             return {"status": "starting" if job.action == "up" else "stopping", "log": log}
         if not (path / "Vagrantfile").exists():
             return {"status": "stopped", "log": log}  # lab embarqué pas encore copié
-        result = self._vagrant(path, "status", "--machine-readable")
-        states = re.findall(r"^\d*,[^,]*,state,([^,\n]+)", result.stdout, re.MULTILINE)
-        running = bool(states) and all(s == "running" for s in states)
+        running = self._all_running(path)
         if job and job.returncode not in (0, None) and not running:
             return {"status": "stopped" if job.cancelled else "error", "log": log}
         if running and lab.startswith(BUNDLED_PREFIX) and not (path / ".tdm" / READY).exists():

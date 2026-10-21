@@ -10,6 +10,7 @@ Les labs Windows (``labs/systemes-windows``, voir son README) sont des VM Vagran
 
 from __future__ import annotations
 
+import copy
 import re
 import subprocess
 import threading
@@ -55,11 +56,26 @@ def load_labs(labs_dir: Path | None = None, category: str | None = None) -> list
     return sorted(labs, key=lambda lab: (order[lab["level"]], lab.get("order", 999), lab["id"]))
 
 
+# lab.yaml déjà lus : chemin -> ((mtime, taille), contenu). L'analyse YAML de la centaine de labs prend
+# plusieurs secondes sous Windows ; elle n'est refaite que pour les fichiers modifiés.
+_yaml_cache: dict[Path, tuple[tuple[int, int], Any]] = {}
+
+
+def _read_yaml(path: Path) -> dict[str, Any]:
+    stat = path.stat()
+    key = (stat.st_mtime_ns, stat.st_size)
+    hit = _yaml_cache.get(path)
+    if hit is None or hit[0] != key:
+        with path.open(encoding="utf-8") as fh:
+            hit = (key, yaml.safe_load(fh) or {})
+        _yaml_cache[path] = hit
+    return copy.deepcopy(hit[1])  # les appelants complètent le dictionnaire : jamais le cache lui-même
+
+
 def _load_dir(root: Path, default_category: str, os_name: str = "linux", bundled: bool = False) -> list[dict[str, Any]]:
     labs = []
     for path in sorted(root.glob("*/lab.yaml")):
-        with path.open(encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
+        data = _read_yaml(path)
         if bundled and data.get("vagrant", "bundled") == "bundled" and (path.parent / "Vagrantfile").exists():
             data["vagrant"] = BUNDLED_PREFIX + path.parent.name
         data["id"] = _slug(data.get("id") or path.parent.name)

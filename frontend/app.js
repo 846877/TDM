@@ -699,7 +699,7 @@ async function renderNetworkExercise(id) {
 
 async function renderLab(id, cat = "devops") {
   const [lab, items] = await Promise.all([
-    api(`/api/devops/labs/${encodeURIComponent(id)}`),
+    api(`/api/devops/labs/${encodeURIComponent(id)}?status=false`),  // l'état (lent) est demandé ensuite
     api(CATEGORIES[cat].api),
   ]);
   document.title = `TDM · ${lab.title}`;
@@ -787,6 +787,7 @@ async function renderLab(id, cat = "devops") {
       ? "Démarrage des VM : le tout premier lancement télécharge la box Windows (plusieurs Go) et prépare Windows, comptez de 20 à 60 minutes ; ensuite, la reprise après une pause ne prend que quelques secondes…"
       : "Démarrage de la VM (plusieurs minutes au premier lancement)…",
     stopping: "Arrêt en cours…",
+    checking: "Vérification de l'état…",
     error: "Échec du dernier lancement (voir le journal)",
     unavailable: isVm ? "Agent Vagrant injoignable" : "Docker indisponible",
   };
@@ -802,7 +803,7 @@ async function renderLab(id, cat = "devops") {
     stopBtn.style.display = status === "running" || cancellable ? "" : "none";
     stopBtn.replaceChildren(cancellable ? "■ Annuler le démarrage" : stopLabel);
     resetBtn.style.display = status === "running" ? "" : "none";
-    startBtn.disabled = status === "unavailable";
+    startBtn.disabled = status === "unavailable" || status === "checking";
     logBox.style.display = log && (busy || status === "error") ? "" : "none";
     logBox.textContent = log;
     if (status === "running") openTerminal(); else closeTerminal();
@@ -810,7 +811,7 @@ async function renderLab(id, cat = "devops") {
     if (busy) {
       pollTimer = setTimeout(async () => {
         try {
-          const fresh = await api(`/api/devops/labs/${encodeURIComponent(id)}`);
+          const fresh = await api(`/api/devops/labs/${encodeURIComponent(id)}/status`);
           setStatus(fresh.status, fresh.log);
         } catch { setStatus(status, log); }
       }, 4000);
@@ -842,10 +843,20 @@ async function renderLab(id, cat = "devops") {
   stopBtn.addEventListener("click", () => action("stop", stopBtn, stopBtn.textContent));
   resetBtn.addEventListener("click", () => action("reset", resetBtn, "↺ Réinitialiser"));
   setStatus(lab.status, lab.log);
-  if (lab.status === "unavailable") {
+  let left = false;
+  onLeave(() => { left = true; });
+  let fresh;
+  try {
+    fresh = await api(`/api/devops/labs/${encodeURIComponent(id)}/status`);
+  } catch {
+    fresh = { status: "unavailable", log: "" };
+  }
+  if (left) return;  // page quittée pendant la vérification
+  setStatus(fresh.status, fresh.log);
+  if (fresh.status === "unavailable") {
     errorBox.append(h("div", { class: "error-box" }, isVm
       ? "Ce lab tourne dans une machine virtuelle : lance l'agent Vagrant sur ta machine (start.bat le démarre automatiquement si Vagrant est installé)."
-      : lab.engine === "desktop"
+      : fresh.engine === "desktop"
         ? "Docker ne répond pas : lance Docker Desktop, ou mets TDM_DOCKER=auto dans les réglages pour que TDM utilise son propre moteur Docker (une petite VM VirtualBox)."
         : "Aucun moteur Docker : installe VirtualBox et Vagrant (TDM démarre alors son propre moteur Docker, une petite VM, au premier lab) ou Docker Desktop."));
   }
