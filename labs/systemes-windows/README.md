@@ -27,16 +27,17 @@ labs/systemes-windows/
 - Le premier démarrage d'un lab prend 10 à 30 min (téléchargement, puis provisionnement ; un domaine
   Active Directory ajoute ≈ 10 min). Ensuite, **Mettre en pause** fait un `vagrant suspend` (état
   sauvegardé) : la reprise ne prend que quelques secondes, là où l'élève s'était arrêté.
-- **Hyper-V** (activé par Docker Desktop/WSL2, ou par l'intégrité de la mémoire) oblige VirtualBox à
-  passer par lui : une tortue verte apparaît en bas de la fenêtre de la VM et Windows devient très
-  lent (écran noir prolongé). TDM n'a pas besoin de Docker Desktop : ses labs Docker tournent dans son
-  propre **moteur Docker**, une petite VM VirtualBox (voir le README principal). L'hyperviseur peut
-  donc rester désactivé ; quand il est actif et que TDM n'utilise pas Docker Desktop, l'interface le
-  signale une fois. TDM ne le désactive jamais lui-même ; pour le faire, dans un terminal
-  **administrateur** : `bcdedit /set hypervisorlaunchtype off`, puis redémarrer Windows. Pour revenir
-  en arrière (Docker Desktop, WSL2) : `bcdedit /set hypervisorlaunchtype auto`, puis redémarrer.
-  L'« Intégrité de la mémoire » (Sécurité Windows › Sécurité des appareils › Isolation du noyau)
-  garde aussi l'hyperviseur actif.
+- **Hyper-V** (activé par Docker Desktop/WSL2, l'intégrité de la mémoire ou la protection du code PIN
+  Windows Hello) oblige VirtualBox à passer par lui : une tortue verte apparaît en bas de la fenêtre de
+  la VM. Les labs fonctionnent quand même, mais Windows démarre plus lentement, surtout la première fois
+  (écran noir de plusieurs minutes possible). Il faut pour cela la fonctionnalité **« Plateforme de
+  l'hyperviseur Windows »** (« Activer ou désactiver des fonctionnalités Windows ») : sans elle,
+  VirtualBox refuse de démarrer les VM (« VT-x is not available ») et l'interface le signale. Pour
+  limiter la lenteur, les VM ont moins de tâches de fond (indexation, SysMain, télémétrie coupées par
+  `provision/base.ps1`), l'état initial est un instantané à chaud (une réinitialisation ne redémarre
+  pas Windows) et **Mettre en pause** évite de redémarrer Windows. TDM ne désactive jamais
+  l'hyperviseur lui-même ; pour le faire soi-même, dans un terminal **administrateur** :
+  `bcdedit /set hypervisorlaunchtype off`, puis redémarrer Windows (retour : `auto`).
 - **Un seul lab à la fois** : démarrer un lab Windows met en pause (`vagrant suspend`) le lab Windows
   qui tournait déjà et le moteur Docker (après arrêt des conteneurs des labs Docker) ; démarrer un lab
   Docker met en pause les VM Windows. Un lab encore en train de démarrer est mis en pause dès la fin

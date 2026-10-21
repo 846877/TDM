@@ -89,4 +89,25 @@ if ($Dns) { Set-DnsClientServerAddress -InterfaceAlias 'LAN' -ServerAddresses $D
 Set-NetIPInterface -InterfaceAlias 'LAN' -InterfaceMetric 10 -ErrorAction SilentlyContinue
 Set-NetIPInterface -InterfaceAlias 'NAT' -InterfaceMetric 50 -ErrorAction SilentlyContinue
 
+# --- Légèreté : moins de tâches de fond (les VM restent fluides même quand VirtualBox passe par
+# l'hyperviseur Windows). L'indexation, SysMain et la télémétrie occupent le processeur et le disque
+# après chaque démarrage sans servir aux labs. Windows Update reste disponible : Add-WindowsCapability
+# (OpenSSH ci-dessus, RSAT dans les labs) en a besoin.
+Step 'Services de fond allégés'
+foreach ($svc in 'WSearch', 'SysMain', 'DiagTrack', 'MapsBroker') {
+    try {
+        if (Get-Service $svc -ErrorAction SilentlyContinue) {
+            Stop-Service $svc -Force -ErrorAction SilentlyContinue
+            Set-Service $svc -StartupType Disabled -ErrorAction Stop
+        }
+    } catch { Write-Host "  $svc : $_" }
+}
+foreach ($task in @(
+        @('\Microsoft\Windows\Application Experience\', 'Microsoft Compatibility Appraiser'),
+        @('\Microsoft\Windows\Defrag\', 'ScheduledDefrag'),
+        @('\Microsoft\Windows\Customer Experience Improvement Program\', 'Consolidator'),
+        @('\Microsoft\Windows\Maintenance\', 'WinSAT'))) {
+    Disable-ScheduledTask -TaskPath $task[0] -TaskName $task[1] -ErrorAction SilentlyContinue | Out-Null
+}
+
 Step 'Prêt : terminal PowerShell par SSH'

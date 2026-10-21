@@ -194,10 +194,14 @@ def test_agent_verifications_prealables(tmp_path, monkeypatch):
     assert vagrant_agent.lab_machines(vagrantfile) == [(vagrant_agent.SERVER_BOX, 2048), (vagrant_agent.CLIENT_BOX, 4096)]
     monkeypatch.setattr(vagrant_agent, "free_memory_mb", lambda: 3000)
     monkeypatch.setattr(vagrant_agent, "hypervisor_present", lambda: True)
+    monkeypatch.setattr(vagrant_agent, "hypervisor_platform_enabled", lambda: True)
     monkeypatch.setattr(vagrant_agent, "installed_boxes", lambda v: {vagrant_agent.SERVER_BOX})
     warnings = vagrant_agent.preflight_warnings(vagrantfile, "vagrant")
-    assert len(warnings) == 3 and "Mémoire" in warnings[0] and "Hyper-V" in warnings[1]
+    assert len(warnings) == 3 and "Mémoire" in warnings[0] and "hyperviseur Windows est actif" in warnings[1]
     assert vagrant_agent.CLIENT_BOX in warnings[2]
+    # Sans « Plateforme de l'hyperviseur Windows », VirtualBox ne démarre pas : on dit quoi activer.
+    monkeypatch.setattr(vagrant_agent, "hypervisor_platform_enabled", lambda: False)
+    assert "Plateforme de l'hyperviseur Windows" in vagrant_agent.preflight_warnings(vagrantfile, "vagrant")[1]
     monkeypatch.setattr(vagrant_agent, "free_memory_mb", lambda: 16000)
     monkeypatch.setattr(vagrant_agent, "hypervisor_present", lambda: False)
     monkeypatch.setattr(vagrant_agent, "installed_boxes", lambda v: {vagrant_agent.SERVER_BOX, vagrant_agent.CLIENT_BOX})

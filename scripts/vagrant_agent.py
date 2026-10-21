@@ -187,6 +187,22 @@ def hypervisor_present() -> bool:
     return result.stdout.strip().lower() == "true"
 
 
+def hypervisor_platform_enabled() -> bool | None:
+    """Fonctionnalité « Plateforme de l'hyperviseur Windows » : sans elle, VirtualBox ne peut pas passer par
+    Hyper-V et refuse de démarrer les VM (« VT-x is not available »). None si on ne sait pas la lire."""
+    if sys.platform != "win32":
+        return None
+    try:
+        result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                                 "(Get-CimInstance Win32_OptionalFeature -Filter \"Name='HypervisorPlatform'\").InstallState"],
+                                capture_output=True, text=True, timeout=30,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    state = result.stdout.strip()
+    return state == "1" if state.isdigit() else None
+
+
 def installed_boxes(vagrant: str) -> set[str]:
     result = subprocess.run([vagrant, "box", "list", "--machine-readable"], capture_output=True, text=True,
                             encoding="utf-8", errors="replace", timeout=60)
@@ -203,10 +219,16 @@ def preflight_warnings(vagrantfile: Path, vagrant: str) -> list[str]:
         warnings.append(f"⚠ Mémoire libre : {free / 1024:.1f} Go pour {needed / 1024:.1f} Go de VM (plus 1 Go de marge). "
                         "Ferme les applications gourmandes (navigateur, jeux...) sinon Windows sera très lent.")
     if hypervisor_present():
-        warnings.append("⚠ Hyper-V est actif (Docker Desktop/WSL2 ou « Intégrité de la mémoire ») : VirtualBox tourne "
-                        "en mode lent (tortue verte) et Windows peut rester longtemps sur un écran noir. "
-                        "TDM n'a pas besoin de Docker Desktop (il a son propre moteur Docker) : voir le README "
-                        "des labs Windows pour désactiver l'hyperviseur soi-même.")
+        if hypervisor_platform_enabled() is False:
+            warnings.append("⚠ L'hyperviseur Windows est actif et la fonctionnalité « Plateforme de l'hyperviseur "
+                            "Windows » est désactivée : VirtualBox ne peut pas démarrer les VM (« VT-x is not "
+                            "available »). Active-la dans « Activer ou désactiver des fonctionnalités Windows », "
+                            "puis redémarre Windows.")
+        else:
+            warnings.append("ℹ L'hyperviseur Windows est actif : VirtualBox passe par lui (tortue verte en bas de la "
+                            "fenêtre de la VM). Les VM fonctionnent mais démarrent plus lentement, surtout la première "
+                            "fois : laisse faire, même si l'écran reste noir plusieurs minutes. Ensuite, « Mettre en "
+                            "pause » puis reprendre ne prend que quelques secondes.")
     missing = sorted({box for box, _ in machines} - installed_boxes(vagrant))
     for box in missing:
         warnings.append(f"ℹ Box {box} pas encore téléchargée : environ 8 Go à télécharger une seule fois "
