@@ -29,8 +29,19 @@ labs/systemes-windows/
   sauvegardé) : la reprise ne prend que quelques secondes, là où l'élève s'était arrêté.
 - **Hyper-V** (activé par Docker Desktop/WSL2, ou par l'intégrité de la mémoire) oblige VirtualBox à
   passer par lui : une tortue verte apparaît en bas de la fenêtre de la VM et Windows devient très
-  lent (écran noir prolongé). Pour les labs Windows, mieux vaut désactiver Hyper-V
-  (`bcdedit /set hypervisorlaunchtype off`, puis redémarrer ; `auto` pour le réactiver).
+  lent (écran noir prolongé). TDM n'a pas besoin de Docker Desktop : ses labs Docker tournent dans son
+  propre **moteur Docker**, une petite VM VirtualBox (voir le README principal). L'hyperviseur peut
+  donc rester désactivé ; quand il est actif et que TDM n'utilise pas Docker Desktop, l'interface le
+  signale une fois. TDM ne le désactive jamais lui-même ; pour le faire, dans un terminal
+  **administrateur** : `bcdedit /set hypervisorlaunchtype off`, puis redémarrer Windows. Pour revenir
+  en arrière (Docker Desktop, WSL2) : `bcdedit /set hypervisorlaunchtype auto`, puis redémarrer.
+  L'« Intégrité de la mémoire » (Sécurité Windows › Sécurité des appareils › Isolation du noyau)
+  garde aussi l'hyperviseur actif.
+- **Un seul lab à la fois** : démarrer un lab Windows met en pause (`vagrant suspend`) le lab Windows
+  qui tournait déjà et le moteur Docker (après arrêt des conteneurs des labs Docker) ; démarrer un lab
+  Docker met en pause les VM Windows. Un lab encore en train de démarrer est mis en pause dès la fin
+  de son démarrage. L'interface affiche ce qui a été mis en pause ; il reprend en quelques secondes
+  au prochain démarrage. À la fermeture de `TDM.exe`, toutes les VM lancées par TDM sont mises en pause.
 
 Boxes utilisées (fournisseur `virtualbox`, versions d'évaluation de Windows, renouvelées
 régulièrement par leur auteur) : `gusztavvargadr/windows-server-2022-standard` et

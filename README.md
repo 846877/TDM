@@ -19,11 +19,21 @@ et double-clique dessus : la plateforme s'ouvre dans sa propre fenêtre, sans in
 - Les exercices **Python** et **Réseaux** marchent tout de suite (Python est embarqué dans l'application).
 - Les labs **Vagrant** utilisent Vagrant et VirtualBox installés sur le PC ; le dossier des labs se règle
   dans `%APPDATA%\TDM\tdm.env` (détecté automatiquement s'il est dans `Bureau\INFORMATIQUE\devops\vagrant`).
-- Les labs **Docker** demandent Docker Desktop démarré.
+- Les labs **Docker** n'ont plus besoin de Docker Desktop : avec VirtualBox et Vagrant installés, TDM
+  démarre son propre **moteur Docker** (une petite VM Linux, voir plus bas) au premier lab Docker.
+  Si Docker Desktop est déjà démarré, TDM l'utilise (réglage `TDM_DOCKER`).
+- Un seul type de lab tourne à la fois : démarrer un lab Windows met en pause le moteur Docker (après
+  arrêt des conteneurs des labs) et l'éventuel autre lab Windows ; démarrer un lab Docker met en pause
+  les VM Windows. L'interface dit ce qui a été mis en pause.
+- À la fermeture de la fenêtre, TDM met en pause (`vagrant suspend`) les VM qu'il a lancées, moteur
+  Docker compris. S'il est fermé brutalement, elles restent allumées et sont reprises au lancement suivant.
 
 Pour la construire soi-même : `powershell -ExecutionPolicy Bypass -File desktop\build.ps1` (crée `dist\TDM.exe`).
 
 ## Démarrer sous Windows avec Docker
+
+Ce mode fait tourner la plateforme elle-même dans un conteneur : il demande Docker Desktop. Pour s'en
+passer (et garder l'hyperviseur Windows désactivé), utilise plutôt `TDM.exe` et son moteur Docker.
 
 Prérequis : **Docker Desktop** démarré. Pour les labs en machine virtuelle : **Vagrant**, **VirtualBox**
 et **Python 3** (pour le petit agent qui pilote Vagrant).
@@ -46,6 +56,34 @@ et `python3 scripts/vagrant_agent.py` à côté pour les labs Vagrant.
   formation, sans les copier. L'agent `scripts/vagrant_agent.py` tourne sur ta machine, lance
   `vagrant up` / `halt` / `destroy` à la demande de la plateforme et ouvre un relais vers le port SSH de
   la VM : le terminal web et les vérifications passent par SSH.
+
+### Moteur Docker de TDM (sans Docker Desktop)
+
+Sur Windows, Docker Desktop (WSL2) garde l'**hyperviseur Windows** actif : VirtualBox perd alors VT-x
+et les VM Windows des labs deviennent très lentes (tortue verte, écran noir). TDM fournit donc son
+propre moteur Docker, pour que labs Docker et labs Windows marchent vite avec l'hyperviseur désactivé :
+
+- une petite VM VirtualBox ([`labs/moteur-docker`](labs/moteur-docker/Vagrantfile) :
+  `bento/ubuntu-24.04`, 2 Go de RAM, Docker Engine et le plugin compose installés au premier
+  démarrage), lancée par l'agent Vagrant **à la demande**, au premier lab Docker (pas au lancement de
+  TDM) ; le premier démarrage télécharge la box (≈ 1 Go) et installe Docker, en quelques minutes ;
+  l'interface affiche « Moteur Docker en démarrage… » pendant ce temps ;
+- l'API Docker (dockerd en tcp dans la VM) n'est redirigée que sur **127.0.0.1:23750** : la
+  plateforme y envoie ses commandes `docker` par `DOCKER_HOST=tcp://127.0.0.1:23750` ;
+- les ports publiés par les labs (`ports:` des `lab.yaml` et des `docker-compose.yml`) sont redirigés
+  de l'hôte (127.0.0.1, même numéro) vers la VM : les liens et vérifications marchent comme avec
+  Docker Desktop. Si un lab ajoute un port, le moteur est redémarré (`vagrant reload`) au démarrage suivant ;
+- « arrêter » le moteur le met en pause (`vagrant suspend`) : la reprise prend quelques secondes ;
+- `TDM.exe` embarque le client `docker` et le plugin compose pour le cas où Docker Desktop n'est pas
+  installé ; le code Python des exercices reste exécuté localement (jamais dans la VM moteur).
+
+Montages : avec ce moteur distant, un dossier de l'hôte monté dans un conteneur (`-v C:\x:/x`,
+`- ./x:/x`) serait vide. Les labs n'en utilisent pas (un test le vérifie) : les fichiers passent par
+les images (`build`, dont le contexte est envoyé au moteur) et les volumes nommés.
+
+Si l'hyperviseur Windows est actif alors que TDM n'utilise pas Docker Desktop, l'interface l'explique
+une fois (texte seulement : TDM ne modifie jamais la configuration de démarrage de Windows). La marche
+à suivre pour le désactiver soi-même est dans [`labs/systemes-windows/README.md`](labs/systemes-windows/README.md).
 
 ## Démarrer en local (sans conteneur)
 
@@ -73,7 +111,12 @@ cd backend && uvicorn app.main:app --reload
 
 | Variable | Défaut | Rôle |
 |----------|--------|------|
-| `TDM_SANDBOX` | `auto` | `docker`, `local` ou `auto` (Docker s'il est disponible) |
+| `TDM_SANDBOX` | `auto` | `docker`, `local` ou `auto` (Docker s'il est disponible, hors moteur Docker de TDM) |
+| `TDM_DOCKER` | `auto` | Moteur des labs Docker : `auto` (Docker déjà joignable, sinon le moteur Docker de TDM), `desktop` (Docker de la machine) ou `vm` (toujours le moteur de TDM) |
+| `TDM_DOCKER_VM_PORT` | `23750` | Port de l'API du moteur Docker de TDM sur 127.0.0.1 |
+| `TDM_DOCKER_VM_MEMORY` | `2048` | Mémoire de la VM moteur en Mo (4096 conseillés pour GitLab ou k3s) |
+| `TDM_DOCKER_VM_CPUS` | `2` | Processeurs de la VM moteur |
+| `TDM_DOCKER_VM_BOX` | `bento/ubuntu-24.04` | Box Vagrant de la VM moteur |
 | `TDM_LABS_DIR` | `labs/devops` | Dossier des labs DevOps (pour pointer vers ta propre collection) |
 | `TDM_CONTENT_DIR` | `content` | Dossier des exercices Python et réseau |
 | `TDM_RUN_TIMEOUT` | `10` | Durée maximale d'exécution d'un code (secondes) |
@@ -95,7 +138,8 @@ navigateur (HTML/JS, CodeMirror, xterm.js)
 backend FastAPI (backend/app)
    ├── python/     moulinette : exécute tests.py contre ton solution.py dans le bac à sable
    ├── network/    simulateur Cisco IOS (modes, abréviations, show, ...) + vérifications
-   ├── devops/     pilote Docker (build/run/exec/stop) et l'agent Vagrant, scripts de vérification
+   ├── devops/     pilote Docker (build/run/exec/stop) et l'agent Vagrant, scripts de vérification ;
+   │               engine.py choisit le moteur Docker (Docker Desktop ou VM moteur de TDM)
    ├── sandbox.py  conteneur jetable sans réseau (ou sous-processus limité en mode local)
    └── terminal.py pont WebSocket ⇄ pseudo-terminal (terminal Python et terminal des labs)
 ```
