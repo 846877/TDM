@@ -1,0 +1,529 @@
+title: Adressage IP et diagnostic réseau sous Windows
+level: debutant
+order: 3
+tags: [windows, windows 11, réseau, ipconfig, dns, ping, arp, route, pare-feu, powershell]
+summary: Configurer la carte réseau d'un poste Windows 11 et diagnostiquer pas à pas - IP, DNS, ping, ports, ARP, routes et profil réseau.
+vagrant: bundled
+machine: pc01
+description: |
+  **Contexte.** Le poste `PC01` de l'accueil vient d'être réinstallé et n'a plus de réseau. Tu dois le
+  reconfigurer, puis traiter une série de petits tickets réseau, avec les outils du technicien :
+  `ipconfig`, `ping`, `tracert`, `nslookup`, `netstat`, `arp`, `route`... et leurs équivalents
+  PowerShell.
+
+  **Machines** (prévoir **8 Go de RAM libres**) :
+
+  | VM | Système | Rôle | Adresse LAN |
+  |----|---------|------|-------------|
+  | `PC01` (terminal) | Windows 11 (3 Go) | poste à dépanner | **à configurer** |
+  | `SRV01` | Windows Server 2022 (2 Go) | DNS de `durand.lan`, intranet (IIS) | 192.168.10.10 |
+
+  Plan d'adressage du réseau `192.168.10.0/24` : passerelle `192.168.10.254`, DNS `192.168.10.10`,
+  postes `.101` à `.199`. Le routeur n'existe pas dans le lab (et Internet n'y est pas nécessaire :
+  Vagrant garde sa propre carte `NAT`, ne la modifie pas). La carte à configurer s'appelle **`LAN`**.
+
+  Ton terminal est sur PC01. Les vérifications marquées « depuis SRV01 » s'exécutent sur le serveur.
+cours: |
+  ## La configuration IP d'un poste
+
+  Pour communiquer, une carte réseau a besoin de quatre informations :
+
+  | Paramètre | Exemple | Rôle |
+  |-----------|---------|------|
+  | Adresse IPv4 | 192.168.10.101 | identifie le poste sur le réseau |
+  | Masque / préfixe | 255.255.255.0 = /24 | délimite le réseau local |
+  | Passerelle par défaut | 192.168.10.254 | routeur pour sortir du réseau |
+  | Serveurs DNS | 192.168.10.10 | traduisent les noms en adresses |
+
+  Elle les reçoit d'un serveur **DHCP** ou on les fixe à la main (serveurs, imprimantes, et ici un
+  poste de lab). Sans DHCP ni adresse fixe, Windows s'attribue une adresse **APIPA** `169.254.x.x` : le
+  symptôme classique d'un « pas de réseau ».
+
+  ## Outils : historique et PowerShell
+
+  | Besoin | Commande historique | PowerShell |
+  |--------|---------------------|------------|
+  | Voir la configuration | `ipconfig /all` | `Get-NetIPConfiguration`, `Get-NetIPAddress` |
+  | Fixer une adresse | `netsh interface ipv4 set address` | `New-NetIPAddress`, `Set-DnsClientServerAddress` |
+  | Renouveler / vider le cache DNS | `ipconfig /renew`, `/flushdns` | `Clear-DnsClientCache` |
+  | Tester la connectivité | `ping`, `tracert`, `pathping` | `Test-Connection`, `Test-NetConnection -TraceRoute` |
+  | Tester un port TCP | `telnet hôte 80` | `Test-NetConnection hôte -Port 80` |
+  | Interroger le DNS | `nslookup` | `Resolve-DnsName` |
+  | Ports en écoute | `netstat -ano` | `Get-NetTCPConnection -State Listen` |
+  | Cache ARP | `arp -a` | `Get-NetNeighbor` |
+  | Table de routage | `route print` | `Get-NetRoute`, `New-NetRoute` |
+
+  Les cartes se désignent par leur **alias** (`LAN`, `Ethernet`, `Wi-Fi`) ou leur **index**
+  (`Get-NetAdapter`). Interface graphique : `ncpa.cpl` (Connexions réseau), puis *Propriétés* ›
+  *Protocole Internet version 4*.
+
+  ```powershell
+  New-NetIPAddress -InterfaceAlias LAN -IPAddress 192.168.10.101 -PrefixLength 24 -DefaultGateway 192.168.10.254
+  Set-DnsClientServerAddress -InterfaceAlias LAN -ServerAddresses 192.168.10.10
+  Get-NetIPConfiguration -InterfaceAlias LAN
+  ```
+
+  ## Méthode de diagnostic : du bas vers le haut
+
+  ```
+  1. La carte est-elle connectée ?          Get-NetAdapter (Status Up)
+  2. Ai-je une adresse correcte ?           ipconfig  (169.254 = pas de DHCP)
+  3. Je joins ma passerelle / un voisin ?   ping 192.168.10.10
+  4. Le DNS répond-il ?                     Resolve-DnsName intranet.durand.lan
+  5. Le service répond-il ?                 Test-NetConnection intranet -Port 80
+  ```
+
+  On ne saute pas d'étape : un « Internet ne marche pas » est souvent un DNS mal saisi, et un « le
+  serveur ne répond pas au ping » un simple pare-feu.
+
+  ## DNS côté client
+
+  Ordre de résolution d'un nom : cache DNS du poste (`Get-DnsClientCache`), fichier **hosts**
+  (`C:\Windows\System32\drivers\etc\hosts`), serveurs DNS de la carte, puis LLMNR/NetBIOS pour les
+  noms courts. Le **suffixe DNS** permet de taper `intranet` au lieu de `intranet.durand.lan`.
+  Types d'enregistrements : **A** (nom → IPv4), **CNAME** (alias), **MX** (serveur de messagerie),
+  **PTR** (adresse → nom, zone inverse).
+
+  ## Pare-feu et profils réseau
+
+  Le pare-feu Windows Defender applique des règles selon le **profil** de la connexion : *Domaine*,
+  *Privé* ou *Public* (le plus fermé : pas de découverte réseau, pas de partage, pas de ping). Un
+  réseau d'entreprise mal classé en *Public* explique bien des tickets. Par défaut, Windows ne répond
+  **pas** au ping (ICMPv4 Echo Request entrant bloqué).
+
+  ## Pièges courants
+
+  - Ajouter une seconde adresse au lieu de remplacer l'ancienne (`New-NetIPAddress` sur une carte déjà
+    configurée) : supprimer d'abord avec `Remove-NetIPAddress`, ou repasser en DHCP.
+  - Oublier le DNS : le ping par adresse marche, mais rien ne fonctionne par nom.
+  - Tester avec `ping` un serveur qui bloque ICMP et conclure à une panne : tester le **port** du service.
+  - Modifier la mauvaise carte (ici `NAT`, celle de Vagrant : tu perdrais le terminal).
+docs:
+  - title: Module NetTCPIP (Get-NetIPAddress, New-NetIPAddress...)
+    url: https://learn.microsoft.com/fr-fr/powershell/module/nettcpip/
+  - title: ipconfig (commandes Windows)
+    url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/ipconfig
+  - title: Resolve-DnsName
+    url: https://learn.microsoft.com/fr-fr/powershell/module/dnsclient/resolve-dnsname
+exercises:
+  - id: win-ip-releve
+    title: Relever la configuration avant d'intervenir
+    description: |
+      Bonne pratique : avant de toucher à un poste, on note son état. Enregistre la sortie complète de
+      `ipconfig /all` dans `C:\Admin\config-avant.txt`, puis la liste des cartes réseau (nom, description,
+      état, adresse MAC) dans `C:\Admin\cartes.csv` (CSV séparé par `;`, colonnes `Name`,
+      `InterfaceDescription`, `Status`, `MacAddress`).
+    hint: ipconfig /all > C:\Admin\config-avant.txt ; Get-NetAdapter | Select-Object Name, InterfaceDescription, Status, MacAddress | Export-Csv ... -Delimiter ';' -NoTypeInformation
+    cours: |
+      `ipconfig /all` affiche tout : nom d'hôte, suffixe DNS, et pour chaque carte son adresse physique
+      (MAC), DHCP activé ou non, adresses, passerelle, serveurs DNS, bail DHCP. La redirection `>` écrit
+      la sortie dans un fichier (en UTF-16 sous Windows PowerShell 5.1 ; `| Out-File -Encoding utf8`
+      pour de l'UTF-8).
+
+      `Get-NetAdapter` renvoie les cartes sous forme d'**objets** : `Name` (l'alias, ici `LAN` et `NAT`),
+      `InterfaceDescription` (le modèle : *Intel(R) PRO/1000 MT*), `Status` (`Up`, `Disconnected`,
+      `Disabled`), `MacAddress`, `LinkSpeed`. On choisit les colonnes avec `Select-Object` et on exporte
+      avec `Export-Csv`.
+
+      Garder une trace « avant » permet de revenir en arrière et de documenter le ticket.
+    ci: true
+    checks:
+      - desc: C:\Admin\config-avant.txt contient la sortie de ipconfig /all
+        run: |
+          $t = Get-Content C:\Admin\config-avant.txt -Raw
+          $t -match [regex]::Escape($env:COMPUTERNAME) -and $t -match '([0-9A-F]{2}-){5}[0-9A-F]{2}'
+      - desc: C:\Admin\cartes.csv liste les cartes avec les colonnes demandées
+        run: |
+          $csv = Import-Csv C:\Admin\cartes.csv -Delimiter ';'
+          $cols = $csv[0].PSObject.Properties.Name -join ','
+          $cols -eq 'Name,InterfaceDescription,Status,MacAddress' -and @($csv).Count -eq @(Get-NetAdapter).Count
+    solution: |
+      New-Item C:\Admin -ItemType Directory -Force | Out-Null
+      ipconfig /all > C:\Admin\config-avant.txt
+      Get-NetAdapter | Select-Object Name, InterfaceDescription, Status, MacAddress |
+        Export-Csv C:\Admin\cartes.csv -Delimiter ';' -NoTypeInformation -Encoding UTF8
+
+  - id: win-ip-statique
+    title: Adresse IP fixe du poste
+    description: |
+      Configure la carte **LAN** de PC01 selon le plan d'adressage :
+
+      - adresse `192.168.10.101`, masque `255.255.255.0` (/24) ;
+      - passerelle `192.168.10.254` ;
+      - serveur DNS `192.168.10.10`.
+
+      Puis vérifie que tu joins le serveur : `ping 192.168.10.10`.
+    hint: New-NetIPAddress -InterfaceAlias LAN -IPAddress 192.168.10.101 -PrefixLength 24 -DefaultGateway 192.168.10.254 ; Set-DnsClientServerAddress -InterfaceAlias LAN -ServerAddresses 192.168.10.10
+    cours: |
+      En PowerShell, l'adresse et la passerelle se posent avec `New-NetIPAddress`, les DNS avec
+      `Set-DnsClientServerAddress` :
+
+      ```powershell
+      New-NetIPAddress -InterfaceAlias LAN -IPAddress 192.168.10.101 -PrefixLength 24 -DefaultGateway 192.168.10.254
+      Set-DnsClientServerAddress -InterfaceAlias LAN -ServerAddresses 192.168.10.10
+      ```
+
+      Le masque s'exprime en **longueur de préfixe** : 255.255.255.0 = 24 bits à 1 = `/24`. Équivalent
+      historique : `netsh interface ipv4 set address name="LAN" static 192.168.10.101 255.255.255.0 192.168.10.254`
+      puis `netsh interface ipv4 set dnsservers name="LAN" static 192.168.10.10 primary`.
+
+      Pour revenir en DHCP : `Set-NetIPInterface -InterfaceAlias LAN -Dhcp Enabled` et
+      `Set-DnsClientServerAddress -InterfaceAlias LAN -ResetServerAddresses`. Graphique : `ncpa.cpl`.
+      Avant de valider, l'adresse APIPA (169.254.x.x) visible dans `ipconfig` doit avoir disparu.
+    checks:
+      - desc: La carte LAN a l'adresse 192.168.10.101/24
+        run: |
+          $a = Get-NetIPAddress -InterfaceAlias LAN -AddressFamily IPv4 | Where-Object IPAddress -eq '192.168.10.101'
+          $a.PrefixLength -eq 24
+      - desc: Passerelle 192.168.10.254 et DNS 192.168.10.10
+        run: |
+          $c = Get-NetIPConfiguration -InterfaceAlias LAN
+          $c.IPv4DefaultGateway.NextHop -contains '192.168.10.254' -and
+          @((Get-DnsClientServerAddress -InterfaceAlias LAN -AddressFamily IPv4).ServerAddresses) -contains '192.168.10.10'
+      - desc: PC01 joint SRV01 (192.168.10.10)
+        run: |
+          Test-Connection 192.168.10.10 -Count 2 -Quiet
+    solution: |
+      Get-NetIPAddress -InterfaceAlias LAN -AddressFamily IPv4 -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false
+      New-NetIPAddress -InterfaceAlias LAN -IPAddress 192.168.10.101 -PrefixLength 24 -DefaultGateway 192.168.10.254 | Out-Null
+      Set-DnsClientServerAddress -InterfaceAlias LAN -ServerAddresses 192.168.10.10
+
+  - id: win-ip-profil
+    title: « Le réseau est en Public »
+    description: |
+      Depuis la réinstallation, la carte LAN est classée dans le profil réseau **Public** : partage de
+      fichiers et découverte réseau sont bloqués. Passe-la en profil **Privé** (le poste n'est pas dans un
+      domaine, sinon ce serait le profil *Domaine*).
+    hint: Set-NetConnectionProfile -InterfaceAlias LAN -NetworkCategory Private
+    cours: |
+      Chaque connexion réseau a un **profil** qui détermine les règles du pare-feu :
+
+      - **Public** : réseau inconnu (café, gare) — tout est fermé, le poste est invisible ;
+      - **Privé** : réseau de confiance (maison, petit bureau) — découverte réseau, partage ;
+      - **Domaine** : attribué automatiquement quand le poste joint un contrôleur de son domaine AD.
+
+      ```powershell
+      Get-NetConnectionProfile
+      Set-NetConnectionProfile -InterfaceAlias LAN -NetworkCategory Private
+      ```
+
+      Graphique : *Paramètres* › *Réseau et Internet* › *Ethernet* › *Type de profil réseau*. Un poste du
+      domaine qui reste en *Public* ou *Privé* signale un problème de joignabilité des contrôleurs de
+      domaine (service *NLA*, DNS) : c'est un symptôme à ne pas masquer en forçant le profil.
+    checks:
+      - desc: La carte LAN est en profil Privé
+        run: |
+          (Get-NetConnectionProfile -InterfaceAlias LAN).NetworkCategory -eq 'Private'
+    solution: |
+      Set-NetConnectionProfile -InterfaceAlias LAN -NetworkCategory Private
+
+  - id: win-ip-ping
+    title: Autoriser le ping vers le poste
+    description: |
+      Le technicien réseau veut pouvoir pinguer PC01 depuis le serveur pour ses tests de supervision.
+      Crée une règle de pare-feu entrante nommée **`TDM-Ping-LAN`** qui autorise l'**ICMPv4 Echo Request**
+      (type 8) **depuis le réseau 192.168.10.0/24 uniquement**.
+    hint: New-NetFirewallRule -Name TDM-Ping-LAN -DisplayName 'Ping depuis le LAN' -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -RemoteAddress 192.168.10.0/24 -Action Allow
+    cours: |
+      Par défaut, Windows bloque les requêtes ping entrantes. Plutôt que d'activer la règle prédéfinie
+      pour tout le monde, on crée une règle ciblée :
+
+      ```powershell
+      New-NetFirewallRule -Name TDM-Ping-LAN -DisplayName 'Ping depuis le LAN' -Direction Inbound `
+        -Protocol ICMPv4 -IcmpType 8 -RemoteAddress 192.168.10.0/24 -Action Allow
+      ```
+
+      - `-Name` est l'identifiant technique (unique), `-DisplayName` le nom affiché dans `wf.msc` ;
+      - `-IcmpType 8` = *Echo Request* (le type 0, *Echo Reply*, est la réponse) ;
+      - `-RemoteAddress` restreint la source ; `-Profile` limite à certains profils (tous par défaut).
+
+      Contrôle : `Get-NetFirewallRule -Name TDM-Ping-LAN | Get-NetFirewallAddressFilter`. L'équivalent
+      historique : `netsh advfirewall firewall add rule name=... protocol=icmpv4:8,any dir=in action=allow`.
+    checks:
+      - desc: La règle TDM-Ping-LAN autorise l'ICMPv4 type 8 entrant
+        run: |
+          $r = Get-NetFirewallRule -Name TDM-Ping-LAN
+          $p = $r | Get-NetFirewallPortFilter
+          $r.Enabled -eq 'True' -and $r.Direction -eq 'Inbound' -and $r.Action -eq 'Allow' -and $p.Protocol -eq 'ICMPv4' -and $p.IcmpType -contains '8'
+      - desc: Elle est limitée au réseau 192.168.10.0/24
+        run: |
+          $f = Get-NetFirewallRule -Name TDM-Ping-LAN | Get-NetFirewallAddressFilter
+          $f.RemoteAddress -contains '192.168.10.0/255.255.255.0' -or $f.RemoteAddress -contains '192.168.10.0/24'
+      - desc: SRV01 arrive à pinguer PC01 (depuis SRV01)
+        machine: srv01
+        run: |
+          Test-Connection 192.168.10.101 -Count 2 -Quiet
+    solution: |
+      New-NetFirewallRule -Name TDM-Ping-LAN -DisplayName 'Ping depuis le LAN' -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -RemoteAddress 192.168.10.0/24 -Action Allow | Out-Null
+
+  - id: win-ip-dns
+    title: Interroger le DNS
+    description: |
+      Une fois le DNS configuré, réponds à ces questions avec `nslookup` ou `Resolve-DnsName` et écris les
+      réponses dans `C:\Admin\dns.txt`, une par ligne, au format `clé=valeur` :
+
+      - `intranet=` l'**adresse IPv4** finale de `intranet.durand.lan` (attention, c'est un alias) ;
+      - `cible=` le **nom** vers lequel pointe l'alias `intranet.durand.lan` ;
+      - `mx=` le serveur de messagerie (**MX**) du domaine `durand.lan` ;
+      - `ptr=` le nom associé à l'adresse `192.168.10.50` (recherche **inverse**).
+    hint: Resolve-DnsName intranet.durand.lan ; Resolve-DnsName durand.lan -Type MX ; Resolve-DnsName 192.168.10.50
+    cours: |
+      `Resolve-DnsName` (ou `nslookup`) interroge les serveurs DNS de la carte :
+
+      ```powershell
+      Resolve-DnsName intranet.durand.lan            # CNAME puis A
+      Resolve-DnsName durand.lan -Type MX            # messagerie
+      Resolve-DnsName 192.168.10.50                  # PTR (zone inverse 10.168.192.in-addr.arpa)
+      nslookup intranet.durand.lan 192.168.10.10     # en précisant le serveur interrogé
+      ```
+
+      Un **CNAME** est un alias : le client suit la chaîne jusqu'à l'enregistrement **A**. Le **MX** désigne
+      le serveur qui reçoit le courrier du domaine (avec une préférence : la plus petite gagne). Le
+      **PTR** sert à la résolution inverse, utilisée par les journaux, la messagerie et certains outils
+      de diagnostic.
+
+      Si une réponse paraît fausse, pense au **cache** : `Get-DnsClientCache`, `Clear-DnsClientCache`
+      (`ipconfig /flushdns`).
+    checks:
+      - desc: intranet= donne l'adresse finale (A) de intranet.durand.lan
+        run: |
+          [bool](Get-Content C:\Admin\dns.txt | Where-Object { $_.Trim() -eq 'intranet=192.168.10.10' })
+      - desc: cible= donne le nom canonique de l'alias
+        run: |
+          [bool](Get-Content C:\Admin\dns.txt | Where-Object { $_.Trim().TrimEnd('.') -eq 'cible=srv01.durand.lan' })
+      - desc: mx= et ptr= sont justes
+        run: |
+          $l = Get-Content C:\Admin\dns.txt | ForEach-Object { $_.Trim().TrimEnd('.') }
+          $l -contains 'mx=mail.durand.lan' -and $l -contains 'ptr=imprimante-rdc.durand.lan'
+    solution: |
+      $a = (Resolve-DnsName intranet.durand.lan -Type A | Where-Object Type -eq 'A').IPAddress
+      $c = (Resolve-DnsName intranet.durand.lan -Type CNAME | Where-Object Type -eq 'CNAME').NameHost
+      $mx = (Resolve-DnsName durand.lan -Type MX | Where-Object Type -eq 'MX').NameExchange
+      $ptr = (Resolve-DnsName 192.168.10.50 | Where-Object Type -eq 'PTR').NameHost
+      Set-Content C:\Admin\dns.txt "intranet=$a", "cible=$c", "mx=$mx", "ptr=$ptr"
+
+  - id: win-ip-suffixe
+    title: Taper « intranet » tout court
+    description: |
+      Les utilisateurs tapent `http://intranet` sans le domaine, et ça échoue. Ajoute le **suffixe DNS
+      spécifique à la connexion** `durand.lan` sur la carte LAN pour que `Resolve-DnsName intranet`
+      fonctionne.
+    hint: Set-DnsClient -InterfaceAlias LAN -ConnectionSpecificSuffix durand.lan
+    cours: |
+      Quand on demande un nom court (`intranet`), le client DNS lui ajoute des **suffixes** avant
+      d'interroger le serveur : le suffixe principal de l'ordinateur (le domaine AD s'il est membre),
+      puis le suffixe **spécifique à la connexion** (souvent fourni par le DHCP, option 15), ou une liste
+      de suffixes de recherche (GPO).
+
+      ```powershell
+      Set-DnsClient -InterfaceAlias LAN -ConnectionSpecificSuffix durand.lan
+      Get-DnsClient -InterfaceAlias LAN
+      Set-DnsClientGlobalSetting -SuffixSearchList durand.lan, atelier.durand.lan   # liste globale
+      ```
+
+      Graphique : propriétés IPv4 › *Avancé* › onglet *DNS* › *Suffixe DNS pour cette connexion*.
+      `ipconfig /all` affiche la *Liste de recherche du suffixe DNS*. Sans suffixe, Windows tente LLMNR
+      ou NetBIOS, qui ne traversent pas les routeurs : ça marche « parfois », la pire des pannes.
+    checks:
+      - desc: Le suffixe durand.lan est configuré sur la carte LAN
+        run: |
+          (Get-DnsClient -InterfaceAlias LAN).ConnectionSpecificSuffix -eq 'durand.lan'
+      - desc: Le nom court intranet se résout en 192.168.10.10
+        run: |
+          Clear-DnsClientCache
+          @((Resolve-DnsName intranet -Type A -DnsOnly | Where-Object Type -eq 'A').IPAddress) -contains '192.168.10.10'
+    solution: |
+      Set-DnsClient -InterfaceAlias LAN -ConnectionSpecificSuffix durand.lan
+
+  - id: win-ip-hosts
+    title: Le vieux serveur ERP absent du DNS
+    description: |
+      L'ancien ERP (`192.168.10.30`) n'a jamais été déclaré dans le DNS et le prestataire ne répond plus.
+      En attendant, ajoute dans le fichier **hosts** du poste une entrée pour `erp.durand.lan` **et** le
+      nom court `erp`, vers `192.168.10.30`.
+    hint: Add-Content C:\Windows\System32\drivers\etc\hosts "192.168.10.30`terp.durand.lan erp"
+    cours: |
+      Le fichier `C:\Windows\System32\drivers\etc\hosts` est consulté **avant** le DNS. Une ligne =
+      une adresse suivie d'un ou plusieurs noms, séparés par des espaces ou des tabulations ; `#` commence
+      un commentaire :
+
+      ```
+      192.168.10.30    erp.durand.lan erp    # ERP, ticket 1187, à déclarer dans le DNS
+      ```
+
+      Il faut des droits administrateur pour le modifier (Bloc-notes lancé « en tant qu'administrateur »,
+      ou `Add-Content` dans un PowerShell élevé). Le résultat est immédiat : `Resolve-DnsName erp` et
+      `ping erp` le prennent en compte (vider le cache DNS en cas de doute).
+
+      C'est un **dépannage**, pas une solution : le fichier hosts n'est géré par personne, il est oublié et
+      provoque des pannes incompréhensibles le jour où l'adresse change. Les logiciels malveillants
+      aiment aussi le modifier : c'est un des premiers fichiers à regarder lors d'un diagnostic.
+    ci: true
+    checks:
+      - desc: Le fichier hosts associe 192.168.10.30 à erp.durand.lan et erp
+        run: |
+          $l = Get-Content C:\Windows\System32\drivers\etc\hosts | Where-Object { $_ -match '^\s*192\.168\.10\.30\s' }
+          $names = ($l -replace '#.*', '' -split '\s+') | Where-Object { $_ }
+          $names -contains 'erp.durand.lan' -and $names -contains 'erp'
+      - desc: erp.durand.lan se résout bien en 192.168.10.30
+        run: |
+          Clear-DnsClientCache
+          @((Resolve-DnsName erp.durand.lan -Type A | Where-Object Type -eq 'A').IPAddress) -contains '192.168.10.30'
+    solution: |
+      Add-Content C:\Windows\System32\drivers\etc\hosts "`r`n192.168.10.30`terp.durand.lan erp"
+
+  - id: win-ip-port-suspect
+    title: Un port 4444 ouvert sur le poste
+    description: |
+      L'antivirus réseau signale que PC01 **écoute sur le port TCP 4444**. Enquête :
+
+      1. trouve le **processus** qui écoute sur ce port (`netstat -ano` ou `Get-NetTCPConnection`) ;
+      2. retrouve ce qui le lance (regarde sa ligne de commande et les **tâches planifiées**) ;
+      3. écris le **nom de la tâche planifiée** responsable dans `C:\Admin\ticket-4444.txt` ;
+      4. **désactive** cette tâche et arrête le processus : plus rien ne doit écouter sur 4444.
+    hint: Get-NetTCPConnection -LocalPort 4444 -State Listen → OwningProcess ; Get-CimInstance Win32_Process -Filter "ProcessId=<pid>" ; Get-ScheduledTask ; Disable-ScheduledTask ; Stop-Process
+    cours: |
+      Pour savoir qui écoute sur un port :
+
+      ```powershell
+      netstat -ano | findstr :4444                       # -o affiche le PID
+      Get-NetTCPConnection -LocalPort 4444 -State Listen  # OwningProcess = PID
+      Get-Process -Id 1234
+      Get-CimInstance Win32_Process -Filter 'ProcessId=1234' | Select-Object Name, CommandLine, ParentProcessId
+      ```
+
+      La **ligne de commande** révèle souvent le coupable (un script caché, un exécutable dans
+      `AppData`). Les mécanismes de démarrage automatique à inspecter : **tâches planifiées**
+      (`Get-ScheduledTask`, `taskschd.msc`), **services** (`Get-Service`), clés `Run` du registre, dossier
+      *Démarrage*. `Get-ScheduledTask | Where-Object { $_.Actions.Arguments -match '4444' }` cherche dans
+      les actions.
+
+      Procédure : on **documente** (nom, chemin, commande) avant de **neutraliser** (désactiver plutôt que
+      supprimer, pour garder une trace pour l'analyse), puis on vérifie que le port est fermé.
+    ci: true
+    checks:
+      - desc: Le ticket nomme la tâche planifiée responsable
+        run: |
+          (Get-Content C:\Admin\ticket-4444.txt -Raw) -match 'MiseAJourAuto'
+      - desc: La tâche MiseAJourAuto est désactivée (ou supprimée)
+        run: |
+          $t = Get-ScheduledTask -TaskName MiseAJourAuto -ErrorAction SilentlyContinue
+          (Test-Path C:\Admin\ticket-4444.txt) -and (-not $t -or $t.State -eq 'Disabled')
+      - desc: Plus rien n'écoute sur le port 4444
+        run: |
+          (Test-Path C:\Admin\ticket-4444.txt) -and -not (Get-NetTCPConnection -LocalPort 4444 -State Listen -ErrorAction SilentlyContinue)
+    solution: |
+      $p = (Get-NetTCPConnection -LocalPort 4444 -State Listen).OwningProcess | Select-Object -First 1
+      $task = Get-ScheduledTask | Where-Object { $_.Actions.Arguments -match '4444' } | Select-Object -First 1
+      Set-Content C:\Admin\ticket-4444.txt "Port 4444 : processus $p lancé par la tâche $($task.TaskName)"
+      $task | Disable-ScheduledTask | Out-Null
+      $task | Stop-ScheduledTask
+      Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+      Start-Sleep -Seconds 2
+
+  - id: win-ip-arp
+    title: Adresse MAC du serveur
+    description: |
+      Le service réseau veut vérifier sur le switch que SRV01 est bien branché sur le bon port : il lui faut
+      l'**adresse MAC** de la carte LAN de SRV01. Récupère-la **depuis PC01** (cache ARP, après un ping) et
+      écris-la seule dans `C:\Admin\mac-srv01.txt` (format `08-00-27-xx-xx-xx`).
+    hint: ping 192.168.10.10 puis arp -a ou Get-NetNeighbor -IPAddress 192.168.10.10
+    cours: |
+      Sur un réseau local, les trames Ethernet sont adressées à des **adresses MAC**. Avant d'envoyer un
+      paquet à 192.168.10.10, PC01 demande « qui a 192.168.10.10 ? » (requête **ARP** en diffusion) et
+      garde la réponse dans son **cache ARP** quelques minutes :
+
+      ```powershell
+      ping 192.168.10.10
+      arp -a                                         # historique
+      Get-NetNeighbor -IPAddress 192.168.10.10       # PowerShell : LinkLayerAddress, State (Reachable, Stale)
+      ```
+
+      Les **trois** premiers octets (`08-00-27`) identifient le constructeur (OUI) : ici la carte
+      virtuelle d'Oracle VirtualBox. Pour une adresse hors du réseau local, le cache contient la MAC de la
+      **passerelle**, jamais celle de la machine distante.
+
+      Un conflit d'adresses IP se diagnostique ainsi : deux MAC différentes pour la même IP selon le moment
+      (`arp -d *` vide le cache).
+    checks:
+      - desc: C:\Admin\mac-srv01.txt contient l'adresse MAC LAN de SRV01
+        run: |
+          (Get-Content C:\Admin\mac-srv01.txt -Raw).Trim().ToUpper().Replace(':', '-') -eq '08-00-27-AA-7C-01'
+    solution: |
+      Test-Connection 192.168.10.10 -Count 1 | Out-Null
+      (Get-NetNeighbor -IPAddress 192.168.10.10).LinkLayerAddress | Set-Content C:\Admin\mac-srv01.txt
+
+  - id: win-ip-route
+    title: Route vers le site de Nantes
+    description: |
+      Le site de Nantes (`10.20.0.0/16`) est joignable par un routeur VPN, `192.168.10.254`, qui n'est pas
+      la passerelle par défaut... dans la vraie vie. Ajoute sur PC01 une route **persistante** vers
+      `10.20.0.0/16` via `192.168.10.254` sur la carte LAN, avec une métrique de `10`.
+    hint: New-NetRoute -DestinationPrefix 10.20.0.0/16 -InterfaceAlias LAN -NextHop 192.168.10.254 -RouteMetric 10
+    cours: |
+      La **table de routage** dit au poste par où envoyer chaque paquet : la route la plus **précise**
+      (préfixe le plus long) gagne, puis la plus petite **métrique**. La route `0.0.0.0/0` est la route par
+      défaut (passerelle).
+
+      ```powershell
+      route print                                         # historique
+      Get-NetRoute -AddressFamily IPv4
+      New-NetRoute -DestinationPrefix 10.20.0.0/16 -InterfaceAlias LAN -NextHop 192.168.10.254 -RouteMetric 10
+      Remove-NetRoute -DestinationPrefix 10.20.0.0/16 -Confirm:$false
+      ```
+
+      `New-NetRoute` crée par défaut une route **persistante** (elle survit au redémarrage, magasin
+      `PersistentStore`) ; `route add` sans `-p` ne crée qu'une route temporaire. `Find-NetRoute
+      -RemoteIPAddress 10.20.1.5` indique la route choisie pour une destination, et `tracert` montre le
+      chemin réel.
+    checks:
+      - desc: Une route persistante 10.20.0.0/16 via 192.168.10.254 existe sur LAN
+        run: |
+          $r = Get-NetRoute -DestinationPrefix 10.20.0.0/16 -PolicyStore PersistentStore
+          $r.NextHop -eq '192.168.10.254' -and $r.InterfaceAlias -eq 'LAN'
+      - desc: Sa métrique est 10
+        run: |
+          (Get-NetRoute -DestinationPrefix 10.20.0.0/16 -PolicyStore PersistentStore).RouteMetric -eq 10
+    solution: |
+      New-NetRoute -DestinationPrefix 10.20.0.0/16 -InterfaceAlias LAN -NextHop 192.168.10.254 -RouteMetric 10 | Out-Null
+
+  - id: win-ip-intranet
+    title: L'intranet répond-il ?
+    description: |
+      Dernier ticket : « l'intranet ne marche pas depuis l'accueil ». Diagnostique avec
+      `Test-NetConnection` et écris dans `C:\Admin\intranet.txt` deux lignes :
+
+      - `port80=ouvert` ou `port80=ferme` (TCP 80 sur `intranet.durand.lan`) ;
+      - `port443=ouvert` ou `port443=ferme` (TCP 443).
+
+      Puis télécharge la page d'accueil de `http://intranet.durand.lan/` dans `C:\Admin\intranet.html`.
+    hint: Test-NetConnection intranet.durand.lan -Port 80 (TcpTestSucceeded) ; Invoke-WebRequest http://intranet.durand.lan/ -OutFile C:\Admin\intranet.html -UseBasicParsing
+    cours: |
+      `Test-NetConnection` (alias `tnc`) combine résolution DNS, ping et test de port TCP :
+
+      ```powershell
+      Test-NetConnection intranet.durand.lan -Port 80        # TcpTestSucceeded : True/False
+      Test-NetConnection intranet.durand.lan -CommonTCPPort HTTP
+      Test-NetConnection 8.8.8.8 -TraceRoute                  # équivalent de tracert
+      ```
+
+      Un port **fermé** (rien n'écoute, le serveur répond « refusé ») et un port **filtré** (un pare-feu
+      jette les paquets, on attend le délai) donnent tous deux `False`, mais le second met plusieurs
+      secondes : c'est un indice. `Invoke-WebRequest` (alias `iwr`, l'équivalent de `curl`) vérifie
+      ensuite la couche application : le code HTTP 200 prouve que le site répond.
+
+      Ici, le site n'est publié qu'en HTTP : le ticket se résout en expliquant à l'utilisateur d'utiliser
+      `http://` (ou en demandant un certificat pour publier en HTTPS).
+    checks:
+      - desc: Les états des ports 80 et 443 sont justes
+        run: |
+          $l = Get-Content C:\Admin\intranet.txt | ForEach-Object { $_.Trim() }
+          $l -contains 'port80=ouvert' -and $l -contains 'port443=ferme'
+      - desc: La page de l'intranet a été téléchargée
+        run: |
+          (Get-Content C:\Admin\intranet.html -Raw) -match 'Intranet Ateliers Durand'
+    solution: |
+      $p80 = if ((Test-NetConnection intranet.durand.lan -Port 80 -WarningAction SilentlyContinue).TcpTestSucceeded) { 'ouvert' } else { 'ferme' }
+      $p443 = if ((Test-NetConnection intranet.durand.lan -Port 443 -WarningAction SilentlyContinue).TcpTestSucceeded) { 'ouvert' } else { 'ferme' }
+      Set-Content C:\Admin\intranet.txt "port80=$p80", "port443=$p443"
+      Invoke-WebRequest http://intranet.durand.lan/ -OutFile C:\Admin\intranet.html -UseBasicParsing

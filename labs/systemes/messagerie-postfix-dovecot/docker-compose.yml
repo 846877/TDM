@@ -1,0 +1,34 @@
+# Messagerie d'« Ateliers Durand » : srv-mail (Postfix et Dovecot installés, non démarrés), admin (poste
+# du LAN) et ext (serveur de messagerie du partenaire partenaire.example, sur le réseau « Internet »).
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.176.0.5}
+  srv-mail:
+    build: {context: ., dockerfile: srv-mail/Dockerfile}
+    hostname: mail
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.176.0.25}
+      wan: {ipv4_address: 10.176.1.25}
+  ext:
+    build: {context: ., dockerfile: ext/Dockerfile}
+    hostname: mx-partenaire
+    volumes: [cles:/lab-ssh]
+    networks:
+      wan: {ipv4_address: 10.176.1.30}
+      lan: {ipv4_address: 10.176.0.30}
+volumes:
+  cles:
+networks:
+  lan:
+    internal: true
+    ipam:
+      config: [{subnet: 10.176.0.0/24, ip_range: 10.176.0.128/28}]
+  wan:
+    internal: true
+    ipam:
+      config: [{subnet: 10.176.1.0/24, ip_range: 10.176.1.128/28}]

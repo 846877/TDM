@@ -1,0 +1,180 @@
+title: Recherche de motif KMP
+level: expert
+order: 20
+tags: [chaînes, algorithmes, complexité]
+summary: Knuth-Morris-Pratt, la fonction préfixe et ses applications.
+description: |
+  La recherche naïve d'un motif de longueur `m` dans un texte de longueur `n` coûte `O(n × m)` dans
+  le pire cas. L'algorithme de **Knuth-Morris-Pratt** descend à `O(n + m)` grâce à la
+  **fonction préfixe**.
+
+  1. `fonction_prefixe(s)` renvoie la liste `pi` où `pi[i]` est la longueur du plus long **préfixe
+     propre** de `s[:i + 1]` qui en est aussi un **suffixe**.
+
+     ```python
+     fonction_prefixe("abacaba")   # [0, 0, 1, 0, 1, 2, 3]
+     fonction_prefixe("aaaa")      # [0, 1, 2, 3]
+     ```
+
+  2. `occurrences(texte, motif)` renvoie la liste des positions de toutes les occurrences du motif,
+     **chevauchements compris** : `occurrences("aaaa", "aa") == [0, 1, 2]`.
+     Un motif vide lève `ValueError`. Interdit : `str.find`, `str.index`, `in`, `re` — c'est à toi
+     d'écrire la recherche avec la fonction préfixe.
+
+  3. `periode(s)` renvoie la longueur de la plus petite chaîne `p` telle que `s` soit `p` répétée
+     un nombre entier de fois : `periode("abcabcabc") == 3`, `periode("abcab") == 5`.
+     Astuce : avec `k = len(s) - pi[-1]`, la réponse est `k` si `k` divise `len(s)`, sinon `len(s)`.
+
+  La moulinette utilise des textes de 200 000 caractères construits pour piéger la recherche naïve.
+starter: |
+  def fonction_prefixe(s):
+      pass
+
+
+  def occurrences(texte, motif):
+      pass
+
+
+  def periode(s):
+      pass
+tests: |
+  import random
+
+  def naif(texte, motif):
+      return [i for i in range(len(texte) - len(motif) + 1) if texte[i:i + len(motif)] == motif]
+
+  def test_prefixe():
+      "Fonction préfixe"
+      assert solution.fonction_prefixe("abacaba") == [0, 0, 1, 0, 1, 2, 3]
+      assert solution.fonction_prefixe("aaaa") == [0, 1, 2, 3]
+      assert solution.fonction_prefixe("abcd") == [0, 0, 0, 0]
+      assert solution.fonction_prefixe("aabaaab") == [0, 1, 0, 1, 2, 2, 3]
+      assert solution.fonction_prefixe("") == []
+
+  def test_occurrences():
+      "Occurrences avec chevauchement"
+      assert solution.occurrences("aaaa", "aa") == [0, 1, 2]
+      assert solution.occurrences("abracadabra", "abra") == [0, 7]
+      assert solution.occurrences("abc", "d") == []
+      assert solution.occurrences("ab", "abc") == []
+
+  def test_motif_vide():
+      "Motif vide refusé"
+      try:
+          solution.occurrences("abc", "")
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("ValueError attendue")
+
+  def test_aleatoire():
+      "Comparaison avec la recherche naïve"
+      rng = random.Random(20)
+      for _ in range(200):
+          texte = "".join(rng.choice("ab") for _ in range(rng.randint(0, 40)))
+          motif = "".join(rng.choice("ab") for _ in range(rng.randint(1, 5)))
+          assert solution.occurrences(texte, motif) == naif(texte, motif), f"texte {texte!r}, motif {motif!r}"
+
+  def test_sans_find():
+      "La recherche n'utilise pas str.find / index"
+      class Chaine(str):
+          def find(self, *a):
+              raise AssertionError("str.find est interdit")
+          index = rfind = count = find
+          def __contains__(self, x):
+              raise AssertionError("l'opérateur in sur la chaîne est interdit")
+      assert solution.occurrences(Chaine("xabxab"), Chaine("ab")) == [1, 4]
+
+  def test_grand_texte():
+      "200 000 caractères piégeux"
+      texte = "a" * 200_000
+      motif = "a" * 999 + "b"
+      assert solution.occurrences(texte, motif) == []
+      assert len(solution.occurrences(texte + "b", motif)) == 1
+
+  def test_periode():
+      "Période d'une chaîne"
+      assert solution.periode("abcabcabc") == 3
+      assert solution.periode("abcab") == 5
+      assert solution.periode("aaaa") == 1
+      assert solution.periode("abab" * 1000) == 2
+      assert solution.periode("x") == 1
+solution: |
+  def fonction_prefixe(s):
+      pi = [0] * len(s)
+      k = 0
+      for i in range(1, len(s)):
+          while k and s[i] != s[k]:
+              k = pi[k - 1]
+          if s[i] == s[k]:
+              k += 1
+          pi[i] = k
+      return pi
+
+
+  def occurrences(texte, motif):
+      if not motif:
+          raise ValueError("motif vide")
+      pi = fonction_prefixe(motif)
+      resultat = []
+      k = 0
+      for i, caractere in enumerate(texte):
+          while k and caractere != motif[k]:
+              k = pi[k - 1]
+          if caractere == motif[k]:
+              k += 1
+          if k == len(motif):
+              resultat.append(i - k + 1)
+              k = pi[k - 1]
+      return resultat
+
+
+  def periode(s):
+      k = len(s) - fonction_prefixe(s)[-1]
+      return k if len(s) % k == 0 else len(s)
+cours: |
+  ## Le problème de la recherche naïve
+
+  Chercher un motif de longueur m dans un texte de longueur n en essayant chaque position
+  coûte O(n × m) dans le pire cas (motif `aaaab` dans un texte `aaaa…a`) : à chaque échec, on
+  recommence la comparaison depuis zéro, en oubliant tout ce qu'on vient de lire.
+
+  ## L'idée de KMP
+
+  Quand une comparaison échoue après avoir reconnu `k` caractères du motif, on sait déjà
+  quels caractères précèdent dans le texte : ce sont les `k` premiers du motif. On peut donc
+  décaler le motif directement à la position où un **préfixe du motif** coïncide avec la
+  **fin** de ce qu'on a lu, sans jamais reculer dans le texte.
+
+  ## La fonction préfixe
+
+  `pi[i]` = longueur du plus long préfixe **propre** (différent de la chaîne entière) de
+  `s[:i+1]` qui est aussi un suffixe de `s[:i+1]`. Exemple pour `"abab"` : `[0, 0, 1, 2]`.
+
+  Elle se calcule en O(m) avec un raisonnement incrémental : on essaie de prolonger le bord
+  précédent ; si le caractère suivant ne correspond pas, on se replie sur le bord **du bord**
+  (`k = pi[k - 1]`), et ainsi de suite jusqu'à pouvoir prolonger ou atteindre 0. Chaque repli
+  diminue `k`, qui n'augmente que d'un par caractère : coût total linéaire (analyse
+  amortie).
+
+  ## La recherche
+
+  Même mécanisme sur le texte, avec `k` = nombre de caractères du motif actuellement
+  reconnus. Quand `k == m`, une occurrence se termine à la position courante ; pour trouver
+  les occurrences **chevauchantes**, on continue avec `k = pi[m - 1]`. Une astuce classique :
+  calculer la fonction préfixe de `motif + séparateur + texte`, où le séparateur n'apparaît
+  nulle part.
+
+  ## Périodes
+
+  La fonction préfixe donne aussi la plus petite période d'une chaîne : si `p = n − pi[n−1]`
+  divise `n`, la chaîne est la répétition de ses `p` premiers caractères.
+
+  ## En pratique
+
+  `str.find` de CPython utilise un algorithme hybride très optimisé ; KMP et ses cousins
+  (Boyer-Moore, Aho-Corasick pour plusieurs motifs) sont utilisés dans `grep`, les antivirus,
+  les IDS réseau (Snort) et la bio-informatique.
+docs:
+  - title: Wikipédia — Algorithme de Knuth-Morris-Pratt
+    url: https://fr.wikipedia.org/wiki/Algorithme_de_Knuth-Morris-Pratt

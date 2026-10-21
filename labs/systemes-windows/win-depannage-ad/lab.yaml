@@ -1,0 +1,456 @@
+title: Dépannage Active Directory - le lundi noir
+level: expert
+order: 1
+tags: [active directory, dépannage, dns, srv, canal sécurisé, kerberos, w32time, gpo, agdlp, dcdiag, nltest]
+summary: Remettre en marche un domaine et un poste où tout casse en même temps - localisateur de DC, redirecteur DNS, DNS du poste, canal sécurisé, heure, GPO filtrée, compte bloqué, chaîne AGDLP - avec méthode et preuves.
+vagrant: bundled
+machine: dc01
+description: |
+  **Contexte.** Lundi, 8 h 10, chez les *Ateliers Durand*. Le prestataire précédent est intervenu pendant le
+  week-end « pour faire du ménage ». Depuis : plus d'Internet sur le serveur, le poste PC01 « n'est plus dans
+  le domaine », le message légal a disparu des postes, Marie Dupont (comptabilité) ne peut plus se
+  connecter et, quand elle le pourra, n'aura plus accès au partage `Compta`. À toi de tout remettre en
+  ordre, **sans réinstaller ni rejoindre à nouveau le domaine**.
+
+  **Machines** (prévoir **8 Go de RAM libres**) :
+
+  | VM | Système | Adresse LAN | Rôle |
+  |----|---------|-------------|------|
+  | `SRV-DC01` (terminal) | Windows Server 2022 (2 Go) | 192.168.10.10 | contrôleur de `durand.lan`, DNS, partage `Compta` |
+  | `PC01` | Windows 11 (3 Go) | 192.168.10.101 | poste du domaine, dans l'OU `Postes` |
+
+  Comptes : `DURAND\vagrant` / `vagrant` (administrateur du domaine), `PC01\vagrant` / `vagrant`
+  (administrateur local du poste), utilisateurs du domaine `Bienvenue2024!`. Si `Invoke-Command -ComputerName PC01`
+  échoue (Kerberos), passe par le compte **local** : ajoute `192.168.10.101` aux *TrustedHosts* de SRV-DC01 puis
+  `Invoke-Command -ComputerName 192.168.10.101 -Credential PC01\vagrant { ... }`.
+cours: |
+  ## Une méthode avant les commandes
+
+  Face à plusieurs pannes simultanées, la tentation est de tout essayer en même temps. La méthode qui
+  marche : **constater** (symptômes précis, messages exacts, depuis quand), **collecter** (journaux,
+  `dcdiag`, `nltest`, `ipconfig /all`), **remonter les dépendances** et réparer **dans l'ordre** où les
+  services dépendent les uns des autres, **vérifier** après chaque correction, **documenter**. Dans un
+  domaine Active Directory, l'ordre est presque toujours le même :
+
+  1. **le réseau et le DNS** : un poste trouve son contrôleur grâce aux enregistrements **SRV** du DNS
+     (`_ldap._tcp.dc._msdcs.<domaine>`, `_kerberos._tcp...`), enregistrés par le service **Netlogon** du
+     DC. Un poste qui utilise un DNS public ou inexistant ne trouve plus le domaine, quoi qu'on fasse
+     ensuite ;
+  2. **l'heure** : Kerberos refuse les tickets si l'écart dépasse **5 minutes**. Les membres se
+     synchronisent sur un DC (hiérarchie `NT5DS`), le DC émulateur PDC sur une source externe ;
+  3. **le canal sécurisé** : chaque ordinateur du domaine a un compte et un **mot de passe machine**,
+     changé automatiquement tous les 30 jours. S'il diffère entre le poste et l'annuaire (restauration
+     d'instantané, réinitialisation du compte), le poste ne peut plus authentifier personne :
+     « la relation d'approbation entre cette station de travail et le domaine principal a échoué ». On
+     répare sans quitter le domaine : `Test-ComputerSecureChannel -Repair` ;
+  4. **les GPO** : lien, filtrage de sécurité (lecture **et** application), contenu ;
+  5. **les comptes et les droits** : état du compte (activé, expiré, verrouillé, horaires), appartenance
+     aux groupes (chaîne AGDLP), permissions de partage et NTFS.
+
+  ## Les outils du diagnostic
+
+  | Outil | Ce qu'il dit |
+  |-------|--------------|
+  | `dcdiag /v`, `dcdiag /test:dns` | santé du DC : services, annonces, DNS, réplication |
+  | `nltest /dsgetdc:durand.lan` | le poste trouve-t-il un DC, lequel, avec quels indicateurs |
+  | `nltest /sc_query:durand.lan`, `Test-ComputerSecureChannel` | état du canal sécurisé |
+  | `Resolve-DnsName -Type SRV` | enregistrements du localisateur |
+  | `w32tm /query /status`, `w32tm /stripchart` | source et écart de temps |
+  | `gpresult /r`, `Get-GPPermission`, `Get-GPInheritance` | GPO appliquées ou filtrées, et pourquoi |
+  | `Get-ADUser -Properties *`, `net user /domain` | état détaillé d'un compte |
+
+  ## Le piège de l'accès au poste cassé
+
+  Quand le canal sécurisé est rompu, l'authentification du domaine vers le poste ne fonctionne plus :
+  WinRM en Kerberos échoue. Il reste le **compte local** (d'où l'importance de le connaître... et de le
+  protéger avec LAPS), joint par son **adresse IP** en NTLM, ce qui exige de déclarer l'hôte dans les
+  *TrustedHosts* du client. C'est aussi pourquoi on ne supprime jamais le dernier moyen d'administration
+  local d'un poste.
+
+  ## Documenter
+
+  Un incident se termine par un compte rendu : chronologie, cause racine, actions, et mesures pour que
+  cela ne se reproduise pas (ici : procédure de changement, revue des accès du prestataire, supervision
+  des enregistrements SRV et de l'heure).
+docs:
+  - title: Dépanner le localisateur de contrôleur de domaine
+    url: https://learn.microsoft.com/fr-fr/troubleshoot/windows-server/active-directory/troubleshoot-domain-controller-location-issues
+  - title: dcdiag
+    url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/dcdiag
+  - title: nltest
+    url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/nltest
+  - title: Service de temps Windows
+    url: https://learn.microsoft.com/fr-fr/windows-server/networking/windows-time-service/windows-time-service-top
+exercises:
+  - id: win-dad-constat
+    title: Constater avant de toucher
+    description: |
+      Avant toute correction, enregistre l'état du contrôleur : la sortie de `dcdiag /v` dans
+      `C:\Admin\dcdiag-avant.txt` et celle de `nltest /dsgetdc:durand.lan` (lancée **sur SRV-DC01**) dans
+      `C:\Admin\nltest-avant.txt`.
+    hint: dcdiag /v > C:\Admin\dcdiag-avant.txt ; nltest /dsgetdc:durand.lan > C:\Admin\nltest-avant.txt
+    cours: |
+      ```powershell
+      dcdiag /v | Out-File C:\Admin\dcdiag-avant.txt
+      nltest /dsgetdc:durand.lan | Out-File C:\Admin\nltest-avant.txt
+      Select-String -Path C:\Admin\dcdiag-avant.txt -Pattern 'failed test'
+      ```
+
+      Garder l'état **avant** sert trois fois : pour comprendre (les tests en échec orientent la
+      recherche), pour prouver (comparaison avant/après dans le compte rendu) et pour revenir en arrière si
+      une correction aggrave les choses. `dcdiag` lance une vingtaine de tests ; en mode verbeux il détaille
+      ce qu'il vérifie. Ici, cherche les échecs liés au DNS et aux annonces du DC : ce sont les pistes à
+      suivre en premier.
+    docs:
+      - title: dcdiag
+        url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/dcdiag
+    checks:
+      - desc: C:\Admin\dcdiag-avant.txt contient un diagnostic de SRV-DC01
+        run: |
+          (Test-Path C:\Admin\dcdiag-avant.txt) -and (Get-Item C:\Admin\dcdiag-avant.txt).Length -gt 2KB -and [bool](Select-String -Path C:\Admin\dcdiag-avant.txt -Pattern 'SRV-DC01' -Quiet)
+      - desc: C:\Admin\nltest-avant.txt existe
+        run: |
+          (Test-Path C:\Admin\nltest-avant.txt) -and (Get-Item C:\Admin\nltest-avant.txt).Length -gt 0
+    solution: |
+      dcdiag /v | Out-File C:\Admin\dcdiag-avant.txt
+      nltest /dsgetdc:durand.lan | Out-File C:\Admin\nltest-avant.txt
+
+  - id: win-dad-srv
+    title: Le localisateur de DC
+    description: |
+      Les enregistrements **SRV** `_ldap._tcp.dc._msdcs.durand.lan` et `_kerberos._tcp.dc._msdcs.durand.lan`
+      ont disparu de la zone `_msdcs.durand.lan`. Fais-les **réenregistrer par le contrôleur** (sans les
+      recréer à la main).
+    hint: nltest /dsregdns (ou Restart-Service Netlogon) ; Resolve-DnsName _ldap._tcp.dc._msdcs.durand.lan -Type SRV -Server 127.0.0.1
+    cours: |
+      ```powershell
+      Resolve-DnsName _ldap._tcp.dc._msdcs.durand.lan -Type SRV -Server 127.0.0.1 -DnsOnly
+      nltest /dsregdns                    # Netlogon réenregistre tous ses enregistrements
+      Get-Content C:\Windows\System32\config\netlogon.dns | Select-Object -First 10
+      ```
+
+      Netlogon tient la liste de ses enregistrements dans `netlogon.dns` et les réenregistre au démarrage
+      puis toutes les 24 heures. Les recréer à la main est une mauvaise idée : on oublie des variantes
+      (par site, GC, PDC, GUID du DC). `nltest /dsregdns` force l'enregistrement immédiat. Sans ces
+      enregistrements, un poste ne peut ni ouvrir de session réseau, ni appliquer de GPO, ni joindre le
+      domaine : c'est le premier point à vérifier dans toute panne « le domaine est introuvable ».
+    docs:
+      - title: Enregistrements SRV du localisateur
+        url: https://learn.microsoft.com/fr-fr/troubleshoot/windows-server/networking/verify-srv-dns-records-have-been-created
+    checks:
+      - desc: _ldap._tcp.dc._msdcs.durand.lan désigne srv-dc01
+        run: |
+          [bool](Resolve-DnsName _ldap._tcp.dc._msdcs.durand.lan -Type SRV -Server 127.0.0.1 -DnsOnly -ErrorAction SilentlyContinue | Where-Object { $_.Type -eq 'SRV' -and $_.NameTarget -like 'srv-dc01*' })
+      - desc: _kerberos._tcp.dc._msdcs.durand.lan est présent
+        run: |
+          [bool](Resolve-DnsName _kerberos._tcp.dc._msdcs.durand.lan -Type SRV -Server 127.0.0.1 -DnsOnly -ErrorAction SilentlyContinue | Where-Object Type -eq 'SRV')
+    solution: |
+      nltest /dsregdns | Out-Null
+      Start-Sleep 10
+
+  - id: win-dad-redirecteur
+    title: Internet depuis le domaine
+    description: |
+      Le serveur DNS du contrôleur ne résout plus les noms Internet. Trouve la cause et corrige-la : le DNS
+      doit relayer les requêtes vers le DNS de VirtualBox, `10.0.2.3`, comme à l'origine.
+    hint: Get-DnsServerForwarder ; Set-DnsServerForwarder -IPAddress 10.0.2.3 ; Resolve-DnsName www.microsoft.com -Server 127.0.0.1
+    cours: |
+      ```powershell
+      Get-DnsServerForwarder
+      Set-DnsServerForwarder -IPAddress 10.0.2.3
+      Clear-DnsServerCache -Force
+      Resolve-DnsName learn.microsoft.com -Server 127.0.0.1
+      ```
+
+      Un DNS d'entreprise fait autorité pour les zones internes et **relaie** le reste à des redirecteurs
+      (ceux du fournisseur d'accès, d'un service filtrant) ou, sans redirecteur, interroge lui-même les
+      serveurs racines (*root hints*). Un redirecteur injoignable se traduit par des délais puis des
+      échecs de résolution, souvent pris pour une « panne d'Internet ». L'adresse `192.0.2.53` appartient
+      à une plage réservée à la documentation (TEST-NET-1) : elle ne répondra jamais. `Test-DnsServer` vérifie
+      qu'une adresse répond vraiment comme serveur DNS avant de la configurer.
+    docs:
+      - title: Set-DnsServerForwarder
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dnsserver/set-dnsserverforwarder
+    checks:
+      - desc: Le redirecteur est 10.0.2.3 (et plus 192.0.2.53)
+        run: |
+          $f = (Get-DnsServerForwarder).IPAddress.IPAddressToString
+          ($f -contains '10.0.2.3') -and ($f -notcontains '192.0.2.53')
+      - desc: Le DNS du contrôleur résout un nom Internet
+        timeout: 60
+        run: |
+          [bool](Resolve-DnsName learn.microsoft.com -Server 127.0.0.1 -DnsOnly -QuickTimeout -ErrorAction SilentlyContinue)
+    solution: |
+      Set-DnsServerForwarder -IPAddress 10.0.2.3
+      Clear-DnsServerCache -Force
+
+  - id: win-dad-dns-poste
+    title: Le DNS du poste
+    description: |
+      PC01 interroge un serveur DNS qui n'existe pas. Rends-lui le contrôleur `192.168.10.10` comme **seul**
+      serveur DNS, sur ses deux cartes (`LAN` et `NAT`), puis vérifie qu'il trouve un contrôleur du domaine.
+    hint: Invoke-Command -ComputerName 192.168.10.101 -Credential PC01\vagrant { Set-DnsClientServerAddress -InterfaceAlias LAN, NAT -ServerAddresses 192.168.10.10 ; nltest /dsgetdc:durand.lan }
+    cours: |
+      ```powershell
+      Set-Item WSMan:\localhost\Client\TrustedHosts -Value '192.168.10.101' -Force
+      $local = Get-Credential PC01\vagrant
+      Invoke-Command -ComputerName 192.168.10.101 -Credential $local {
+          Get-DnsClientServerAddress -AddressFamily IPv4
+          Set-DnsClientServerAddress -InterfaceAlias LAN, NAT -ServerAddresses 192.168.10.10
+          Clear-DnsClientCache
+          nltest /dsgetdc:durand.lan }
+      ```
+
+      Un membre du domaine ne doit utiliser **que** les DNS du domaine (qui relaient Internet). Ajouter un DNS
+      public « en secours » est une erreur classique : le poste l'interroge parfois en premier et ne trouve
+      alors ni les SRV ni les noms internes, avec des symptômes intermittents très difficiles à diagnostiquer.
+      Dans un vrai parc, le DNS vient du DHCP ; ici les adresses sont fixes. Remarque l'accès par adresse IP
+      et compte local : le canal sécurisé du poste est rompu, Kerberos ne fonctionne plus vers lui.
+    docs:
+      - title: Set-DnsClientServerAddress
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dnsclient/set-dnsclientserveraddress
+      - title: Configurer les hôtes approuvés WinRM
+        url: https://learn.microsoft.com/fr-fr/powershell/module/microsoft.powershell.core/about/about_remote_troubleshooting
+    checks:
+      - desc: Les cartes LAN et NAT de PC01 utilisent 192.168.10.10 comme seul DNS
+        machine: pc01
+        run: |
+          $d = Get-DnsClientServerAddress -InterfaceAlias LAN, NAT -AddressFamily IPv4
+          @($d | Where-Object { ($_.ServerAddresses -join ',') -ne '192.168.10.10' }).Count -eq 0
+      - desc: PC01 résout les enregistrements du localisateur
+        machine: pc01
+        run: |
+          [bool](Resolve-DnsName _ldap._tcp.dc._msdcs.durand.lan -Type SRV -DnsOnly -ErrorAction SilentlyContinue | Where-Object Type -eq 'SRV')
+    solution: |
+      Set-Item WSMan:\localhost\Client\TrustedHosts -Value '192.168.10.101' -Force
+      $local = New-Object PSCredential 'PC01\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force)
+      Invoke-Command -ComputerName 192.168.10.101 -Credential $local { Set-DnsClientServerAddress -InterfaceAlias LAN, NAT -ServerAddresses 192.168.10.10; Clear-DnsClientCache }
+
+  - id: win-dad-canal
+    title: Le canal sécurisé
+    description: |
+      PC01 n'arrive plus à s'authentifier auprès du domaine : son mot de passe machine ne correspond plus à
+      celui de l'annuaire. **Répare le canal sécurisé** sans sortir le poste du domaine.
+    hint: Invoke-Command -ComputerName 192.168.10.101 -Credential PC01\vagrant { Test-ComputerSecureChannel -Repair -Credential (New-Object PSCredential 'DURAND\vagrant', ...) }
+    cours: |
+      ```powershell
+      Invoke-Command -ComputerName 192.168.10.101 -Credential $local {
+          Test-ComputerSecureChannel -Verbose                       # False
+          $dom = New-Object PSCredential 'DURAND\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force)
+          Test-ComputerSecureChannel -Repair -Credential $dom
+          nltest /sc_query:durand.lan }
+      ```
+
+      `-Repair` remet en accord le mot de passe machine du poste et celui de l'annuaire (le compte fourni
+      doit avoir le droit de réinitialiser le compte ordinateur). `Reset-ComputerMachinePassword -Credential`
+      fait la même chose ; `netdom resetpwd` est l'ancienne méthode. Sortir puis rejoindre le domaine
+      « marche » aussi, mais recrée un SID, perd les appartenances aux groupes du compte ordinateur et les
+      délégations : c'est la solution de dernier recours. Cause fréquente en entreprise : la restauration
+      d'un instantané de machine virtuelle vieux de plus de 30 jours.
+    docs:
+      - title: Test-ComputerSecureChannel
+        url: https://learn.microsoft.com/fr-fr/powershell/module/microsoft.powershell.management/test-computersecurechannel
+    checks:
+      - desc: Le canal sécurisé de PC01 fonctionne
+        machine: pc01
+        run: |
+          Test-ComputerSecureChannel
+    solution: |
+      $local = New-Object PSCredential 'PC01\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force)
+      Invoke-Command -ComputerName 192.168.10.101 -Credential $local {
+          $dom = New-Object PSCredential 'DURAND\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force)
+          Test-ComputerSecureChannel -Repair -Credential $dom | Out-Null
+      }
+
+  - id: win-dad-heure
+    title: L'heure du poste
+    description: |
+      Le service de temps de PC01 est désactivé, pointe vers une source inexistante, et l'horloge dérive.
+      Remets-le en service **automatique**, synchronisé sur la **hiérarchie du domaine** (`NT5DS`), et force
+      une resynchronisation : l'écart avec SRV-DC01 doit être inférieur à une minute.
+    hint: Set-Service W32Time -StartupType Automatic ; Start-Service W32Time ; w32tm /config /syncfromflags:domhier /update ; w32tm /resync /force
+    cours: |
+      ```powershell
+      Invoke-Command -ComputerName PC01 {
+          Set-Service W32Time -StartupType Automatic
+          Start-Service W32Time
+          w32tm /config /syncfromflags:domhier /update
+          w32tm /resync /force
+          w32tm /query /status
+          w32tm /stripchart /computer:192.168.10.10 /samples:3 /dataonly }
+      ```
+
+      Dans un domaine, **seul l'émulateur PDC** de la racine de la forêt se synchronise sur une source
+      externe ; tous les autres suivent la hiérarchie (`NT5DS`). Configurer une source NTP à la main sur un
+      poste est donc une erreur. Au-delà de 5 minutes d'écart, Kerberos échoue (`KRB_AP_ERR_SKEW`, événement
+      4 du journal *System*) : ouvertures de session, accès aux partages et GPO tombent en panne avec des
+      messages trompeurs. Le canal sécurisé étant réparé, l'accès Kerberos au poste fonctionne à nouveau.
+    docs:
+      - title: Outils et paramètres du service de temps Windows
+        url: https://learn.microsoft.com/fr-fr/windows-server/networking/windows-time-service/windows-time-service-tools-and-settings
+    checks:
+      - desc: W32Time est démarré, automatique, en mode NT5DS
+        machine: pc01
+        run: |
+          $s = Get-Service W32Time
+          $s.Status -eq 'Running' -and $s.StartType -eq 'Automatic' -and (Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Parameters).Type -eq 'NT5DS'
+      - desc: L'écart avec SRV-DC01 est inférieur à 60 secondes
+        machine: pc01
+        timeout: 60
+        run: |
+          $l = w32tm /stripchart /computer:192.168.10.10 /samples:1 /dataonly | Select-String '([+-]\d+[.,]\d+)s' | Select-Object -Last 1
+          [bool]$l -and [math]::Abs([double]($l.Matches[0].Groups[1].Value -replace ',', '.')) -lt 60
+    solution: |
+      Invoke-Command -ComputerName PC01 {
+          Set-Service W32Time -StartupType Automatic
+          Start-Service W32Time
+          w32tm /config /syncfromflags:domhier /update | Out-Null
+          Start-Sleep 5
+          w32tm /resync /force | Out-Null
+      }
+
+  - id: win-dad-gpo
+    title: Le message légal a disparu
+    description: |
+      La GPO `C - Postes securite` existe toujours mais ne s'applique plus. Trouve **les deux** causes, corrige-les,
+      puis applique les stratégies sur PC01 : le message légal doit y être de retour.
+    hint: Get-GPInheritance -Target 'OU=Postes,...' (lien activé ?) ; Get-GPPermission -Name 'C - Postes securite' -All (qui peut lire et appliquer ?)
+    cours: |
+      ```powershell
+      (Get-GPInheritance -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan').GpoLinks
+      Get-GPPermission -Name 'C - Postes securite' -All | Format-Table Trustee, Permission
+      Set-GPLink -Name 'C - Postes securite' -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' -LinkEnabled Yes
+      Set-GPPermission -Name 'C - Postes securite' -TargetName 'Authenticated Users' -TargetType Group -PermissionLevel GpoApply
+      Invoke-Command -ComputerName PC01 { gpupdate /target:computer /force; gpresult /scope computer /r }
+      ```
+
+      `gpresult /r` sur le poste aurait donné la piste : une GPO absente de la liste (lien désactivé) ou
+      listée comme « filtrée : accès refusé ». Les ordinateurs sont membres d'*Utilisateurs
+      authentifiés* : sans au moins la lecture, la GPO est invisible pour eux. Un lien désactivé ne laisse
+      aucune trace côté poste ; c'est souvent le vestige d'un test oublié. D'où l'intérêt des rapports
+      réguliers (`Get-GPOReport -All`) et de la sauvegarde des GPO avant toute intervention extérieure.
+    docs:
+      - title: Set-GPPermission
+        url: https://learn.microsoft.com/fr-fr/powershell/module/grouppolicy/set-gppermission
+      - title: gpresult
+        url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/gpresult
+    checks:
+      - desc: Le lien de C - Postes securite sur Postes est activé
+        run: |
+          [bool]((Get-GPInheritance -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan').GpoLinks | Where-Object { $_.DisplayName -eq 'C - Postes securite' -and $_.Enabled })
+      - desc: Utilisateurs authentifiés peut appliquer la GPO
+        run: |
+          (Get-GPPermission -Name 'C - Postes securite' -All | Where-Object { $_.Trustee.Sid.Value -eq 'S-1-5-11' }).Permission -eq 'GpoApply'
+      - desc: PC01 affiche de nouveau le message légal
+        machine: pc01
+        run: |
+          (Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System).legalnoticecaption -eq 'Ateliers Durand'
+    solution: |
+      Set-GPLink -Name 'C - Postes securite' -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' -LinkEnabled Yes | Out-Null
+      $au = (New-Object Security.Principal.SecurityIdentifier 'S-1-5-11').Translate([Security.Principal.NTAccount]).Value.Split('\')[-1]
+      Set-GPPermission -Name 'C - Postes securite' -TargetName $au -TargetType Group -PermissionLevel GpoApply | Out-Null
+      Invoke-Command -ComputerName PC01 { gpupdate /target:computer /force } | Out-Null
+
+  - id: win-dad-compte
+    title: Marie Dupont ne peut pas se connecter
+    description: |
+      Le compte `mdupont` cumule **trois** problèmes. Trouve-les et corrige-les (sans changer son mot de passe
+      `Bienvenue2024!`) : elle doit pouvoir s'authentifier à toute heure.
+    hint: Get-ADUser mdupont -Properties Enabled, AccountExpirationDate, logonHours, LockedOut ; Enable-ADAccount ; Clear-ADAccountExpiration ; Set-ADUser -Clear logonHours
+    cours: |
+      ```powershell
+      Get-ADUser mdupont -Properties Enabled, LockedOut, AccountExpirationDate, logonHours, PasswordExpired |
+          Format-List Enabled, LockedOut, AccountExpirationDate, PasswordExpired, logonHours
+      Enable-ADAccount mdupont
+      Clear-ADAccountExpiration mdupont
+      Set-ADUser mdupont -Clear logonHours            # aucune restriction horaire
+      ```
+
+      Les causes possibles d'un refus d'ouverture de session : compte **désactivé**, **verrouillé**
+      (trop d'échecs), **expiré** (date de fin de contrat), mot de passe **expiré** ou à changer,
+      **horaires** d'ouverture (`logonHours`, 21 octets = 168 heures de la semaine, un bit par heure),
+      restriction de **postes** (`userWorkstations`). Le journal *Security* du DC (événements 4625 et 4771,
+      avec leur code d'échec) dit lequel : apprends à le lire plutôt que de tout réinitialiser à l'aveugle.
+    docs:
+      - title: Get-ADUser
+        url: https://learn.microsoft.com/fr-fr/powershell/module/activedirectory/get-aduser
+      - title: Événement 4625 (échec d'ouverture de session)
+        url: https://learn.microsoft.com/fr-fr/windows/security/threat-protection/auditing/event-4625
+    checks:
+      - desc: mdupont est activé, sans date d'expiration ni restriction horaire
+        run: |
+          $u = Get-ADUser mdupont -Properties AccountExpirationDate, logonHours
+          $h = $u.logonHours
+          $u.Enabled -and -not $u.AccountExpirationDate -and (-not $h -or @($h | Where-Object { $_ -ne 255 }).Count -eq 0)
+      - desc: mdupont s'authentifie avec son mot de passe
+        run: |
+          Add-Type -Namespace TDM -Name AuthAd -MemberDefinition '[DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool LogonUser(string u, string d, string p, int t, int f, out IntPtr h); [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h); public static int Code(string u, string d, string p) { IntPtr h; if (LogonUser(u, d, p, 3, 0, out h)) { CloseHandle(h); return 0; } return Marshal.GetLastWin32Error(); }'
+          [TDM.AuthAd]::Code('mdupont', 'DURAND', 'Bienvenue2024!') -eq 0
+    solution: |
+      Enable-ADAccount mdupont
+      Clear-ADAccountExpiration mdupont
+      Set-ADUser mdupont -Clear logonHours
+
+  - id: win-dad-agdlp
+    title: Le partage Compta
+    description: |
+      Le partage `\\SRV-DC01\Compta` donne la modification au groupe `DL_Compta_RW`. Les comptables
+      (`GG_Compta`) n'y ont plus accès. Rétablis la **chaîne AGDLP** : Marie Dupont doit obtenir l'accès par
+      les groupes, pas par une permission à son nom.
+    hint: (Get-Acl C:\Partages\Compta).Access ; Get-ADGroupMember DL_Compta_RW ; Add-ADGroupMember DL_Compta_RW -Members GG_Compta
+    cours: |
+      ```powershell
+      (Get-Acl C:\Partages\Compta).Access | Format-Table IdentityReference, FileSystemRights
+      Get-ADGroupMember DL_Compta_RW
+      Add-ADGroupMember DL_Compta_RW -Members GG_Compta
+      Get-ADGroupMember DL_Compta_RW -Recursive | Select-Object SamAccountName
+      ```
+
+      AGDLP : les comptes (**A**) dans des groupes **G**lobaux par métier, ceux-ci dans des groupes
+      **D**omaine **L**ocal par ressource et niveau d'accès, et les **P**ermissions données aux seuls groupes
+      domaine local. Quand un maillon manque, la permission est bonne mais personne ne l'obtient. Le
+      réflexe à éviter : ajouter l'utilisateur directement dans l'ACL « pour dépanner » ; il devient
+      invisible pour la gestion par les groupes. Rappel : l'utilisateur doit **rouvrir sa session** pour que
+      son nouveau jeton contienne le groupe.
+    docs:
+      - title: Étendues des groupes Active Directory
+        url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/manage/understand-security-groups
+    checks:
+      - desc: GG_Compta est membre de DL_Compta_RW
+        run: |
+          (Get-ADGroupMember DL_Compta_RW).SamAccountName -contains 'GG_Compta'
+      - desc: mdupont obtient le groupe par imbrication, sans permission à son nom
+        run: |
+          ((Get-ADGroupMember DL_Compta_RW -Recursive).SamAccountName -contains 'mdupont') -and -not ((Get-Acl C:\Partages\Compta).Access | Where-Object { $_.IdentityReference -like '*mdupont' })
+    solution: |
+      Add-ADGroupMember DL_Compta_RW -Members GG_Compta
+
+  - id: win-dad-bilan
+    title: Le bilan
+    description: |
+      Enregistre dans `C:\Admin\dcdiag-apres.txt` le résultat de `dcdiag` limité aux tests **Advertising**,
+      **Services**, **NetLogons** et **KnowsOfRoleHolders** : aucun ne doit échouer. Compare avec l'état du
+      matin.
+    hint: dcdiag /test:Advertising /test:Services /test:NetLogons /test:KnowsOfRoleHolders > C:\Admin\dcdiag-apres.txt
+    cours: |
+      ```powershell
+      dcdiag /test:Advertising /test:Services /test:NetLogons /test:KnowsOfRoleHolders | Out-File C:\Admin\dcdiag-apres.txt
+      Select-String -Path C:\Admin\dcdiag-apres.txt -Pattern 'passed test|failed test'
+      Compare-Object (Select-String C:\Admin\dcdiag-avant.txt 'failed test').Line (Select-String C:\Admin\dcdiag-apres.txt 'failed test').Line
+      ```
+
+      Le bilan ferme l'incident : tests au vert, utilisateurs prévenus, compte rendu rédigé (chronologie,
+      cause racine : intervention non encadrée d'un prestataire ; actions ; mesures : comptes nominatifs pour
+      les prestataires, journalisation des modifications de l'annuaire et des GPO, supervision des SRV, de
+      l'heure et du canal sécurisé). Un `dcdiag` complet peut signaler des erreurs anciennes des journaux
+      (test `SystemLog`) : on cible les tests utiles pour ne pas noyer l'information.
+    docs:
+      - title: dcdiag
+        url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/dcdiag
+    checks:
+      - desc: Les quatre tests sont passés, aucun échec
+        run: |
+          $t = Get-Content C:\Admin\dcdiag-apres.txt -Raw -ErrorAction Stop
+          @('Advertising', 'Services', 'NetLogons', 'KnowsOfRoleHolders' | Where-Object { $t -notmatch "passed test $_" }).Count -eq 0 -and $t -notmatch 'failed test'
+    solution: |
+      dcdiag /test:Advertising /test:Services /test:NetLogons /test:KnowsOfRoleHolders | Out-File C:\Admin\dcdiag-apres.txt

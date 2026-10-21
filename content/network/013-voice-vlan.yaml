@@ -1,0 +1,94 @@
+title: Téléphones IP et VLAN voix
+level: debutant
+order: 13
+device: switch
+hostname: SW-OPENSPACE
+tags: [vlan, voice vlan, téléphonie]
+summary: Brancher un PC derrière un téléphone IP sur le même port.
+description: |
+  Dans l'open space, chaque PC est branché **derrière un téléphone IP**. Le port du switch
+  transporte donc deux VLAN : les données du PC (non étiquetées) et la voix (étiquetée).
+
+  1. Crée le VLAN `150` nommé `VOIX` (le VLAN `10 DATA` existe déjà) ;
+  2. sur `Fa0/1` à `Fa0/12` :
+     - mode access, VLAN d'accès `10`,
+     - VLAN voix `150` : `switchport voice vlan 150`.
+checks:
+  - desc: VLAN 150 nommé VOIX
+    expr: vlan(150) == "VOIX"
+  - desc: Fa0/1-12 en access dans le VLAN 10
+    expr: all(i.mode == "access" and i.access_vlan == 10 for i in ports("fa0/1-12"))
+  - desc: VLAN voix 150 sur Fa0/1-12
+    expr: all(i.voice_vlan == 150 for i in ports("fa0/1-12"))
+    hint: "interface range fa0/1 - 12 puis switchport voice vlan 150"
+  - desc: Les autres ports n'ont pas de VLAN voix
+    expr: not any(i.voice_vlan for i in ports("fa0/13-24"))
+solution: |
+  configure terminal
+  vlan 150
+  name VOIX
+  exit
+  interface range fa0/1 - 12
+  switchport mode access
+  switchport access vlan 10
+  switchport voice vlan 150
+  end
+initial: |
+  vlan 10
+  name DATA
+cours: |
+  ## Un câble, deux réseaux
+
+  Dans les bureaux, le PC est souvent branché **derrière** le téléphone IP, qui contient un petit
+  switch à trois ports. Le port du switch d'étage reçoit donc deux trafics :
+
+  - les **données** du PC, **non étiquetées**, placées dans le VLAN d'accès ;
+  - la **voix**, **étiquetée 802.1Q** avec le numéro du VLAN voix (et une priorité CoS 5).
+
+  Le port reste un **port d'accès** : on ajoute simplement `switchport voice vlan`. Le switch
+  indique au téléphone quel VLAN utiliser grâce à **CDP** (téléphones Cisco) ou **LLDP-MED**.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# vlan 40
+  SW1(config-vlan)# name DONNEES
+  SW1(config-vlan)# vlan 140
+  SW1(config-vlan)# name TELEPHONIE
+  SW1(config-vlan)# exit
+  SW1(config)# interface range fa0/25 - 36
+  SW1(config-if-range)# switchport mode access
+  SW1(config-if-range)# switchport access vlan 40
+  SW1(config-if-range)# switchport voice vlan 140
+  SW1# show interfaces fa0/25 switchport | include VLAN
+  Access Mode VLAN: 40 (DONNEES)
+  Voice VLAN: 140 (TELEPHONIE)
+  ```
+
+  ### Pourquoi séparer la voix ?
+
+  - **qualité** : on applique facilement une priorité (QoS) au VLAN voix ;
+  - **sécurité** : les PC n'atteignent pas directement le serveur de téléphonie ;
+  - **adressage** : un pool DHCP dédié, avec l'option 150 (serveur TFTP du standard).
+
+  ### Compléments habituels
+
+  - `spanning-tree portfast` : le téléphone obtient son adresse sans attendre 30 s ;
+  - alimentation **PoE** du téléphone par le switch (`show power inline`) ;
+  - port-security avec au moins **2** adresses MAC (PC + téléphone, voire 3 selon les modèles).
+
+  ### Pièges fréquents
+
+  - Configurer le port en **trunk** pour « faire passer la voix » : inutile et moins sûr.
+  - VLAN voix non créé sur le switch.
+  - CDP désactivé : les téléphones Cisco ne découvrent plus leur VLAN.
+
+  ### Pour le CCNA
+
+  Le fonctionnement du VLAN voix (données non étiquetées, voix étiquetée) est explicitement au
+  programme.
+docs:
+  - title: "Wikipédia — Voix sur IP"
+    url: https://fr.wikipedia.org/wiki/Voix_sur_IP
+  - title: "Wikipédia — IEEE 802.1Q"
+    url: https://fr.wikipedia.org/wiki/IEEE_802.1Q

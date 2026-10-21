@@ -1,0 +1,111 @@
+title: Routage EIGRP
+level: avance
+order: 6
+device: router
+hostname: R-NANTES
+tags: [eigrp, routage dynamique, wildcard]
+summary: Rejoindre le système autonome EIGRP 100 de l'entreprise.
+description: |
+  Le réseau étendu de l'entreprise tourne en **EIGRP**, système autonome `100`.
+  Raccorde le site de Nantes :
+
+  1. `router eigrp 100` ;
+  2. identifiant : `eigrp router-id 2.2.2.2` ;
+  3. annonce **précisément** chaque réseau avec un masque générique :
+     - LAN `192.168.20.0/24`,
+     - lien vers le siège `10.0.12.0/30` (`G0/1`),
+     - lien vers Rennes `10.0.23.0/30` (`S0/0/0`) ;
+  4. `no auto-summary` ;
+  5. LAN `G0/0` passive.
+
+  Le numéro d'AS doit être **identique** sur tous les routeurs, sinon ils ne deviennent pas voisins.
+initial: |
+  interface g0/0
+  ip address 192.168.20.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.0.12.2 255.255.255.252
+  no shutdown
+  interface s0/0/0
+  ip address 10.0.23.1 255.255.255.252
+  no shutdown
+checks:
+  - desc: EIGRP AS 100 avec router-id 2.2.2.2
+    expr: 100 in d.eigrp and d.eigrp[100].router_id == "2.2.2.2"
+    hint: "router eigrp 100 puis eigrp router-id 2.2.2.2"
+  - desc: LAN 192.168.20.0/24 annoncé avec son wildcard
+    expr: eigrp_net(100, "192.168.20.0", "0.0.0.255")
+  - desc: Liens WAN 10.0.12.0/30 et 10.0.23.0/30 annoncés avec leur wildcard
+    expr: eigrp_net(100, "10.0.12.0", "0.0.0.3") and eigrp_net(100, "10.0.23.0", "0.0.0.3")
+    hint: "Un /30 correspond au wildcard 0.0.0.3"
+  - desc: Résumé automatique désactivé
+    expr: 100 in d.eigrp and not d.eigrp[100].auto_summary
+  - desc: G0/0 passive
+    expr: 100 in d.eigrp and d.eigrp[100].is_passive("g0/0")
+solution: |
+  configure terminal
+  router eigrp 100
+  eigrp router-id 2.2.2.2
+  network 192.168.20.0 0.0.0.255
+  network 10.0.12.0 0.0.0.3
+  network 10.0.23.0 0.0.0.3
+  no auto-summary
+  passive-interface g0/0
+  end
+cours: |
+  ## EIGRP en bref
+
+  **EIGRP** est un protocole à vecteur de distance **avancé**, conçu par Cisco (publié en RFC
+  7868). Il garde les avantages des vecteurs de distance (simplicité) en corrigeant leurs
+  défauts :
+
+  - mises à jour **partielles** et seulement en cas de changement ;
+  - algorithme **DUAL** : un chemin de secours sans boucle (*feasible successor*) est calculé à
+    l'avance et utilisé instantanément ;
+  - métrique **composite** : bande passante minimale et délai cumulé (par défaut) ;
+  - partage de charge sur des chemins de coûts inégaux (`variance`).
+
+  Les voisins doivent partager le même **numéro d'AS**.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# router eigrp 200
+  R1(config-router)# eigrp router-id 6.6.6.6
+  R1(config-router)# network 172.16.40.0 0.0.0.255
+  R1(config-router)# network 10.0.0.4 0.0.0.3
+  R1(config-router)# no auto-summary
+  R1(config-router)# passive-interface gi0/0
+  R1# show ip eigrp neighbors
+  H   Address     Interface  Hold Uptime    SRTT  RTO  Q  Seq
+  0   10.0.0.6    Gi0/1      13   00:12:41  1     100  0  27
+  R1# show ip eigrp topology
+  R1# show ip route eigrp
+  D    172.16.50.0/24 [90/3072] via 10.0.0.6, GigabitEthernet0/1
+  ```
+
+  - le masque générique de `network` est facultatif (sans lui, réseau par classe) ;
+  - `D` dans la table = EIGRP interne (AD 90) ; `D EX` = externe (AD 170) ;
+  - `show ip eigrp topology` affiche successeurs et successeurs possibles.
+
+  ### Successeur et successeur possible
+
+  Le **successeur** est le meilleur chemin. Un voisin devient **successeur possible** si sa
+  propre distance vers la destination (*reported distance*) est inférieure à notre meilleure
+  distance totale (*feasible distance*) : c'est la garantie mathématique qu'il ne fait pas
+  passer par nous.
+
+  ### Pièges fréquents
+
+  - Numéro d'AS différent entre voisins : pas d'adjacence.
+  - `auto-summary` actif avec des réseaux discontinus.
+  - Interface vers un voisin mise en passive.
+
+  ### Pour le CCNA / CCNP ENCOR
+
+  EIGRP a quitté le CCNA mais reste au programme d'ENCOR (métrique, DUAL, variance, stub).
+docs:
+  - title: "Cisco — Enhanced Interior Gateway Routing Protocol (EIGRP)"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/16406-eigrp-toc.html
+  - title: "RFC 7868 — Cisco's Enhanced Interior Gateway Routing Protocol"
+    url: https://www.rfc-editor.org/rfc/rfc7868

@@ -1,0 +1,128 @@
+title: Classement d'une course
+level: intermediaire
+order: 16
+tags: [tri, lambda, input]
+summary: Trier avec sorted, key et un tuple de critères.
+mode: stdio
+description: |
+  Chaque ligne d'entrée décrit un coureur au format `nom;temps` où le temps est écrit `mm:ss`.
+  La lecture s'arrête à la fin de l'entrée.
+
+  Affiche le classement : rang, nom et temps, du plus rapide au plus lent. En cas d'égalité de
+  temps, les coureurs sont classés par **ordre alphabétique** et partagent le même rang (le
+  rang suivant saute, comme aux JO) :
+
+  ```
+  1. Léa 12:05
+  2. Ben 12:30
+  2. Max 12:30
+  4. Zoé 13:00
+  ```
+
+  Astuces :
+  - lire toutes les lignes : `import sys` puis `sys.stdin.read().splitlines()` ;
+  - `sorted(coureurs, key=lambda c: (c[1], c[0]))` trie selon plusieurs critères ;
+  - convertis le temps en secondes pour comparer correctement.
+starter: |
+  import sys
+
+  lignes = sys.stdin.read().splitlines()
+cases:
+  - name: "Avec égalité"
+    input: "Zoé;13:00\nMax;12:30\nLéa;12:05\nBen;12:30\n"
+    output: |
+      1. Léa 12:05
+      2. Ben 12:30
+      2. Max 12:30
+      4. Zoé 13:00
+  - name: "Minutes à plus d'un chiffre"
+    input: "Ali;9:59\nBob;10:01\nCyd;59:00\n"
+    output: |
+      1. Ali 9:59
+      2. Bob 10:01
+      3. Cyd 59:00
+  - name: "Lignes vides ignorées"
+    input: "Paul;20:00\n\nAnne;20:00\n\n"
+    output: |
+      1. Anne 20:00
+      1. Paul 20:00
+  - name: "Un seul coureur"
+    input: "Solo;01:00\n"
+    output: "1. Solo 01:00"
+solution: |
+  import sys
+
+
+  def en_secondes(temps):
+      minutes, secondes = temps.split(":")
+      return int(minutes) * 60 + int(secondes)
+
+
+  coureurs = []
+  for ligne in sys.stdin.read().splitlines():
+      if ligne.strip():
+          nom, temps = ligne.strip().split(";")
+          coureurs.append((nom, temps))
+
+  classement = sorted(coureurs, key=lambda c: (en_secondes(c[1]), c[0]))
+  rang = 0
+  precedent = None
+  for position, (nom, temps) in enumerate(classement, start=1):
+      if en_secondes(temps) != precedent:
+          rang = position
+          precedent = en_secondes(temps)
+      print(f"{rang}. {nom} {temps}")
+cours: |
+  ## Lire toute l'entrée
+
+  Quand on ne connaît pas le nombre de lignes à l'avance, on lit tout d'un coup :
+
+  ```python
+  import sys
+  lignes = sys.stdin.read().splitlines()
+  # ou, ligne par ligne :
+  for ligne in sys.stdin:
+      ligne = ligne.rstrip("\n")
+  ```
+
+  Ignore les lignes vides éventuelles (une ligne blanche en fin de fichier est fréquente).
+
+  ## Comparer des durées
+
+  `"9:05"` et `"12:30"` comparés en tant que chaînes donnent un ordre alphabétique faux
+  (`"9" > "1"`). Convertis en un nombre comparable (des secondes) ; garde la chaîne
+  d'origine pour l'affichage.
+
+  ## `sorted` et le paramètre `key`
+
+  `key` est une fonction appliquée à chaque élément ; le tri se fait sur son résultat.
+  Une clé **tuple** trie selon plusieurs critères : d'abord le premier élément, puis le
+  second en cas d'égalité, etc.
+
+  ```python
+  machines = [("web", 3), ("db", 1), ("api", 3)]
+  sorted(machines, key=lambda m: (m[1], m[0]))
+  # [("db", 1), ("api", 3), ("web", 3)]
+  sorted(machines, key=lambda m: (-m[1], m[0]))   # décroissant puis alphabétique
+  ```
+
+  Le tri de Python est **stable** : deux éléments égaux selon la clé gardent leur ordre
+  relatif. On peut donc aussi trier en plusieurs passes, du critère secondaire au critère
+  principal.
+
+  ## Le rang « olympique »
+
+  Avec `enumerate(liste, start=1)`, on obtient la position de chaque élément. Pour les
+  ex-aequo, le rang est la position du **premier** coureur ayant ce temps : il suffit de
+  garder le temps et le rang précédents, et de ne mettre à jour le rang que si le temps
+  change. Ainsi, après deux seconds, le suivant est quatrième.
+
+  ## `lambda`
+
+  `lambda x: expression` crée une fonction anonyme d'une seule expression. Pour une clé plus
+  complexe, une fonction nommée avec `def` est souvent plus lisible.
+docs:
+  - title: HOWTO — trier avec Python (clés multiples)
+    url: https://docs.python.org/fr/3/howto/sorting.html
+  - title: Module sys (sys.stdin)
+    url: https://docs.python.org/fr/3/library/sys.html#sys.stdin

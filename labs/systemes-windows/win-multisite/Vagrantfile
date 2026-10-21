@@ -1,0 +1,12 @@
+# Lab « Multisite » : SRV-DC01 (Windows Server 2022, 2 Go, contrôleur de durand.lan, « Lyon », 192.168.10.10)
+# et SRV-DC02 (Windows Server 2022, 2 Go, serveur membre, « Grenoble », 192.168.20.10). Les deux sous-réseaux
+# partagent le même réseau interne VirtualBox (masque /16) : les sites AD restent logiques. Prévoir 6 Go de RAM.
+require_relative "../_commun/tdm"
+
+Vagrant.configure("2") do |config|
+  TDM.lab(config, __dir__) do |lab|
+    lab.server "dc01", hostname: "SRV-DC01", ip: "192.168.10.10", prefix: 16, domain: :forest, primary: true,
+               scenario: "scenario-dc01.ps1"
+    lab.server "dc02", hostname: "SRV-DC02", ip: "192.168.20.10", prefix: 16, dns: "192.168.10.10", join: true
+  end
+end

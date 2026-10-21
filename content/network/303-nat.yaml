@@ -1,0 +1,98 @@
+title: NAT/PAT vers Internet
+level: expert
+order: 3
+device: router
+hostname: R-EDGE
+tags: [nat, pat, acl]
+summary: Partager une IP publique avec tout le LAN.
+description: |
+  Le LAN `192.168.1.0/24` (derrière `G0/0`) doit sortir sur Internet via `G0/1` (IP publique) en **PAT**.
+
+  1. Déclare `G0/0` en `ip nat inside` et `G0/1` en `ip nat outside` ;
+  2. Crée l'ACL standard `1` qui autorise `192.168.1.0 0.0.0.255` ;
+  3. Active la traduction : `ip nat inside source list 1 interface g0/1 overload` ;
+  4. Ajoute la route par défaut vers le FAI `203.0.113.1`.
+initial: |
+  interface g0/0
+  ip address 192.168.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 203.0.113.2 255.255.255.252
+  no shutdown
+checks:
+  - desc: G0/0 en nat inside, G0/1 en nat outside
+    expr: intf("g0/0").nat == "inside" and intf("g0/1").nat == "outside"
+  - desc: ACL 1 autorise le LAN
+    expr: '"permit 192.168.1.0 0.0.0.255" in acl(1)'
+  - desc: PAT (overload) sur G0/1 avec la liste 1
+    expr: any(r.split()[:6] == ["ip", "nat", "inside", "source", "list", "1"] and r.endswith("overload") and r.split()[-2].lower() in ("g0/1", "gi0/1", "gigabitethernet0/1") for r in d.nat_rules)
+  - desc: Route par défaut vers 203.0.113.1
+    expr: route("0.0.0.0", "0.0.0.0", "203.0.113.1")
+solution: |
+  configure terminal
+  interface g0/0
+  ip nat inside
+  interface g0/1
+  ip nat outside
+  exit
+  access-list 1 permit 192.168.1.0 0.0.0.255
+  ip nat inside source list 1 interface g0/1 overload
+  ip route 0.0.0.0 0.0.0.0 203.0.113.1
+  end
+cours: |
+  ## Pourquoi le NAT ?
+
+  Les adresses privées (RFC 1918 : `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) ne sont pas
+  routées sur Internet. Le **NAT** remplace l'adresse source privée par une adresse publique à
+  la sortie. Avec le **PAT** (*Port Address Translation*, `overload`), des centaines de postes
+  partagent **une seule** adresse publique : le routeur distingue les sessions par le port
+  source.
+
+  ### Vocabulaire
+
+  | Terme           | Signification                                  |
+  |-----------------|------------------------------------------------|
+  | inside local    | adresse privée du poste (`172.16.40.21`)       |
+  | inside global   | adresse publique qui le représente (`198.51.100.2`) |
+  | outside global  | adresse du serveur sur Internet                |
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# interface gi0/0
+  R1(config-if)# ip nat inside
+  R1(config-if)# interface gi0/2
+  R1(config-if)# ip nat outside
+  R1(config-if)# exit
+  R1(config)# access-list 5 permit 172.16.40.0 0.0.0.255
+  R1(config)# ip nat inside source list 5 interface gi0/2 overload
+  R1(config)# ip route 0.0.0.0 0.0.0.0 198.51.100.1
+  R1# show ip nat translations
+  Pro Inside global        Inside local        Outside local    Outside global
+  tcp 198.51.100.2:51544   172.16.40.21:51544  93.184.216.34:443 93.184.216.34:443
+  R1# show ip nat statistics
+  ```
+
+  Les quatre éléments indispensables :
+
+  1. l'interface **inside** (côté LAN) et l'interface **outside** (côté Internet) ;
+  2. une ACL qui sélectionne les adresses à traduire (ici, en permit) ;
+  3. la règle de traduction avec `overload` ;
+  4. une route par défaut vers l'opérateur.
+
+  ### Pièges fréquents
+
+  - inside/outside inversés : aucune traduction.
+  - Wildcard faux dans l'ACL : une partie des postes n'est pas traduite.
+  - Oublier `overload` : un seul poste à la fois peut sortir.
+  - `clear ip nat translation *` est parfois nécessaire avant de modifier une règle.
+
+  ### Pour le CCNA
+
+  NAT statique, dynamique et PAT, ainsi que la lecture de `show ip nat translations`, sont au
+  programme.
+docs:
+  - title: "Cisco — NAT Frequently Asked Questions"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/network-address-translation-nat/26704-nat-faq-00.html
+  - title: "Wikipédia — Network address translation"
+    url: https://fr.wikipedia.org/wiki/Network_address_translation

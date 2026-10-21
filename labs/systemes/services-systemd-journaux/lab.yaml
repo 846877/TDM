@@ -1,0 +1,367 @@
+title: Services systemd et journaux
+level: debutant
+order: 5
+tags: [linux, systemd, systemctl, journalctl, services, timers]
+summary: État des services, démarrage et activation, dépannage par le journal, redémarrage automatique, création d'un service et d'un timer, journal persistant.
+build: .
+privileged: true
+command: []
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Le serveur de l'atelier d'*Ateliers Durand* a redémarré cette nuit et plusieurs choses ne
+  vont pas : l'export comptable n'est pas parti, le lecteur de badges de l'entrée tombe régulièrement, un
+  service inutile tourne encore, et le journal est perdu à chaque redémarrage. Tu dois aussi mettre en
+  service le planning de l'atelier et automatiser un nettoyage.
+
+  **Machine.** Serveur Ubuntu où **systemd** est le processus n°1, comme sur une vraie machine (conteneur
+  privilégié). Terminal `root`.
+
+  | Unité | Rôle |
+  |---|---|
+  | `export-compta.service` | export vers la comptabilité (au démarrage) |
+  | `badge.service` | lecteur de badges de l'entrée |
+  | `capteur.service` | relevé des sondes de température |
+  | `imprimante-ancienne.service` | pilote d'une imprimante retirée en 2024 |
+  | `nginx.service` | serveur web (installé, non activé) |
+
+  Réponses à écrire dans `/root/reponses.txt`, au format `cle=valeur`.
+
+  Outils : `systemctl status|start|stop|restart|enable|disable|mask|edit|daemon-reload`,
+  `systemctl --failed`, `systemctl list-timers`, `journalctl -u <unité>`, `journalctl -p err -b`.
+cours: |
+  ## systemd, le chef d'orchestre
+
+  Sur Ubuntu, Debian, Red Hat et la plupart des distributions actuelles, **systemd** est le premier
+  processus lancé par le noyau (PID 1). Il démarre les services dans le bon ordre, les surveille, les
+  relance si besoin et centralise leurs journaux. Tout ce qu'il gère est une **unité** :
+
+  | Type d'unité | Exemple                  | Rôle                                         |
+  |--------------|--------------------------|----------------------------------------------|
+  | `.service`   | `nginx.service`          | un programme (démon) ou une tâche ponctuelle |
+  | `.timer`     | `logrotate.timer`        | déclenche un service à heure fixe (remplace cron) |
+  | `.target`    | `multi-user.target`      | groupe d'unités, équivalent des « niveaux » de démarrage |
+  | `.socket`, `.mount`, `.path` | `ssh.socket` | activation sur connexion, montage, surveillance de fichier |
+
+  ## Démarré ≠ activé
+
+  Deux notions indépendantes, source de nombreuses confusions :
+
+  ```
+              maintenant                  au prochain démarrage
+  start  ───▶ active (running)     enable  ───▶ enabled (lien dans multi-user.target.wants/)
+  stop   ───▶ inactive (dead)      disable ───▶ disabled
+                                   mask    ───▶ masked (impossible à démarrer, même par dépendance)
+  ```
+
+  `systemctl enable --now <unité>` fait les deux d'un coup. Après un redémarrage, un service démarré mais
+  non activé ne revient pas.
+
+  ## Mémo systemctl et journalctl
+
+  | Besoin                               | Commande                                     |
+  |--------------------------------------|----------------------------------------------|
+  | État détaillé (+ dernières lignes du journal) | `systemctl status nginx`            |
+  | Tous les services en échec           | `systemctl --failed`                         |
+  | Démarrer / arrêter / redémarrer      | `systemctl start|stop|restart nginx`         |
+  | Relire la configuration sans couper  | `systemctl reload nginx`                     |
+  | Activer / désactiver au démarrage    | `systemctl enable|disable nginx`             |
+  | Contenu d'une unité (avec surcharges)| `systemctl cat nginx`                        |
+  | Surcharger proprement une unité      | `systemctl edit nginx` (crée un *drop-in*)   |
+  | Après modification d'un fichier d'unité | `systemctl daemon-reload`                 |
+  | Journal d'une unité                  | `journalctl -u nginx` (`-e` fin, `-f` suivi) |
+  | Erreurs depuis le démarrage          | `journalctl -p err -b`                       |
+  | Depuis une heure                     | `journalctl --since "1 hour ago"`            |
+  | Programmations                       | `systemctl list-timers`                      |
+
+  ## Écrire une unité de service
+
+  ```ini
+  # /etc/systemd/system/planning.service
+  [Unit]
+  Description=Planning de l'atelier
+  After=network.target
+
+  [Service]
+  User=planning
+  ExecStart=/usr/bin/python3 -m http.server 8085 --directory /srv/planning
+  Restart=on-failure
+
+  [Install]
+  WantedBy=multi-user.target
+  ```
+
+  Les unités fournies par les paquets sont dans `/lib/systemd/system/` : on ne les modifie **jamais**
+  (une mise à jour écraserait la modification). On écrit ses propres unités dans `/etc/systemd/system/`,
+  et on surcharge celles des paquets avec un **drop-in** : `/etc/systemd/system/<unité>.d/override.conf`.
+
+  ## Le journal
+
+  `journald` collecte tout ce que les services écrivent sur leur sortie, avec l'heure, l'unité et une
+  **priorité** (0 `emerg` à 7 `debug` ; 3 = `err`, 4 = `warning`, 6 = `info`). Par défaut sur certaines
+  installations, il est conservé en mémoire (`/run/log/journal`) et perdu au redémarrage ; avec
+  `Storage=persistent`, il est écrit dans `/var/log/journal`.
+
+  ## Pièges courants
+
+  - Oublier `daemon-reload` après avoir modifié un fichier d'unité : systemd utilise l'ancienne version.
+  - Démarrer un service sans l'activer (ou l'inverse).
+  - Modifier un fichier dans `/lib/systemd/system` au lieu de faire un drop-in.
+  - Lire seulement `systemctl status` (10 lignes) : `journalctl -u <unité>` montre tout l'historique.
+  - `Restart=always` sur un service mal configuré : il redémarre en boucle et remplit le journal.
+
+  ## Bonnes pratiques en entreprise
+
+  - Faire tourner chaque service sous un compte dédié sans privilèges (`User=`).
+  - Désactiver et masquer les services inutiles : moins de surface d'attaque, démarrage plus rapide.
+  - Journal persistant et limité en taille, idéalement envoyé aussi vers un serveur central.
+  - Superviser l'état `systemctl is-system-running` (`degraded` = au moins une unité en échec).
+docs:
+  - title: systemctl(1) - piloter systemd (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man1/systemctl.1.html
+  - title: journalctl(1) - consulter le journal (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man1/journalctl.1.html
+  - title: systemd.service(5) - unités de service (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/systemd.service.5.html
+  - title: systemd.timer(5) - unités de minuterie (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/systemd.timer.5.html
+exercises:
+  - id: sd-etat-systeme
+    title: Faire l'état des lieux après le redémarrage
+    cours: |
+      Premier réflexe après un redémarrage : vérifier que tout est reparti.
+
+      - `systemctl is-system-running` résume l'état global : `running` (tout va bien) ou `degraded` (au
+        moins une unité en échec) ;
+      - `systemctl --failed` liste les unités en échec ;
+      - `systemctl list-units --type=service` liste les services chargés avec leur état ;
+      - `ps -p 1 -o comm=` affiche le nom du processus n°1.
+
+      Une unité en échec reste dans cet état jusqu'à ce qu'on la redémarre avec succès ou qu'on remette son
+      compteur à zéro (`systemctl reset-failed`).
+    description: |
+      Fais l'état des lieux : quel est le processus n°1, et quel service lié à la **comptabilité** est en
+      échec depuis le démarrage ?
+
+      Réponses : `pid1=` (nom du processus n°1) et `service_en_echec=` (nom de l'unité, avec ou sans
+      `.service`).
+    hint: ps -p 1 -o comm= ; systemctl is-system-running ; systemctl --failed
+    checks:
+      - desc: Processus n°1
+        run: grep -Eq '^pid1 *= *systemd *$' /root/reponses.txt
+      - desc: Service en échec
+        run: grep -Eq '^service_en_echec *= *export-compta(\.service)? *$' /root/reponses.txt
+
+  - id: sd-journal-unite
+    title: Dépanner un service grâce à son journal
+    cours: |
+      `systemctl status <unité>` affiche l'état et les **dernières** lignes du journal. Pour l'historique
+      complet d'une unité : `journalctl -u <unité>` (`-e` pour aller à la fin, `-n 50` pour les 50 dernières
+      lignes, `--no-pager` pour un affichage brut).
+
+      Le message d'erreur du programme indique presque toujours la cause : fichier absent, droits, port
+      occupé, erreur de syntaxe... `systemctl cat <unité>` montre la commande lancée (`ExecStart=`), utile
+      pour lire le script correspondant.
+
+      Après correction, `systemctl restart <unité>` relance le service et `systemctl status` confirme.
+    description: |
+      Lis le journal de `export-compta.service` pour comprendre pourquoi il échoue, puis corrige : le
+      fichier attendu doit contenir la ligne `destination=/srv/compta/exports`. Relance le service : il doit
+      être **actif**.
+    hint: journalctl -u export-compta ; echo destination=/srv/compta/exports > /srv/compta/export.cfg ; systemctl restart export-compta ; systemctl status export-compta
+    checks:
+      - desc: Le fichier de configuration est correct
+        run: grep -qx 'destination=/srv/compta/exports' /srv/compta/export.cfg
+      - desc: export-compta est actif
+        run: systemctl is-active -q export-compta.service
+
+  - id: sd-demarrer-activer
+    title: Démarrer et activer un service
+    cours: |
+      Un service a deux états indépendants :
+
+      - **actif ou non** maintenant (`systemctl start` / `stop`, vérifié par `systemctl is-active`) ;
+      - **activé ou non** au démarrage (`systemctl enable` / `disable`, vérifié par `systemctl is-enabled`).
+
+      `enable` crée un lien symbolique dans `/etc/systemd/system/multi-user.target.wants/` : la cible de
+      démarrage « tire » alors le service. `systemctl enable --now` active et démarre en une commande.
+
+      Pour un serveur web, on vérifie ensuite du point de vue de l'utilisateur : `curl http://localhost/`.
+
+      `systemctl is-enabled` et `systemctl is-active` répondent en un mot : pratique dans un script de vérification.
+    description: |
+      Le serveur web `nginx` doit tourner **maintenant** et **à chaque démarrage**.
+    hint: systemctl enable --now nginx ; systemctl is-active nginx ; systemctl is-enabled nginx ; curl -I http://localhost/
+    checks:
+      - desc: nginx est actif
+        run: systemctl is-active -q nginx
+      - desc: nginx est activé au démarrage
+        run: test "$(systemctl is-enabled nginx)" = enabled
+      - desc: Le serveur répond
+        run: curl -sf -o /dev/null http://localhost/
+
+  - id: sd-arreter-masquer
+    title: Arrêter, désactiver et masquer un service inutile
+    cours: |
+      Un service inutile consomme des ressources et augmente la surface d'attaque. Trois niveaux :
+
+      | Commande          | Effet                                                         |
+      |-------------------|---------------------------------------------------------------|
+      | `systemctl stop`  | arrêt immédiat, mais il reviendra au prochain démarrage s'il est activé |
+      | `systemctl disable` | ne démarre plus automatiquement                             |
+      | `systemctl mask`  | lien vers `/dev/null` : impossible à démarrer, même à la main ou par dépendance |
+
+      `systemctl mask --now` masque et arrête. `systemctl unmask` annule. On masque ce qui ne doit plus
+      jamais tourner sur la machine.
+    description: |
+      L'imprimante gérée par `imprimante-ancienne.service` a été retirée il y a deux ans. Arrête ce service
+      et fais en sorte qu'il ne puisse plus être démarré, ni au démarrage ni à la main.
+    hint: systemctl disable --now imprimante-ancienne ; systemctl mask imprimante-ancienne
+    checks:
+      - desc: Le service est arrêté
+        run: |
+          ! systemctl is-active -q imprimante-ancienne.service
+      - desc: Le service est masqué
+        run: test "$(systemctl is-enabled imprimante-ancienne.service 2>/dev/null)" = masked
+
+  - id: sd-journal-filtres
+    title: Filtrer le journal par priorité
+    cours: |
+      Le journal peut contenir des milliers de lignes : on filtre.
+
+      | Option                   | Filtre                                             |
+      |--------------------------|----------------------------------------------------|
+      | `-b`                     | depuis le dernier démarrage (`-b -1` : le précédent) |
+      | `-p err`                 | priorité `err` et plus grave (`warning`, `info`...) |
+      | `-u <unité>`             | une seule unité                                    |
+      | `--since` / `--until`    | période (`"10:00"`, `"1 hour ago"`, `yesterday`)   |
+      | `-g <motif>`             | lignes qui contiennent un motif                    |
+      | `-o short-precise`, `-o json` | format de sortie                              |
+
+      Les filtres se combinent. `journalctl -p err -b` est le premier coup d'œil à donner sur un serveur
+      après un incident.
+    description: |
+      Affiche les messages de priorité **err** (ou plus grave) depuis le démarrage. L'un d'eux signale une
+      sonde de température hors service.
+
+      Réponse : `sonde_hs=` (le numéro de la sonde).
+    hint: journalctl -p err -b ; journalctl -u capteur
+    checks:
+      - desc: Numéro de la sonde hors service
+        run: grep -Eq '^sonde_hs *= *3 *$' /root/reponses.txt
+
+  - id: sd-redemarrage-auto
+    title: Relancer automatiquement un service qui tombe
+    cours: |
+      Par défaut, systemd ne relance pas un service qui s'arrête. La directive `Restart=` de la section
+      `[Service]` change cela : `on-failure` relance après un arrêt en erreur, `always` dans tous les cas.
+      `RestartSec=` fixe le délai avant la relance.
+
+      L'unité `badge.service` vient de `/lib/systemd/system` : on ne la modifie pas. On crée une
+      **surcharge** (*drop-in*) :
+
+      ```
+      /etc/systemd/system/badge.service.d/override.conf
+      [Service]
+      ...
+      ```
+
+      `systemctl edit badge` ouvre ce fichier et recharge systemd à l'enregistrement. Sinon,
+      `systemctl daemon-reload` est obligatoire. `systemctl cat badge` affiche l'unité **et** ses surcharges.
+    description: |
+      Le lecteur de badges (`badge.service`) perd régulièrement sa connexion et reste arrêté jusqu'à ce que
+      quelqu'un s'en aperçoive. Configure une relance automatique **en cas d'échec**, après **5 secondes**,
+      à l'aide d'une surcharge (sans modifier le fichier de `/lib/systemd/system`). Le service doit tourner.
+    hint: systemctl edit badge  → [Service] / Restart=on-failure / RestartSec=5 ; systemctl restart badge ; systemctl cat badge
+    checks:
+      - desc: Relance en cas d'échec après 5 secondes
+        run: test "$(systemctl show badge -p Restart --value)" = on-failure && test "$(systemctl show badge -p RestartUSec --value)" = 5s
+      - desc: Réglage fait par une surcharge dans /etc/systemd/system/badge.service.d/
+        run: systemctl show badge -p DropInPaths --value | grep -q '/etc/systemd/system/badge.service.d/' && ! grep -q Restart /lib/systemd/system/badge.service
+      - desc: Le service tourne (ou est en cours de relance)
+        run: systemctl is-active -q badge || test "$(systemctl show badge -p ActiveState --value)" = activating
+
+  - id: sd-creer-service
+    title: Créer son propre service
+    cours: |
+      Une unité de service minimale contient trois sections :
+
+      - `[Unit]` : `Description=`, et l'ordre de démarrage (`After=network.target`) ;
+      - `[Service]` : la commande `ExecStart=` (chemin **absolu**), le compte `User=`, la politique
+        `Restart=` ;
+      - `[Install]` : `WantedBy=multi-user.target`, utilisé par `enable`.
+
+      Le fichier se place dans `/etc/systemd/system/<nom>.service`, puis `systemctl daemon-reload` et
+      `systemctl enable --now <nom>`. Faire tourner un service sous un compte dédié limite les dégâts s'il
+      est compromis. `python3 -m http.server <port> --directory <dossier>` sert un dossier en HTTP.
+    description: |
+      Crée le service **`planning.service`** qui publie le dossier `/srv/planning` en HTTP sur le port
+      **8085**, avec le module `http.server` de Python, sous le compte système **`planning`** (déjà créé).
+      Il doit démarrer maintenant et à chaque démarrage, et être relancé en cas d'échec.
+    hint: nano /etc/systemd/system/planning.service ; ExecStart=/usr/bin/python3 -m http.server 8085 --directory /srv/planning ; User=planning ; Restart=on-failure ; systemctl daemon-reload ; systemctl enable --now planning
+    checks:
+      - desc: planning.service est actif et activé
+        run: systemctl is-active -q planning && test "$(systemctl is-enabled planning)" = enabled
+      - desc: Le planning répond sur le port 8085
+        run: curl -sf http://localhost:8085/ | grep -q 'Planning des ateliers'
+      - desc: Le processus tourne sous le compte planning, avec relance en cas d'échec
+        run: |
+          test "$(ps -o user= -p "$(systemctl show planning -p MainPID --value)" | tr -d ' ')" = planning && test "$(systemctl show planning -p Restart --value)" = on-failure
+
+  - id: sd-timer
+    title: Planifier une tâche avec un timer
+    cours: |
+      Un **timer** systemd déclenche un service à heure fixe, comme cron, avec des avantages : journal de
+      chaque exécution (`journalctl -u`), rattrapage des exécutions manquées (`Persistent=true`), dépendances.
+
+      Il faut deux unités du même nom :
+
+      - `nettoyage-tmp.service` : `Type=oneshot` et `ExecStart=` (la tâche), sans section `[Install]` ;
+      - `nettoyage-tmp.timer` : section `[Timer]` avec `OnCalendar=` (`daily`, `hourly`,
+        `*-*-* 03:00:00`...) et `[Install]` avec `WantedBy=timers.target`.
+
+      On active le **timer** (pas le service). `systemd-analyze calendar '<expression>'` vérifie une
+      expression, `systemctl list-timers` affiche la prochaine exécution.
+    description: |
+      Le script `/usr/local/bin/nettoyage-tmp` supprime les fichiers de plus de 7 jours de `/srv/tmp`.
+      Planifie-le **chaque jour à 3 h 00** avec un service `nettoyage-tmp.service` et un timer
+      `nettoyage-tmp.timer` (exécutions manquées rattrapées). Active le timer, puis lance une fois le service
+      à la main pour vérifier qu'il fonctionne.
+    hint: nettoyage-tmp.service → [Service] Type=oneshot / ExecStart=/usr/local/bin/nettoyage-tmp ; nettoyage-tmp.timer → [Timer] OnCalendar=*-*-* 03:00:00 / Persistent=true ; [Install] WantedBy=timers.target ; systemctl daemon-reload ; systemctl enable --now nettoyage-tmp.timer ; systemctl start nettoyage-tmp.service
+    checks:
+      - desc: Le timer est actif et activé
+        run: systemctl is-active -q nettoyage-tmp.timer && test "$(systemctl is-enabled nettoyage-tmp.timer)" = enabled
+      - desc: Déclenchement chaque jour à 3 h, avec rattrapage
+        run: |
+          systemctl show nettoyage-tmp.timer -p TimersCalendar --value | grep -Eq '\*-\*-\* 03:00:00' && test "$(systemctl show nettoyage-tmp.timer -p Persistent --value)" = yes
+      - desc: Le service a été exécuté (vieux fichiers supprimés, récent conservé)
+        run: test ! -e /srv/tmp/vieux-1.tmp && test -e /srv/tmp/recent.tmp
+
+  - id: sd-journal-persistant
+    title: Rendre le journal persistant
+    cours: |
+      `journald` se configure dans `/etc/systemd/journald.conf`, ou mieux dans un fichier
+      `/etc/systemd/journald.conf.d/<nom>.conf` (section `[Journal]`), qui ne sera pas touché par les mises
+      à jour.
+
+      | Directive         | Rôle                                                        |
+      |-------------------|-------------------------------------------------------------|
+      | `Storage=`        | `persistent` (disque, `/var/log/journal`), `volatile` (mémoire), `auto` |
+      | `SystemMaxUse=`   | taille maximale occupée sur disque (`200M`, `1G`)           |
+      | `MaxRetentionSec=`| durée de conservation maximale                              |
+
+      `systemctl restart systemd-journald` applique la configuration ; `journalctl --disk-usage` affiche la
+      place occupée, `journalctl --list-boots` les démarrages conservés.
+
+      Limite la taille avec `SystemMaxUse` dans `journald.conf` pour que le journal ne remplisse pas le disque.
+    description: |
+      Configure journald dans `/etc/systemd/journald.conf.d/persistant.conf` pour conserver le journal
+      **sur disque** et limiter sa taille à **200 Mo** (`200M`). Applique la configuration : le journal doit
+      être écrit dans `/var/log/journal`.
+    hint: mkdir -p /etc/systemd/journald.conf.d ; printf '[Journal]\nStorage=persistent\nSystemMaxUse=200M\n' > /etc/systemd/journald.conf.d/persistant.conf ; systemctl restart systemd-journald
+    checks:
+      - desc: Configuration dans persistant.conf
+        run: |
+          f=/etc/systemd/journald.conf.d/persistant.conf; grep -q '^\[Journal\]' $f && grep -Eq '^Storage *= *persistent' $f && grep -Eq '^SystemMaxUse *= *200M' $f
+      - desc: Le journal est écrit dans /var/log/journal
+        run: ls /var/log/journal/*/system.journal >/dev/null 2>&1

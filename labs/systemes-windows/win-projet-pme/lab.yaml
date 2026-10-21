@@ -1,0 +1,609 @@
+title: Projet PME - monter l'informatique d'une entreprise sous Windows
+level: expert
+order: 3
+tags: [projet, active directory, dhcp, partages, agdlp, dfs, gpo, préférences, pso, sauvegarde, groupes restreints, automatisation]
+summary: Mener un projet complet pour une PME - annuaire depuis un CSV, ordinateurs, DHCP, partages AGDLP, espace de noms DFS, lecteurs par GPO, politique de mots de passe et PSO, sauvegarde, administrateurs locaux et rapport planifié.
+vagrant: bundled
+machine: dc01
+description: |
+  **Contexte.** Les *Ateliers Durand* (10 salariés, 5 services) quittent leur vieux NAS et leurs comptes
+  locaux. Le domaine `durand.lan` vient d'être créé, un serveur de fichiers et un premier poste y sont
+  joints, et c'est tout. Tu es le prestataire : à toi de livrer une infrastructure **complète, propre et
+  documentable**, en suivant le cahier des charges de chaque exercice.
+
+  **Machines** (prévoir **10 Go de RAM libres**) :
+
+  | VM | Système | Adresse LAN | Rôle |
+  |----|---------|-------------|------|
+  | `SRV-DC01` (terminal) | Windows Server 2022 (2 Go) | 192.168.10.10 | contrôleur de `durand.lan`, DNS |
+  | `SRV-FIC01` | Windows Server 2022 (2 Go) | 192.168.10.20 | serveur de fichiers joint (conteneur `Computers`) |
+  | `PC01` | Windows 11 (3 Go) | 192.168.10.101 | poste joint (conteneur `Computers`) |
+
+  La liste du personnel est dans `C:\Admin\import\personnel.csv` (séparateur `;`, UTF-8) : `Identifiant`,
+  `Prenom`, `Nom`, `Service`, `Fonction`. Mot de passe initial de tous les comptes : `Bienvenue2024!`.
+  Pour agir sur les autres machines : `Invoke-Command -ComputerName SRV-FIC01 { ... }` ou `-ComputerName PC01`.
+cours: |
+  ## Un projet, pas une suite de commandes
+
+  Monter l'informatique d'une PME, c'est enchaîner des briques qui dépendent les unes des autres. L'ordre
+  compte : l'**annuaire** (OU, comptes, groupes) d'abord, car tout le reste s'appuie dessus ; les
+  **services réseau** (DNS, DHCP) ; les **données** (partages et permissions), leur **accès** (espace de
+  noms, lecteurs), la **sécurité** (mots de passe, administrateurs locaux), puis l'**exploitation**
+  (sauvegarde, rapports). Chaque étape se vérifie avant de passer à la suivante.
+
+  ## Les principes qui font une infrastructure maintenable
+
+  - **Une arborescence d'OU pensée pour l'administration**, pas un organigramme : on sépare utilisateurs,
+    ordinateurs et serveurs, car les GPO et les délégations s'appliquent par OU.
+  - **AGDLP** : comptes dans des groupes globaux par métier (`GG_Compta`), groupes globaux dans des groupes
+    domaine local par ressource (`DL_Compta_RW`), permissions aux seuls groupes domaine local. Un nouvel
+    arrivant : un seul ajout à un groupe.
+  - **Des chemins qui ne dépendent d'aucun serveur** : `\\durand.lan\Entreprise\...` (DFS) plutôt que
+    `\\SRV-FIC01\...`, pour pouvoir changer de serveur sans toucher aux postes.
+  - **Tout par GPO**, rien poste par poste : lecteurs réseau, administrateurs locaux, sécurité.
+  - **Le moindre privilège** : les techniciens administrent les postes, pas le domaine ; la direction a
+    une politique de mot de passe renforcée (PSO).
+  - **Automatiser et tracer** : import depuis un fichier, scripts rejouables, rapports planifiés,
+    sauvegarde vérifiée (une sauvegarde jamais restaurée n'est qu'un espoir).
+
+  ## Les outils mobilisés
+
+  Ce lab réutilise les modules vus dans les labs précédents : `ActiveDirectory`, `DhcpServer`,
+  `SmbShare` et `icacls`, `DFSN`, `GroupPolicy` (et l'écriture directe de préférences et de
+  `GptTmpl.inf` dans SYSVOL quand aucune cmdlet n'existe), `WindowsServerBackup`, `ScheduledTasks`. La
+  différence avec les labs précédents est l'**intégration** : un nom de groupe mal choisi au premier
+  exercice se paie au cinquième.
+
+  ## Ce que l'on livre au client
+
+  Au-delà de la configuration, un prestataire livre la **documentation** : schéma, plan d'adressage, liste
+  des OU, groupes et GPO avec leur rôle, procédures (arrivée et départ d'un salarié, restauration d'un
+  fichier), comptes d'administration et emplacement des secrets. Les scripts de ce lab, rejoués dans
+  l'ordre, sont déjà une documentation exécutable.
+
+  ## Conventions de ce projet
+
+  | Objet | Convention |
+  |-------|-----------|
+  | OU | `Ateliers Durand\Utilisateurs\<Service>`, `Groupes`, `Postes`, `Serveurs` |
+  | Groupes | `GG_<Service>` (globaux), `DL_<Ressource>_RW` (domaine local) |
+  | GPO | `U - ...` (utilisateurs), `C - ...` (ordinateurs) |
+  | Données | `C:\Donnees` sur SRV-FIC01, publiées dans `\\durand.lan\Entreprise` |
+docs:
+  - title: Planifier une structure d'OU
+    url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/plan/reviewing-ou-design-concepts
+  - title: Module ActiveDirectory (PowerShell)
+    url: https://learn.microsoft.com/fr-fr/powershell/module/activedirectory/
+  - title: Stratégies de mot de passe affinées
+    url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/get-started/adac/fine-grained-password-policies
+exercises:
+  - id: win-pme-annuaire
+    title: L'annuaire depuis le CSV
+    description: |
+      Crée l'arborescence `OU=Ateliers Durand,DC=durand,DC=lan` avec les OU `Utilisateurs` (et une sous-OU par
+      **service** du CSV), `Groupes`, `Postes` et `Serveurs`. Importe ensuite **chaque** salarié du CSV :
+      identifiant, prénom, nom, `Department` = service, `Title` = fonction, UPN `<identifiant>@durand.lan`,
+      dans l'OU de son service, compte activé, mot de passe `Bienvenue2024!` **à changer** à la première
+      connexion. Crée un groupe global `GG_<Service>` par service (OU `Groupes`) contenant ses salariés.
+    hint: Import-Csv C:\Admin\import\personnel.csv -Delimiter ';' -Encoding UTF8 ; New-ADOrganizationalUnit ; New-ADUser -ChangePasswordAtLogon $true ; New-ADGroup ; Add-ADGroupMember
+    cours: |
+      ```powershell
+      $racine = 'OU=Ateliers Durand,DC=durand,DC=lan'
+      $liste = Import-Csv C:\Admin\import\personnel.csv -Delimiter ';' -Encoding UTF8
+      New-ADOrganizationalUnit 'Ateliers Durand' -Path 'DC=durand,DC=lan'
+      'Utilisateurs', 'Groupes', 'Postes', 'Serveurs' | ForEach-Object { New-ADOrganizationalUnit $_ -Path $racine }
+      $mdp = ConvertTo-SecureString 'Bienvenue2024!' -AsPlainText -Force
+      foreach ($s in $liste.Service | Sort-Object -Unique) {
+          New-ADOrganizationalUnit $s -Path "OU=Utilisateurs,$racine"
+          New-ADGroup "GG_$s" -GroupScope Global -GroupCategory Security -Path "OU=Groupes,$racine"
+      }
+      foreach ($p in $liste) {
+          New-ADUser -Name "$($p.Prenom) $($p.Nom)" -SamAccountName $p.Identifiant -GivenName $p.Prenom -Surname $p.Nom `
+              -UserPrincipalName "$($p.Identifiant)@durand.lan" -Department $p.Service -Title $p.Fonction `
+              -Path "OU=$($p.Service),OU=Utilisateurs,$racine" -AccountPassword $mdp -ChangePasswordAtLogon $true -Enabled $true
+          Add-ADGroupMember "GG_$($p.Service)" -Members $p.Identifiant
+      }
+      ```
+
+      Le script se rejoue pour chaque vague d'embauches : c'est l'intérêt de partir d'un fichier. Pense à
+      `-Encoding UTF8` pour les accents, et rends le script **idempotent** (tester l'existence avant de
+      créer) si tu dois le relancer.
+    docs:
+      - title: New-ADUser
+        url: https://learn.microsoft.com/fr-fr/powershell/module/activedirectory/new-aduser
+      - title: Import-Csv
+        url: https://learn.microsoft.com/fr-fr/powershell/module/microsoft.powershell.utility/import-csv
+    checks:
+      - desc: Les OU Utilisateurs (une par service), Groupes, Postes et Serveurs existent
+        run: |
+          $racine = 'OU=Ateliers Durand,DC=durand,DC=lan'
+          $services = (Import-Csv C:\Admin\import\personnel.csv -Delimiter ';' -Encoding UTF8).Service | Sort-Object -Unique
+          $ou = @('Groupes', 'Postes', 'Serveurs' | ForEach-Object { "OU=$_,$racine" }) + @($services | ForEach-Object { "OU=$_,OU=Utilisateurs,$racine" })
+          @($ou | Where-Object { -not (Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$_'") }).Count -eq 0
+      - desc: Chaque salarié est dans l'OU de son service, avec service et fonction, et doit changer son mot de passe
+        run: |
+          $erreurs = foreach ($p in Import-Csv C:\Admin\import\personnel.csv -Delimiter ';' -Encoding UTF8) {
+              $u = Get-ADUser -Filter "SamAccountName -eq '$($p.Identifiant)'" -Properties Department, Title, pwdLastSet
+              if (-not $u -or $u.DistinguishedName -notlike "*,OU=$($p.Service),OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan" -or $u.Department -ne $p.Service -or $u.Title -ne $p.Fonction -or -not $u.Enabled -or $u.pwdLastSet -ne 0) { $p.Identifiant }
+          }
+          @($erreurs).Count -eq 0
+      - desc: Chaque salarié est membre du groupe GG_ de son service
+        run: |
+          $erreurs = foreach ($p in Import-Csv C:\Admin\import\personnel.csv -Delimiter ';' -Encoding UTF8) {
+              if ((Get-ADGroupMember "GG_$($p.Service)" -ErrorAction SilentlyContinue).SamAccountName -notcontains $p.Identifiant) { $p.Identifiant }
+          }
+          @($erreurs).Count -eq 0
+    solution: |
+      $racine = 'OU=Ateliers Durand,DC=durand,DC=lan'
+      $liste = Import-Csv C:\Admin\import\personnel.csv -Delimiter ';' -Encoding UTF8
+      New-ADOrganizationalUnit 'Ateliers Durand' -Path 'DC=durand,DC=lan'
+      'Utilisateurs', 'Groupes', 'Postes', 'Serveurs' | ForEach-Object { New-ADOrganizationalUnit $_ -Path $racine }
+      $mdp = ConvertTo-SecureString 'Bienvenue2024!' -AsPlainText -Force
+      foreach ($s in $liste.Service | Sort-Object -Unique) {
+          New-ADOrganizationalUnit $s -Path "OU=Utilisateurs,$racine"
+          New-ADGroup "GG_$s" -GroupScope Global -GroupCategory Security -Path "OU=Groupes,$racine"
+      }
+      foreach ($p in $liste) {
+          New-ADUser -Name "$($p.Prenom) $($p.Nom)" -SamAccountName $p.Identifiant -GivenName $p.Prenom -Surname $p.Nom -UserPrincipalName "$($p.Identifiant)@durand.lan" -Department $p.Service -Title $p.Fonction -Path "OU=$($p.Service),OU=Utilisateurs,$racine" -AccountPassword $mdp -ChangePasswordAtLogon $true -Enabled $true
+          Add-ADGroupMember "GG_$($p.Service)" -Members $p.Identifiant
+      }
+
+  - id: win-pme-ordinateurs
+    title: Ranger les ordinateurs
+    description: |
+      Déplace `PC01` dans l'OU `Postes` et `SRV-FIC01` dans l'OU `Serveurs`. Fais en sorte que les **prochains**
+      ordinateurs joints au domaine arrivent directement dans `Postes`.
+    hint: Get-ADComputer PC01 | Move-ADObject -TargetPath 'OU=Postes,...' ; redircmp 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+    cours: |
+      ```powershell
+      $racine = 'OU=Ateliers Durand,DC=durand,DC=lan'
+      Get-ADComputer PC01 | Move-ADObject -TargetPath "OU=Postes,$racine"
+      Get-ADComputer SRV-FIC01 | Move-ADObject -TargetPath "OU=Serveurs,$racine"
+      redircmp "OU=Postes,$racine"
+      (Get-ADDomain).ComputersContainer
+      ```
+
+      Le conteneur `CN=Computers` n'est pas une OU : on ne peut pas y lier de GPO. Un poste qui y reste ne
+      reçoit que les GPO du domaine. `redircmp` change le conteneur par défaut des nouveaux comptes
+      ordinateurs (attribut `wellKnownObjects` du domaine) ; `redirusr` fait de même pour les utilisateurs.
+      Un poste déplacé applique les GPO de sa nouvelle OU au prochain rafraîchissement.
+    docs:
+      - title: redircmp
+        url: https://learn.microsoft.com/fr-fr/troubleshoot/windows-server/active-directory/redirect-users-computers-containers
+      - title: Move-ADObject
+        url: https://learn.microsoft.com/fr-fr/powershell/module/activedirectory/move-adobject
+    checks:
+      - desc: PC01 est dans Postes, SRV-FIC01 dans Serveurs
+        run: |
+          (Get-ADComputer PC01).DistinguishedName -eq 'CN=PC01,OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' -and (Get-ADComputer SRV-FIC01).DistinguishedName -eq 'CN=SRV-FIC01,OU=Serveurs,OU=Ateliers Durand,DC=durand,DC=lan'
+      - desc: Les nouveaux ordinateurs arrivent dans Postes
+        run: |
+          (Get-ADDomain).ComputersContainer -eq 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+    solution: |
+      $racine = 'OU=Ateliers Durand,DC=durand,DC=lan'
+      Get-ADComputer PC01 | Move-ADObject -TargetPath "OU=Postes,$racine"
+      Get-ADComputer SRV-FIC01 | Move-ADObject -TargetPath "OU=Serveurs,$racine"
+      redircmp "OU=Postes,$racine" | Out-Null
+
+  - id: win-pme-dhcp
+    title: Le DHCP
+    description: |
+      Installe et **autorise** le DHCP sur SRV-DC01, avec l'étendue `LAN` : 192.168.10.100 à 192.168.10.199,
+      bail de 8 jours, options routeur `192.168.10.254`, DNS `192.168.10.10`, domaine `durand.lan`. Exclus
+      `192.168.10.100` à `192.168.10.109` (futurs équipements fixes).
+    hint: Install-WindowsFeature DHCP -IncludeManagementTools ; Add-DhcpServerInDC ; Add-DhcpServerv4Scope ; Set-DhcpServerv4OptionValue ; Add-DhcpServerv4ExclusionRange
+    cours: |
+      ```powershell
+      Install-WindowsFeature DHCP -IncludeManagementTools
+      netsh dhcp add securitygroups; Restart-Service DHCPServer
+      Add-DhcpServerInDC -DnsName srv-dc01.durand.lan -IPAddress 192.168.10.10
+      Add-DhcpServerv4Scope -Name LAN -StartRange 192.168.10.100 -EndRange 192.168.10.199 -SubnetMask 255.255.255.0 -LeaseDuration 8.00:00:00
+      Add-DhcpServerv4ExclusionRange -ScopeId 192.168.10.0 -StartRange 192.168.10.100 -EndRange 192.168.10.109
+      Set-DhcpServerv4OptionValue -ScopeId 192.168.10.0 -Router 192.168.10.254 -DnsServer 192.168.10.10 -DnsDomain durand.lan
+      ```
+
+      Plan d'adressage type d'une PME : serveurs et équipements réseau en adresses fixes basses, imprimantes
+      en réservations ou dans une plage exclue, postes en DHCP. Le DNS distribué est **celui du domaine**,
+      jamais un DNS public. Dans une PME avec un seul DC, le DHCP y est souvent installé ; le lab
+      *Basculement DHCP* montre comment le rendre redondant.
+    docs:
+      - title: Déployer DHCP avec PowerShell
+        url: https://learn.microsoft.com/fr-fr/windows-server/networking/technologies/dhcp/dhcp-deploy-wps
+    checks:
+      - desc: Le serveur DHCP est autorisé et l'étendue LAN existe avec la bonne plage
+        run: |
+          $s = Get-DhcpServerv4Scope -ScopeId 192.168.10.0 -ErrorAction SilentlyContinue
+          [bool](Get-DhcpServerInDC | Where-Object IPAddress -eq '192.168.10.10') -and [bool]$s -and $s.StartRange -eq '192.168.10.100' -and $s.EndRange -eq '192.168.10.199' -and $s.LeaseDuration -eq [TimeSpan]'8.00:00:00'
+      - desc: Options routeur, DNS et domaine, et exclusion .100-.109
+        run: |
+          $o = Get-DhcpServerv4OptionValue -ScopeId 192.168.10.0
+          $x = Get-DhcpServerv4ExclusionRange -ScopeId 192.168.10.0
+          (($o | Where-Object OptionId -eq 3).Value -contains '192.168.10.254') -and (($o | Where-Object OptionId -eq 6).Value -contains '192.168.10.10') -and (($o | Where-Object OptionId -eq 15).Value -contains 'durand.lan') -and [bool]($x | Where-Object { $_.StartRange -eq '192.168.10.100' -and $_.EndRange -eq '192.168.10.109' })
+    solution: |
+      Install-WindowsFeature DHCP -IncludeManagementTools | Out-Null
+      netsh dhcp add securitygroups | Out-Null
+      Restart-Service DHCPServer
+      Add-DhcpServerInDC -DnsName srv-dc01.durand.lan -IPAddress 192.168.10.10
+      Add-DhcpServerv4Scope -Name LAN -StartRange 192.168.10.100 -EndRange 192.168.10.199 -SubnetMask 255.255.255.0 -LeaseDuration 8.00:00:00
+      Add-DhcpServerv4ExclusionRange -ScopeId 192.168.10.0 -StartRange 192.168.10.100 -EndRange 192.168.10.109
+      Set-DhcpServerv4OptionValue -ScopeId 192.168.10.0 -Router 192.168.10.254 -DnsServer 192.168.10.10 -DnsDomain durand.lan
+
+  - id: win-pme-partages
+    title: Les partages en AGDLP
+    description: |
+      Sur SRV-FIC01 :
+
+      - `C:\Donnees\Services\<Service>` pour chaque service, partagé une seule fois sous le nom **`Services`**
+        avec l'**énumération basée sur l'accès** ; sur chaque dossier de service, héritage coupé, contrôle
+        total aux Administrateurs et à SYSTEM, **modification** au groupe `DL_<Service>_RW` ;
+      - `C:\Donnees\Commun`, partagé sous le nom **`Commun`**, **modification** au groupe `DL_Commun_RW`.
+
+      Crée les groupes domaine local (OU `Groupes`) : chaque `GG_<Service>` dans son `DL_<Service>_RW`, et
+      tous les `GG_` dans `DL_Commun_RW`.
+    hint: New-ADGroup DL_X_RW -GroupScope DomainLocal ; Invoke-Command -ComputerName SRV-FIC01 { New-SmbShare -FolderEnumerationMode AccessBased ; icacls ... /inheritance:r /grant 'DURAND\DL_X_RW:(OI)(CI)M' }
+    cours: |
+      ```powershell
+      $services = (Get-ADGroup -Filter "Name -like 'GG_*'").Name -replace '^GG_'
+      foreach ($s in $services + 'Commun') { New-ADGroup "DL_$($s)_RW" -GroupScope DomainLocal -Path 'OU=Groupes,OU=Ateliers Durand,DC=durand,DC=lan' }
+      foreach ($s in $services) { Add-ADGroupMember "DL_$($s)_RW" -Members "GG_$s"; Add-ADGroupMember DL_Commun_RW -Members "GG_$s" }
+      Invoke-Command -ComputerName SRV-FIC01 -ArgumentList (,$services) {
+          param($services)
+          foreach ($s in $services) {
+              New-Item "C:\Donnees\Services\$s" -ItemType Directory -Force
+              icacls "C:\Donnees\Services\$s" /inheritance:r /grant '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' "DURAND\DL_$($s)_RW:(OI)(CI)M"
+          }
+          New-SmbShare -Name Services -Path C:\Donnees\Services -ChangeAccess '*S-1-5-11' -FolderEnumerationMode AccessBased
+          # ... puis Commun de la même façon
+      }
+      ```
+
+      L'énumération basée sur l'accès masque les dossiers qu'on ne peut pas ouvrir : chaque salarié ne voit
+      que son service dans `Services`. Les permissions de **partage** restent larges (utilisateurs
+      authentifiés : modification), le **NTFS** fait le tri : on n'administre ainsi qu'une seule couche de
+      droits. Pense que la racine `C:\Donnees\Services` doit rester lisible (sans héritage vers les
+      sous-dossiers) pour que les utilisateurs puissent la parcourir.
+    docs:
+      - title: New-SmbShare
+        url: https://learn.microsoft.com/fr-fr/powershell/module/smbshare/new-smbshare
+      - title: icacls
+        url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/icacls
+    checks:
+      - desc: Les groupes DL_<Service>_RW et DL_Commun_RW contiennent les bons GG_
+        run: |
+          $services = (Get-ADGroup -Filter "Name -like 'GG_*'").Name -replace '^GG_'
+          $erreurs = foreach ($s in $services) {
+              if ((Get-ADGroupMember "DL_$($s)_RW" -ErrorAction SilentlyContinue).Name -notcontains "GG_$s") { $s }
+              if ((Get-ADGroupMember DL_Commun_RW -ErrorAction SilentlyContinue).Name -notcontains "GG_$s") { "Commun/$s" }
+          }
+          @($services).Count -ge 5 -and @($erreurs).Count -eq 0 -and (Get-ADGroup DL_Commun_RW).GroupScope -eq 'DomainLocal'
+      - desc: Le partage Services utilise l'énumération basée sur l'accès, Commun existe
+        machine: fic01
+        run: |
+          (Get-SmbShare -Name Services -ErrorAction SilentlyContinue).FolderEnumerationMode -eq 'AccessBased' -and (Get-SmbShare -Name Commun -ErrorAction SilentlyContinue).Path -eq 'C:\Donnees\Commun'
+      - desc: Chaque dossier de service donne la modification à son DL, sans héritage
+        machine: fic01
+        run: |
+          $dossiers = Get-ChildItem C:\Donnees\Services -Directory
+          $erreurs = foreach ($d in $dossiers) {
+              $acl = Get-Acl $d.FullName
+              if (-not $acl.AreAccessRulesProtected -or -not ($acl.Access | Where-Object { $_.IdentityReference -like "*\DL_$($d.Name)_RW" -and $_.FileSystemRights -match 'Modify' })) { $d.Name }
+          }
+          @($dossiers).Count -ge 5 -and @($erreurs).Count -eq 0 -and [bool]((Get-Acl C:\Donnees\Commun).Access | Where-Object { $_.IdentityReference -like '*\DL_Commun_RW' -and $_.FileSystemRights -match 'Modify' })
+    solution: |
+      $services = (Get-ADGroup -Filter "Name -like 'GG_*'").Name -replace '^GG_'
+      foreach ($s in @($services) + 'Commun') { New-ADGroup "DL_$($s)_RW" -GroupScope DomainLocal -GroupCategory Security -Path 'OU=Groupes,OU=Ateliers Durand,DC=durand,DC=lan' }
+      foreach ($s in $services) { Add-ADGroupMember "DL_$($s)_RW" -Members "GG_$s"; Add-ADGroupMember DL_Commun_RW -Members "GG_$s" }
+      Invoke-Command -ComputerName SRV-FIC01 -ArgumentList (,[string[]]$services) -ScriptBlock {
+          param($services)
+          foreach ($s in $services) {
+              New-Item "C:\Donnees\Services\$s" -ItemType Directory -Force | Out-Null
+              icacls "C:\Donnees\Services\$s" /inheritance:r /grant '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' "DURAND\DL_$($s)_RW:(OI)(CI)M" | Out-Null
+          }
+          New-Item C:\Donnees\Commun -ItemType Directory -Force | Out-Null
+          icacls C:\Donnees\Commun /inheritance:r /grant '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' 'DURAND\DL_Commun_RW:(OI)(CI)M' | Out-Null
+          New-SmbShare -Name Services -Path C:\Donnees\Services -ChangeAccess '*S-1-5-11' -FolderEnumerationMode AccessBased | Out-Null
+          New-SmbShare -Name Commun -Path C:\Donnees\Commun -ChangeAccess '*S-1-5-11' -FolderEnumerationMode AccessBased | Out-Null
+      }
+
+  - id: win-pme-dfs
+    title: L'espace de noms de l'entreprise
+    description: |
+      Crée l'espace de noms de domaine **`\\durand.lan\Entreprise`** (serveur d'espace de noms : SRV-DC01) avec
+      deux dossiers : `Services` → `\\SRV-FIC01\Services` et `Commun` → `\\SRV-FIC01\Commun`.
+    hint: Install-WindowsFeature FS-DFS-Namespace, RSAT-DFS-Mgmt-Con ; New-SmbShare Entreprise -Path C:\DFSRoots\Entreprise -ReadAccess '*S-1-1-0' ; New-DfsnRoot -Path \\durand.lan\Entreprise -TargetPath \\SRV-DC01\Entreprise -Type DomainV2 ; New-DfsnFolder
+    cours: |
+      ```powershell
+      Install-WindowsFeature FS-DFS-Namespace, RSAT-DFS-Mgmt-Con
+      New-Item C:\DFSRoots\Entreprise -ItemType Directory
+      New-SmbShare -Name Entreprise -Path C:\DFSRoots\Entreprise -ReadAccess '*S-1-1-0'
+      New-DfsnRoot -Path \\durand.lan\Entreprise -TargetPath \\SRV-DC01\Entreprise -Type DomainV2
+      New-DfsnFolder -Path \\durand.lan\Entreprise\Services -TargetPath \\SRV-FIC01\Services
+      New-DfsnFolder -Path \\durand.lan\Entreprise\Commun -TargetPath \\SRV-FIC01\Commun
+      ```
+
+      L'espace de noms est le contrat passé avec les utilisateurs : ce chemin ne changera plus. Le jour où
+      SRV-FIC01 est remplacé, on copie les données, on change la cible des dossiers, et aucun poste ni GPO
+      n'est modifié. Dans une PME, le DC peut être serveur d'espace de noms ; un second serveur (cible de
+      racine supplémentaire) rend l'espace disponible même si le DC est arrêté.
+    docs:
+      - title: Créer un espace de noms DFS
+        url: https://learn.microsoft.com/fr-fr/windows-server/storage/dfs-namespaces/create-a-dfs-namespace
+    checks:
+      - desc: \\durand.lan\Entreprise existe (Domain V2)
+        run: |
+          (Get-DfsnRoot -Path '\\durand.lan\Entreprise' -ErrorAction SilentlyContinue).Type -eq 'Domain V2'
+      - desc: Les dossiers Services et Commun pointent vers SRV-FIC01
+        run: |
+          [bool](Get-DfsnFolderTarget -Path '\\durand.lan\Entreprise\Services' -ErrorAction SilentlyContinue | Where-Object TargetPath -like '\\SRV-FIC01*\Services') -and [bool](Get-DfsnFolderTarget -Path '\\durand.lan\Entreprise\Commun' -ErrorAction SilentlyContinue | Where-Object TargetPath -like '\\SRV-FIC01*\Commun')
+    solution: |
+      Install-WindowsFeature FS-DFS-Namespace, RSAT-DFS-Mgmt-Con | Out-Null
+      New-Item C:\DFSRoots\Entreprise -ItemType Directory -Force | Out-Null
+      New-SmbShare -Name Entreprise -Path C:\DFSRoots\Entreprise -ReadAccess '*S-1-1-0' | Out-Null
+      New-DfsnRoot -Path \\durand.lan\Entreprise -TargetPath \\SRV-DC01\Entreprise -Type DomainV2 | Out-Null
+      New-DfsnFolder -Path \\durand.lan\Entreprise\Services -TargetPath \\SRV-FIC01\Services | Out-Null
+      New-DfsnFolder -Path \\durand.lan\Entreprise\Commun -TargetPath \\SRV-FIC01\Commun | Out-Null
+
+  - id: win-pme-lecteurs
+    title: Les lecteurs réseau par GPO
+    description: |
+      Crée la GPO `U - Lecteurs reseau`, liée à l'OU `Utilisateurs`, avec deux **préférences de lecteur** :
+      `S:` → `\\durand.lan\Entreprise\Services` (nom « Services ») et `P:` → `\\durand.lan\Entreprise\Commun`
+      (nom « Commun »), action **Mettre à jour**. Désactive la partie ordinateur de la GPO.
+    hint: 'Pas de cmdlet pour les lecteurs GPP : écris User\Preferences\Drives\Drives.xml dans le dossier SYSVOL de la GPO, ajoute [{00000000-0000-0000-0000-000000000000}{2EA1A81B-48E5-45E9-8BB7-A6E3AC170006}][{5794DAFD-BE60-433F-88A2-1A31939AC01F}{2EA1A81B-48E5-45E9-8BB7-A6E3AC170006}] à gPCUserExtensionNames et incrémente la version utilisateur (+65536)'
+    cours: |
+      La console GPMC (*Configuration utilisateur* › *Préférences* › *Paramètres Windows* › *Mappages de
+      lecteurs*) est le chemin normal. En PowerShell, on écrit le fichier de préférences et on déclare
+      l'extension côté client à l'annuaire :
+
+      ```powershell
+      $gpo = New-GPO -Name 'U - Lecteurs reseau'
+      $gpo | New-GPLink -Target 'OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan'
+      $dossier = "C:\Windows\SYSVOL\sysvol\durand.lan\Policies\{$($gpo.Id)}\User\Preferences\Drives"
+      New-Item $dossier -ItemType Directory -Force
+      # Drives.xml : un élément <Drive> par lecteur, avec <Properties action="U" path="..." letter="S" .../>
+      $dn = "CN={$($gpo.Id)},CN=Policies,CN=System,DC=durand,DC=lan"
+      Set-ADObject $dn -Replace @{ gPCUserExtensionNames = '[{00000000-...}{2EA1A81B-...}][{5794DAFD-...}{2EA1A81B-...}]' }
+      # puis versionNumber + 65536 dans l'annuaire et dans GPT.INI
+      ```
+
+      Sans l'extension déclarée dans `gPCUserExtensionNames`, le poste ignore le fichier ; sans changement
+      de version, il ne relit pas la GPO. Les préférences de lecteurs permettent aussi le **ciblage** par
+      groupe (un lecteur `R:` pour la direction seulement) sans multiplier les GPO.
+    docs:
+      - title: Configurer un élément de mappage de lecteur
+        url: https://learn.microsoft.com/fr-fr/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/cc770902(v=ws.11)
+    checks:
+      - desc: U - Lecteurs reseau est liée à l'OU Utilisateurs, partie ordinateur désactivée
+        run: |
+          $lien = (Get-GPInheritance -Target 'OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan').GpoLinks | Where-Object DisplayName -eq 'U - Lecteurs reseau'
+          [bool]$lien -and (Get-GPO -Name 'U - Lecteurs reseau').GpoStatus -eq 'ComputerSettingsDisabled'
+      - desc: Drives.xml contient S et P vers \\durand.lan\Entreprise
+        run: |
+          $g = Get-GPO -Name 'U - Lecteurs reseau'
+          [xml]$x = Get-Content "C:\Windows\SYSVOL\sysvol\durand.lan\Policies\{$($g.Id)}\User\Preferences\Drives\Drives.xml" -ErrorAction Stop
+          $p = $x.Drives.Drive.Properties
+          [bool]($p | Where-Object { $_.letter -eq 'S' -and $_.path -eq '\\durand.lan\Entreprise\Services' }) -and [bool]($p | Where-Object { $_.letter -eq 'P' -and $_.path -eq '\\durand.lan\Entreprise\Commun' })
+      - desc: L'extension des lecteurs est déclarée et la version utilisateur incrémentée
+        run: |
+          $g = Get-GPO -Name 'U - Lecteurs reseau'
+          $o = Get-ADObject "CN={$($g.Id)},CN=Policies,CN=System,DC=durand,DC=lan" -Properties gPCUserExtensionNames, versionNumber
+          $o.gPCUserExtensionNames -match '5794DAFD-BE60-433F-88A2-1A31939AC01F' -and $o.versionNumber -ge 65536
+    solution: |
+      $gpo = New-GPO -Name 'U - Lecteurs reseau'
+      $gpo | New-GPLink -Target 'OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan' | Out-Null
+      $racine = "C:\Windows\SYSVOL\sysvol\durand.lan\Policies\{$($gpo.Id)}"
+      New-Item "$racine\User\Preferences\Drives" -ItemType Directory -Force | Out-Null
+      $date = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+      $items = foreach ($l in @(@('S', 'Services'), @('P', 'Commun'))) {
+          "<Drive clsid=`"{935D1B74-9CB8-4e3c-9914-7DD559B7A417}`" name=`"$($l[0]):`" status=`"$($l[0]):`" image=`"2`" changed=`"$date`" uid=`"{$([guid]::NewGuid().ToString().ToUpper())}`"><Properties action=`"U`" thisDrive=`"NOCHANGE`" allDrives=`"NOCHANGE`" userName=`"`" path=`"\\durand.lan\Entreprise\$($l[1])`" label=`"$($l[1])`" persistent=`"1`" useLetter=`"1`" letter=`"$($l[0])`"/></Drive>"
+      }
+      "<?xml version=`"1.0`" encoding=`"utf-8`"?><Drives clsid=`"{8FDDCC1A-0C3C-43cd-A6B4-71A6DF20DA8C}`">$($items -join '')</Drives>" | Set-Content "$racine\User\Preferences\Drives\Drives.xml" -Encoding UTF8
+      $dn = "CN={$($gpo.Id)},CN=Policies,CN=System,DC=durand,DC=lan"
+      $v = (Get-ADObject $dn -Properties versionNumber).versionNumber + 65536
+      Set-ADObject $dn -Replace @{ versionNumber = $v; gPCUserExtensionNames = '[{00000000-0000-0000-0000-000000000000}{2EA1A81B-48E5-45E9-8BB7-A6E3AC170006}][{5794DAFD-BE60-433F-88A2-1A31939AC01F}{2EA1A81B-48E5-45E9-8BB7-A6E3AC170006}]' }
+      Set-Content "$racine\GPT.INI" "[General]`r`nVersion=$v" -Encoding Ascii
+      (Get-GPO -Name 'U - Lecteurs reseau').GpoStatus = 'ComputerSettingsDisabled'
+
+  - id: win-pme-mdp
+    title: Mots de passe - le domaine et la direction
+    description: |
+      Dans la **Default Domain Policy**, impose une longueur minimale de **12** caractères. Pour la direction
+      (`GG_Direction`), crée en plus la stratégie affinée **`PSO-Direction`** (priorité 10) : **16** caractères
+      minimum, complexité, historique de 24, verrouillage après **5** échecs pendant 30 minutes.
+    hint: GptTmpl.inf de {31B2F340-016D-11D2-945F-00C04FB984F9} (MinimumPasswordLength = 12) + version ; New-ADFineGrainedPasswordPolicy PSO-Direction -Precedence 10 ... ; Add-ADFineGrainedPasswordPolicySubject PSO-Direction -Subjects GG_Direction
+    cours: |
+      ```powershell
+      New-ADFineGrainedPasswordPolicy -Name PSO-Direction -Precedence 10 -MinPasswordLength 16 -ComplexityEnabled $true `
+          -PasswordHistoryCount 24 -LockoutThreshold 5 -LockoutDuration 00:30:00 -LockoutObservationWindow 00:30:00 `
+          -MaxPasswordAge 365.00:00:00 -MinPasswordAge 1.00:00:00
+      Add-ADFineGrainedPasswordPolicySubject PSO-Direction -Subjects GG_Direction
+      Get-ADUserResultantPasswordPolicy hgirard
+      ```
+
+      La stratégie du **domaine** se règle uniquement dans la Default Domain Policy (fichier `GptTmpl.inf`,
+      section `[System Access]`, puis incrément de version et `gpupdate` sur le DC). Les **PSO** (objets de
+      paramètres de mot de passe) s'appliquent à des **groupes globaux** ou des utilisateurs, et remplacent
+      entièrement la stratégie du domaine pour eux ; en cas de plusieurs PSO, la plus petite valeur de
+      priorité gagne. Les comptes à privilèges et les comptes de service sont les candidats naturels.
+    docs:
+      - title: Stratégies de mot de passe affinées
+        url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/get-started/adac/fine-grained-password-policies
+      - title: New-ADFineGrainedPasswordPolicy
+        url: https://learn.microsoft.com/fr-fr/powershell/module/activedirectory/new-adfinegrainedpasswordpolicy
+    checks:
+      - desc: La Default Domain Policy impose 12 caractères minimum
+        run: |
+          $inf = 'C:\Windows\SYSVOL\sysvol\durand.lan\Policies\{31B2F340-016D-11D2-945F-00C04FB984F9}\MACHINE\Microsoft\Windows NT\SecEdit\GptTmpl.inf'
+          ((Get-Content $inf -Raw) -match 'MinimumPasswordLength\s*=\s*12\b') -and (Get-ADDefaultDomainPasswordPolicy).MinPasswordLength -eq 12
+      - desc: PSO-Direction s'applique à hgirard avec 16 caractères et 5 échecs
+        run: |
+          $p = Get-ADUserResultantPasswordPolicy hgirard
+          [bool]$p -and $p.Name -eq 'PSO-Direction' -and $p.MinPasswordLength -eq 16 -and $p.LockoutThreshold -eq 5 -and $p.Precedence -eq 10
+    solution: |
+      $id = '{31B2F340-016D-11D2-945F-00C04FB984F9}'
+      $dossier = "C:\Windows\SYSVOL\sysvol\durand.lan\Policies\$id"
+      $inf = "$dossier\MACHINE\Microsoft\Windows NT\SecEdit\GptTmpl.inf"
+      (Get-Content $inf) -replace '^MinimumPasswordLength\s*=.*', 'MinimumPasswordLength = 12' | Set-Content $inf -Encoding Unicode
+      $dn = "CN=$id,CN=Policies,CN=System,DC=durand,DC=lan"
+      $v = (Get-ADObject $dn -Properties versionNumber).versionNumber + 1
+      Set-ADObject $dn -Replace @{ versionNumber = $v }
+      (Get-Content "$dossier\GPT.INI") -replace 'Version=\d+', "Version=$v" | Set-Content "$dossier\GPT.INI" -Encoding Ascii
+      gpupdate /target:computer /force | Out-Null
+      New-ADFineGrainedPasswordPolicy -Name PSO-Direction -Precedence 10 -MinPasswordLength 16 -ComplexityEnabled $true -PasswordHistoryCount 24 -LockoutThreshold 5 -LockoutDuration 00:30:00 -LockoutObservationWindow 00:30:00 -MaxPasswordAge 365.00:00:00 -MinPasswordAge 1.00:00:00
+      Add-ADFineGrainedPasswordPolicySubject PSO-Direction -Subjects GG_Direction
+
+  - id: win-pme-admins-locaux
+    title: Le service informatique administre les postes
+    description: |
+      Crée la GPO `C - Admins locaux`, liée à l'OU `Postes`, qui ajoute **`GG_Informatique`** au groupe local
+      **Administrateurs** des postes (groupes restreints, mode « membre de » : les autres membres sont
+      conservés). Applique-la sur PC01.
+    hint: 'GptTmpl.inf de la GPO, section [Group Membership] : *<SID de GG_Informatique>__Memberof = *S-1-5-32-544 ; extension sécurité {827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B} dans gPCMachineExtensionNames ; version +1'
+    cours: |
+      ```powershell
+      $gpo = New-GPO -Name 'C - Admins locaux'
+      $gpo | New-GPLink -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+      $sid = (Get-ADGroup GG_Informatique).SID.Value
+      $inf = "C:\Windows\SYSVOL\sysvol\durand.lan\Policies\{$($gpo.Id)}\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf"
+      # [Unicode] Unicode=yes / [Version] signature="$CHICAGO$" Revision=1 / [Group Membership]
+      # *S-1-5-21-...__Memberof = *S-1-5-32-544      et      *S-1-5-21-...__Members =
+      ```
+
+      Les **groupes restreints** ont deux modes : « **Membres** » (la liste remplace entièrement le groupe
+      local, dangereux) et « **Membre de** » (le groupe du domaine est ajouté au groupe local, le reste est
+      conservé). On désigne le groupe Administrateurs par son SID `S-1-5-32-544`, indépendant de la langue.
+      La préférence *Utilisateurs et groupes locaux* fait la même chose avec plus de souplesse. Ainsi, les
+      techniciens administrent les postes **sans** être administrateurs du domaine.
+    docs:
+      - title: Groupes restreints
+        url: https://learn.microsoft.com/fr-fr/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/dd392249(v=ws.10)
+    checks:
+      - desc: La GPO C - Admins locaux est liée à Postes et contient la règle « membre de » pour GG_Informatique
+        run: |
+          $g = Get-GPO -Name 'C - Admins locaux' -ErrorAction Stop
+          $sid = (Get-ADGroup GG_Informatique).SID.Value
+          $inf = Get-Content "C:\Windows\SYSVOL\sysvol\durand.lan\Policies\{$($g.Id)}\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf" -Raw
+          $lien = (Get-GPInheritance -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan').GpoLinks | Where-Object DisplayName -eq 'C - Admins locaux'
+          [bool]$lien -and $inf -match ([regex]::Escape("*$sid") + '__Memberof\s*=\s*\*S-1-5-32-544')
+      - desc: GG_Informatique est administrateur local de PC01
+        machine: pc01
+        run: |
+          [bool](Get-LocalGroupMember -SID S-1-5-32-544 | Where-Object Name -like '*\GG_Informatique')
+    solution: |
+      $gpo = New-GPO -Name 'C - Admins locaux'
+      $gpo | New-GPLink -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' | Out-Null
+      $sid = (Get-ADGroup GG_Informatique).SID.Value
+      $racine = "C:\Windows\SYSVOL\sysvol\durand.lan\Policies\{$($gpo.Id)}"
+      New-Item "$racine\Machine\Microsoft\Windows NT\SecEdit" -ItemType Directory -Force | Out-Null
+      "[Unicode]`r`nUnicode=yes`r`n[Version]`r`nsignature=`"`$CHICAGO`$`"`r`nRevision=1`r`n[Group Membership]`r`n*$($sid)__Memberof = *S-1-5-32-544`r`n*$($sid)__Members =" | Set-Content "$racine\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf" -Encoding Unicode
+      $dn = "CN={$($gpo.Id)},CN=Policies,CN=System,DC=durand,DC=lan"
+      $v = (Get-ADObject $dn -Properties versionNumber).versionNumber + 1
+      Set-ADObject $dn -Replace @{ versionNumber = $v; gPCMachineExtensionNames = '[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]' }
+      Set-Content "$racine\GPT.INI" "[General]`r`nVersion=$v" -Encoding Ascii
+      Invoke-Command -ComputerName PC01 { gpupdate /target:computer /force } | Out-Null
+
+  - id: win-pme-sauvegarde
+    title: La sauvegarde des données
+    description: |
+      Sur SRV-DC01, crée le partage `Sauvegardes` (`C:\Sauvegardes`, contrôle total aux Admins du domaine).
+      Sur SRV-FIC01, installe **Sauvegarde Windows Server** et planifie une sauvegarde **quotidienne à 21:00**
+      de `C:\Donnees` vers `\\SRV-DC01\Sauvegardes` (compte `DURAND\vagrant`). Lance-la une première fois :
+      elle doit réussir.
+    hint: Invoke-Command -ComputerName SRV-FIC01 { Install-WindowsFeature Windows-Server-Backup ; $p = New-WBPolicy ; Add-WBFileSpec ; Add-WBBackupTarget (New-WBBackupTarget -NetworkPath ... -Credential ...) ; Set-WBSchedule 21:00 ; Set-WBPolicy ; Start-WBBackup -Policy (Get-WBPolicy) }
+    cours: |
+      ```powershell
+      New-Item C:\Sauvegardes -ItemType Directory
+      New-SmbShare -Name Sauvegardes -Path C:\Sauvegardes -FullAccess 'DURAND\Domain Admins'
+      Invoke-Command -ComputerName SRV-FIC01 {
+          Install-WindowsFeature Windows-Server-Backup
+          $cred = New-Object PSCredential 'DURAND\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force)
+          $p = New-WBPolicy
+          Add-WBFileSpec -Policy $p -FileSpec (New-WBFileSpec -FileSpec C:\Donnees)
+          Add-WBBackupTarget -Policy $p -Target (New-WBBackupTarget -NetworkPath \\SRV-DC01\Sauvegardes -Credential $cred)
+          Set-WBSchedule -Policy $p -Schedule 21:00
+          Set-WBPolicy -Policy $p -Force
+          Start-WBBackup -Policy (Get-WBPolicy) }
+      ```
+
+      Une sauvegarde planifiée vers un dossier réseau ne conserve **qu'une version** (chaque sauvegarde
+      remplace la précédente) : en production, on préfère un disque dédié ou une solution avec rétention,
+      et une copie **hors site** (règle 3-2-1). La sauvegarde sur le DC ne sert ici que le lab : un serveur
+      de sauvegarde dédié est la bonne pratique. Et une sauvegarde ne vaut que si l'on a testé une
+      **restauration**.
+    docs:
+      - title: Module WindowsServerBackup (PowerShell)
+        url: https://learn.microsoft.com/fr-fr/powershell/module/windowsserverbackup/
+    checks:
+      - desc: SRV-FIC01 a une sauvegarde planifiée à 21:00 de C:\Donnees
+        machine: fic01
+        run: |
+          $p = Get-WBPolicy
+          [bool]$p -and [bool]((Get-WBSchedule -Policy $p) | Where-Object { $_.TimeOfDay -eq [TimeSpan]'21:00:00' }) -and [bool]((Get-WBFileSpec -Policy $p) | Where-Object { ($_ | Format-List * | Out-String) -match 'Donnees' })
+      - desc: La dernière sauvegarde a réussi aujourd'hui
+        machine: fic01
+        run: |
+          (Get-WBSummary).LastSuccessfulBackupTime -gt (Get-Date).Date
+      - desc: La sauvegarde est sur \\SRV-DC01\Sauvegardes
+        run: |
+          Test-Path C:\Sauvegardes\WindowsImageBackup
+    solution: |
+      New-Item C:\Sauvegardes -ItemType Directory -Force | Out-Null
+      $da = (Get-ADGroup -Identity "$((Get-ADDomain).DomainSID)-512").Name
+      New-SmbShare -Name Sauvegardes -Path C:\Sauvegardes -FullAccess "DURAND\$da" | Out-Null
+      Invoke-Command -ComputerName SRV-FIC01 {
+          Install-WindowsFeature Windows-Server-Backup | Out-Null
+          $cred = New-Object PSCredential 'DURAND\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force)
+          $p = New-WBPolicy
+          Add-WBFileSpec -Policy $p -FileSpec (New-WBFileSpec -FileSpec C:\Donnees)
+          Add-WBBackupTarget -Policy $p -Target (New-WBBackupTarget -NetworkPath \\SRV-DC01\Sauvegardes -Credential $cred)
+          Set-WBSchedule -Policy $p -Schedule 21:00 | Out-Null
+          Set-WBPolicy -Policy $p -Force
+          Start-WBBackup -Policy (Get-WBPolicy)
+      } | Out-Null
+
+  - id: win-pme-rapport
+    title: Un rapport hebdomadaire des comptes
+    description: |
+      Écris le script `C:\Admin\rapport.ps1` qui exporte dans `C:\Admin\rapport-comptes.csv` (séparateur `;`)
+      tous les utilisateurs de l'OU `Ateliers Durand` avec `SamAccountName`, `Department`, `Enabled`,
+      `LastLogonDate` et `PasswordLastSet`. Planifie-le dans la tâche **`TDM - Rapport des comptes`**, chaque
+      **lundi à 07:00**, sous le compte **SYSTEM**, et lance-la une fois.
+    hint: Register-ScheduledTask -TaskName 'TDM - Rapport des comptes' -Action (New-ScheduledTaskAction powershell.exe '-NoProfile -ExecutionPolicy Bypass -File C:\Admin\rapport.ps1') -Trigger (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 07:00) -User SYSTEM ; Start-ScheduledTask
+    cours: |
+      ```powershell
+      @'
+      Get-ADUser -SearchBase 'OU=Ateliers Durand,DC=durand,DC=lan' -Filter * -Properties Department, LastLogonDate, PasswordLastSet |
+          Select-Object SamAccountName, Department, Enabled, LastLogonDate, PasswordLastSet |
+          Export-Csv C:\Admin\rapport-comptes.csv -Delimiter ';' -NoTypeInformation -Encoding UTF8
+      '@ | Set-Content C:\Admin\rapport.ps1 -Encoding UTF8
+      $action = New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Admin\rapport.ps1'
+      $declencheur = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 07:00
+      Register-ScheduledTask -TaskName 'TDM - Rapport des comptes' -Action $action -Trigger $declencheur -User SYSTEM -RunLevel Highest
+      Start-ScheduledTask -TaskName 'TDM - Rapport des comptes'
+      ```
+
+      Sur un contrôleur de domaine, une tâche sous SYSTEM interroge l'annuaire avec le compte ordinateur du
+      DC : pas de mot de passe à stocker. Ailleurs, on utiliserait un **compte de service géré** (gMSA). Ce
+      rapport repère les comptes jamais utilisés, inactifs (départs non signalés) ou dont le mot de passe
+      n'a jamais changé. Prochaine étape : l'envoyer par courriel ou le déposer dans un partage du service.
+    docs:
+      - title: Register-ScheduledTask
+        url: https://learn.microsoft.com/fr-fr/powershell/module/scheduledtasks/register-scheduledtask
+    checks:
+      - desc: La tâche tourne chaque lundi à 07:00 sous SYSTEM et lance rapport.ps1
+        run: |
+          $t = Get-ScheduledTask -TaskName 'TDM - Rapport des comptes' -ErrorAction Stop
+          $d = $t.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskWeeklyTrigger' }
+          [bool]$d -and ($d.DaysOfWeek -band 2) -and ([datetime]$d.StartBoundary).TimeOfDay -eq [TimeSpan]'07:00:00' -and $t.Principal.UserId -match 'SYSTEM' -and $t.Actions.Arguments -match 'rapport\.ps1'
+      - desc: Le rapport existe et liste les salariés
+        run: |
+          $l = Import-Csv C:\Admin\rapport-comptes.csv -Delimiter ';' -ErrorAction Stop
+          ($l.SamAccountName -contains 'hgirard') -and ($l[0].PSObject.Properties.Name -contains 'PasswordLastSet')
+    solution: |
+      @'
+      Get-ADUser -SearchBase 'OU=Ateliers Durand,DC=durand,DC=lan' -Filter * -Properties Department, LastLogonDate, PasswordLastSet | Select-Object SamAccountName, Department, Enabled, LastLogonDate, PasswordLastSet | Export-Csv C:\Admin\rapport-comptes.csv -Delimiter ';' -NoTypeInformation -Encoding UTF8
+      '@ | Set-Content C:\Admin\rapport.ps1 -Encoding UTF8
+      $action = New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Admin\rapport.ps1'
+      Register-ScheduledTask -TaskName 'TDM - Rapport des comptes' -Action $action -Trigger (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 07:00) -User SYSTEM -RunLevel Highest | Out-Null
+      Start-ScheduledTask -TaskName 'TDM - Rapport des comptes'
+      Start-Sleep 20

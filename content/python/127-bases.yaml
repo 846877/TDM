@@ -1,0 +1,139 @@
+title: Conversion de bases
+level: intermediaire
+order: 27
+tags: [algorithmes, chaînes, input]
+summary: Passer d'une base à l'autre, de 2 à 36.
+mode: stdio
+description: |
+  Chaque ligne d'entrée contient `nombre base_source base_cible` (bases entre 2 et 36). Pour
+  chaque ligne, affiche le nombre converti dans la base cible, en **majuscules**, sans préfixe.
+  Le nombre peut être négatif.
+
+  Si une base est hors de `[2, 36]` ou si le nombre n'est pas valide dans sa base, affiche
+  `Erreur` pour cette ligne et continue. Les lignes vides sont ignorées.
+
+  Entrée :
+
+  ```
+  255 10 16
+  ff 16 2
+  -101 2 10
+  19 8 10
+  ```
+
+  Sortie :
+
+  ```
+  FF
+  11111111
+  -5
+  Erreur
+  ```
+
+  `int(texte, base)` lit un nombre dans n'importe quelle base. Pour écrire dans la base cible,
+  c'est à toi de jouer : divisions successives et la chaîne
+  `"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"`.
+starter: |
+  import sys
+
+  for ligne in sys.stdin:
+      nombre, source, cible = ligne.split()
+cases:
+  - name: "Exemple de l'énoncé"
+    input: "255 10 16\nff 16 2\n-101 2 10\n19 8 10\n"
+    output: |
+      FF
+      11111111
+      -5
+      Erreur
+  - name: "Zéro et base 36"
+    input: "0 10 2\n35 10 36\nZZ 36 10\n"
+    output: |
+      0
+      Z
+      1295
+  - name: "Bases invalides"
+    input: "10 1 10\n10 10 37\n42 10 3\n"
+    output: |
+      Erreur
+      Erreur
+      1120
+  - name: "Lignes vides et grands nombres"
+    input: "\n18446744073709551615 10 16\n\n"
+    output: "FFFFFFFFFFFFFFFF"
+solution: |
+  import sys
+
+  CHIFFRES = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+  def en_base(n, base):
+      if n == 0:
+          return "0"
+      signe = "-" if n < 0 else ""
+      n = abs(n)
+      chiffres = []
+      while n > 0:
+          n, reste = divmod(n, base)
+          chiffres.append(CHIFFRES[reste])
+      return signe + "".join(reversed(chiffres))
+
+
+  for ligne in sys.stdin:
+      if not ligne.strip():
+          continue
+      nombre, source, cible = ligne.split()
+      source, cible = int(source), int(cible)
+      if not (2 <= source <= 36 and 2 <= cible <= 36):
+          print("Erreur")
+          continue
+      try:
+          valeur = int(nombre, source)
+      except ValueError:
+          print("Erreur")
+          continue
+      print(en_base(valeur, cible))
+cours: |
+  ## Les bases de numération
+
+  Un nombre en base `b` s'écrit avec des chiffres de 0 à b − 1 ; chaque position vaut une
+  puissance de `b`. `1011` en base 2 vaut 1×8 + 0×4 + 1×2 + 1×1 = 11. Au-delà de 10, on
+  utilise les lettres : en hexadécimal (base 16), A = 10 … F = 15. En réseau, tu croises le
+  binaire (masques), l'hexadécimal (MAC, IPv6) et parfois l'octal (droits Unix `chmod 755`).
+
+  ## Lire : `int(texte, base)`
+
+  ```python
+  int("ff", 16)      # 255
+  int("1011", 2)     # 11
+  int("-z", 36)      # -35
+  int("19", 8)       # ValueError : 9 n'existe pas en octal
+  ```
+
+  `int` accepte majuscules et minuscules, un signe, et des espaces autour. Une base hors de
+  2..36 lève aussi `ValueError` : un seul `try / except ValueError` gère les deux erreurs.
+
+  ## Écrire : divisions successives
+
+  Python fournit `bin()`, `oct()`, `hex()` (avec préfixes `0b`, `0o`, `0x`) et
+  `format(n, "b")`, mais pas de conversion vers une base quelconque. L'algorithme :
+
+  1. le reste de la division par `b` donne le **dernier** chiffre ;
+  2. on recommence avec le quotient, jusqu'à obtenir 0 ;
+  3. les chiffres sont obtenus de droite à gauche : il faut les **inverser** à la fin.
+
+  Une chaîne `"0123456789ABC..."` indexée par le reste donne le symbole de chaque chiffre.
+
+  ## Cas particuliers
+
+  - **Zéro** : la boucle « tant que n > 0 » ne fait aucun tour ; il faut quand même
+    afficher `0`.
+  - **Négatifs** : convertis la valeur absolue et rajoute le signe `-` devant.
+  - **Robustesse** : une ligne invalide ne doit pas arrêter le programme. Isoler le
+    traitement d'une ligne dans une fonction, appelée dans un `try`, rend la boucle
+    principale très simple.
+docs:
+  - title: Documentation Python — int() (paramètre base)
+    url: https://docs.python.org/fr/3/library/functions.html#int
+  - title: Documentation Python — bin(), hex(), oct()
+    url: https://docs.python.org/fr/3/library/functions.html#bin

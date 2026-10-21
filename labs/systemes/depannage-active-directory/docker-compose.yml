@@ -1,0 +1,43 @@
+# Domaine DURAND.LAN en panne : dc1 se provisionne au premier démarrage (~1 min), puis srv-fichiers
+# et poste01 se joignent automatiquement au domaine (~1 min de plus). Les pannes sont injectées
+# par dc/role.sh et membre/role.sh.
+x-membre: &membre
+  build: {context: ., dockerfile: membre/Dockerfile}
+  domainname: durand.lan
+  dns: [10.62.0.10]
+  volumes: [cles:/lab-ssh]
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    dns: [10.62.0.10]
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.62.0.5}
+  dc1:
+    build: {context: ., dockerfile: dc/Dockerfile}
+    hostname: dc1
+    # privileged : Samba AD a besoin des attributs étendus « security.* » (ACL NT du sysvol).
+    privileged: true
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.62.0.10}
+  srv-fichiers:
+    <<: *membre
+    hostname: srv-fichiers
+    environment: {ROLE: fichiers}
+    networks:
+      lan: {ipv4_address: 10.62.0.20}
+  poste01:
+    <<: *membre
+    hostname: poste01
+    environment: {ROLE: poste}
+    networks:
+      lan: {ipv4_address: 10.62.0.30}
+volumes:
+  cles:
+networks:
+  lan:
+    internal: true
+    ipam:
+      config: [{subnet: 10.62.0.0/24, ip_range: 10.62.0.128/26}]

@@ -1,0 +1,177 @@
+title: Valider et convertir une adresse IPv4
+level: intermediaire
+order: 31
+tags: [réseau, chaînes, conversions, bits]
+summary: Analyser une IPv4 à la main et la convertir en entier 32 bits.
+description: |
+  Sans utiliser le module `ipaddress` :
+
+  1. `est_ipv4(texte)` renvoie `True` si le texte est une adresse IPv4 valide : exactement
+     4 nombres décimaux séparés par des points, chacun entre 0 et 255, **sans zéro en tête**
+     (`"01"` est refusé, mais `"0"` est accepté), sans espace ni signe.
+  2. `ip_vers_entier(ip)` convertit une adresse valide en entier sur 32 bits
+     (`a.b.c.d` → `a×256³ + b×256² + c×256 + d`). Lève `ValueError` si l'adresse est invalide.
+  3. `entier_vers_ip(n)` fait l'inverse (`0 ≤ n < 2³²`, sinon `ValueError`).
+  4. `classe_privee(ip)` renvoie `True` si l'adresse appartient à une plage privée RFC 1918 :
+     `10.0.0.0/8`, `172.16.0.0/12` (172.16.x.x à 172.31.x.x) ou `192.168.0.0/16`.
+
+  ```python
+  est_ipv4("192.168.1.10")       # True
+  est_ipv4("256.1.1.1")          # False
+  est_ipv4("10.0.0.01")          # False
+  ip_vers_entier("10.0.0.1")     # 167772161
+  entier_vers_ip(3232235777)     # "192.168.1.1"
+  classe_privee("172.20.5.4")    # True
+  ```
+starter: |
+  def est_ipv4(texte):
+      pass
+
+
+  def ip_vers_entier(ip):
+      pass
+
+
+  def entier_vers_ip(n):
+      pass
+
+
+  def classe_privee(ip):
+      pass
+tests: |
+  def test_valides():
+      "Adresses valides"
+      for ip in ["192.168.1.10", "0.0.0.0", "255.255.255.255", "10.0.0.1", "8.8.8.8"]:
+          assert solution.est_ipv4(ip) is True, f"{ip} devrait être valide"
+
+  def test_invalides():
+      "Adresses invalides"
+      for ip in ["256.1.1.1", "1.2.3", "1.2.3.4.5", "10.0.0.01", "a.b.c.d", "1..2.3",
+                 "", " 1.2.3.4", "1.2.3.4 ", "-1.2.3.4", "+1.2.3.4", "1.2.3.4.", "١.2.3.4"]:
+          assert solution.est_ipv4(ip) is False, f"{ip!r} devrait être invalide"
+
+  def test_vers_entier():
+      "ip_vers_entier"
+      assert solution.ip_vers_entier("10.0.0.1") == 167772161
+      assert solution.ip_vers_entier("0.0.0.0") == 0
+      assert solution.ip_vers_entier("255.255.255.255") == 2 ** 32 - 1
+
+  def test_vers_entier_invalide():
+      "ip_vers_entier refuse une adresse invalide"
+      try:
+          solution.ip_vers_entier("300.0.0.1")
+      except ValueError:
+          return
+      raise AssertionError("ValueError attendue")
+
+  def test_vers_ip():
+      "entier_vers_ip"
+      assert solution.entier_vers_ip(3232235777) == "192.168.1.1"
+      assert solution.entier_vers_ip(0) == "0.0.0.0"
+      for n in [-1, 2 ** 32]:
+          try:
+              solution.entier_vers_ip(n)
+          except ValueError:
+              continue
+          raise AssertionError(f"entier_vers_ip({n}) devrait lever ValueError")
+
+  def test_aller_retour():
+      "Aller-retour"
+      for ip in ["1.2.3.4", "172.31.255.254", "100.64.0.1"]:
+          assert solution.entier_vers_ip(solution.ip_vers_entier(ip)) == ip
+
+  def test_privee():
+      "classe_privee"
+      vrais = ["10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.0.1"]
+      faux = ["172.15.0.1", "172.32.0.1", "192.169.0.1", "8.8.8.8", "11.0.0.1"]
+      for ip in vrais:
+          assert solution.classe_privee(ip) is True, f"{ip} est privée"
+      for ip in faux:
+          assert solution.classe_privee(ip) is False, f"{ip} n'est pas privée"
+solution: |
+  def est_ipv4(texte):
+      parties = texte.split(".")
+      if len(parties) != 4:
+          return False
+      for p in parties:
+          if not p or not p.isascii() or not p.isdigit():
+              return False
+          if len(p) > 1 and p[0] == "0":
+              return False
+          if int(p) > 255:
+              return False
+      return True
+
+
+  def ip_vers_entier(ip):
+      if not est_ipv4(ip):
+          raise ValueError(f"adresse invalide : {ip!r}")
+      n = 0
+      for p in ip.split("."):
+          n = n * 256 + int(p)
+      return n
+
+
+  def entier_vers_ip(n):
+      if not 0 <= n < 2 ** 32:
+          raise ValueError("hors de la plage IPv4")
+      octets = []
+      for _ in range(4):
+          octets.append(str(n % 256))
+          n //= 256
+      return ".".join(reversed(octets))
+
+
+  def classe_privee(ip):
+      a, b, _, _ = (int(p) for p in ip.split("."))
+      return a == 10 or (a == 172 and 16 <= b <= 31) or (a == 192 and b == 168)
+cours: |
+  ## Une adresse IPv4, c'est un entier de 32 bits
+
+  La notation `192.168.1.10` (« décimale pointée ») n'est qu'une façon lisible d'écrire
+  **4 octets** : chaque nombre est un octet, entre 0 et 255. En mémoire et sur le réseau,
+  l'adresse est un seul entier de 32 bits :
+
+  ```
+  192.168.1.10  →  11000000.10101000.00000001.00001010
+                →  192×256³ + 168×256² + 1×256 + 10 = 3232235786
+  ```
+
+  Travailler avec l'entier rend les calculs faciles : comparer deux adresses, savoir si une
+  adresse est dans une plage, passer à l'adresse suivante (+1).
+
+  ## Valider soigneusement
+
+  Une validation robuste vérifie chaque contrainte : le nombre de parties après `split(".")`,
+  que chaque partie est non vide et ne contient que des chiffres, la plage 0–255, et
+  l'absence de zéro non significatif. Ce dernier point n'est pas un détail : certaines
+  bibliothèques interprétaient `010` comme de l'**octal** (8), ce qui a causé des failles de
+  sécurité (contournements de filtres d'adresses).
+
+  **Piège** : `str.isdigit()` accepte aussi des chiffres non latins (`"١"`, chiffre arabe) et
+  des exposants (`"²"`). Combine-le avec `str.isascii()` ou compare à `"0123456789"`.
+
+  ## Conversion par base 256
+
+  C'est le même algorithme que pour la base 10, avec 256 à la place de 10 :
+
+  - vers l'entier : pour chaque octet, `n = n * 256 + octet` (schéma de Horner) ;
+  - vers le texte : `n % 256` donne le **dernier** octet, `n // 256` retire cet octet ; on
+    répète 4 fois puis on inverse l'ordre.
+
+  Avec les opérateurs de bits, c'est encore plus naturel : `n << 8` multiplie par 256,
+  `n >> 8` divise par 256 et `n & 0xFF` garde l'octet de poids faible.
+
+  ## Les plages privées
+
+  La RFC 1918 réserve trois plages non routées sur Internet : `10.0.0.0/8`,
+  `172.16.0.0/12` et `192.168.0.0/16`. Le `/12` est le piège classique : il couvre de
+  172.16 à 172.31, pas tout 172.x. D'autres plages spéciales existent : `127.0.0.0/8`
+  (boucle locale), `169.254.0.0/16` (APIPA), `100.64.0.0/10` (CGNAT).
+
+  En production, on utilise le module `ipaddress`, que tu verras au niveau avancé.
+docs:
+  - title: Module ipaddress (pour la vraie vie)
+    url: https://docs.python.org/fr/3/library/ipaddress.html
+  - title: RFC 1918 — adresses privées
+    url: https://www.rfc-editor.org/rfc/rfc1918

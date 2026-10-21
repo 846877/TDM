@@ -1,0 +1,106 @@
+title: Recherche dichotomique
+level: avance
+order: 8
+tags: [algorithmes, complexité]
+summary: Chercher en O(log n).
+description: |
+  Écris `recherche_binaire(liste_triee, cible)` qui renvoie l'indice de `cible` dans la liste triée,
+  ou `-1` si elle n'y est pas. Ta fonction doit être en **O(log n)** : la moulinette compte les
+  accès à la liste.
+
+  Interdit : `in`, `.index()`, le module `bisect`.
+starter: |
+  def recherche_binaire(liste_triee, cible):
+      pass
+tests: |
+  class ListeEspion(list):
+      def __init__(self, *a):
+          super().__init__(*a)
+          self.acces = 0
+      def __getitem__(self, i):
+          self.acces += 1
+          return super().__getitem__(i)
+
+  def test_trouve():
+      "Élément présent"
+      assert solution.recherche_binaire([1, 3, 5, 7, 9], 7) == 3
+
+  def test_absent():
+      "Élément absent"
+      assert solution.recherche_binaire([1, 3, 5, 7, 9], 4) == -1
+
+  def test_bords():
+      "Premier, dernier, liste vide"
+      assert solution.recherche_binaire([1, 2, 3], 1) == 0
+      assert solution.recherche_binaire([1, 2, 3], 3) == 2
+      assert solution.recherche_binaire([], 3) == -1
+
+  def test_logarithmique():
+      "Au plus ~40 accès sur un million d'éléments"
+      liste = ListeEspion(range(0, 2_000_000, 2))
+      assert solution.recherche_binaire(liste, 1_234_566) == 617_283
+      assert liste.acces <= 40, f"{liste.acces} accès : ce n'est pas une recherche dichotomique"
+solution: |
+  def recherche_binaire(liste_triee, cible):
+      bas, haut = 0, len(liste_triee) - 1
+      while bas <= haut:
+          milieu = (bas + haut) // 2
+          valeur = liste_triee[milieu]
+          if valeur == cible:
+              return milieu
+          if valeur < cible:
+              bas = milieu + 1
+          else:
+              haut = milieu - 1
+      return -1
+cours: |
+  ## L'idée
+
+  Dans une liste **triée**, on regarde l'élément du milieu :
+
+  - s'il est égal à la cible, c'est gagné ;
+  - s'il est plus petit, la cible ne peut être que dans la moitié droite ;
+  - s'il est plus grand, dans la moitié gauche.
+
+  À chaque étape, on élimine la moitié des candidats. C'est le jeu du « plus ou moins »
+  joué intelligemment, ou la façon dont on cherche un mot dans un dictionnaire papier.
+
+  ## Complexité
+
+  Pour n éléments, il faut au plus ⌈log₂(n + 1)⌉ comparaisons : 20 pour un million, 30
+  pour un milliard. La recherche linéaire (`in`, `index`) en fait jusqu'à n.
+
+  ## Les bornes : là où tout se joue
+
+  On maintient un intervalle `[gauche, droite]` qui contient la cible si elle existe.
+
+  ```python
+  gauche, droite = 0, len(liste) - 1
+  while gauche <= droite:
+      milieu = (gauche + droite) // 2
+      ...
+  ```
+
+  Points d'attention :
+
+  - la condition de boucle (`<=` avec une borne droite **incluse**) ;
+  - après comparaison, exclure le milieu (`milieu + 1` ou `milieu - 1`), sinon la boucle
+    peut ne jamais se terminer quand l'intervalle a deux éléments ;
+  - la liste vide doit renvoyer `-1` sans erreur.
+
+  Ces erreurs « à un près » sont si courantes qu'une étude célèbre a montré que la plupart
+  des programmeurs professionnels n'écrivaient pas une dichotomie correcte du premier coup.
+  Teste : cible au début, à la fin, absente (plus petite que tout, plus grande que tout,
+  entre deux valeurs).
+
+  ## En pratique
+
+  Le module `bisect` fournit `bisect_left` / `bisect_right` (position d'insertion) et
+  `insort` (insertion en gardant la liste triée). La dichotomie s'applique aussi à des
+  problèmes sans liste : chercher la plus petite valeur qui vérifie une condition monotone
+  (par exemple, `git bisect` cherche le commit qui a introduit un bug).
+docs:
+  - title: Module bisect
+    url: https://docs.python.org/fr/3/library/bisect.html
+  - title: Wikipédia — Recherche dichotomique
+    url: https://fr.wikipedia.org/wiki/Recherche_dichotomique

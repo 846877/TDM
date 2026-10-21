@@ -1,0 +1,89 @@
+title: Anagrammes
+level: intermediaire
+order: 5
+tags: [chaînes, tri]
+summary: Comparer deux mots lettre par lettre.
+description: |
+  Écris `sont_anagrammes(a, b)` qui renvoie `True` si les deux mots utilisent exactement les mêmes lettres
+  (casse et espaces ignorés).
+
+  ```python
+  sont_anagrammes("Chien", "niche")      # True
+  sont_anagrammes("Marie", "aimer")      # True
+  sont_anagrammes("Python", "typhoon")   # False
+  ```
+starter: |
+  def sont_anagrammes(a, b):
+      pass
+tests: |
+  def test_vrai():
+      "chien / niche"
+      assert solution.sont_anagrammes("Chien", "niche") is True
+
+  def test_espaces():
+      "Espaces ignorés"
+      assert solution.sont_anagrammes("Marie", "aimer") is True
+      assert solution.sont_anagrammes("Jim Morrison", "Mr Mojo Risin") is True
+
+  def test_faux():
+      "Python / typhoon"
+      assert solution.sont_anagrammes("Python", "typhoon") is False
+solution: |
+  def sont_anagrammes(a, b):
+      def cle(mot):
+          return sorted(mot.lower().replace(" ", ""))
+      return cle(a) == cle(b)
+cours: |
+  ## Une forme canonique
+
+  Deux mots sont anagrammes s'ils contiennent les mêmes lettres, chacune le même nombre de
+  fois. L'astuce : calculer pour chaque mot une **forme canonique** qui ne dépend pas de
+  l'ordre des lettres, puis comparer ces formes.
+
+  ### Option 1 : trier
+
+  `sorted()` accepte n'importe quel itérable, y compris une chaîne, et renvoie une **liste**
+  triée :
+
+  ```python
+  sorted("radar")        # ['a', 'a', 'd', 'r', 'r']
+  "".join(sorted("bca")) # "abc"
+  ```
+
+  Coût : O(n log n) pour n lettres.
+
+  ### Option 2 : compter
+
+  Un dictionnaire `{lettre: nombre}` (ou `collections.Counter`) est lui aussi indépendant
+  de l'ordre. Deux dictionnaires sont égaux (`==`) s'ils ont les mêmes paires
+  clé/valeur. Coût : O(n).
+
+  ## Nettoyer d'abord
+
+  L'énoncé ignore la casse et les espaces : normalise les deux mots de la **même** façon
+  avant de calculer la forme canonique (`lower()`, `replace(" ", "")`). Écrire une petite
+  fonction de normalisation interne évite de dupliquer le code pour `a` et `b`.
+
+  ## Raccourci
+
+  Si les deux chaînes nettoyées n'ont pas la même longueur, elles ne peuvent pas être
+  anagrammes : on peut répondre `False` immédiatement.
+
+  ## Application : regrouper des anagrammes
+
+  La forme canonique sert de **clé de dictionnaire** pour regrouper des mots :
+
+  ```python
+  groupes = {}
+  for mot in ["chien", "niche", "aimer", "marie"]:
+      cle = "".join(sorted(mot))
+      groupes.setdefault(cle, []).append(mot)
+  ```
+
+  Cette idée (une clé calculée qui identifie une classe d'équivalence) se retrouve partout :
+  détection de doublons, hachage, normalisation d'adresses…
+docs:
+  - title: HOWTO — trier avec Python
+    url: https://docs.python.org/fr/3/howto/sorting.html
+  - title: collections.Counter
+    url: https://docs.python.org/fr/3/library/collections.html#collections.Counter

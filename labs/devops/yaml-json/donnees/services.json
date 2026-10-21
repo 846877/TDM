@@ -1,0 +1,8 @@
+[
+  {"name": "web", "image": "nginx:1.27", "port": 8080, "replicas": 3, "env": "prod", "tags": ["front", "public"]},
+  {"name": "api", "image": "registry.local/api:1.4.2", "port": 9000, "replicas": 2, "env": "prod", "tags": ["back"]},
+  {"name": "worker", "image": "registry.local/worker:1.4.2", "port": null, "replicas": 1, "env": "prod", "tags": ["back", "async"]},
+  {"name": "db", "image": "postgres:16", "port": 5432, "replicas": 1, "env": "prod", "tags": ["data"]},
+  {"name": "api-test", "image": "registry.local/api:1.5.0-rc1", "port": 9100, "replicas": 1, "env": "staging", "tags": ["back"]},
+  {"name": "cache", "image": "redis:7.4", "port": 6379, "replicas": 2, "env": "staging", "tags": ["data"]}
+]

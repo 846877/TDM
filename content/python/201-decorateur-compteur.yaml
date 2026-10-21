@@ -1,0 +1,132 @@
+title: Décorateur compteur d'appels
+level: avance
+order: 1
+tags: [décorateurs, fonctions]
+summary: Écrire ton premier décorateur.
+description: |
+  Écris un décorateur `compter_appels` qui ajoute à la fonction décorée un attribut `appels`
+  indiquant combien de fois elle a été appelée.
+
+  ```python
+  @compter_appels
+  def saluer(nom):
+      return f"Salut {nom}"
+
+  saluer("a"); saluer("b")
+  saluer.appels       # 2
+  saluer.__name__     # "saluer"  (pense à functools.wraps)
+  ```
+starter: |
+  import functools
+
+
+  def compter_appels(fonction):
+      pass
+tests: |
+  def test_compte():
+      "Le nombre d'appels est compté"
+      @solution.compter_appels
+      def f(x):
+          return x * 2
+      assert f(2) == 4
+      f(3)
+      assert f.appels == 2
+
+  def test_initial():
+      "Zéro appel au départ"
+      @solution.compter_appels
+      def g():
+          pass
+      assert g.appels == 0
+
+  def test_arguments():
+      "Les arguments nommés sont transmis"
+      @solution.compter_appels
+      def h(a, b=1):
+          return a + b
+      assert h(1, b=5) == 6
+
+  def test_wraps():
+      "Le nom de la fonction est conservé"
+      @solution.compter_appels
+      def ma_fonction():
+          "doc"
+      assert ma_fonction.__name__ == "ma_fonction"
+      assert ma_fonction.__doc__ == "doc"
+solution: |
+  import functools
+
+
+  def compter_appels(fonction):
+      @functools.wraps(fonction)
+      def enveloppe(*args, **kwargs):
+          enveloppe.appels += 1
+          return fonction(*args, **kwargs)
+      enveloppe.appels = 0
+      return enveloppe
+cours: |
+  ## Les fonctions sont des objets
+
+  En Python, une fonction est une valeur comme une autre : on peut la ranger dans une
+  variable, la passer en argument, la renvoyer, et même lui ajouter des attributs.
+
+  ```python
+  def bonjour():
+      return "bonjour"
+
+  f = bonjour          # pas de parenthèses : on manipule la fonction elle-même
+  f()                  # "bonjour"
+  bonjour.auteur = "moi"
+  ```
+
+  ## Fonctions imbriquées et fermetures
+
+  Une fonction définie dans une autre « capture » les variables de la fonction englobante :
+  c'est une **fermeture** (*closure*).
+
+  ```python
+  def multiplicateur(k):
+      def fois(x):
+          return x * k      # k est capturé
+      return fois
+
+  triple = multiplicateur(3)
+  triple(5)   # 15
+  ```
+
+  ## Le décorateur
+
+  Un décorateur est une fonction qui reçoit une fonction et renvoie une fonction (souvent
+  une **enveloppe** qui ajoute un comportement autour de l'originale). La syntaxe
+  `@deco` au-dessus de `def f` est un raccourci pour `f = deco(f)`.
+
+  ```python
+  import functools, time
+
+  def chronometrer(fonction):
+      @functools.wraps(fonction)
+      def enveloppe(*args, **kwargs):
+          debut = time.perf_counter()
+          try:
+              return fonction(*args, **kwargs)
+          finally:
+              print(f"{fonction.__name__}: {time.perf_counter() - debut:.3f}s")
+      return enveloppe
+  ```
+
+  - `*args, **kwargs` permet de transmettre **n'importe quels** arguments.
+  - `functools.wraps` recopie `__name__`, `__doc__`, etc. de l'originale sur l'enveloppe ;
+    sans lui, toutes les fonctions décorées s'appelleraient `enveloppe`.
+
+  ## Garder un état
+
+  Pour compter, l'état doit survivre entre les appels. Options : un attribut posé sur
+  l'enveloppe (accessible depuis l'extérieur comme `f.attribut`), une variable de la
+  fermeture modifiée avec `nonlocal`, ou une classe avec `__call__`. Attention : l'attribut
+  doit être sur la fonction **renvoyée** par le décorateur, puisque c'est elle qui remplace
+  le nom décoré.
+docs:
+  - title: Glossaire — décorateur
+    url: https://docs.python.org/fr/3/glossary.html#term-decorator
+  - title: functools.wraps
+    url: https://docs.python.org/fr/3/library/functools.html#functools.wraps

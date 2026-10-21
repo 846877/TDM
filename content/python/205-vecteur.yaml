@@ -1,0 +1,140 @@
+title: Classe Vecteur
+level: avance
+order: 5
+tags: [classes, méthodes spéciales]
+summary: Surcharger les opérateurs avec les dunder methods.
+description: |
+  Crée une classe `Vecteur(x, y)` qui supporte :
+
+  | Expression          | Résultat                         |
+  |---------------------|----------------------------------|
+  | `v1 + v2`           | nouveau `Vecteur` somme          |
+  | `v1 - v2`           | nouveau `Vecteur` différence     |
+  | `v * 3` et `3 * v`  | produit par un scalaire          |
+  | `v1 == v2`          | égalité des coordonnées          |
+  | `abs(v)`            | norme (longueur)                 |
+  | `repr(v)`           | `"Vecteur(1, 2)"`                |
+  | `x, y = v`          | décomposition (`__iter__`)       |
+starter: |
+  class Vecteur:
+      def __init__(self, x, y):
+          self.x = x
+          self.y = y
+tests: |
+  V = lambda x, y: solution.Vecteur(x, y)
+
+  def test_addition():
+      "Addition et soustraction"
+      assert V(1, 2) + V(3, 4) == V(4, 6)
+      assert V(5, 5) - V(1, 2) == V(4, 3)
+
+  def test_scalaire():
+      "Produit par un scalaire des deux côtés"
+      assert V(1, 2) * 3 == V(3, 6)
+      assert 3 * V(1, 2) == V(3, 6)
+
+  def test_norme():
+      "Norme"
+      assert abs(V(3, 4)) == 5
+
+  def test_repr():
+      "Représentation"
+      assert repr(V(1, 2)) == "Vecteur(1, 2)"
+
+  def test_iter():
+      "Décomposition"
+      x, y = V(7, 8)
+      assert (x, y) == (7, 8)
+
+  def test_egalite():
+      "Inégalité"
+      assert V(1, 2) != V(2, 1)
+solution: |
+  import math
+
+
+  class Vecteur:
+      def __init__(self, x, y):
+          self.x = x
+          self.y = y
+
+      def __add__(self, autre):
+          return Vecteur(self.x + autre.x, self.y + autre.y)
+
+      def __sub__(self, autre):
+          return Vecteur(self.x - autre.x, self.y - autre.y)
+
+      def __mul__(self, k):
+          return Vecteur(self.x * k, self.y * k)
+
+      __rmul__ = __mul__
+
+      def __eq__(self, autre):
+          return isinstance(autre, Vecteur) and (self.x, self.y) == (autre.x, autre.y)
+
+      def __abs__(self):
+          return math.hypot(self.x, self.y)
+
+      def __repr__(self):
+          return f"Vecteur({self.x}, {self.y})"
+
+      def __iter__(self):
+          yield self.x
+          yield self.y
+cours: |
+  ## Surcharger les opérateurs
+
+  Quand Python évalue `a + b`, il appelle `a.__add__(b)`. Définir ces **méthodes
+  spéciales** (ou *dunder methods*, pour *double underscore*) permet à tes objets de
+  fonctionner avec les opérateurs.
+
+  | Expression | Méthode |
+  |------------|---------|
+  | `a + b`, `a - b`, `a * b` | `__add__`, `__sub__`, `__mul__` |
+  | `a == b` | `__eq__` |
+  | `abs(a)`, `-a` | `__abs__`, `__neg__` |
+  | `repr(a)` | `__repr__` |
+  | `for x in a`, `x, y = a` | `__iter__` |
+
+  ## Les opérations « à droite »
+
+  Pour `3 * v`, Python essaie d'abord `int.__mul__(3, v)`, qui renvoie `NotImplemented`
+  (un `int` ne sait pas multiplier un Vecteur). Python essaie alors **`v.__rmul__(3)`**.
+  Pour une opération commutative, `__rmul__` peut simplement réutiliser `__mul__`.
+
+  ```python
+  class Argent:
+      def __init__(self, montant):
+          self.montant = montant
+      def __mul__(self, k):
+          if not isinstance(k, (int, float)):
+              return NotImplemented
+          return Argent(self.montant * k)
+      __rmul__ = __mul__
+  ```
+
+  Renvoyer `NotImplemented` (et non lever une erreur) laisse Python essayer d'autres
+  options puis lever lui-même une `TypeError` claire.
+
+  ## Objets immuables en pratique
+
+  Les opérateurs arithmétiques renvoient un **nouvel** objet, sans modifier les opérandes :
+  `v1 + v2` ne doit pas changer `v1`.
+
+  ## Déballage via `__iter__`
+
+  `__iter__` peut être un générateur (`yield self.x` puis `yield self.y`) : l'objet devient
+  itérable, donc déballable et convertible en liste ou tuple.
+
+  ## Norme
+
+  La norme d'un vecteur 2D est √(x² + y²). `math.hypot(x, y)` la calcule de façon précise
+  (sans débordement intermédiaire).
+
+  Un bon `__repr__` ressemble au code qui recrée l'objet ; le format exact attendu est
+  dans l'énoncé.
+docs:
+  - title: Référence — émulation des types numériques
+    url: https://docs.python.org/fr/3/reference/datamodel.html#emulating-numeric-types
+  - title: Module math (hypot)
+    url: https://docs.python.org/fr/3/library/math.html#math.hypot

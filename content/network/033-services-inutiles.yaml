@@ -1,0 +1,95 @@
+title: Désactiver les services inutiles
+level: debutant
+order: 33
+device: router
+hostname: R-DMZ
+tags: [durcissement, sécurité, services]
+summary: Réduire la surface d'attaque d'un routeur exposé.
+description: |
+  Chaque service actif est une porte d'entrée possible. Sur le routeur `R-DMZ` :
+
+  1. coupe l'interface web d'administration, en HTTP **et** en HTTPS
+     (`no ip http server`, `no ip http secure-server`) ;
+  2. refuse les paquets qui imposent leur propre chemin : `no ip source-route` ;
+  3. détecte et ferme les sessions d'administration mortes (PC éteint brutalement) :
+     `service tcp-keepalives-in` et `service tcp-keepalives-out`.
+
+  Contrôle avec `show running-config | include http|source-route|keepalive`.
+checks:
+  - desc: Serveurs web HTTP et HTTPS désactivés
+    expr: not d.http_server and not d.https_server
+  - desc: Routage par la source refusé
+    expr: not d.source_route
+    hint: "no ip source-route"
+  - desc: Keepalives TCP entrants et sortants activés
+    expr: d.tcp_keepalives_in and d.tcp_keepalives_out
+solution: |
+  configure terminal
+  no ip http server
+  no ip http secure-server
+  no ip source-route
+  service tcp-keepalives-in
+  service tcp-keepalives-out
+  end
+cours: |
+  ## Le principe : moins de services, moins de risques
+
+  Le **durcissement** (*hardening*) consiste à désactiver tout ce qui n'est pas indispensable.
+  Un service inutilisé n'apporte rien et peut contenir une faille : plusieurs vulnérabilités
+  critiques d'IOS ont visé le serveur web intégré.
+
+  ### Les services à examiner
+
+  | Commande                      | Pourquoi                                                    |
+  |-------------------------------|-------------------------------------------------------------|
+  | `no ip http server`           | interface web en clair : mots de passe interceptables       |
+  | `no ip http secure-server`    | interface web HTTPS, rarement utilisée en CLI               |
+  | `no ip source-route`          | un paquet ne doit pas choisir son chemin (contournement de filtres) |
+  | `service tcp-keepalives-in`   | libère les lignes VTY occupées par des sessions mortes      |
+  | `no cdp run` (ou par interface) | ne pas dévoiler modèle et version aux inconnus            |
+  | `no ip domain-lookup` (labo)  | pas de requêtes DNS sur une faute de frappe                 |
+  | `no service pad`              | service X.25 obsolète (désactivé par défaut aujourd'hui)    |
+  | `no ip proxy-arp` (interface) | ne pas répondre aux ARP à la place d'autres machines        |
+  | `no ip redirects` (interface) | pas de messages ICMP Redirect exploitables                  |
+
+  ### Exemple
+
+  ```
+  R1(config)# no ip http server
+  R1(config)# no ip http secure-server
+  R1(config)# no ip source-route
+  R1(config)# service tcp-keepalives-in
+  R1(config)# service tcp-keepalives-out
+  R1(config)# interface g0/1
+  R1(config-if)# no ip proxy-arp
+  R1(config-if)# no ip redirects
+  ```
+
+  ### Le routage par la source
+
+  L'option IP *source route* permet à l'émetteur d'imposer la liste des routeurs à traverser. Un
+  attaquant peut s'en servir pour faire passer un paquet par un chemin qui évite le pare-feu, ou
+  pour recevoir les réponses à une adresse usurpée. Personne n'en a besoin en production.
+
+  ### Les keepalives TCP
+
+  Une session SSH dont le PC a disparu (coupure Wi-Fi) reste ouverte côté routeur et occupe une
+  des 5 lignes VTY. Avec `service tcp-keepalives-in`, le routeur sonde régulièrement la session et
+  la ferme si l'autre bout ne répond plus. À combiner avec `exec-timeout`.
+
+  ### Pièges fréquents
+
+  - Couper `ip http server` alors qu'un outil de gestion (Cisco Configuration Professional,
+    certaines API) s'en sert : vérifier avant.
+  - Se croire protégé par ces seules commandes : le durcissement comprend aussi mots de passe
+    forts, SSH, ACL sur les VTY, journalisation et mises à jour d'IOS.
+
+  ### Pour le CCNA
+
+  Savoir citer les services à désactiver et justifier chaque choix ; l'outil **AutoSecure**
+  (`auto secure`) d'IOS applique d'ailleurs une bonne partie de cette liste.
+docs:
+  - title: Cisco IOS — documentation de référence des commandes
+    url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-4m-t/products-command-reference-list.html
+  - title: Wikipédia — Cisco IOS
+    url: https://fr.wikipedia.org/wiki/Cisco_IOS

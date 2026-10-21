@@ -1,0 +1,118 @@
+title: Analyser une phrase
+level: debutant
+order: 23
+tags: [chaînes, méthodes, boucles, input]
+summary: Classer les caractères avec isalpha, isdigit et isspace.
+mode: stdio
+description: |
+  Lis une ligne de texte puis affiche combien elle contient de lettres, de chiffres, d'espaces
+  et d'autres caractères, exactement sous cette forme (exemple pour `Rendez-vous 2026 à midi`) :
+
+  ```
+  Lettres : 15
+  Chiffres : 4
+  Espaces : 3
+  Autres : 1
+  ```
+
+  Les lettres accentuées comptent comme des lettres. Utilise les méthodes de chaînes
+  `isalpha()`, `isdigit()` et `isspace()`.
+starter: |
+  phrase = input()
+cases:
+  - name: "Phrase avec chiffres"
+    input: "Rendez-vous 2026 à midi\n"
+    output: |
+      Lettres : 15
+      Chiffres : 4
+      Espaces : 3
+      Autres : 1
+  - name: "Lettres seulement"
+    input: "Bonjour\n"
+    output: |
+      Lettres : 7
+      Chiffres : 0
+      Espaces : 0
+      Autres : 0
+  - name: "Ponctuation"
+    input: "1, 2, 3... partez !\n"
+    output: |
+      Lettres : 6
+      Chiffres : 3
+      Espaces : 4
+      Autres : 6
+  - name: "Ligne vide"
+    input: "\n"
+    output: |
+      Lettres : 0
+      Chiffres : 0
+      Espaces : 0
+      Autres : 0
+solution: |
+  phrase = input()
+  lettres = chiffres = espaces = autres = 0
+  for c in phrase:
+      if c.isalpha():
+          lettres += 1
+      elif c.isdigit():
+          chiffres += 1
+      elif c.isspace():
+          espaces += 1
+      else:
+          autres += 1
+  print(f"Lettres : {lettres}")
+  print(f"Chiffres : {chiffres}")
+  print(f"Espaces : {espaces}")
+  print(f"Autres : {autres}")
+cours: |
+  ## Les méthodes de test des chaînes
+
+  Les méthodes `is...()` renvoient un booléen. Sur un seul caractère, elles permettent de le
+  classer :
+
+  | Méthode | Vrai pour |
+  |---------|-----------|
+  | `isalpha()` | lettres, **accents compris** (`"é".isalpha()` → `True`) |
+  | `isdigit()` | chiffres `0` à `9` (et quelques chiffres Unicode) |
+  | `isspace()` | espace, tabulation, retour à la ligne |
+  | `isalnum()` | lettre ou chiffre |
+  | `isupper()` / `islower()` | majuscules / minuscules |
+
+  Sur une chaîne entière, elles sont vraies si **tous** les caractères vérifient le test
+  (et la chaîne n'est pas vide) : `"2026".isdigit()` vaut `True`, `"20 26".isdigit()`
+  `False`.
+
+  ## Plusieurs compteurs dans une même boucle
+
+  ```python
+  voyelles = consonnes = 0
+  for c in "Bonjour":
+      if c.lower() in "aeiouy":
+          voyelles += 1
+      elif c.isalpha():
+          consonnes += 1
+  ```
+
+  Avec `if / elif / else`, chaque caractère tombe dans **exactement une** catégorie : la
+  branche `else` récupère « tout le reste » (ponctuation, symboles…). C'est une garantie
+  utile : la somme des compteurs est égale à la longueur du texte, ce que tu peux vérifier
+  avec `len()`.
+
+  ## Lire une ligne complète
+
+  `input()` lit toute la ligne, espaces compris (seul le retour à la ligne final est retiré).
+  N'utilise pas `strip()` ici : tu perdrais des espaces à compter.
+
+  ## Affichage
+
+  Respecte exactement le format : `Lettres : 15` comporte une espace avant et après les
+  deux-points (typographie française). Une f-string par ligne rend cela simple et lisible.
+
+  Le module `string` fournit des constantes comme `string.ascii_letters`,
+  `string.digits` ou `string.punctuation`, utiles si tu veux une définition stricte
+  (sans accents).
+docs:
+  - title: Méthodes str.isalpha, str.isdigit, str.isspace
+    url: https://docs.python.org/fr/3/library/stdtypes.html#str.isalpha
+  - title: Tutoriel — les chaînes de caractères
+    url: https://docs.python.org/fr/3/tutorial/introduction.html

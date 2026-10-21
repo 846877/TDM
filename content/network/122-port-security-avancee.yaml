@@ -1,0 +1,109 @@
+title: "Port-security : adresses fixes et vieillissement"
+level: intermediaire
+order: 22
+device: switch
+hostname: SW-ACCUEIL
+tags: [port-security, mac, vieillissement, sécurité]
+summary: Autoriser une imprimante précise et laisser tourner les portables en salle de réunion.
+description: |
+  Deux besoins différents sur `SW-ACCUEIL` (ports déjà en access dans le VLAN 10) :
+
+  **Imprimante sur `Fa0/10`** : seule l'imprimante `0011.2233.4455` doit pouvoir y émettre.
+  - active la port-security, déclare l'adresse **statique** :
+    `switchport port-security mac-address 0011.2233.4455` ;
+  - en cas de violation, journalise sans couper : mode `restrict`.
+
+  **Salle de réunion `Fa0/11` et `Fa0/12`** : les visiteurs changent toutes les heures.
+  - port-security avec **2** adresses maximum ;
+  - les adresses apprises sont oubliées après **60 minutes d'inactivité** :
+    `switchport port-security aging time 60` et `switchport port-security aging type inactivity`.
+
+  Contrôle avec `show port-security address`.
+initial: |
+  vlan 10
+  name ACCUEIL
+  interface range fa0/1 - 12
+  switchport mode access
+  switchport access vlan 10
+checks:
+  - desc: Fa0/10 n'autorise que l'imprimante 0011.2233.4455
+    expr: intf("fa0/10").port_security and intf("fa0/10").port_security_macs == ["0011.2233.4455"]
+  - desc: Fa0/10 en mode de violation restrict
+    expr: intf("fa0/10").port_security_violation == "restrict"
+  - desc: Fa0/11 et Fa0/12 limités à 2 adresses
+    expr: all(i.port_security and i.port_security_max == 2 for i in ports("fa0/11-12"))
+  - desc: Vieillissement de 60 minutes par inactivité sur Fa0/11 et Fa0/12
+    expr: all(i.port_security_aging_time == 60 and i.port_security_aging_type == "inactivity" for i in ports("fa0/11-12"))
+solution: |
+  configure terminal
+  interface fa0/10
+  switchport port-security
+  switchport port-security mac-address 0011.2233.4455
+  switchport port-security violation restrict
+  interface range fa0/11 - 12
+  switchport port-security
+  switchport port-security maximum 2
+  switchport port-security aging time 60
+  switchport port-security aging type inactivity
+  end
+cours: |
+  ## Trois façons de connaître les adresses autorisées
+
+  | Méthode     | Commande                                   | Conservée au redémarrage |
+  |-------------|--------------------------------------------|--------------------------|
+  | dynamique   | (apprise automatiquement)                  | non                      |
+  | **statique** | `switchport port-security mac-address H.H.H` | oui (dans la configuration) |
+  | sticky      | `switchport port-security mac-address sticky` | oui, après `copy run start` |
+
+  L'adresse **statique** convient aux équipements fixes (imprimante, caméra, badgeuse) : on sait à
+  l'avance quel appareil doit être là. L'apprentissage **sticky** transforme automatiquement les
+  adresses apprises en lignes de configuration : pratique pour un déploiement massif.
+
+  ```
+  SW1(config)# interface fa0/20
+  SW1(config-if)# switchport port-security
+  SW1(config-if)# switchport port-security maximum 2
+  SW1(config-if)# switchport port-security mac-address aaaa.bbbb.0001
+  SW1(config-if)# switchport port-security violation restrict
+  SW1# show port-security address
+  Vlan  Mac Address      Type               Ports   Remaining Age(mins)
+  30    aaaa.bbbb.0001   SecureConfigured   Fa0/20  -
+  ```
+
+  Le nombre d'adresses statiques ne peut pas dépasser le **maximum** : augmente-le d'abord si
+  nécessaire.
+
+  ### Le vieillissement
+
+  Par défaut, une adresse sécurisée apprise ne disparaît jamais tant que le port reste actif. En
+  salle de réunion, le premier visiteur « réserve » donc le port pour la journée. Le vieillissement
+  libère les places :
+
+  - `aging time <minutes>` (1 à 1440) ;
+  - `aging type absolute` (par défaut) : l'adresse est supprimée au bout du délai, qu'elle soit
+    active ou non ;
+  - `aging type inactivity` : le délai ne court que si l'appareil **n'émet plus** ;
+  - `aging static` applique aussi le vieillissement aux adresses statiques.
+
+  ### Rappel des modes de violation
+
+  `protect` (jette en silence), `restrict` (jette, compte et journalise), `shutdown` (err-disabled,
+  par défaut). Pour une imprimante, `restrict` évite qu'un simple test de câble coupe le port.
+
+  ### Pièges fréquents
+
+  - Un poste derrière un téléphone IP compte double ; un PC avec des machines virtuelles en pont
+    peut présenter plusieurs adresses MAC.
+  - Remplacer l'imprimante : la nouvelle adresse MAC est refusée tant que la configuration n'est pas
+    mise à jour.
+  - Oublier de sauvegarder après un apprentissage sticky.
+
+  ### Pour le CCNA
+
+  Savoir combiner maximum, adresses statiques/sticky, vieillissement et mode de violation, et
+  lire `show port-security interface` pour diagnostiquer un port coupé.
+docs:
+  - title: Cisco Catalyst 2960-X — guides de configuration
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html
+  - title: Wikipédia — Adresse MAC
+    url: https://fr.wikipedia.org/wiki/Adresse_MAC

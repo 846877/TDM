@@ -1,0 +1,134 @@
+title: Lire et écrire un fichier
+level: intermediaire
+order: 20
+tags: [fichiers, io, chaînes]
+summary: Travailler avec des objets fichier (simulés par io.StringIO).
+description: |
+  Une bonne fonction reçoit un **objet fichier** déjà ouvert plutôt qu'un nom de fichier : elle
+  fonctionne alors aussi bien avec `open(...)` qu'avec un `io.StringIO` (un « fichier » en
+  mémoire, pratique pour les tests).
+
+  1. `statistiques(fichier)` : lit le fichier et renvoie un dictionnaire
+     `{"lignes": ..., "mots": ..., "caracteres": ...}`. Les caractères comptent tout, y compris
+     les retours à la ligne. Les mots sont séparés par des espaces.
+  2. `copier_majuscules(source, destination)` : écrit dans `destination` chaque ligne **non vide**
+     de `source`, en majuscules et sans espaces autour, une par ligne (terminée par `\n`).
+     Renvoie le nombre de lignes écrites.
+
+  ```python
+  import io
+  f = io.StringIO("bonjour le monde\nsalut\n")
+  statistiques(f)   # {"lignes": 2, "mots": 4, "caracteres": 23}
+  ```
+
+  Astuces : `for ligne in fichier:` parcourt les lignes, `fichier.write(texte)` écrit.
+starter: |
+  def statistiques(fichier):
+      pass
+
+
+  def copier_majuscules(source, destination):
+      pass
+tests: |
+  import io
+
+  def test_stats():
+      "Statistiques d'un petit fichier"
+      r = solution.statistiques(io.StringIO("bonjour le monde\nsalut\n"))
+      assert r == {"lignes": 2, "mots": 4, "caracteres": 23}, f"obtenu {r!r}"
+
+  def test_stats_sans_fin_de_ligne():
+      "Dernière ligne sans retour à la ligne"
+      r = solution.statistiques(io.StringIO("a b\nc"))
+      assert r == {"lignes": 2, "mots": 3, "caracteres": 5}, f"obtenu {r!r}"
+
+  def test_stats_vide():
+      "Fichier vide"
+      r = solution.statistiques(io.StringIO(""))
+      assert r == {"lignes": 0, "mots": 0, "caracteres": 0}, f"obtenu {r!r}"
+
+  def test_copie():
+      "Copie en majuscules"
+      src = io.StringIO("  un \n\ndeux trois\n   \n")
+      dst = io.StringIO()
+      n = solution.copier_majuscules(src, dst)
+      assert dst.getvalue() == "UN\nDEUX TROIS\n", f"contenu écrit : {dst.getvalue()!r}"
+      assert n == 2, f"attendu 2 lignes écrites, obtenu {n!r}"
+
+  def test_copie_vide():
+      "Source vide"
+      dst = io.StringIO()
+      assert solution.copier_majuscules(io.StringIO(""), dst) == 0
+      assert dst.getvalue() == ""
+solution: |
+  def statistiques(fichier):
+      lignes = mots = caracteres = 0
+      for ligne in fichier:
+          lignes += 1
+          mots += len(ligne.split())
+          caracteres += len(ligne)
+      return {"lignes": lignes, "mots": mots, "caracteres": caracteres}
+
+
+  def copier_majuscules(source, destination):
+      ecrites = 0
+      for ligne in source:
+          ligne = ligne.strip()
+          if ligne:
+              destination.write(ligne.upper() + "\n")
+              ecrites += 1
+      return ecrites
+cours: |
+  ## Ouvrir un fichier
+
+  ```python
+  with open("rapport.txt", "w", encoding="utf-8") as f:
+      f.write("ligne 1\n")
+  with open("rapport.txt", encoding="utf-8") as f:
+      contenu = f.read()
+  ```
+
+  - Modes : `"r"` lecture (défaut), `"w"` écriture (**écrase** le fichier), `"a"` ajout à
+    la fin, `"x"` création exclusive, `"b"` binaire.
+  - Le bloc `with` ferme automatiquement le fichier, même en cas d'exception.
+  - Précise toujours `encoding="utf-8"` : sinon l'encodage dépend du système (Windows !).
+
+  ## Lire
+
+  - `f.read()` : tout le contenu en une chaîne ;
+  - `f.readline()` : une ligne (avec son `\n`) ;
+  - `for ligne in f:` : ligne par ligne, **sans tout charger en mémoire** (idéal pour des
+    logs de plusieurs Go).
+
+  Chaque ligne lue conserve son `\n` final, d'où les `strip()` / `rstrip("\n")`.
+  Un fichier se lit une seule fois : après un `read()`, le curseur est à la fin (voir
+  `f.seek(0)`).
+
+  ## Écrire
+
+  `f.write(texte)` n'ajoute **pas** de retour à la ligne : c'est à toi d'écrire `\n`.
+  `print(texte, file=f)` en ajoute un.
+
+  ## Le principe : recevoir un fichier, pas un nom
+
+  Une fonction qui reçoit un **objet fichier** est découplée du système de fichiers : on
+  peut lui passer un vrai fichier, `sys.stdin`, ou un `io.StringIO` :
+
+  ```python
+  import io
+  faux = io.StringIO("a b\nc\n")
+  faux.readline()     # "a b\n"
+  sortie = io.StringIO()
+  sortie.write("ok\n")
+  sortie.getvalue()   # "ok\n"
+  ```
+
+  C'est l'idée du **duck typing** : peu importe le type exact, tant que l'objet a les
+  méthodes attendues. Cela rend le code facile à tester, sans créer de fichiers temporaires.
+
+  **Compter** : les caractères incluent les `\n`, les mots se comptent avec `split()`.
+docs:
+  - title: Tutoriel — lecture et écriture de fichiers
+    url: https://docs.python.org/fr/3/tutorial/inputoutput.html#reading-and-writing-files
+  - title: Module io (StringIO)
+    url: https://docs.python.org/fr/3/library/io.html

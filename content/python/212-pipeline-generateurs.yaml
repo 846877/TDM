@@ -1,0 +1,192 @@
+title: Pipeline de générateurs
+level: avance
+order: 12
+tags: [générateurs, yield from, itérateurs]
+summary: Enchaîner des traitements paresseux sur un flux de données.
+description: |
+  Les générateurs permettent de traiter des flux énormes (voire infinis) sans tout charger en mémoire.
+  Écris les **fonctions génératrices** suivantes ; aucune ne doit construire de liste complète
+  de son entrée.
+
+  | Fonction | Rôle |
+  |----------|------|
+  | `nettoyer(lignes)` | produit chaque ligne sans les espaces de début/fin, en sautant les lignes vides et celles qui commencent par `#` |
+  | `decouper(lignes, sep=";")` | produit la liste des champs de chaque ligne (champs nettoyés de leurs espaces) |
+  | `par_paquets(iterable, taille)` | produit des listes de `taille` éléments (la dernière peut être plus courte) ; `ValueError` si `taille < 1` |
+  | `enchainer(*iterables)` | produit les éléments de chaque itérable à la suite, avec `yield from` |
+  | `pipeline(source, *etapes)` | applique les étapes dans l'ordre : `etape3(etape2(etape1(source)))` |
+
+  ```python
+  lignes = ["# entête", "a ; 1", "", "b;2"]
+  list(pipeline(lignes, nettoyer, decouper))      # [["a", "1"], ["b", "2"]]
+  list(par_paquets(range(5), 2))                  # [[0, 1], [2, 3], [4]]
+  ```
+
+  La moulinette vérifie que tout reste **paresseux** en branchant une source infinie.
+starter: |
+  def nettoyer(lignes):
+      pass
+
+
+  def decouper(lignes, sep=";"):
+      pass
+
+
+  def par_paquets(iterable, taille):
+      pass
+
+
+  def enchainer(*iterables):
+      pass
+
+
+  def pipeline(source, *etapes):
+      pass
+tests: |
+  import itertools
+
+  def test_nettoyer():
+      "nettoyer saute vides et commentaires"
+      r = list(solution.nettoyer(["  a  ", "", "   ", "# x", "  # y", "b"]))
+      assert r == ["a", "b"], f"obtenu {r}"
+
+  def test_decouper():
+      "decouper sépare et nettoie les champs"
+      assert list(solution.decouper(["a ; b;c", "x"])) == [["a", "b", "c"], ["x"]]
+      assert list(solution.decouper(["1,2"], sep=",")) == [["1", "2"]]
+
+  def test_paquets():
+      "par_paquets regroupe par taille"
+      assert list(solution.par_paquets(range(5), 2)) == [[0, 1], [2, 3], [4]]
+      assert list(solution.par_paquets([], 3)) == []
+      assert list(solution.par_paquets("abc", 3)) == [["a", "b", "c"]]
+
+  def test_paquets_invalide():
+      "par_paquets refuse une taille < 1"
+      try:
+          list(solution.par_paquets([1, 2], 0))
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("ValueError attendue")
+
+  def test_enchainer():
+      "enchainer met les itérables bout à bout"
+      assert list(solution.enchainer([1, 2], (3,), "ab", iter([4]))) == [1, 2, 3, "a", "b", 4]
+      assert list(solution.enchainer()) == []
+
+  def test_pipeline():
+      "pipeline applique les étapes dans l'ordre"
+      lignes = ["# entête", "a ; 1", "", "b;2"]
+      assert list(solution.pipeline(lignes, solution.nettoyer, solution.decouper)) == [["a", "1"], ["b", "2"]]
+      assert list(solution.pipeline([1, 2, 3])) == [1, 2, 3]
+
+  def test_paresseux():
+      "Tout reste paresseux sur une source infinie"
+      consommes = []
+      def source():
+          for i in range(100_000):    # « presque » infinie
+              consommes.append(i)
+              yield f"l{i};{i}" if i % 3 else "# commentaire"
+      paquets = lambda it: solution.par_paquets(it, 2)
+      flux = solution.pipeline(source(), solution.nettoyer, solution.decouper, paquets)
+      premier = next(iter(flux))
+      assert premier == [["l1", "1"], ["l2", "2"]], f"premier paquet : {premier}"
+      assert len(consommes) <= 6, f"{len(consommes)} lignes lues pour un seul paquet : pas assez paresseux"
+
+  def test_generateurs():
+      "Les fonctions sont des générateurs"
+      import inspect
+      for nom in ("nettoyer", "decouper", "par_paquets", "enchainer"):
+          assert inspect.isgeneratorfunction(getattr(solution, nom)), f"{nom} doit utiliser yield"
+solution: |
+  def nettoyer(lignes):
+      for ligne in lignes:
+          ligne = ligne.strip()
+          if ligne and not ligne.startswith("#"):
+              yield ligne
+
+
+  def decouper(lignes, sep=";"):
+      for ligne in lignes:
+          yield [champ.strip() for champ in ligne.split(sep)]
+
+
+  def par_paquets(iterable, taille):
+      if taille < 1:
+          raise ValueError("taille doit valoir au moins 1")
+      paquet = []
+      for element in iterable:
+          paquet.append(element)
+          if len(paquet) == taille:
+              yield paquet
+              paquet = []
+      if paquet:
+          yield paquet
+
+
+  def enchainer(*iterables):
+      for iterable in iterables:
+          yield from iterable
+
+
+  def pipeline(source, *etapes):
+      flux = source
+      for etape in etapes:
+          flux = etape(flux)
+      return flux
+cours: |
+  ## Le traitement en flux
+
+  Un pipeline Unix (`cat log | grep ERROR | cut -d' ' -f1 | sort`) fait passer les données
+  d'étape en étape, ligne par ligne, sans stocker l'intégralité. Les générateurs permettent
+  exactement la même chose en Python :
+
+  ```python
+  def lire(fichier):
+      for ligne in fichier:
+          yield ligne.rstrip("\n")
+
+  def erreurs(lignes):
+      for ligne in lignes:
+          if "ERROR" in ligne:
+              yield ligne
+
+  for l in erreurs(lire(open("app.log"))):
+      print(l)
+  ```
+
+  Chaque étape **consomme** un itérable et **produit** un générateur. Aucune liste
+  intermédiaire n'est construite : la mémoire utilisée est constante, même pour un fichier
+  de 50 Go, et la première ligne sort avant que le fichier soit entièrement lu.
+
+  ## `yield from`
+
+  `yield from iterable` produit tous les éléments d'un itérable, comme une boucle
+  `for x in iterable: yield x`, en plus court (et il transmet aussi `send()` et la valeur de
+  retour d'un sous-générateur).
+
+  ## Regrouper par paquets
+
+  Pour former des paquets de taille fixe, on accumule dans une liste temporaire et on la
+  produit quand elle est pleine, puis on repart d'une **nouvelle** liste (si on vidait la
+  même liste avec `clear()`, les paquets déjà produits seraient vidés aussi). Le dernier
+  paquet incomplet doit être produit après la boucle s'il n'est pas vide. Python 3.12 a
+  ajouté `itertools.batched` pour cela.
+
+  ## Validation paresseuse : attention
+
+  Le corps d'une fonction génératrice ne s'exécute qu'au premier `next()`. Un
+  `raise ValueError` placé au début ne se déclenche donc **pas** à l'appel, mais au premier
+  parcours. Pour valider immédiatement, on écrit une fonction normale qui vérifie les
+  paramètres puis renvoie un générateur interne.
+
+  ## Composer des étapes
+
+  Appliquer une suite de fonctions successivement est une **composition** : une boucle qui
+  remplace l'itérable courant par `etape(iterable)` suffit.
+docs:
+  - title: HOWTO — programmation fonctionnelle (générateurs)
+    url: https://docs.python.org/fr/3/howto/functional.html
+  - title: Référence — expressions yield (yield from)
+    url: https://docs.python.org/fr/3/reference/expressions.html#yield-expressions

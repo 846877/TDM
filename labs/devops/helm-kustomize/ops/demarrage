@@ -1,0 +1,14 @@
+#!/bin/sh
+# Récupère le kubeconfig écrit par k3s et le fait pointer vers le conteneur k3s.
+mkdir -p /root/.kube
+(
+  until [ -s /k3s/kubeconfig.yaml ]; do sleep 2; done
+  sed 's#https://127.0.0.1:6443#https://k3s:6443#' /k3s/kubeconfig.yaml > /root/.kube/config
+  chmod 600 /root/.kube/config
+  # Scénario de départ éventuel (ressources à auditer ou à réparer).
+  if [ -d /opt/scenario ]; then
+    until kubectl get --raw /readyz >/dev/null 2>&1; do sleep 2; done
+    kubectl apply -f /opt/scenario/ >/var/log/scenario.log 2>&1
+  fi
+) &
+exec sleep infinity

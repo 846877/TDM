@@ -1,0 +1,198 @@
+title: Threads avec concurrent.futures
+level: expert
+order: 14
+tags: [concurrent.futures, threads, concurrence]
+summary: ThreadPoolExecutor, as_completed et gestion des erreurs.
+description: |
+  `concurrent.futures` offre une interface simple pour exécuter des fonctions dans un pool de threads
+  (idéal pour les entrées/sorties : requêtes réseau, fichiers…).
+
+  1. `executer_tous(fonction, elements, max_travailleurs=4)` appelle `fonction(e)` pour chaque élément
+     dans un `ThreadPoolExecutor`, avec **réellement** `max_travailleurs` appels simultanés possibles,
+     et renvoie une liste, **dans l'ordre des éléments**, de :
+     - `("ok", valeur)` si l'appel a réussi ;
+     - `("erreur", "NomDeLException: message")` sinon.
+
+  2. `premier_resultat(fonctions)` lance toutes les fonctions (sans argument) en parallèle et renvoie
+     la valeur de **la première qui se termine avec succès** (`as_completed`). Les échecs sont ignorés ;
+     si toutes échouent, lève `RuntimeError`. N'attends pas la fin des fonctions plus lentes :
+     `executor.shutdown(wait=False, cancel_futures=True)`.
+
+  3. `compter_mots(textes, max_travailleurs=4)` compte les mots (séparés par des espaces, en minuscules)
+     de tous les textes, chaque texte étant traité dans un thread, puis fusionne les résultats en
+     un `collections.Counter` (schéma *map/reduce*).
+
+  La moulinette vérifie le parallélisme avec une `threading.Barrier` : si tes appels ne s'exécutent
+  pas vraiment en même temps, la barrière casse.
+starter: |
+  from collections import Counter
+  from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+  def executer_tous(fonction, elements, max_travailleurs=4):
+      pass
+
+
+  def premier_resultat(fonctions):
+      pass
+
+
+  def compter_mots(textes, max_travailleurs=4):
+      pass
+tests: |
+  import threading
+  from collections import Counter
+
+  def test_ordre_et_erreurs():
+      "Résultats dans l'ordre, erreurs capturées"
+      def inverse(x):
+          return 1 / x
+      r = solution.executer_tous(inverse, [1, 0, 4], 2)
+      assert r[0] == ("ok", 1.0) and r[2] == ("ok", 0.25), f"obtenu {r}"
+      assert r[1][0] == "erreur" and r[1][1].startswith("ZeroDivisionError:"), f"obtenu {r[1]}"
+
+  def test_parallelisme():
+      "max_travailleurs appels simultanés (barrière)"
+      barriere = threading.Barrier(4, timeout=2)
+      def attendre(x):
+          barriere.wait()
+          return x
+      r = solution.executer_tous(attendre, list(range(8)), max_travailleurs=4)
+      assert r == [("ok", i) for i in range(8)], "la barrière a cassé : les appels ne sont pas simultanés"
+
+  def test_vide():
+      "Liste vide"
+      assert solution.executer_tous(str, []) == []
+
+  def test_premier():
+      "premier_resultat renvoie le plus rapide"
+      lent_libere = threading.Event()
+      def lent():
+          lent_libere.wait(2)
+          return "lent"
+      def rapide():
+          return "rapide"
+      try:
+          assert solution.premier_resultat([lent, rapide]) == "rapide"
+      finally:
+          lent_libere.set()
+
+  def test_premier_ignore_echecs():
+      "Les échecs sont ignorés"
+      libere = threading.Event()
+      def echoue():
+          raise ValueError("non")
+      def reussit():
+          libere.wait(2)
+          return 42
+      def liberer():
+          libere.set()
+          raise KeyError("x")
+      assert solution.premier_resultat([echoue, liberer, reussit]) == 42
+
+  def test_premier_tous_echouent():
+      "Tout échoue : RuntimeError"
+      def echoue():
+          raise ValueError("non")
+      try:
+          solution.premier_resultat([echoue, echoue])
+      except RuntimeError:
+          pass
+      else:
+          raise AssertionError("RuntimeError attendue")
+
+  def test_compter_mots():
+      "Comptage map/reduce"
+      r = solution.compter_mots(["Le chat", "le chien et le chat", ""], 3)
+      assert isinstance(r, Counter)
+      assert r == Counter({"le": 3, "chat": 2, "chien": 1, "et": 1}), f"obtenu {r}"
+solution: |
+  from collections import Counter
+  from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+  def executer_tous(fonction, elements, max_travailleurs=4):
+      with ThreadPoolExecutor(max_workers=max_travailleurs) as executeur:
+          futurs = [executeur.submit(fonction, e) for e in elements]
+      resultats = []
+      for futur in futurs:
+          exc = futur.exception()
+          if exc is None:
+              resultats.append(("ok", futur.result()))
+          else:
+              resultats.append(("erreur", f"{type(exc).__name__}: {exc}"))
+      return resultats
+
+
+  def premier_resultat(fonctions):
+      executeur = ThreadPoolExecutor(max_workers=max(1, len(fonctions)))
+      try:
+          futurs = [executeur.submit(f) for f in fonctions]
+          for futur in as_completed(futurs):
+              if futur.exception() is None:
+                  return futur.result()
+          raise RuntimeError("toutes les fonctions ont échoué")
+      finally:
+          executeur.shutdown(wait=False, cancel_futures=True)
+
+
+  def compter_mots(textes, max_travailleurs=4):
+      def compter(texte):
+          return Counter(texte.lower().split())
+      total = Counter()
+      with ThreadPoolExecutor(max_workers=max_travailleurs) as executeur:
+          for partiel in executeur.map(compter, textes):
+              total.update(partiel)
+      return total
+cours: |
+  ## Threads et GIL
+
+  Un **thread** est un fil d'exécution partageant la mémoire du programme. En CPython, le
+  **GIL** (verrou global de l'interpréteur) empêche deux threads d'exécuter du bytecode
+  Python en même temps. Mais il est **relâché pendant les entrées/sorties** (réseau, disque,
+  `time.sleep`) : les threads accélèrent donc très bien les tâches d'E/S (pinger 200 hôtes,
+  télécharger des fichiers), pas le calcul pur (pour lui : `ProcessPoolExecutor`).
+
+  ## `ThreadPoolExecutor`
+
+  ```python
+  from concurrent.futures import ThreadPoolExecutor, as_completed
+
+  with ThreadPoolExecutor(max_workers=8) as ex:
+      futures = [ex.submit(verifier, hote) for hote in hotes]
+      for f in as_completed(futures):      # dans l'ordre de FIN
+          print(f.result())
+  ```
+
+  - `submit(f, *args)` renvoie un **Future** : une promesse de résultat.
+  - `future.result()` attend et renvoie la valeur, ou **relève** l'exception survenue dans
+    le thread. `future.exception()` la renvoie sans la lever.
+  - `ex.map(f, elements)` renvoie les résultats **dans l'ordre des éléments**, mais lève à la
+    première exception rencontrée lors de l'itération.
+  - Le `with` attend la fin de tous les travaux à la sortie.
+
+  Pour garder l'ordre tout en traitant les erreurs une par une, on garde la liste des
+  futures dans l'ordre de soumission et on interroge chacune.
+
+  ## Le premier qui réussit
+
+  `as_completed` produit les futures au fur et à mesure qu'elles se terminent : on peut
+  renvoyer le premier succès. Pour ne pas attendre les retardataires, ne pas utiliser le
+  `with` (qui attendrait) mais `shutdown(wait=False, cancel_futures=True)` : les tâches non
+  démarrées sont annulées (celles déjà en cours ne peuvent pas être interrompues).
+
+  ## Données partagées
+
+  Plusieurs threads qui modifient le même objet peuvent créer des **conditions de course**
+  (`compteur += 1` n'est pas atomique). Solutions : un `threading.Lock`, ou mieux, faire
+  produire à chaque tâche un résultat **local** et fusionner à la fin (par exemple
+  additionner des `Counter`), sans état partagé.
+
+  ## Format d'erreur
+
+  `type(e).__name__` donne le nom de la classe de l'exception, `str(e)` son message.
+docs:
+  - title: Module concurrent.futures
+    url: https://docs.python.org/fr/3/library/concurrent.futures.html
+  - title: Module threading
+    url: https://docs.python.org/fr/3/library/threading.html

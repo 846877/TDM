@@ -1,0 +1,431 @@
+title: Serveur web Nginx
+level: intermediaire
+order: 1
+tags: [nginx, web, reverse proxy, load balancing, sécurité]
+summary: Sites, reverse proxy, virtual hosts, logs, performances, sécurité et répartition de charge.
+ports: ["8088:8080"]
+description: |
+  Un serveur Ubuntu avec **nginx installé mais non configuré** (le site par défaut a été supprimé).
+  Tu es `root`. Le port `8080` du conteneur est publié sur le port **8088** de ta machine :
+  une fois l'exercice 2 fait, ouvre http://localhost:8088 dans ton navigateur.
+
+  Rappels : la configuration se trouve dans `/etc/nginx/`, on teste avec `nginx -t`
+  et on recharge avec `nginx -s reload`. `python3` et `openssl` sont installés.
+
+  Le parcours : démarrer nginx, publier un site, reverse proxy, plusieurs sites sur le même port,
+  page d'erreur, journaux personnalisés, compression et cache, durcissement, puis répartition de charge.
+cours: |
+  ## Nginx : serveur web, reverse proxy et répartiteur
+
+  Nginx est l'un des serveurs web les plus utilisés au monde. Son architecture événementielle (un processus
+  maître et quelques *workers* qui gèrent chacun des milliers de connexions) le rend très économe. En
+  DevOps, on le croise partout : servir des fichiers statiques, terminer le TLS, faire du **reverse proxy**
+  devant une application, répartir la charge, ou comme *Ingress controller* dans Kubernetes.
+
+  ### Le rôle du reverse proxy
+
+  ```
+              Internet                     réseau interne
+  client ──HTTPS──▶ ┌────────┐ ──HTTP──▶ app:9000   (API)
+                    │ nginx  │ ──HTTP──▶ /var/www   (statique)
+                    └────────┘ ──HTTP──▶ b1:9001, b2:9002 (upstream)
+       TLS, compression, cache, en-têtes de sécurité, journaux, limites
+  ```
+
+  Le client ne voit que nginx. L'application reste sur le réseau interne et n'a pas à gérer TLS ni la
+  compression.
+
+  ### Organisation de la configuration (Debian/Ubuntu)
+
+  ```
+  /etc/nginx/
+  ├── nginx.conf            contexte principal : events {}, http { include ... }
+  ├── conf.d/*.conf         réglages inclus dans http {}
+  ├── sites-available/      un fichier par site
+  └── sites-enabled/        liens symboliques vers les sites actifs
+  ```
+
+  La configuration est faite de **contextes** imbriqués : `http` > `server` (un site) > `location` (un
+  chemin). Une directive définie dans un contexte parent est héritée par les enfants, sauf redéfinition.
+
+  ```nginx
+  server {
+      listen 8080 default_server;
+      server_name tdm.local;
+      root /var/www/tdm;
+      index index.html;
+
+      location /api/ {
+          proxy_pass http://127.0.0.1:9000/;   # le / final remplace le préfixe /api/
+          proxy_set_header Host $host;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      }
+  }
+  ```
+
+  ### Comment nginx choisit
+
+  1. Le **server** : selon l'adresse et le port (`listen`), puis l'en-tête `Host` comparé aux `server_name`.
+     Sans correspondance, c'est le serveur `default_server` (ou le premier chargé).
+  2. La **location** : correspondance exacte `=`, puis le plus long préfixe, puis les expressions régulières
+     `~` dans l'ordre du fichier (sauf si le préfixe est marqué `^~`).
+
+  ### Mémo
+
+  ```bash
+  nginx -t                 # tester la configuration (toujours avant de recharger !)
+  nginx -s reload          # recharger sans couper les connexions
+  nginx -T                 # afficher toute la configuration chargée
+  tail -f /var/log/nginx/access.log /var/log/nginx/error.log
+  curl -H 'Host: api.tdm.local' http://localhost:8080/
+  curl -sI --compressed http://localhost:8080/static/style.css
+  ```
+
+  Directives fréquentes : `error_page`, `access_log`/`log_format`, `gzip`/`gzip_types`, `expires`,
+  `add_header`, `auth_basic`, `upstream`, `return 301`, `client_max_body_size`.
+
+  ### Pièges courants
+
+  - Recharger sans `nginx -t` : une faute de frappe et le rechargement échoue.
+  - Oublier le `;` en fin de directive.
+  - La barre finale de `proxy_pass` : avec ou sans URI, le chemin transmis n'est pas le même.
+  - `add_header` dans une `location` **remplace** tous les `add_header` hérités du `server`.
+  - Une erreur 502 *Bad Gateway* : nginx n'arrive pas à joindre le backend (arrêté, mauvais port).
+  - Pas de `default_server` : le premier site par ordre alphabétique répond aux noms inconnus.
+
+  ### Bonnes pratiques
+
+  Un fichier par site, `server_tokens off`, des en-têtes de sécurité, HTTPS partout avec redirection, des
+  journaux exploitables (temps de réponse, upstream), et des tests automatiques (`nginx -t` en CI).
+
+  ### Pour réviser
+
+  - Quelle commande lancer systématiquement avant `nginx -s reload` ?
+  - Que change la présence d'un `/` à la fin de l'URL de `proxy_pass` ?
+  - Comment nginx choisit-il le bloc `server` qui traite une requête ?
+  - Que signifie une erreur 502, et où chercher la cause ?
+docs:
+  - title: Documentation officielle nginx
+    url: https://nginx.org/en/docs/
+  - title: Guide du débutant nginx
+    url: https://nginx.org/en/docs/beginners_guide.html
+  - title: Index des directives nginx
+    url: https://nginx.org/en/docs/dirindex.html
+exercises:
+  - id: demarrer
+    title: Démarrer nginx
+    description: Lance le service nginx et vérifie qu'il tourne (`nginx`, puis `ps aux | grep nginx`).
+    cours: |
+      Dans un conteneur, il n'y a généralement pas de systemd : on lance le binaire `nginx` directement. Il
+      démarre un processus **maître** (qui tourne en root pour ouvrir les ports et lire la configuration) et
+      des processus **workers** (sous l'utilisateur `www-data`) qui traitent les requêtes.
+
+      `ps aux | grep nginx` ou `pgrep -a nginx` montre ces processus. Le maître enregistre son PID dans
+      `/run/nginx.pid`, ce qui permet à `nginx -s reload|stop|quit` de lui envoyer des signaux.
+
+      Si le démarrage échoue, le message s'affiche dans le terminal ou dans `/var/log/nginx/error.log` :
+      port déjà utilisé, erreur de syntaxe…
+    checks:
+      - desc: Le processus nginx tourne
+        run: pgrep -x nginx
+  - id: site
+    title: Publier un site sur le port 8080
+    description: |
+      Crée la page `/var/www/tdm/index.html` contenant le texte `Bienvenue sur TDM`, puis un site
+      `/etc/nginx/sites-available/tdm` qui sert ce dossier sur le **port 8080**. Active-le avec un lien
+      symbolique dans `sites-enabled` et recharge nginx.
+    hint: "server { listen 8080; root /var/www/tdm; index index.html; }"
+    cours: |
+      Un site se déclare dans un bloc `server` : `listen` (le port), `server_name` (le ou les noms),
+      `root` (le dossier servi) et `index` (le fichier servi pour un dossier).
+
+      Sous Debian/Ubuntu, on écrit le fichier dans `sites-available` puis on l'**active** en créant un lien
+      symbolique dans `sites-enabled` (`ln -s` avec un chemin absolu). `nginx.conf` n'inclut que ce dernier
+      dossier : désactiver un site revient à supprimer le lien, sans perdre sa configuration.
+
+      Ensuite : `nginx -t` pour valider, `nginx -s reload` pour appliquer. Vérifie avec `curl localhost:8080`.
+      Les workers doivent pouvoir lire les fichiers servis.
+    checks:
+      - desc: Site activé par lien symbolique
+        run: test -L /etc/nginx/sites-enabled/tdm
+      - desc: La configuration est valide
+        run: nginx -t
+      - desc: http://localhost:8080 affiche la page
+        run: curl -fsS http://localhost:8080 | grep -q "Bienvenue sur TDM"
+  - id: proxy
+    title: Reverse proxy
+    description: |
+      Une API tourne déjà sur le port 9000 ? Pas encore : lance-la avec
+      `mkdir -p /srv/api && echo '{"status":"ok"}' > /srv/api/health && cd /srv/api && nohup python3 -m http.server 9000 &`
+      (installe `python3` avec `apt-get update && apt-get install -y python3` si besoin).
+
+      Puis configure nginx pour que `http://localhost:8080/api/` soit redirigé vers `http://127.0.0.1:9000/`.
+    hint: "location /api/ { proxy_pass http://127.0.0.1:9000/; }"
+    cours: |
+      Avec `proxy_pass`, nginx transmet la requête à un autre serveur et renvoie sa réponse au client : c'est le
+      **reverse proxy**.
+
+      Le détail qui compte : la présence d'un chemin (même un simple `/`) à la fin de l'URL de `proxy_pass`.
+      - `location /api/ { proxy_pass http://127.0.0.1:9000; }` transmet `/api/health` tel quel ;
+      - `location /api/ { proxy_pass http://127.0.0.1:9000/; }` remplace `/api/` par `/` : le backend reçoit
+        `/health`.
+
+      En production, on ajoute les en-têtes `Host`, `X-Real-IP` et `X-Forwarded-For` pour que l'application
+      connaisse le client d'origine. Une erreur **502** signifie que nginx n'a pas pu joindre le backend.
+    checks:
+      - desc: /api/health passe par nginx
+        run: curl -fsS http://localhost:8080/api/health | grep -q '"status":"ok"'
+      - desc: La page d'accueil fonctionne toujours
+        run: curl -fsS http://localhost:8080 | grep -q "Bienvenue sur TDM"
+  - id: vhost
+    title: Plusieurs sites sur le même port
+    description: |
+      Ajoute un deuxième site **par nom** (virtual host) : `/etc/nginx/sites-available/api` répond pour
+      `server_name api.tdm.local` sur le port 8080 et sert `/var/www/api/index.html` qui contient `API TDM`.
+      Active-le.
+
+      Attention : le site `tdm` doit rester le site **par défaut** pour tous les autres noms
+      (`listen 8080 default_server;`), sinon nginx prend le premier fichier par ordre alphabétique… c'est-à-dire `api` !
+    hint: "curl -H 'Host: api.tdm.local' http://localhost:8080 permet de tester sans DNS"
+    cours: |
+      Plusieurs sites peuvent partager le même port : c'est l'**hébergement virtuel par nom**. Le navigateur
+      envoie le nom demandé dans l'en-tête `Host`, et nginx choisit le bloc `server` dont le `server_name`
+      correspond.
+
+      Si aucun `server_name` ne correspond, nginx utilise le serveur marqué `default_server` sur ce port, ou, à
+      défaut, le premier chargé. Comme `sites-enabled/*` est lu par ordre alphabétique, un nouveau site peut
+      « voler » le trafic par défaut sans qu'on s'en rende compte.
+
+      Pour tester sans DNS, fournis l'en-tête toi-même : `curl -H 'Host: api.tdm.local' http://localhost:8080/`.
+    checks:
+      - desc: Le site api est activé
+        run: test -L /etc/nginx/sites-enabled/api && nginx -t
+      - desc: api.tdm.local affiche API TDM
+        run: |
+          curl -fsS -H 'Host: api.tdm.local' http://localhost:8080/ | grep -q "API TDM"
+      - desc: Les autres noms tombent sur le site tdm
+        run: |
+          curl -fsS -H 'Host: inconnu.example' http://localhost:8080/ | grep -q "Bienvenue sur TDM"
+  - id: erreurs
+    title: Page d'erreur personnalisée
+    description: |
+      Crée la page `/var/www/tdm/404.html` contenant `Page introuvable` et configure le site `tdm` pour
+      l'afficher sur toute erreur **404** (directive `error_page`). Le code HTTP doit rester **404**.
+    hint: "error_page 404 /404.html; dans le bloc server du site tdm"
+    cours: |
+      La directive `error_page CODE URI` indique quelle page afficher pour un code d'erreur donné. Elle se place
+      dans le bloc `server` (ou une `location`), et l'URI est résolue comme une nouvelle requête interne, donc
+      relativement à `root`.
+
+      Attention à la syntaxe : `error_page 404 /404.html;` conserve le code 404, alors que
+      `error_page 404 =200 /404.html;` le remplacerait par 200, ce qui trompe les moteurs de recherche et les
+      outils de supervision.
+
+      Vérifie le code renvoyé avec `curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/inexistant`,
+      et le contenu avec un simple `curl`.
+    checks:
+      - desc: Le code HTTP est 404
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/nexiste-pas)" = 404
+      - desc: La page personnalisée est affichée
+        run: curl -s http://localhost:8080/nexiste-pas | grep -q "Page introuvable"
+  - id: logs
+    title: Journaux personnalisés
+    description: |
+      1. Définis (dans le contexte `http`, par exemple `/etc/nginx/conf.d/tdm-log.conf`) un format de log
+         nommé `tdm` : `'$remote_addr "$request" $status $request_time'`.
+      2. Fais écrire au site `tdm` ses accès dans `/var/log/nginx/tdm.access.log` avec ce format.
+
+      Recharge, fais une requête, puis observe le fichier avec `tail -f`.
+    hint: "log_format tdm '...'; puis access_log /var/log/nginx/tdm.access.log tdm; dans le server"
+    cours: |
+      `log_format nom 'modèle';` définit un format de journal ; il n'est autorisé que dans le contexte `http`
+      (un fichier de `conf.d/` y est inclus). Le modèle utilise des variables nginx : `$remote_addr`,
+      `$request` (la ligne de requête), `$status`, `$body_bytes_sent`, `$request_time` (durée en secondes),
+      `$upstream_response_time`, `$http_user_agent`…
+
+      `access_log chemin nom;` dans un `server` envoie ses accès dans un fichier, avec ce format. Les journaux
+      personnalisés servent au diagnostic (lenteurs) et à l'analyse (Loki, ELK, GoAccess).
+
+      Le fichier est créé au rechargement ou à la première requête : fais une requête avant de le chercher.
+    checks:
+      - desc: Le format tdm est défini
+        run: grep -rqE 'log_format +tdm' /etc/nginx/
+      - desc: Une requête est journalisée au format demandé
+        run: |
+          curl -s -o /dev/null 'http://localhost:8080/?verif-log' && sleep 1 && tail -1 /var/log/nginx/tdm.access.log | grep -Eq '^[0-9.]+ "GET /\?verif-log HTTP/1.1" 200 [0-9.]+$'
+  - id: performances
+    title: Compression et cache navigateur
+    description: |
+      1. Crée une feuille de style `/var/www/tdm/static/style.css` d'au moins 1 Kio
+         (par exemple `for i in $(seq 1 100); do echo "p.c$i { color: red; }"; done > style.css`).
+      2. Active la compression **gzip** pour le CSS, le JavaScript et le JSON (`gzip_types`) : par défaut,
+         seul le HTML est compressé.
+      3. Ajoute un cache navigateur de **7 jours** sur `/static/` (`expires 7d;`).
+    hint: "gzip_types text/css application/javascript application/json; et location /static/ { expires 7d; }"
+    cours: |
+      **gzip** compresse les réponses textuelles à la volée : moins d'octets transférés, pages plus rapides.
+      `gzip on;` est souvent déjà présent dans `nginx.conf`, mais seuls les types listés dans `gzip_types` sont
+      compressés (`text/html` l'est toujours). Il faut donc y ajouter `text/css`, `application/javascript`,
+      `application/json`… Les petites réponses ne sont pas compressées (`gzip_min_length`).
+
+      Le client annonce qu'il accepte la compression avec `Accept-Encoding: gzip` ; la réponse porte alors
+      `Content-Encoding: gzip`. `curl --compressed -I` ou `curl -H 'Accept-Encoding: gzip' -I` permet de le voir.
+
+      `expires 7d;` ajoute les en-têtes `Expires` et `Cache-Control: max-age=604800`, qui autorisent le
+      navigateur à garder le fichier en cache une semaine.
+    checks:
+      - desc: Le CSS est servi compressé
+        run: |
+          curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip' http://localhost:8080/static/style.css | grep -qi '^content-encoding: gzip'
+      - desc: Cache de 7 jours sur /static/
+        run: |
+          curl -s -o /dev/null -D - http://localhost:8080/static/style.css | grep -qi '^cache-control: max-age=604800'
+  - id: securite
+    title: Durcissement et accès protégé
+    description: |
+      1. Masque la version de nginx dans les en-têtes (`server_tokens off;`).
+      2. Ajoute l'en-tête `X-Content-Type-Options: nosniff` aux réponses du site `tdm`.
+      3. Protège `/admin/` (page `/var/www/tdm/admin/index.html` contenant `Admin TDM`) par une
+         **authentification basique** : utilisateur `admin`, mot de passe `tdm`, fichier `/etc/nginx/.htpasswd`.
+    hint: "printf 'admin:%s\\n' \"$(openssl passwd -apr1 tdm)\" > /etc/nginx/.htpasswd ; auth_basic \"Admin\"; auth_basic_user_file /etc/nginx/.htpasswd;"
+    cours: |
+      Quelques mesures de durcissement simples :
+      - `server_tokens off;` (contexte `http`) retire le numéro de version de l'en-tête `Server` et des pages
+        d'erreur, pour ne pas faciliter la recherche de failles connues ;
+      - `add_header Nom valeur;` ajoute des en-têtes de sécurité (`X-Content-Type-Options: nosniff`,
+        `X-Frame-Options`, `Content-Security-Policy`…). Ajoute `always` pour les inclure aussi dans les
+        réponses d'erreur ;
+      - `auth_basic "Zone";` et `auth_basic_user_file fichier;` protègent une `location` par identifiant et mot
+        de passe.
+
+      Le fichier de mots de passe contient des lignes `utilisateur:hash` ; `openssl passwd -apr1` produit un
+      hash compatible. L'authentification basique doit toujours passer par HTTPS.
+    checks:
+      - desc: La version de nginx est masquée
+        run: |
+          curl -sI http://localhost:8080/ | grep -i '^server:' | grep -qiv 'nginx/'
+      - desc: En-tête X-Content-Type-Options présent
+        run: |
+          curl -sI http://localhost:8080/ | grep -qi '^x-content-type-options: nosniff'
+      - desc: /admin/ refuse l'accès sans mot de passe
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/admin/)" = 401
+      - desc: admin/tdm donne accès à /admin/
+        run: curl -fsS -u admin:tdm http://localhost:8080/admin/ | grep -q "Admin TDM"
+  - id: repartition
+    title: Répartition de charge
+    description: |
+      Lance deux petits serveurs de test en arrière-plan :
+      ```
+      mkdir -p /srv/b1 /srv/b2 && echo "backend 1" > /srv/b1/index.html && echo "backend 2" > /srv/b2/index.html
+      nohup python3 -m http.server 9001 --directory /srv/b1 > /dev/null 2>&1 &
+      nohup python3 -m http.server 9002 --directory /srv/b2 > /dev/null 2>&1 &
+      ```
+      Déclare un `upstream backends` avec ces deux serveurs et fais servir `http://localhost:8080/lb/` en
+      alternance par l'un et l'autre. Ajoute l'en-tête de diagnostic `X-Upstream` qui indique quel serveur
+      a répondu (`$upstream_addr`).
+    hint: "upstream backends { server 127.0.0.1:9001; server 127.0.0.1:9002; } … location /lb/ { proxy_pass http://backends/; add_header X-Upstream $upstream_addr; }"
+    cours: |
+      Un bloc `upstream nom { server a; server b; }` (contexte `http`) déclare un groupe de serveurs. Un
+      `proxy_pass http://nom/;` envoie ensuite les requêtes à tour de rôle (**round-robin**, par défaut).
+
+      D'autres stratégies existent : `least_conn` (le moins chargé), `ip_hash` (persistance par adresse IP),
+      poids (`weight=3`). Nginx retire temporairement un serveur qui ne répond pas (`max_fails`, `fail_timeout`).
+
+      La variable `$upstream_addr` contient l'adresse du serveur qui a traité la requête : en l'exposant dans un
+      en-tête, tu peux constater la répartition avec quelques `curl -I`. Attention au chemin transmis, comme
+      dans l'exercice du reverse proxy.
+    checks:
+      - desc: Les deux backends répondent à tour de rôle
+        run: for i in 1 2 3 4; do curl -fsS http://localhost:8080/lb/; done | grep -o 'backend [12]' | sort -u | wc -l | grep -qx 2
+      - desc: L'en-tête X-Upstream indique le serveur
+        run: |
+          curl -s -o /dev/null -D - http://localhost:8080/lb/ | grep -Eqi '^x-upstream: 127\.0\.0\.1:900[12]'
+      - desc: La page d'accueil fonctionne toujours
+        run: curl -fsS http://localhost:8080 | grep -q "Bienvenue sur TDM"
+  - id: ng-redirection
+    title: Redirections permanentes
+    description: |
+      Le site a été réorganisé : l'ancienne adresse `/ancien` doit renvoyer **définitivement** (code `301`) vers
+      `/nouveau/`, qui sert la page `/var/www/tdm/nouveau/index.html` contenant `Nouvelle page`.
+
+      Ajoute aussi une redirection **temporaire** (`302`) de `/aide` vers `https://nginx.org/en/docs/`.
+    hint: "location = /ancien { return 301 /nouveau/; } ; location = /aide { return 302 https://nginx.org/en/docs/; }"
+    cours: |
+      Une **redirection** est une réponse 3xx accompagnée d'un en-tête `Location` : le navigateur fait alors une
+      nouvelle requête vers cette adresse. Le code compte :
+      - `301` (*Moved Permanently*) ou `308` : définitif. Les navigateurs et les moteurs de recherche
+        mémorisent la nouvelle adresse ;
+      - `302` (*Found*) ou `307` : temporaire (maintenance, campagne).
+
+      Dans nginx, `return CODE URL;` est la façon la plus simple et la plus rapide de rediriger. Une
+      `location = /chemin` (correspondance **exacte**) évite de capturer d'autres chemins qui commenceraient
+      pareil. Une URL relative (`/nouveau/`) est complétée par nginx avec le schéma et l'hôte de la requête.
+
+      `rewrite` existe aussi pour des réécritures à base d'expressions régulières. Pour tester sans suivre la
+      redirection : `curl -I` ; pour la suivre : `curl -L`.
+    checks:
+      - desc: /ancien redirige en 301 vers /nouveau/
+        run: test "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' http://localhost:8080/ancien)" = "301 http://localhost:8080/nouveau/"
+      - desc: /nouveau/ affiche la nouvelle page
+        run: curl -fsSL http://localhost:8080/ancien | grep -q 'Nouvelle page'
+      - desc: /aide redirige en 302 vers la documentation nginx
+        run: test "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' http://localhost:8080/aide)" = "302 https://nginx.org/en/docs/"
+  - id: ng-limitation
+    title: Limiter le débit des requêtes
+    description: |
+      Protège la page de connexion `/connexion/` (fichier `/var/www/tdm/connexion/index.html` contenant
+      `Connexion`) contre le forçage de mots de passe :
+      - déclare une zone de limitation `connexion` (10 Mo de mémoire) à **1 requête par seconde** par adresse IP ;
+      - applique-la à `/connexion/` avec une rafale tolérée de **5** requêtes, sans délai (`nodelay`) ;
+      - au-delà, nginx doit répondre **`429`** au lieu du `503` par défaut.
+
+      Le reste du site ne doit pas être limité.
+    hint: "limit_req_zone $binary_remote_addr zone=connexion:10m rate=1r/s; (contexte http) puis dans location /connexion/ : limit_req zone=connexion burst=5 nodelay; limit_req_status 429;"
+    cours: |
+      Le module `limit_req` limite le **débit** de requêtes selon une clé, avec l'algorithme du seau percé
+      (*leaky bucket*) :
+      - `limit_req_zone CLE zone=NOM:TAILLE rate=N r/s;` (contexte `http`) déclare la zone. La clé
+        `$binary_remote_addr` (l'IP du client sous forme compacte) donne une limite par client ; 10 Mo
+        suffisent pour environ 160 000 adresses ;
+      - `limit_req zone=NOM burst=N nodelay;` (dans un `server` ou une `location`) applique la limite.
+        `burst` tolère une rafale au-dessus du débit ; avec `nodelay`, ces requêtes sont servies tout de suite
+        plutôt que retardées ;
+      - `limit_req_status 429;` remplace le code par défaut (503) par le code standard *Too Many Requests*.
+
+      `limit_conn` limite, lui, le nombre de connexions simultanées. Pour tester, une boucle de requêtes
+      rapides avec `curl -w '%{http_code}\n'` montre les refus.
+    checks:
+      - desc: La page de connexion répond
+        run: curl -fsS http://localhost:8080/connexion/ | grep -q 'Connexion'
+      - desc: Une rafale de requêtes reçoit des 429
+        run: sleep 2; for i in $(seq 1 15); do curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/connexion/; done | grep -q '^429$'
+      - desc: Le reste du site n'est pas limité
+        run: sleep 2; for i in $(seq 1 15); do curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/; done | sort -u | grep -qx 200
+  - id: ng-spa
+    title: Servir une application monopage
+    description: |
+      Une application monopage (React, Vue…) gère ses propres routes dans le navigateur : `/app/clients/42` n'existe
+      pas sur le disque, mais doit renvoyer `/var/www/tdm/app/index.html` (qui contient `Application TDM`) avec
+      le code **200**.
+
+      En revanche, un fichier statique existant (crée `/var/www/tdm/app/app.js` contenant `console.log("tdm")`) doit
+      être servi tel quel.
+    hint: "location /app/ { try_files $uri $uri/ /app/index.html; }"
+    cours: |
+      `try_files` essaie une liste de chemins dans l'ordre et sert le premier qui existe ; le dernier élément
+      est le repli (une URI interne ou un code comme `=404`). Les variables utiles : `$uri` (le chemin demandé)
+      et `$uri/` (le même en tant que dossier, qui déclenche la directive `index`).
+
+      `try_files $uri $uri/ /app/index.html;` signifie donc : le fichier s'il existe, sinon le dossier, sinon la
+      page de l'application. C'est la configuration standard pour une application monopage, dont le routeur
+      JavaScript lit l'URL dans le navigateur.
+
+      La même directive sert aussi devant une application : `try_files $uri @backend;` envoie au proxy tout ce
+      qui n'est pas un fichier statique, avec une `location @backend` nommée.
+    checks:
+      - desc: Une route de l'application renvoie index.html en 200
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/app/clients/42)" = 200 && curl -fsS http://localhost:8080/app/clients/42 | grep -q 'Application TDM'
+      - desc: Un fichier statique existant est servi tel quel
+        run: curl -fsS http://localhost:8080/app/app.js | grep -q 'console.log'
+      - desc: La racine de l'application répond
+        run: curl -fsS http://localhost:8080/app/ | grep -q 'Application TDM'

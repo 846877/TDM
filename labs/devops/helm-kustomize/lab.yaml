@@ -1,0 +1,353 @@
+title: Helm et Kustomize
+level: expert
+order: 3
+tags: [kubernetes, helm, kustomize, k3s, gitops, packaging]
+summary: Industrialiser ses déploiements Kubernetes - base et overlays Kustomize, chart Helm, valeurs par environnement, templates conditionnels, rollback et dépôt de charts.
+compose: docker-compose.yml
+service: ops
+shell: bash
+workdir: /root
+description: |
+  Un cluster **k3s** tourne dans le conteneur `k3s` ; ton terminal est sur **ops** avec `kubectl`
+  (Kustomize est intégré : `kubectl kustomize` et `kubectl apply -k`) et `helm`.
+  Attends que `kubectl get nodes` affiche `Ready` (une trentaine de secondes).
+
+  Deux façons de ne plus copier-coller des manifestes d'un environnement à l'autre :
+
+  - **Kustomize** : une *base* commune et des *overlays* (dev, prod) qui la modifient par patchs ;
+  - **Helm** : un *chart* paramétré par des valeurs, versionné, installé sous forme de *release*.
+
+  Les manifestes de départ sont dans `/root/kustomize/base/`. Le port NodePort **30090** est publié sur
+  **http://localhost:30890** de ta machine.
+cours: |
+  ## Helm et Kustomize : gérer des manifestes à grande échelle
+
+  Copier-coller les mêmes manifestes pour dev, recette et prod en changeant trois valeurs mène vite à des
+  environnements divergents. Deux outils, complémentaires, répondent à ce problème.
+
+  ### Kustomize : patcher sans modèle
+
+  Kustomize part de YAML Kubernetes **valide** et le transforme. Il est intégré à kubectl
+  (`kubectl apply -k`, `kubectl kustomize`).
+
+  ```
+  kustomize/
+  ├── base/                    manifestes communs
+  │   ├── deployment.yaml
+  │   ├── service.yaml
+  │   └── kustomization.yaml   resources, labels
+  └── overlays/
+      ├── dev/kustomization.yaml    resources: [../../base], namespace: dev, namePrefix: dev-,
+      │                             replicas, configMapGenerator
+      └── prod/kustomization.yaml   images, patches, replicas: 3
+  ```
+
+  | Champ | Effet |
+  |---|---|
+  | `resources` | fichiers ou dossiers (bases) à inclure |
+  | `namespace`, `namePrefix`, `nameSuffix` | appliqués à toutes les ressources (et aux références) |
+  | `labels` / `commonLabels` | étiquettes ajoutées partout, y compris aux sélecteurs si demandé |
+  | `images` | change le nom ou le tag d'une image sans toucher à la base |
+  | `replicas` | change le nombre de réplicas d'un Deployment |
+  | `configMapGenerator`, `secretGenerator` | génère des ConfigMaps avec un **suffixe de hachage** |
+  | `patches` | patch stratégique ou JSON 6902 pour tout le reste |
+
+  Le suffixe de hachage d'une ConfigMap générée change avec son contenu : la référence dans le Deployment est
+  mise à jour, ce qui déclenche un redéploiement automatique quand la configuration change.
+
+  ### Helm : modèles et paquets
+
+  Helm est le **gestionnaire de paquets** de Kubernetes. Un **chart** est un paquet versionné ; son
+  installation dans un cluster s'appelle une **release**, qui a un historique de **révisions**.
+
+  ```
+  vitrine/
+  ├── Chart.yaml          name, version (du chart), appVersion (de l'application)
+  ├── values.yaml         valeurs par défaut
+  ├── values-prod.yaml    surcharges d'un environnement (fichier ajouté par toi)
+  └── templates/
+      ├── _helpers.tpl    fonctions réutilisables (vitrine.fullname, labels)
+      ├── deployment.yaml
+      ├── service.yaml
+      └── NOTES.txt       message affiché après l'installation
+  ```
+
+  Les templates utilisent la syntaxe Go : `{{ .Values.replicaCount }}`, `{{ .Release.Name }}`,
+  `{{ include "vitrine.fullname" . }}`, conditions `{{- if .Values.message }} ... {{- end }}`, filtres
+  `| quote`, `| default "x"`, `| nindent 4`. Les tirets `{{-` suppriment les espaces et retours à la ligne.
+
+  Priorité des valeurs : `values.yaml` < `-f fichier` (dans l'ordre) < `--set`.
+
+  ### Mémo
+
+  ```bash
+  kubectl kustomize overlays/prod ; kubectl apply -k overlays/prod ; kubectl diff -k overlays/prod
+  helm create vitrine ; helm lint vitrine ; helm template vitrine -f values-prod.yaml
+  helm install vitrine ./vitrine -n web --create-namespace
+  helm upgrade --install vitrine ./vitrine -n web -f values-prod.yaml --set image.tag=x
+  helm list -n web ; helm history vitrine -n web ; helm rollback vitrine 2 -n web
+  helm get values|manifest vitrine -n web
+  helm package vitrine -d depot/ ; helm repo index depot/ ; helm repo add local http://...
+  ```
+
+  ### Lequel choisir ?
+
+  Kustomize pour ses propres applications, avec peu de variations entre environnements. Helm pour distribuer
+  une application paramétrable (beaucoup de logiciels tiers sont publiés en charts). On peut les combiner :
+  rendre un chart puis le patcher avec Kustomize.
+
+  ### Pièges courants
+
+  - Une indentation incorrecte dans un template : `helm template` puis `kubectl apply --dry-run` aident.
+  - Oublier d'incrémenter `version` dans `Chart.yaml` avant de publier.
+  - Des secrets dans `values.yaml` versionné.
+  - Un `--set` oublié lors du prochain `upgrade` : les valeurs non répétées reviennent aux défauts (sauf
+    `--reuse-values`, à manier avec prudence).
+
+  ### Bonnes pratiques
+
+  `helm lint` et `kubectl kustomize` en CI, des fichiers de valeurs par environnement versionnés, des charts
+  versionnés dans un dépôt (HTTP ou OCI), `upgrade --install --atomic` pour revenir automatiquement en cas
+  d'échec.
+docs:
+  - title: Documentation Helm
+    url: https://helm.sh/docs/
+  - title: Guide des templates Helm
+    url: https://helm.sh/docs/chart_template_guide/
+  - title: Gestion déclarative avec Kustomize
+    url: https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/
+  - title: Documentation Kustomize
+    url: https://kubectl.docs.kubernetes.io/references/kustomize/
+exercises:
+  - id: kustomize-base
+    title: Une base Kustomize
+    description: |
+      Dans `/root/kustomize/base/`, écris le fichier `kustomization.yaml` qui :
+      - référence `deployment.yaml` et `service.yaml` ;
+      - ajoute à toutes les ressources (et aux sélecteurs) l'étiquette `app.kubernetes.io/part-of: boutique`.
+
+      Vérifie le rendu avec `kubectl kustomize /root/kustomize/base`.
+    hint: "Champs resources: [...] et labels: avec pairs: et includeSelectors: true (ou l'ancien commonLabels:)"
+    cours: |
+      Un dossier devient une **kustomisation** dès qu'il contient un `kustomization.yaml`. La clé `resources:`
+      liste les fichiers (ou dossiers) à assembler, dans l'ordre voulu.
+
+      Pour ajouter des étiquettes à toutes les ressources, Kustomize propose `labels:` : une liste d'entrées avec
+      `pairs:` (les étiquettes) et `includeSelectors: true` pour les ajouter **aussi** aux sélecteurs des
+      Deployments et Services (l'ancien champ `commonLabels` le fait toujours). Ajouter une étiquette à un
+      sélecteur rend le Deployment incompatible avec une version déjà déployée : à décider dès le départ.
+
+      `kubectl kustomize dossier` affiche le résultat sans rien appliquer : c'est ta boucle de vérification.
+    checks:
+      - desc: La base se construit et contient un Deployment et un Service
+        run: test "$(kubectl kustomize /root/kustomize/base | grep -cE '^kind. (Deployment|Service)$')" = 2
+      - desc: L'étiquette part-of est ajoutée
+        run: kubectl kustomize /root/kustomize/base | grep -q 'app.kubernetes.io/part-of. boutique'
+  - id: overlay-dev
+    title: L'overlay de développement
+    description: |
+      Le déploiement attend une ConfigMap `api-config` (voir `envFrom`). Crée l'overlay
+      `/root/kustomize/overlays/dev` qui part de la base et :
+      - place tout dans le namespace `dev` avec le préfixe de nom `dev-` ;
+      - ramène le déploiement à **1 réplica** ;
+      - **génère** la ConfigMap `api-config` avec `ENV=dev` (`configMapGenerator`).
+
+      Crée le namespace puis applique : `kubectl apply -k /root/kustomize/overlays/dev`.
+      Remarque le suffixe de hachage ajouté au nom de la ConfigMap, et la référence mise à jour dans le déploiement.
+    hint: "resources: [../../base] ; namespace: dev ; namePrefix: dev- ; replicas: [{name: api, count: 1}] ; configMapGenerator: [{name: api-config, literals: [ENV=dev]}]"
+    cours: |
+      Un **overlay** est une kustomisation qui inclut la base (`resources: [../../base]`) puis la modifie.
+      `namespace:` place toutes les ressources dans un namespace, `namePrefix:` préfixe leurs noms, et Kustomize
+      met à jour les références (le Service vise toujours le bon Deployment).
+
+      `replicas:` (liste de `name` + `count`) change le nombre de réplicas sans patch.
+
+      `configMapGenerator` crée une ConfigMap à partir de `literals` ou de fichiers. Son nom reçoit un **suffixe
+      de hachage** du contenu (`dev-api-config-7h2k9`) et toutes les références sont réécrites : quand la
+      configuration change, les pods sont recréés. Le namespace cible doit exister avant `kubectl apply -k`.
+    checks:
+      - desc: dev-api tourne avec 1 réplica dans dev
+        run: test "$(kubectl -n dev get deploy dev-api -o jsonpath='{.spec.replicas}/{.status.availableReplicas}')" = 1/1
+      - desc: La ConfigMap est générée (nom haché) et référencée
+        run: |
+          cm=$(kubectl -n dev get deploy dev-api -o jsonpath='{.spec.template.spec.containers[0].envFrom[0].configMapRef.name}')
+          case "$cm" in dev-api-config-?*) ;; *) exit 1 ;; esac
+          test "$(kubectl -n dev get cm "$cm" -o jsonpath='{.data.ENV}')" = dev
+      - desc: Le conteneur voit ENV=dev
+        run: test "$(kubectl -n dev exec deploy/dev-api -- printenv ENV)" = dev
+  - id: overlay-prod
+    title: L'overlay de production
+    description: |
+      Crée l'overlay `/root/kustomize/overlays/prod` (namespace `prod`, **sans** préfixe) qui :
+      - passe à **3 réplicas** ;
+      - utilise l'image `nginx:1.27.3-alpine` grâce au champ `images` (sans toucher à la base) ;
+      - ajoute par un **patch** une limite mémoire de `128Mi` au conteneur `api` ;
+      - génère `api-config` avec `ENV=prod`.
+
+      Applique-le dans le namespace `prod`.
+    hint: "images: [{name: nginx, newTag: 1.27.3-alpine}] ; patches: avec un patch stratégique (path: limites.yaml) ciblant le Deployment api"
+    cours: |
+      Le champ `images:` remplace le nom ou le tag d'une image partout où elle apparaît :
+      `- name: nginx` (le nom dans la base) avec `newTag:` (ou `newName:`). C'est ce que modifie une CI pour
+      promouvoir une version.
+
+      Pour le reste, on écrit un **patch**. Un patch stratégique ressemble à un extrait du Deployment ne contenant
+      que ce qui change : il faut garder `apiVersion`, `kind`, `metadata.name` et le chemin jusqu'au conteneur,
+      identifié par son `name`. Kustomize fusionne intelligemment les listes de conteneurs par nom. Les patchs se
+      déclarent sous `patches:` (`path:` ou `patch:` en ligne).
+
+      Vérifie le rendu avant d'appliquer : la limite doit apparaître sur le bon conteneur.
+    checks:
+      - desc: api tourne avec 3 réplicas dans prod
+        run: test "$(kubectl -n prod get deploy api -o jsonpath='{.status.availableReplicas}')" = 3
+      - desc: Image surchargée en nginx:1.27.3-alpine
+        run: test "$(kubectl -n prod get deploy api -o jsonpath='{.spec.template.spec.containers[0].image}')" = nginx:1.27.3-alpine
+      - desc: Limite mémoire de 128Mi
+        run: test "$(kubectl -n prod get deploy api -o jsonpath='{.spec.template.spec.containers[0].resources.limits.memory}')" = 128Mi
+      - desc: ENV=prod et étiquette part-of héritée de la base
+        run: test "$(kubectl -n prod exec deploy/api -- printenv ENV)" = prod && kubectl -n prod get deploy api --show-labels | grep -q 'app.kubernetes.io/part-of=boutique'
+  - id: helm-chart
+    title: Créer et installer un chart Helm
+    description: |
+      1. Génère un chart : `helm create /root/charts/vitrine`. Explore `Chart.yaml`, `values.yaml` et `templates/`.
+      2. Dans `values.yaml`, fixe l'étiquette d'image à `1.27-alpine` (le dépôt reste `nginx`).
+      3. Installe le chart sous le nom de release **`vitrine`** dans le namespace **`web`** (à créer par Helm).
+
+      `helm list -n web` doit afficher la release au statut `deployed`.
+    hint: "helm install vitrine /root/charts/vitrine -n web --create-namespace ; helm template permet de voir le rendu sans installer"
+    cours: |
+      `helm create` génère un chart complet et fonctionnel (déploiement nginx, service, compte de service,
+      Ingress désactivé, HPA désactivé). Lis les templates : ils montrent les idiomes Helm (helpers, `toYaml`,
+      `nindent`, conditions).
+
+      Dans `values.yaml`, la section `image` contient `repository`, `tag` et `pullPolicy`. Par défaut, le tag
+      vide signifie « utiliser `appVersion` de `Chart.yaml` ».
+
+      `helm install NOM CHEMIN -n NAMESPACE --create-namespace` crée une **release** : Helm rend les templates,
+      applique les manifestes et enregistre l'état dans un Secret du namespace (`sh.helm.release.v1...`).
+      `helm list -n web` et `helm status` montrent le résultat.
+    checks:
+      - desc: Le chart existe
+        run: test -f /root/charts/vitrine/Chart.yaml && test -d /root/charts/vitrine/templates
+      - desc: La release vitrine est déployée dans web
+        run: test "$(helm -n web status vitrine -o json | jq -r .info.status)" = deployed
+      - desc: Le déploiement utilise nginx:1.27-alpine et est disponible
+        run: test "$(kubectl -n web get deploy vitrine -o jsonpath='{.spec.template.spec.containers[0].image}')" = nginx:1.27-alpine && test "$(kubectl -n web get deploy vitrine -o jsonpath='{.status.availableReplicas}')" -ge 1
+  - id: valeurs-prod
+    title: Des valeurs par environnement
+    description: |
+      Crée `/root/charts/vitrine/values-prod.yaml` qui demande **2 réplicas** et un service **NodePort** sur le
+      port **30090**. Problème : le template `templates/service.yaml` généré ne sait pas fixer le `nodePort`.
+      Modifie-le pour qu'il utilise `service.nodePort` **quand la valeur est définie**.
+
+      Mets à jour la release avec ce fichier de valeurs, puis ouvre http://localhost:30890.
+    hint: "Dans service.yaml, sous le port : {{- if .Values.service.nodePort }} nodePort: {{ .Values.service.nodePort }} {{- end }} ; puis helm upgrade vitrine /root/charts/vitrine -n web -f /root/charts/vitrine/values-prod.yaml"
+    cours: |
+      Un fichier de valeurs supplémentaire (`-f values-prod.yaml`) surcharge seulement les clés qu'il contient ;
+      le reste vient de `values.yaml`. On garde ainsi un fichier par environnement, versionné.
+
+      Dans un template, `{{- if .Values.service.nodePort }}` n'insère un bloc que si la valeur est définie et
+      non vide. Attention à l'indentation : le champ `nodePort` doit se trouver dans l'élément de la liste
+      `ports`, au même niveau que `port` et `targetPort`.
+
+      `helm template . -f values-prod.yaml` affiche le rendu sans toucher au cluster. Ensuite,
+      `helm upgrade vitrine CHEMIN -n web -f values-prod.yaml` crée une nouvelle révision.
+    checks:
+      - desc: Le service est un NodePort sur 30090
+        run: test "$(kubectl -n web get svc vitrine -o jsonpath='{.spec.type}/{.spec.ports[0].nodePort}')" = NodePort/30090
+      - desc: 2 réplicas prêts
+        run: test "$(kubectl -n web get deploy vitrine -o jsonpath='{.status.readyReplicas}')" = 2
+      - desc: Les valeurs de la release viennent de values-prod.yaml
+        run: test -s /root/charts/vitrine/values-prod.yaml && helm -n web get values vitrine -o json | jq -e '.replicaCount == 2 and .service.nodePort == 30090' >/dev/null
+      - desc: L'application répond sur k3s:30090
+        run: curl -fsS --max-time 5 http://k3s:30090/ >/dev/null
+  - id: template-conditionnel
+    title: Logique de template
+    description: |
+      Ajoute au chart le template `templates/message.yaml` : une ConfigMap nommée
+      `<nom complet>-message` (utilise le helper `vitrine.fullname`) avec une clé `message`, **créée seulement si**
+      la valeur `message` est non vide.
+
+      - Dans `values.yaml` : `message: ""` (rien n'est créé par défaut) ;
+      - dans `values-prod.yaml` : `message: Bienvenue en production`.
+
+      Vérifie avec `helm template` et `helm lint`, puis mets à jour la release avec les valeurs de prod.
+    hint: "{{- if .Values.message }} ... {{- end }} autour de la ConfigMap ; name: {{ include \"vitrine.fullname\" . }}-message ; message: {{ .Values.message | quote }}"
+    cours: |
+      Un template peut être entièrement conditionnel : entoure tout le contenu du fichier par `{{- if
+      .Values.message }}` ... `{{- end }}`. Si la condition est fausse (chaîne vide, `false`, absent), le fichier
+      ne produit aucune ressource.
+
+      Les helpers de `_helpers.tpl` s'appellent avec `include` : `{{ include "vitrine.fullname" . }}` renvoie le
+      nom complet, construit à partir du nom de release et du chart. Le point `.` passe le contexte courant.
+      Pour insérer une valeur texte en toute sécurité, utilise le filtre `quote`.
+
+      `helm lint` détecte les erreurs de structure ; `helm template --show-only templates/message.yaml` n'affiche
+      qu'un fichier.
+    checks:
+      - desc: Le chart passe helm lint
+        run: helm lint /root/charts/vitrine >/dev/null
+      - desc: La ConfigMap n'est rendue que si message est défini
+        run: |
+          helm template vitrine /root/charts/vitrine --set message=essai | grep -q 'name. vitrine-message' &&
+          ! helm template vitrine /root/charts/vitrine | grep -q 'name. vitrine-message'
+      - desc: La ConfigMap de prod existe dans le cluster
+        run: test "$(kubectl -n web get cm vitrine-message -o jsonpath='{.data.message}')" = 'Bienvenue en production'
+  - id: rollback
+    title: Mise à jour ratée et rollback
+    description: |
+      Simule une mise en production ratée : mets à jour `vitrine` (avec les valeurs de prod) en forçant
+      `image.tag=9.9.9-inexistant`. Constate les pods en `ImagePullBackOff`, puis consulte `helm history` et
+      **reviens à la dernière révision saine** avec `helm rollback`.
+    hint: "helm upgrade vitrine /root/charts/vitrine -n web -f /root/charts/vitrine/values-prod.yaml --set image.tag=9.9.9-inexistant ; helm history vitrine -n web ; helm rollback vitrine <révision> -n web"
+    cours: |
+      Chaque `helm upgrade` crée une nouvelle **révision** de la release, même si elle échoue. `helm history`
+      liste les révisions avec leur statut (`deployed`, `superseded`, `failed`) et leur description.
+
+      `helm rollback RELEASE REVISION` réapplique les manifestes et les valeurs d'une révision antérieure, ce qui
+      crée… une nouvelle révision (l'historique est conservé). Vise la dernière révision saine, pas forcément la
+      première.
+
+      Une image inexistante ne fait pas échouer `helm upgrade` par défaut : Helm applique les manifestes sans
+      attendre. `--wait` (attend que les pods soient prêts) et `--atomic` (retour arrière automatique en cas
+      d'échec) rendent les mises à jour plus sûres.
+    checks:
+      - desc: Une révision avec l'image inexistante a été déployée
+        run: |
+          for r in $(helm -n web history vitrine -o json | jq -r '.[].revision'); do
+            if helm -n web get values vitrine --revision "$r" -o json | jq -e '.image.tag == "9.9.9-inexistant"' >/dev/null; then exit 0; fi
+          done
+          exit 1
+      - desc: Un rollback apparaît dans l'historique
+        run: helm -n web history vitrine -o json | jq -e 'any(.[]; .description | startswith("Rollback to"))' >/dev/null
+      - desc: La release est revenue sur nginx:1.27-alpine et elle est saine
+        run: test "$(kubectl -n web get deploy vitrine -o jsonpath='{.spec.template.spec.containers[0].image}')" = nginx:1.27-alpine && kubectl -n web rollout status deploy/vitrine --timeout=30s
+        timeout: 45
+  - id: depot
+    title: Publier le chart dans un dépôt
+    description: |
+      1. Passe la version du chart à **0.2.0** (`Chart.yaml`), puis empaquette-le dans `/root/depot/`.
+      2. Génère l'index du dépôt (`helm repo index`).
+      3. Sers le dossier en HTTP sur le port **8879** (en arrière-plan) avec `python3 -m http.server`.
+      4. Ajoute ce dépôt à Helm sous le nom **`local`** et retrouve ton chart avec `helm search repo`.
+    hint: "helm package /root/charts/vitrine -d /root/depot ; helm repo index /root/depot --url http://localhost:8879 ; nohup python3 -m http.server 8879 -d /root/depot >/dev/null 2>&1 & ; helm repo add local http://localhost:8879"
+    cours: |
+      Un **dépôt de charts** HTTP est un simple dossier servi en HTTP contenant des archives `.tgz` et un fichier
+      `index.yaml` qui les décrit (nom, version, URL, empreinte).
+
+      - `helm package CHEMIN -d DOSSIER` crée `nom-version.tgz` : la version vient de `Chart.yaml`, d'où
+        l'importance de l'incrémenter (versionnage sémantique).
+      - `helm repo index DOSSIER --url http://...` génère ou met à jour l'index.
+      - `helm repo add NOM URL`, puis `helm repo update` et `helm search repo` côté client.
+
+      Les registres d'images compatibles OCI peuvent aussi héberger des charts (`helm push` vers `oci://...`),
+      ce qui évite un serveur dédié.
+    checks:
+      - desc: L'archive vitrine-0.2.0.tgz et l'index existent
+        run: test -f /root/depot/vitrine-0.2.0.tgz && grep -q 'version. 0.2.0' /root/depot/index.yaml
+      - desc: Le dépôt est servi sur le port 8879
+        run: curl -fsS --max-time 5 http://localhost:8879/index.yaml | grep -q vitrine
+      - desc: Le dépôt local est connu de Helm et propose vitrine 0.2.0
+        run: |
+          helm repo update local >/dev/null 2>&1
+          helm search repo local/vitrine --version 0.2.0 -o json | jq -e 'length == 1' >/dev/null

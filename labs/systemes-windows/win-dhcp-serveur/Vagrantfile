@@ -1,0 +1,12 @@
+# Lab « Serveur DHCP » : SRV-DC01 (Windows Server 2022, 2 Go, contrôleur de durand.lan promu automatiquement)
+# et PC01 (Windows 11, 3 Go, carte LAN en DHCP : sans serveur DHCP, elle reste en 169.254.x.x).
+# Prévoir 8 Go de RAM libres.
+require_relative "../_commun/tdm"
+
+Vagrant.configure("2") do |config|
+  TDM.lab(config, __dir__) do |lab|
+    lab.server "dc01", hostname: "SRV-DC01", ip: "192.168.10.10", domain: :forest, primary: true,
+               scenario: "scenario.ps1"
+    lab.client "pc01", hostname: "PC01"
+  end
+end

@@ -1,0 +1,107 @@
+title: Adressage IPv6 d'un routeur
+level: intermediaire
+order: 15
+device: router
+hostname: R-V6
+tags: [ipv6, adressage, link-local]
+summary: Configurer des adresses globales et link-local.
+description: |
+  L'entreprise a obtenu le préfixe `2001:db8:acad::/48`. Prépare le routeur du siège :
+
+  1. active le routage IPv6 : `ipv6 unicast-routing` (sans cela le routeur se comporte comme un hôte) ;
+  2. adresses globales :
+
+  | Interface | Adresse globale            | Link-local |
+  |-----------|----------------------------|------------|
+  | `G0/0`    | `2001:db8:acad:10::1/64`   | `fe80::1`  |
+  | `G0/1`    | `2001:db8:acad:20::1/64`   | `fe80::1`  |
+
+  3. une adresse link-local fixe et facile à retenir : `ipv6 address fe80::1 link-local` ;
+  4. active les deux interfaces.
+
+  ```
+  interface g0/0
+   ipv6 address 2001:db8:acad:10::1/64
+   ipv6 address fe80::1 link-local
+  ```
+
+  Vérifie avec `show ipv6 interface brief`.
+checks:
+  - desc: Routage IPv6 activé
+    expr: d.ipv6_routing
+  - desc: G0/0 en 2001:db8:acad:10::1/64
+    expr: ipv6("g0/0", "2001:db8:acad:10::1/64")
+  - desc: G0/1 en 2001:db8:acad:20::1/64
+    expr: ipv6("g0/1", "2001:db8:acad:20::1/64")
+  - desc: Link-local fe80::1 sur les deux interfaces
+    expr: intf("g0/0").ipv6_link_local == "fe80::1" and intf("g0/1").ipv6_link_local == "fe80::1"
+    hint: "ipv6 address fe80::1 link-local"
+  - desc: Les deux interfaces sont activées
+    expr: not intf("g0/0").shutdown and not intf("g0/1").shutdown
+solution: |
+  configure terminal
+  ipv6 unicast-routing
+  interface g0/0
+  ipv6 address 2001:db8:acad:10::1/64
+  ipv6 address fe80::1 link-local
+  no shutdown
+  interface g0/1
+  ipv6 address 2001:db8:acad:20::1/64
+  ipv6 address fe80::1 link-local
+  no shutdown
+  end
+cours: |
+  ## Les adresses IPv6
+
+  Une adresse IPv6 fait **128 bits**, écrite en 8 groupes de 4 chiffres hexadécimaux. Deux
+  règles d'abréviation : supprimer les zéros en tête de chaque groupe, et remplacer **une seule**
+  suite de groupes nuls par `::`.
+
+  `2001:0db8:0000:0050:0000:0000:0000:0001` → `2001:db8:0:50::1`
+
+  Les types à connaître :
+
+  | Type                 | Préfixe      | Rôle                                          |
+  |----------------------|--------------|-----------------------------------------------|
+  | globale unicast      | `2000::/3`   | routable sur Internet                          |
+  | **link-local**       | `fe80::/10`  | valable sur un seul lien ; présente sur toute interface IPv6 |
+  | unique locale        | `fc00::/7`   | équivalent des adresses privées                |
+  | multicast            | `ff00::/8`   | `ff02::1` tous les nœuds, `ff02::2` tous les routeurs |
+
+  Les réseaux d'utilisateurs sont presque toujours en **/64** (nécessaire pour SLAAC).
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# ipv6 unicast-routing
+  R1(config)# interface gi0/2
+  R1(config-if)# ipv6 address 2001:db8:cafe:5::1/64
+  R1(config-if)# ipv6 address fe80::5 link-local
+  R1(config-if)# no shutdown
+  R1# show ipv6 interface brief
+  GigabitEthernet0/2     [up/up]
+      FE80::5
+      2001:DB8:CAFE:5::1
+  ```
+
+  - sans configuration, la link-local est **générée** automatiquement (EUI-64 ou aléatoire) ;
+    la fixer (`fe80::5`) rend les tables de voisins et de routage lisibles ;
+  - `ipv6 unicast-routing` fait du routeur un routeur IPv6 : il transmet les paquets et envoie
+    des **annonces RA** qui permettent aux hôtes de s'auto-configurer ;
+  - `ipv6 address 2001:db8:cafe:5::/64 eui-64` construit l'identifiant d'interface à partir de
+    l'adresse MAC.
+
+  ### Pièges fréquents
+
+  - Utiliser `::` deux fois dans une adresse : ambigu, refusé.
+  - Oublier `ipv6 unicast-routing` : les hôtes ne reçoivent pas de RA, donc pas de passerelle.
+  - Se tromper de longueur de préfixe (/48 sur une interface au lieu de /64).
+
+  ### Pour le CCNA
+
+  L'abréviation des adresses, les types d'adresses IPv6 et leur configuration sont au programme.
+docs:
+  - title: "RFC 4291 — IP Version 6 Addressing Architecture"
+    url: https://www.rfc-editor.org/rfc/rfc4291
+  - title: "Wikipédia — Adresse IPv6"
+    url: https://fr.wikipedia.org/wiki/Adresse_IPv6

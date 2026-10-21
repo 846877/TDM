@@ -1,0 +1,99 @@
+title: Adressage d'un routeur
+level: intermediaire
+order: 2
+device: router
+tags: [routeur, ipv4, interfaces]
+summary: Configurer et activer les interfaces d'un routeur.
+description: |
+  Contrairement aux switchs, les interfaces d'un routeur sont **éteintes par défaut**.
+
+  | Interface | Adresse         | Masque          | Description |
+  |-----------|-----------------|-----------------|-------------|
+  | `G0/0`    | 192.168.1.1     | 255.255.255.0   | LAN         |
+  | `G0/1`    | 10.0.0.1        | 255.255.255.252 | WAN         |
+
+  Renomme aussi le routeur `R1`, puis vérifie avec `show ip interface brief`.
+checks:
+  - desc: Le routeur s'appelle R1
+    expr: d.hostname == "R1"
+  - desc: G0/0 en 192.168.1.1/24
+    expr: intf("g0/0").ip == "192.168.1.1" and prefix(intf("g0/0").mask) == 24
+  - desc: G0/1 en 10.0.0.1/30
+    expr: intf("g0/1").ip == "10.0.0.1" and prefix(intf("g0/1").mask) == 30
+  - desc: Les deux interfaces sont activées
+    expr: not intf("g0/0").shutdown and not intf("g0/1").shutdown
+  - desc: Descriptions LAN et WAN
+    expr: intf("g0/0").description.upper().startswith("LAN") and intf("g0/1").description.upper().startswith("WAN")
+solution: |
+  configure terminal
+  hostname R1
+  interface g0/0
+  description LAN
+  ip address 192.168.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  description WAN
+  ip address 10.0.0.1 255.255.255.252
+  no shutdown
+  end
+cours: |
+  ## Chaque interface de routeur, un réseau
+
+  Un routeur relie des **réseaux IP différents**. Chacune de ses interfaces appartient à un
+  sous-réseau et porte une adresse de ce sous-réseau, qui sert de **passerelle** aux hôtes
+  connectés. Deux interfaces d'un même routeur ne peuvent pas être dans le même sous-réseau
+  (`% ... overlaps with ...`).
+
+  Contrairement aux ports de switch, les interfaces de routeur sont **éteintes par défaut**
+  (`administratively down`) : il faut `no shutdown`.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  Router(config)# hostname R-NANTES
+  R-NANTES(config)# interface gi0/0
+  R-NANTES(config-if)# description LAN-BUREAUX
+  R-NANTES(config-if)# ip address 172.16.40.1 255.255.255.0
+  R-NANTES(config-if)# no shutdown
+  R-NANTES(config-if)# interface gi0/1
+  R-NANTES(config-if)# description LIEN-SIEGE
+  R-NANTES(config-if)# ip address 10.0.0.5 255.255.255.252
+  R-NANTES(config-if)# no shutdown
+  R-NANTES# show ip interface brief
+  Interface       IP-Address    OK? Method Status  Protocol
+  GigabitEthernet0/0  172.16.40.1  YES manual up  up
+  GigabitEthernet0/1  10.0.0.5     YES manual up  up
+  ```
+
+  ### Les liaisons point à point en /30
+
+  Un lien entre deux routeurs n'a besoin que de **deux** adresses : un **/30**
+  (`255.255.255.252`) offre 4 adresses dont 2 utilisables (réseau `10.0.0.4`, hôtes `.5` et
+  `.6`, broadcast `.7`). Le /31 (RFC 3021) n'en utilise que deux, sans réseau ni broadcast.
+
+  ### Lire l'état d'une interface
+
+  | Status / Protocol          | Cause probable                          |
+  |----------------------------|-----------------------------------------|
+  | administratively down / down | `shutdown`                            |
+  | down / down                | câble débranché, équipement d'en face éteint |
+  | up / down                  | problème de couche 2 (encapsulation, horloge série) |
+  | up / up                    | fonctionnel                             |
+
+  Une fois l'interface `up/up`, son réseau apparaît comme **connecté** (`C`) et local (`L`) dans
+  `show ip route`.
+
+  ### Pièges fréquents
+
+  - Oublier `no shutdown`.
+  - Se tromper de masque : l'hôte et le routeur ne sont plus dans le même réseau.
+  - Attribuer l'adresse réseau ou broadcast à l'interface : refusé (`Bad mask`).
+
+  ### Pour le CCNA
+
+  L'adressage IPv4 des interfaces et la lecture de `show ip interface brief` sont des bases.
+docs:
+  - title: "Wikipédia — Adresse IP"
+    url: https://fr.wikipedia.org/wiki/Adresse_IP
+  - title: "Wikipédia — Sous-réseau"
+    url: https://fr.wikipedia.org/wiki/Sous-r%C3%A9seau

@@ -1,0 +1,110 @@
+title: Variables et calculs
+level: debutant
+order: 31
+tags: [variables, input, conversions]
+summary: Ranger des valeurs dans des variables pour calculer une aire et un périmètre.
+mode: stdio
+description: |
+  Une pièce rectangulaire est décrite par deux lignes d'entrée : la **longueur** puis la
+  **largeur**, en mètres (nombres entiers).
+
+  Range chaque valeur dans une variable, calcule l'aire et le périmètre, puis affiche
+  exactement :
+
+  ```
+  Aire : 12 m²
+  Périmètre : 14 m
+  ```
+
+  (exemple pour une longueur de `4` et une largeur de `3`).
+
+  Rappels : `input()` renvoie du texte, `int(...)` le convertit en entier ; l'aire vaut
+  `longueur × largeur` et le périmètre `2 × (longueur + largeur)`.
+starter: |
+  # Écris ton code ici
+cases:
+  - name: Pièce de 4 m sur 3 m
+    input: |
+      4
+      3
+    output: |
+      Aire : 12 m²
+      Périmètre : 14 m
+  - name: Pièce carrée
+    input: |
+      5
+      5
+    output: |
+      Aire : 25 m²
+      Périmètre : 20 m
+  - name: Grand entrepôt
+    input: |
+      120
+      45
+    output: |
+      Aire : 5400 m²
+      Périmètre : 330 m
+solution: |
+  longueur = int(input())
+  largeur = int(input())
+  aire = longueur * largeur
+  perimetre = 2 * (longueur + largeur)
+  print(f"Aire : {aire} m²")
+  print(f"Périmètre : {perimetre} m")
+cours: |
+  ## Qu'est-ce qu'une variable ?
+
+  Une variable est une **étiquette** posée sur une valeur. On la crée en lui affectant une
+  valeur avec `=` :
+
+  ```python
+  nb_serveurs = 12
+  nom = "web01"
+  nb_serveurs = nb_serveurs + 3   # on réutilise l'ancienne valeur : 15
+  ```
+
+  Le côté droit est calculé **d'abord**, puis le résultat est rangé dans le nom de gauche.
+  C'est pourquoi `x = x + 1` a un sens en programmation (alors que c'est absurde en
+  mathématiques). Raccourcis : `x += 1`, `x -= 2`, `x *= 3`.
+
+  ## Bien nommer ses variables
+
+  - lettres, chiffres et `_`, sans commencer par un chiffre ; pas d'espace ni de tiret ;
+  - en Python, la convention est le `snake_case` : `taille_disque`, `adresse_ip` ;
+  - un nom **explicite** vaut mieux qu'un commentaire : `prix_ttc` plutôt que `p` ;
+  - évite les noms des fonctions intégrées (`list`, `str`, `input`, `sum`) : tu les
+    masquerais.
+
+  ## Lire, convertir, calculer, afficher
+
+  La plupart des petits programmes suivent ce schéma :
+
+  ```python
+  quantite = int(input())          # 1. lire et convertir
+  prix = 7
+  total = quantite * prix          # 2. calculer
+  print(f"Total : {total} €")      # 3. afficher
+  ```
+
+  Sans `int()`, `input()` donne une chaîne : `"4" * 3` vaut `"444"` et `"4" + "3"` vaut
+  `"43"`. Python ne signale pas d'erreur dans ces deux cas, d'où des bugs sournois.
+
+  ## Variables intermédiaires
+
+  Stocker un résultat intermédiaire dans une variable bien nommée rend le code lisible et
+  évite de recalculer la même chose. Comparer :
+
+  ```python
+  print(f"{2 * (int(a) + int(b))}")      # difficile à relire
+  demi_tour = int(a) + int(b)
+  print(f"{2 * demi_tour}")              # plus clair
+  ```
+
+  ## Caractères spéciaux
+
+  Les chaînes Python sont en Unicode : `²`, `é`, `€` s'écrivent directement dans le code.
+docs:
+  - title: Tutoriel — utiliser Python comme une calculatrice
+    url: https://docs.python.org/fr/3/tutorial/introduction.html
+  - title: PEP 8 — conventions de nommage
+    url: https://peps.python.org/pep-0008/#naming-conventions

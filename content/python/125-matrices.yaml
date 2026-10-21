@@ -1,0 +1,149 @@
+title: Calcul matriciel
+level: intermediaire
+order: 25
+tags: [listes, matrices, algorithmes]
+summary: Manipuler des listes de listes.
+description: |
+  Une matrice est représentée par une liste de lignes : `[[1, 2], [3, 4]]`.
+
+  1. `transposer(m)` : échange lignes et colonnes (une matrice vide donne `[]`).
+  2. `multiplier(a, b)` : produit matriciel. Si le nombre de colonnes de `a` est différent du
+     nombre de lignes de `b`, lève `ValueError`.
+  3. `rotation_horaire(m)` : fait tourner la matrice d'un quart de tour dans le sens des
+     aiguilles d'une montre.
+
+  Aucune fonction ne doit modifier les matrices reçues.
+
+  ```python
+  transposer([[1, 2, 3], [4, 5, 6]])          # [[1, 4], [2, 5], [3, 6]]
+  multiplier([[1, 2], [3, 4]], [[5], [6]])    # [[17], [39]]
+  rotation_horaire([[1, 2], [3, 4]])          # [[3, 1], [4, 2]]
+  ```
+
+  Rappel : l'élément `(i, j)` du produit vaut `sum(a[i][k] * b[k][j] for k ...)`.
+  Astuce : `zip(*m)` transpose en une ligne.
+starter: |
+  def transposer(m):
+      pass
+
+
+  def multiplier(a, b):
+      pass
+
+
+  def rotation_horaire(m):
+      pass
+tests: |
+  def test_transposer():
+      "Transposée d'une matrice 2x3"
+      r = solution.transposer([[1, 2, 3], [4, 5, 6]])
+      assert r == [[1, 4], [2, 5], [3, 6]], f"obtenu {r!r}"
+
+  def test_transposer_vide():
+      "Matrice vide et matrice ligne"
+      assert solution.transposer([]) == []
+      assert solution.transposer([[1, 2]]) == [[1], [2]]
+
+  def test_transposer_listes():
+      "Le résultat contient des listes (pas des tuples)"
+      r = solution.transposer([[1, 2], [3, 4]])
+      assert all(isinstance(l, list) for l in r), f"obtenu {r!r}"
+
+  def test_multiplier():
+      "Produit 2x2 par 2x1"
+      r = solution.multiplier([[1, 2], [3, 4]], [[5], [6]])
+      assert r == [[17], [39]], f"obtenu {r!r}"
+
+  def test_multiplier_identite():
+      "Multiplier par l'identité ne change rien"
+      m = [[2, -1, 0], [4, 3, 7]]
+      i3 = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+      assert solution.multiplier(m, i3) == m
+
+  def test_multiplier_incompatible():
+      "Dimensions incompatibles -> ValueError"
+      try:
+          solution.multiplier([[1, 2]], [[1, 2]])
+      except ValueError:
+          return
+      raise AssertionError("multiplier 1x2 par 1x2 doit lever ValueError")
+
+  def test_rotation():
+      "Rotation d'une matrice 2x3"
+      m = [[1, 2, 3], [4, 5, 6]]
+      r = solution.rotation_horaire(m)
+      assert r == [[4, 1], [5, 2], [6, 3]], f"obtenu {r!r}"
+      assert m == [[1, 2, 3], [4, 5, 6]], "la matrice d'origine ne doit pas être modifiée"
+
+  def test_quatre_rotations():
+      "Quatre rotations ramènent au départ"
+      m = [[1, 2], [3, 4]]
+      r = m
+      for _ in range(4):
+          r = solution.rotation_horaire(r)
+      assert r == m, f"obtenu {r!r}"
+solution: |
+  def transposer(m):
+      return [list(colonne) for colonne in zip(*m)]
+
+
+  def multiplier(a, b):
+      if not a or not b or len(a[0]) != len(b):
+          raise ValueError("dimensions incompatibles")
+      colonnes = transposer(b)
+      return [[sum(x * y for x, y in zip(ligne, col)) for col in colonnes] for ligne in a]
+
+
+  def rotation_horaire(m):
+      return [list(reversed(colonne)) for colonne in zip(*m)]
+cours: |
+  ## Matrices en listes de listes
+
+  `m[i][j]` est l'élément ligne `i`, colonne `j`. Dimensions : `len(m)` lignes, `len(m[0])`
+  colonnes (si `m` n'est pas vide).
+
+  ```python
+  m = [[1, 2, 3],
+       [4, 5, 6]]
+  m[1][2]                 # 6
+  [ligne[0] for ligne in m]   # première colonne : [1, 4]
+  ```
+
+  ## Créer une matrice correctement
+
+  ```python
+  zeros = [[0] * 3 for _ in range(2)]   # correct : 2 lignes indépendantes
+  piege = [[0] * 3] * 2                 # FAUX : 2 fois la même ligne
+  ```
+
+  ## `zip` et le déballage `*`
+
+  `zip(a, b, c)` regroupe les éléments de même rang. Avec `*m`, on passe chaque ligne
+  comme un argument séparé : `zip(*m)` regroupe donc les **colonnes**. Le résultat est
+  composé de tuples ; convertis-les en listes si nécessaire.
+
+  ## Produit matriciel
+
+  Pour `A` (n×p) et `B` (p×q), le produit `C` est n×q et `C[i][j]` est le produit scalaire
+  de la ligne `i` de A par la colonne `j` de B. Trois boucles imbriquées : complexité
+  **O(n·p·q)**, soit O(n³) pour des matrices carrées. La condition de compatibilité : le
+  nombre de colonnes de A égale le nombre de lignes de B. Vérifie-la avant de calculer et
+  lève `ValueError` sinon.
+
+  ## Rotations
+
+  Une rotation d'un quart de tour se décompose en deux opérations simples : une
+  **transposition** et un **retournement** (des lignes, ou de chaque ligne). Dessine une
+  matrice 3×3 sur papier et essaie les deux ordres pour trouver la bonne combinaison pour le
+  sens horaire.
+
+  ## Ne pas modifier les entrées
+
+  Construis toujours de nouvelles listes (compréhensions, `zip`) plutôt que de modifier
+  `m` sur place. Une copie superficielle (`m[:]`) ne copie pas les lignes internes :
+  `copy.deepcopy` le fait. En pratique, pour du calcul numérique sérieux, on utilise NumPy.
+docs:
+  - title: Documentation Python — zip()
+    url: https://docs.python.org/fr/3/library/functions.html#zip
+  - title: Tutoriel — compréhensions imbriquées
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#nested-list-comprehensions

@@ -1,0 +1,547 @@
+title: Comptes et groupes locaux, UAC et stratégie locale
+level: debutant
+order: 1
+tags: [windows, windows server, comptes, groupes, mots de passe, uac, stratégie locale, powershell]
+summary: Créer les comptes et groupes locaux d'un serveur, appliquer la politique de mots de passe, régler l'UAC et traiter un départ.
+vagrant: bundled
+description: |
+  **Contexte.** Tu es technicien systèmes et réseaux chez *Ateliers Durand* (35 salariés). Un serveur
+  **Windows Server 2022** autonome (hors domaine), `SRV01`, vient d'être livré pour l'atelier : avant de
+  le mettre en production, il faut y créer les comptes locaux, appliquer la politique de sécurité de
+  l'entreprise et nettoyer ce que le prestataire a laissé (dont le compte d'un salarié parti).
+
+  **Machine.** Une VM Windows Server 2022 (2 Go de RAM, ≈ 15 Go de disque pour la box). Le terminal
+  ouvre **Windows PowerShell 5.1** en administrateur (`vagrant`). Interface graphique : bouton
+  *Afficher* dans VirtualBox ou `mstsc /v:127.0.0.1:33389` (vagrant / vagrant), puis
+  `lusrmgr.msc`, `secpol.msc`, `netplwiz`.
+
+  Cmdlets utiles : `Get-LocalUser`, `New-LocalUser`, `Set-LocalUser`, `Disable-LocalUser`,
+  `Get-LocalGroup`, `New-LocalGroup`, `Add-LocalGroupMember`, `Remove-LocalGroupMember`,
+  `Get-LocalGroupMember`, et les commandes historiques `net user`, `net localgroup`, `net accounts`.
+
+  ⚠️ Les VM sont en anglais : le groupe *Administrateurs* d'un Windows français s'appelle ici
+  **Administrators** (SID `S-1-5-32-544`), *Utilisateurs* s'appelle **Users** (`S-1-5-32-545`).
+cours: |
+  ## Comptes locaux et comptes de domaine
+
+  Chaque Windows possède sa propre base de comptes, la **SAM** (*Security Account Manager*), stockée
+  dans le registre (`HKLM\SAM`). Un **compte local** n'existe que sur cette machine : `SRV01\mdupont`
+  n'a rien à voir avec `PC01\mdupont`. Dans une entreprise avec Active Directory, les salariés utilisent
+  des **comptes de domaine** (`DURAND\mdupont`) ; les comptes locaux restent pourtant indispensables :
+  serveur hors domaine (DMZ, atelier), compte de secours, administrateur local des postes, comptes de
+  service.
+
+  ```
+  SRV01 (SAM locale)                    Contrôleur de domaine (base AD)
+  ├── Administrator  (SID ...-500)      ├── DURAND\mdupont
+  ├── Guest          (SID ...-501)      └── DURAND\Admins du domaine
+  ├── vagrant
+  └── groupes : Administrators, Users, Remote Desktop Users...
+  ```
+
+  Windows ne raisonne pas avec les noms mais avec les **SID** (*Security Identifier*) : `S-1-5-21-…-1001`
+  pour un compte créé, `S-1-5-32-544` pour le groupe intégré *Administrators* quelle que soit la langue.
+  Renommer un compte ne change pas son SID ; supprimer puis recréer un compte du même nom donne un
+  **nouveau** SID, qui perd tous les droits de l'ancien (NTFS, partages...). D'où la règle : on
+  **désactive** d'abord un compte, on ne le supprime qu'après archivage.
+
+  ## Outils
+
+  | Tâche | Graphique | PowerShell | Historique |
+  |-------|-----------|------------|------------|
+  | Utilisateurs et groupes | `lusrmgr.msc` (Gestion de l'ordinateur) | `New-LocalUser`, `Add-LocalGroupMember` | `net user`, `net localgroup` |
+  | Stratégie de mots de passe | `secpol.msc` › Stratégies de comptes | `secedit /export` (lecture) | `net accounts` |
+  | UAC | Panneau de configuration › Comptes d'utilisateurs | registre `HKLM:\...\Policies\System` | |
+
+  ```powershell
+  $mdp = Read-Host 'Mot de passe' -AsSecureString
+  New-LocalUser mdupont -FullName 'Marie Dupont' -Description 'Comptabilité' -Password $mdp
+  Add-LocalGroupMember -Group Compta -Member mdupont
+  Get-LocalGroupMember -SID S-1-5-32-544          # membres des Administrateurs
+  ```
+
+  Les mots de passe se manipulent en **SecureString** : `ConvertTo-SecureString 'xxx' -AsPlainText -Force`
+  est pratique en lab mais laisse le mot de passe en clair dans l'historique (`Get-History`, fichier
+  PSReadLine) : en production, `Read-Host -AsSecureString`.
+
+  ## Groupes intégrés à connaître
+
+  - **Administrators** : contrôle total de la machine. Le moins de membres possible.
+  - **Users** : utilisateurs standard (ouvrir une session, lancer des programmes).
+  - **Remote Desktop Users** : ouverture de session par le Bureau à distance.
+  - **Remote Management Users** : accès WinRM / PowerShell Remoting sans être administrateur.
+  - **Backup Operators**, **Event Log Readers**... : délégations ciblées.
+
+  On applique le **principe du moindre privilège** : un salarié n'est jamais administrateur ; le
+  technicien utilise un compte nominatif, distinct de son compte bureautique.
+
+  ## Stratégie de mots de passe et verrouillage
+
+  Dans `secpol.msc` › *Stratégies de comptes* (ou `net accounts`) : longueur minimale, durée de vie
+  maximale, historique (interdit de réutiliser les N derniers), complexité, et **verrouillage** après N
+  échecs pendant X minutes. L'ANSSI recommande des mots de passe longs (12 caractères et plus) plutôt
+  que des changements trop fréquents. Sur un poste du domaine, ces réglages viennent de la GPO du
+  domaine et écrasent la stratégie locale.
+
+  ## Contrôle de compte d'utilisateur (UAC)
+
+  Même membre d'*Administrators*, un utilisateur ouvre sa session avec un **jeton filtré** (droits
+  standard). L'élévation (« Exécuter en tant qu'administrateur ») affiche une invite sur le **bureau
+  sécurisé**. Réglages dans `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System` :
+  `EnableLUA` (1 = UAC actif, ne jamais le désactiver), `ConsentPromptBehaviorAdmin` (5 = par défaut,
+  2 = toujours demander), `PromptOnSecureDesktop` (1 = bureau sécurisé).
+
+  ## Pièges courants
+
+  - Ouvrir PowerShell **sans** élévation : `Access denied` sur `New-LocalUser`.
+  - Oublier que `Get-LocalGroupMember` affiche `SRV01\mdupont` (nom préfixé par la machine).
+  - Cocher « le mot de passe n'expire jamais » pour les comptes humains.
+  - Supprimer un compte au lieu de le désactiver, et perdre les droits associés.
+  - Utiliser le compte *Administrator* intégré au quotidien : on le renomme, on lui donne un mot de passe
+    fort et on travaille avec des comptes nominatifs.
+docs:
+  - title: Module Microsoft.PowerShell.LocalAccounts
+    url: https://learn.microsoft.com/fr-fr/powershell/module/microsoft.powershell.localaccounts/
+  - title: Contrôle de compte d'utilisateur (UAC)
+    url: https://learn.microsoft.com/fr-fr/windows/security/application-security/application-control/user-account-control/
+  - title: Stratégie de mot de passe
+    url: https://learn.microsoft.com/fr-fr/windows/security/threat-protection/security-policy-settings/password-policy
+exercises:
+  - id: win-cpt-groupes
+    title: Groupes des services
+    description: |
+      Ticket n° 1042 : « Préparer les groupes locaux de SRV01 ». Crée les groupes locaux suivants, avec
+      leur description :
+
+      | Groupe         | Description                  |
+      |----------------|------------------------------|
+      | `Compta`       | Service comptabilité         |
+      | `RH`           | Ressources humaines          |
+      | `Informatique` | Service informatique         |
+
+      Contrôle avec `Get-LocalGroup`.
+    hint: New-LocalGroup -Name Compta -Description 'Service comptabilité'
+    cours: |
+      Un **groupe local** regroupe des comptes pour leur donner des droits en une fois : on donne
+      l'accès d'un dossier au groupe `Compta`, jamais à `mdupont` directement. Quand Marie change de
+      service, on la change de groupe et tous ses accès suivent.
+
+      `New-LocalGroup -Name Compta -Description '...'` crée le groupe ; `Get-LocalGroup` les liste ;
+      `Set-LocalGroup` modifie la description, `Rename-LocalGroup` le nom. La commande historique
+      équivalente est `net localgroup Compta /add /comment:"..."`.
+
+      La description n'est pas décorative : six mois plus tard, c'est elle qui dit à ton collègue à quoi
+      sert le groupe `GRP_ATL_LECT`. Côté graphique : `lusrmgr.msc` › Groupes › Nouveau groupe.
+    ci: true
+    checks:
+      - desc: Les trois groupes existent
+        run: |
+          @(Get-LocalGroup -Name Compta, RH, Informatique).Count -eq 3
+      - desc: Chaque groupe a la bonne description
+        run: |
+          (Get-LocalGroup Compta).Description -eq 'Service comptabilité' -and
+          (Get-LocalGroup RH).Description -eq 'Ressources humaines' -and
+          (Get-LocalGroup Informatique).Description -eq 'Service informatique'
+    solution: |
+      New-LocalGroup -Name Compta -Description 'Service comptabilité'
+      New-LocalGroup -Name RH -Description 'Ressources humaines'
+      New-LocalGroup -Name Informatique -Description 'Service informatique'
+
+  - id: win-cpt-comptes
+    title: Comptes des collaborateurs
+    description: |
+      Crée les comptes locaux suivants, avec le mot de passe provisoire `Bienvenue2024!` :
+
+      | Compte     | Nom complet    | Description            |
+      |------------|----------------|------------------------|
+      | `mdupont`  | Marie Dupont   | Comptable              |
+      | `jmartin`  | Julien Martin  | Gestionnaire RH        |
+      | `tbernard` | Thomas Bernard | Technicien informatique|
+
+      Les comptes doivent être **activés**.
+    hint: |
+      $mdp = ConvertTo-SecureString 'Bienvenue2024!' -AsPlainText -Force
+      New-LocalUser mdupont -FullName 'Marie Dupont' -Description 'Comptable' -Password $mdp
+    cours: |
+      `New-LocalUser` attend le mot de passe sous forme de **SecureString** (chaîne chiffrée en mémoire).
+      En interactif : `$mdp = Read-Host -AsSecureString`. Dans un script de lab :
+      `ConvertTo-SecureString 'texte' -AsPlainText -Force`.
+
+      Options utiles : `-FullName` (nom affiché à l'ouverture de session), `-Description`,
+      `-PasswordNeverExpires`, `-UserMayNotChangePassword`, `-AccountExpires`, `-NoPassword`
+      (déconseillé). Un compte créé avec `New-LocalUser` est automatiquement membre de **Users** ?
+      Non : contrairement à `lusrmgr.msc`, la cmdlet ne l'ajoute à aucun groupe. Sans le groupe *Users*,
+      l'utilisateur ne peut pas ouvrir de session interactive sur un serveur.
+
+      Équivalent historique : `net user mdupont Bienvenue2024! /add /fullname:"Marie Dupont"`.
+      `Get-LocalUser | Format-Table Name, FullName, Enabled` pour contrôler.
+    ci: true
+    checks:
+      - desc: Les trois comptes existent et sont activés
+        run: |
+          @(Get-LocalUser mdupont, jmartin, tbernard | Where-Object Enabled).Count -eq 3
+      - desc: Noms complets et descriptions renseignés
+        run: |
+          $u = Get-LocalUser mdupont, jmartin, tbernard
+          ($u.FullName -join '|') -eq 'Marie Dupont|Julien Martin|Thomas Bernard' -and
+          ($u.Description -join '|') -eq 'Comptable|Gestionnaire RH|Technicien informatique'
+      - desc: Le mot de passe de mdupont est Bienvenue2024!
+        run: |
+          Add-Type -Namespace TDM -Name Auth -MemberDefinition '[DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool LogonUser(string u, string d, string p, int t, int f, out IntPtr h); [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h); public static int Code(string u, string p) { IntPtr h; if (LogonUser(u, ".", p, 3, 0, out h)) { CloseHandle(h); return 0; } return Marshal.GetLastWin32Error(); }'
+          # 0 = accepté ; 1385 (type d'ouverture non accordé) et 1907 (changement exigé) = mot de passe correct quand même
+          ([TDM.Auth]::Code('mdupont', 'Bienvenue2024!') -in 0, 1385, 1907)
+    solution: |
+      $mdp = ConvertTo-SecureString 'Bienvenue2024!' -AsPlainText -Force
+      New-LocalUser mdupont -FullName 'Marie Dupont' -Description 'Comptable' -Password $mdp
+      New-LocalUser jmartin -FullName 'Julien Martin' -Description 'Gestionnaire RH' -Password $mdp
+      New-LocalUser tbernard -FullName 'Thomas Bernard' -Description 'Technicien informatique' -Password $mdp
+
+  - id: win-cpt-membres
+    title: Appartenance aux groupes
+    description: |
+      Place chacun dans son groupe de service **et** dans le groupe intégré **Users** :
+
+      - `mdupont` → `Compta`
+      - `jmartin` → `RH`
+      - `tbernard` → `Informatique`
+
+      Thomas, technicien, doit aussi être **administrateur local** de SRV01 (groupe *Administrators*).
+    hint: Add-LocalGroupMember -Group Compta -Member mdupont ; Add-LocalGroupMember -SID S-1-5-32-544 -Member tbernard
+    cours: |
+      `Add-LocalGroupMember -Group <groupe> -Member <comptes>` ajoute un ou plusieurs membres (séparés
+      par des virgules) ; `Remove-LocalGroupMember` retire ; `Get-LocalGroupMember <groupe>` liste
+      (les noms apparaissent sous la forme `SRV01\mdupont`).
+
+      Pour viser un groupe intégré sans dépendre de la langue de Windows, utilise son SID :
+      `Add-LocalGroupMember -SID S-1-5-32-544 -Member tbernard` fonctionne aussi bien sur un serveur
+      anglais (*Administrators*) que français (*Administrateurs*).
+
+      Les appartenances sont lues **à l'ouverture de session** : un utilisateur connecté doit se
+      déconnecter puis se reconnecter pour profiter d'un nouveau groupe (`whoami /groups` pour voir les
+      groupes de sa session).
+    ci: true
+    checks:
+      - desc: mdupont est dans Compta, jmartin dans RH, tbernard dans Informatique
+        run: |
+          [bool](Get-LocalGroupMember Compta | Where-Object Name -like '*\mdupont') -and
+          [bool](Get-LocalGroupMember RH | Where-Object Name -like '*\jmartin') -and
+          [bool](Get-LocalGroupMember Informatique | Where-Object Name -like '*\tbernard')
+      - desc: Les trois comptes sont membres de Users
+        run: |
+          $m = (Get-LocalGroupMember -SID S-1-5-32-545).Name
+          @('mdupont', 'jmartin', 'tbernard' | Where-Object { $m -like "*\$_" }).Count -eq 3
+      - desc: tbernard est administrateur local, mdupont et jmartin ne le sont pas
+        run: |
+          $admins = (Get-LocalGroupMember -SID S-1-5-32-544).Name
+          [bool]($admins -like '*\tbernard') -and -not ($admins -like '*\mdupont') -and -not ($admins -like '*\jmartin')
+    solution: |
+      Add-LocalGroupMember -Group Compta -Member mdupont
+      Add-LocalGroupMember -Group RH -Member jmartin
+      Add-LocalGroupMember -Group Informatique -Member tbernard
+      Add-LocalGroupMember -SID S-1-5-32-545 -Member mdupont, jmartin, tbernard
+      Add-LocalGroupMember -SID S-1-5-32-544 -Member tbernard
+
+  - id: win-cpt-politique-mdp
+    title: Politique de mots de passe et de verrouillage
+    description: |
+      La charte informatique impose, sur tous les serveurs hors domaine :
+
+      - mots de passe de **12 caractères minimum**, valables **90 jours** au maximum ;
+      - impossibilité de réutiliser les **5** derniers mots de passe ;
+      - verrouillage du compte après **5** échecs, pendant **15 minutes**.
+
+      Applique-la à la stratégie locale de SRV01 (`net accounts` ou `secpol.msc`).
+    hint: net accounts /minpwlen:12 /maxpwage:90 /uniquepw:5 /lockoutthreshold:5 /lockoutduration:15 /lockoutwindow:15
+    cours: |
+      La stratégie de comptes locale se règle dans `secpol.msc` › *Stratégies de comptes* ›
+      *Stratégie de mot de passe* et *Stratégie de verrouillage du compte*, ou en ligne de commande :
+
+      ```
+      net accounts /minpwlen:12 /maxpwage:90 /uniquepw:5
+      net accounts /lockoutthreshold:5 /lockoutduration:15 /lockoutwindow:15
+      ```
+
+      `net accounts` sans argument affiche les valeurs actuelles. Pour un contrôle fiable (indépendant
+      de la langue), on exporte la stratégie de sécurité :
+      `secedit /export /cfg C:\Admin\secpol.inf /areas SECURITYPOLICY` puis on lit
+      `MinimumPasswordLength`, `MaximumPasswordAge`, `PasswordHistorySize`, `LockoutBadCount` et
+      `LockoutDuration`.
+
+      Le verrouillage freine les attaques par force brute, mais un seuil trop bas (3) génère des appels
+      au support. Sur une machine du domaine, c'est la GPO *Default Domain Policy* qui fait foi.
+    ci: true
+    checks:
+      - desc: Longueur minimale 12, durée maximale 90 jours, historique 5
+        run: |
+          $f = Join-Path $env:TEMP 'tdm-secpol.inf'
+          secedit /export /cfg $f /areas SECURITYPOLICY | Out-Null
+          $c = Get-Content $f
+          ($c -match '^MinimumPasswordLength = 12$').Count -eq 1 -and ($c -match '^MaximumPasswordAge = 90$').Count -eq 1 -and
+          ($c -match '^PasswordHistorySize = 5$').Count -eq 1
+      - desc: Verrouillage après 5 échecs pendant 15 minutes
+        run: |
+          $f = Join-Path $env:TEMP 'tdm-secpol.inf'
+          secedit /export /cfg $f /areas SECURITYPOLICY | Out-Null
+          $c = Get-Content $f
+          ($c -match '^LockoutBadCount = 5$').Count -eq 1 -and ($c -match '^LockoutDuration = 15$').Count -eq 1
+    solution: |
+      net accounts /minpwlen:12 /maxpwage:90 /uniquepw:5
+      net accounts /lockoutthreshold:5 /lockoutduration:15 /lockoutwindow:15
+
+  - id: win-cpt-premiere-connexion
+    title: Arrivée d'une salariée
+    description: |
+      Sophie Lefèvre arrive lundi au service RH. Crée son compte `slefevre` (nom complet
+      `Sophie Lefèvre`, description `Assistante RH`) avec le mot de passe provisoire `Provisoire2024!`,
+      membre de `RH` et de *Users*, et **oblige-la à changer son mot de passe à la première connexion**.
+    hint: net user slefevre /logonpasswordchg:yes (après New-LocalUser et Add-LocalGroupMember)
+    cours: |
+      Le technicien ne doit pas connaître le mot de passe définitif d'un salarié : on donne un mot de
+      passe provisoire (de vive voix, jamais dans le même courriel que l'identifiant) et on coche
+      « L'utilisateur doit changer le mot de passe à la prochaine ouverture de session ».
+
+      `New-LocalUser` n'a pas d'option pour cela. Deux méthodes :
+
+      ```powershell
+      net user slefevre /logonpasswordchg:yes
+      # ou par ADSI (fournisseur WinNT, celui de la SAM locale)
+      $u = [ADSI]"WinNT://$env:COMPUTERNAME/slefevre,user"
+      $u.PasswordExpired = 1 ; $u.SetInfo()
+      ```
+
+      Attention : cette case est incompatible avec « Le mot de passe n'expire jamais ». Elle bloque aussi
+      les connexions réseau (partage, WinRM) tant que le mot de passe n'a pas été changé de façon
+      interactive.
+    ci: true
+    checks:
+      - desc: Le compte slefevre existe, avec le bon nom complet, dans RH et Users
+        run: |
+          $u = Get-LocalUser slefevre
+          $u.FullName -eq 'Sophie Lefèvre' -and $u.Description -eq 'Assistante RH' -and
+          [bool](Get-LocalGroupMember RH | Where-Object Name -like '*\slefevre') -and
+          [bool](Get-LocalGroupMember -SID S-1-5-32-545 | Where-Object Name -like '*\slefevre')
+      - desc: Elle devra changer son mot de passe à la première connexion
+        run: |
+          $u = [ADSI]"WinNT://$env:COMPUTERNAME/slefevre,user"
+          [int]$u.Properties['PasswordExpired'].Value -eq 1
+    solution: |
+      $mdp = ConvertTo-SecureString 'Provisoire2024!' -AsPlainText -Force
+      New-LocalUser slefevre -FullName 'Sophie Lefèvre' -Description 'Assistante RH' -Password $mdp
+      Add-LocalGroupMember -Group RH -Member slefevre
+      Add-LocalGroupMember -SID S-1-5-32-545 -Member slefevre
+      net user slefevre /logonpasswordchg:yes
+
+  - id: win-cpt-depart
+    title: Départ d'un salarié
+    description: |
+      Paul Leroy (`pleroy`), comptable, a quitté l'entreprise hier. Le prestataire l'avait mis
+      administrateur local « pour installer un logiciel ». Applique la procédure de départ :
+
+      1. **désactive** le compte (on ne le supprime pas : ses fichiers doivent être archivés d'abord) ;
+      2. retire-le du groupe **Administrators** ;
+      3. remplace sa description par `Départ le 18/10 - à supprimer après archivage`.
+    hint: Disable-LocalUser pleroy ; Remove-LocalGroupMember -SID S-1-5-32-544 -Member pleroy ; Set-LocalUser pleroy -Description '...'
+    cours: |
+      La procédure de départ d'un salarié est un classique des tickets : **désactiver** immédiatement
+      (`Disable-LocalUser`, ou `net user pleroy /active:no`), retirer les privilèges, tracer l'action
+      (description, ticket), puis **supprimer** plus tard (`Remove-LocalUser`) une fois les données
+      récupérées.
+
+      Pourquoi ne pas supprimer tout de suite ? Le compte est identifié par son SID : ses droits NTFS,
+      sa propriété de fichiers et son profil (`C:\Users\pleroy`) y sont liés. Une suppression
+      précipitée laisse des « SID orphelins » (`S-1-5-21-...` affichés à la place du nom) et rend
+      l'archivage plus pénible.
+
+      Profite du départ pour faire le ménage : `Get-LocalGroupMember -SID S-1-5-32-544` doit être une
+      liste courte et connue.
+    ci: true
+    checks:
+      - desc: Le compte pleroy est désactivé (mais existe toujours)
+        run: |
+          (Get-LocalUser pleroy).Enabled -eq $false
+      - desc: pleroy n'est plus administrateur
+        run: |
+          -not (Get-LocalGroupMember -SID S-1-5-32-544 | Where-Object Name -like '*\pleroy') -and [bool](Get-LocalUser pleroy)
+      - desc: La description trace le départ
+        run: |
+          (Get-LocalUser pleroy).Description -eq 'Départ le 18/10 - à supprimer après archivage'
+    solution: |
+      Disable-LocalUser pleroy
+      Remove-LocalGroupMember -SID S-1-5-32-544 -Member pleroy
+      Set-LocalUser pleroy -Description 'Départ le 18/10 - à supprimer après archivage'
+
+  - id: win-cpt-stagiaire
+    title: Compte temporaire de stagiaire
+    description: |
+      Un stagiaire arrive pour six mois. Crée le compte `stagiaire01` (nom complet `Stagiaire Atelier`,
+      mot de passe `Apprenti2024!Lyon`) :
+
+      - membre de *Users* uniquement ;
+      - le compte **expire le 30/06/2027** ;
+      - le stagiaire **ne peut pas changer** son mot de passe (compte partagé par les stagiaires
+        successifs, mot de passe géré par le service informatique).
+    hint: New-LocalUser stagiaire01 ... -AccountExpires (Get-Date 2027-06-30) -UserMayNotChangePassword
+    cours: |
+      Pour les comptes à durée limitée (stagiaires, intérimaires, prestataires), on fixe une **date
+      d'expiration** : le compte se bloque tout seul, même si personne ne pense à le désactiver.
+
+      ```powershell
+      New-LocalUser stagiaire01 -Password $mdp -AccountExpires (Get-Date '2027-06-30') -UserMayNotChangePassword
+      Set-LocalUser stagiaire01 -AccountExpires (Get-Date '2027-06-30')   # pour un compte existant
+      net user stagiaire01 /expires:30/06/2027                             # format de date de la machine !
+      ```
+
+      Piège de la **complexité** : le mot de passe ne doit contenir ni l'identifiant, ni un mot de 3
+      caractères ou plus du nom complet. `Stage2024!Atelier` serait refusé pour « Stagiaire Atelier »
+      (`InvalidPasswordException`).
+
+      Ne confonds pas l'expiration du **compte** (date de fin, `AccountExpires`) avec l'expiration du
+      **mot de passe** (durée de vie, `PasswordExpires`). `Get-LocalUser stagiaire01 | Format-List *`
+      affiche toutes les propriétés, dont `UserMayChangePassword` et `AccountExpires`.
+    ci: true
+    checks:
+      - desc: Le compte stagiaire01 existe et est membre de Users
+        run: |
+          [bool](Get-LocalUser stagiaire01) -and [bool](Get-LocalGroupMember -SID S-1-5-32-545 | Where-Object Name -like '*\stagiaire01')
+      - desc: Il expire le 30/06/2027
+        run: |
+          $e = (Get-LocalUser stagiaire01).AccountExpires
+          $null -ne $e -and $e.ToString('yyyy-MM-dd') -in '2027-06-30', '2027-07-01'
+      - desc: Le stagiaire ne peut pas changer son mot de passe
+        run: |
+          (Get-LocalUser stagiaire01).UserMayChangePassword -eq $false
+      - desc: Le stagiaire n'est pas administrateur
+        run: |
+          [bool](Get-LocalUser stagiaire01) -and -not (Get-LocalGroupMember -SID S-1-5-32-544 | Where-Object Name -like '*\stagiaire01')
+    solution: |
+      $mdp = ConvertTo-SecureString 'Apprenti2024!Lyon' -AsPlainText -Force
+      New-LocalUser stagiaire01 -FullName 'Stagiaire Atelier' -Password $mdp -AccountExpires (Get-Date '2027-06-30') -UserMayNotChangePassword
+      Add-LocalGroupMember -SID S-1-5-32-545 -Member stagiaire01
+
+  - id: win-cpt-uac
+    title: Durcir l'UAC
+    description: |
+      L'audit de sécurité demande que, sur SRV01, l'UAC **demande toujours une confirmation** aux
+      administrateurs, **sur le bureau sécurisé**, et reste évidemment activé :
+
+      | Valeur (HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System) | Donnée |
+      |---|---|
+      | `EnableLUA` | 1 |
+      | `ConsentPromptBehaviorAdmin` | 2 |
+      | `PromptOnSecureDesktop` | 1 |
+    hint: Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name ConsentPromptBehaviorAdmin -Value 2
+    cours: |
+      L'UAC se règle graphiquement avec le curseur *Modifier les paramètres de contrôle de compte
+      d'utilisateur* (`UserAccountControlSettings.exe`), dans la stratégie locale (`secpol.msc` ›
+      Options de sécurité › *Contrôle de compte d'utilisateur*), ou directement dans le registre :
+
+      ```powershell
+      $k = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+      Get-ItemProperty $k | Select-Object EnableLUA, ConsentPromptBehaviorAdmin, PromptOnSecureDesktop
+      Set-ItemProperty $k -Name ConsentPromptBehaviorAdmin -Value 2
+      ```
+
+      `ConsentPromptBehaviorAdmin` : 0 = élever sans demander (dangereux), 2 = toujours demander sur le
+      bureau sécurisé, 5 = demander pour les binaires non Windows (défaut). `EnableLUA = 0` désactive
+      complètement l'UAC (et casse les applications modernes) : c'est un réglage à ne jamais
+      appliquer, et qui demande un redémarrage.
+    ci: true
+    checks:
+      - desc: L'UAC est actif
+        run: |
+          (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System').EnableLUA -eq 1
+      - desc: Confirmation toujours demandée aux administrateurs, sur le bureau sécurisé
+        run: |
+          $p = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+          $p.ConsentPromptBehaviorAdmin -eq 2 -and $p.PromptOnSecureDesktop -eq 1
+    solution: |
+      $k = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+      Set-ItemProperty $k -Name EnableLUA -Value 1 -Type DWord
+      Set-ItemProperty $k -Name ConsentPromptBehaviorAdmin -Value 2 -Type DWord
+      Set-ItemProperty $k -Name PromptOnSecureDesktop -Value 1 -Type DWord
+
+  - id: win-cpt-admin-integre
+    title: Sécuriser l'administrateur intégré
+    description: |
+      Le compte *Administrator* intégré (SID terminant par `-500`) est la première cible des attaques.
+      Selon la procédure de l'entreprise :
+
+      1. renomme-le `adm-srv01` ;
+      2. donne-lui la description `Compte de secours - mot de passe au coffre` ;
+      3. vérifie que le compte *Guest* (Invité, SID `-501`) est **désactivé**.
+
+      Ne touche pas au compte `vagrant`, c'est lui qui ouvre ton terminal.
+    hint: Get-LocalUser | Where-Object SID -like '*-500' | Rename-LocalUser -NewName adm-srv01
+    cours: |
+      Le compte administrateur intégré existe sur tous les Windows avec le même SID relatif **500** :
+      les attaquants le connaissent, son nom (*Administrator*/*Administrateur*) aussi. Il n'est pas
+      soumis au verrouillage de compte. Bonnes pratiques :
+
+      - le **renommer** (`Rename-LocalUser`), lui donner un mot de passe long et unique, rangé dans le
+        coffre-fort de mots de passe (sur un parc, **Windows LAPS** le fait automatiquement) ;
+      - le **désactiver** sur les postes quand un autre compte d'administration existe ;
+      - désactiver le compte *Invité* (SID 501).
+
+      On retrouve ces comptes par leur SID, indépendamment de leur nom :
+      `Get-LocalUser | Where-Object { $_.SID -like '*-500' }`.
+    ci: true
+    checks:
+      - desc: Le compte -500 s'appelle adm-srv01, avec la bonne description
+        run: |
+          $a = Get-LocalUser | Where-Object { $_.SID.Value -like '*-500' }
+          $a.Name -eq 'adm-srv01' -and $a.Description -eq 'Compte de secours - mot de passe au coffre'
+      - desc: Le compte Invité est désactivé
+        run: |
+          (Get-LocalUser | Where-Object { $_.SID.Value -like '*-501' }).Enabled -eq $false
+    solution: |
+      $a = Get-LocalUser | Where-Object { $_.SID.Value -like '*-500' }
+      $a | Rename-LocalUser -NewName adm-srv01
+      Set-LocalUser -SID $a.SID -Description 'Compte de secours - mot de passe au coffre'
+      Get-LocalUser | Where-Object { $_.SID.Value -like '*-501' } | Disable-LocalUser
+
+  - id: win-cpt-rapport
+    title: Rapport des comptes pour l'audit
+    description: |
+      Le responsable informatique veut un état des comptes locaux de SRV01. Produis le fichier
+      `C:\Admin\comptes-srv01.csv` (séparateur `;`, encodage UTF-8, sans ligne `#TYPE`) avec, pour
+      **chaque** compte local, les colonnes dans cet ordre :
+      `Name;FullName;Enabled;PasswordLastSet;LastLogon`.
+
+      Produis aussi `C:\Admin\admins-srv01.txt` contenant la liste des membres du groupe
+      *Administrators* (un nom par ligne, tel qu'affiché par `Get-LocalGroupMember`).
+    hint: Get-LocalUser | Select-Object Name, FullName, Enabled, PasswordLastSet, LastLogon | Export-Csv C:\Admin\comptes-srv01.csv -Delimiter ';' -NoTypeInformation -Encoding UTF8
+    cours: |
+      PowerShell manipule des **objets** : `Get-LocalUser` renvoie des comptes avec des propriétés
+      (`Name`, `Enabled`, `LastLogon`...). `Select-Object` choisit les colonnes, `Export-Csv` les écrit :
+
+      ```powershell
+      Get-LocalUser |
+        Select-Object Name, FullName, Enabled, PasswordLastSet, LastLogon |
+        Export-Csv C:\Admin\comptes.csv -Delimiter ';' -NoTypeInformation -Encoding UTF8
+      ```
+
+      `-Delimiter ';'` rend le fichier lisible directement par un Excel français ; `-NoTypeInformation`
+      supprime la ligne `#TYPE` de Windows PowerShell 5.1 ; `-Encoding UTF8` conserve les accents.
+      Pour un simple fichier texte : `(Get-LocalGroupMember -SID S-1-5-32-544).Name | Set-Content fichier.txt`.
+
+      Ce genre d'export, planifié chaque mois, sert de preuve lors des audits (qui est administrateur ?
+      quels comptes ne se sont pas connectés depuis 90 jours ?).
+    ci: true
+    checks:
+      - desc: Le CSV a les bonnes colonnes, dans l'ordre, séparées par ;
+        run: |
+          (Get-Content C:\Admin\comptes-srv01.csv -Encoding UTF8 -TotalCount 1) -replace '"', '' -eq 'Name;FullName;Enabled;PasswordLastSet;LastLogon'
+      - desc: Il contient tous les comptes locaux
+        run: |
+          $csv = Import-Csv C:\Admin\comptes-srv01.csv -Delimiter ';' -Encoding UTF8
+          $csv.Count -eq @(Get-LocalUser).Count -and ($csv | Where-Object Name -eq 'mdupont').FullName -eq 'Marie Dupont'
+      - desc: La liste des administrateurs est à jour
+        run: |
+          $f = Get-Content C:\Admin\admins-srv01.txt | Where-Object { $_.Trim() }
+          $attendu = (Get-LocalGroupMember -SID S-1-5-32-544).Name
+          $f.Count -eq @($attendu).Count -and -not (Compare-Object @($f) @($attendu))
+    solution: |
+      New-Item C:\Admin -ItemType Directory -Force | Out-Null
+      Get-LocalUser | Select-Object Name, FullName, Enabled, PasswordLastSet, LastLogon |
+        Export-Csv C:\Admin\comptes-srv01.csv -Delimiter ';' -NoTypeInformation -Encoding UTF8
+      (Get-LocalGroupMember -SID S-1-5-32-544).Name | Set-Content C:\Admin\admins-srv01.txt

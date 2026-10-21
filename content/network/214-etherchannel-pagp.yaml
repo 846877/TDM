@@ -1,0 +1,105 @@
+title: EtherChannel PAgP et statique
+level: avance
+order: 14
+device: switch
+hostname: SW-ACCES2
+tags: [etherchannel, pagp, port-channel]
+summary: Agréger vers un ancien switch Cisco et vers un serveur.
+description: |
+  Deux agrégats à monter sur `SW-ACCES2` :
+
+  **Vers l'ancien switch de l'étage** (il ne parle que PAgP, le protocole Cisco)
+  - `Fa0/23` et `Fa0/24` dans le groupe `2` en mode `desirable` ;
+  - `Port-channel 2` : trunk, VLAN natif `99`, VLAN autorisés `10`, `20`, `99`.
+
+  **Vers le serveur de fichiers** (agrégation de cartes réseau sans protocole de négociation)
+  - `Fa0/21` et `Fa0/22` dans le groupe `3` en mode `on` (statique) ;
+  - `Port-channel 3` : access dans le VLAN `20`.
+
+  ⚠️ Les deux extrémités doivent être compatibles : `desirable`↔`desirable/auto`, `on`↔`on`.
+initial: |
+  vlan 10
+  vlan 20
+  vlan 99
+checks:
+  - desc: Fa0/23-24 dans le groupe 2 en PAgP desirable
+    expr: all(i.channel_group == 2 and i.channel_mode == "desirable" for i in ports("fa0/23-24"))
+  - desc: Port-channel 2 en trunk (natif 99, VLAN 10, 20, 99)
+    expr: intf("po2").mode == "trunk" and intf("po2").native_vlan == 99 and intf("po2").allowed_vlans() == {10, 20, 99}
+  - desc: Fa0/21-22 dans le groupe 3 en mode on
+    expr: all(i.channel_group == 3 and i.channel_mode == "on" for i in ports("fa0/21-22"))
+    hint: "channel-group 3 mode on"
+  - desc: Port-channel 3 en access dans le VLAN 20
+    expr: intf("po3").mode == "access" and intf("po3").access_vlan == 20
+solution: |
+  configure terminal
+  interface range fa0/23 - 24
+  channel-group 2 mode desirable
+  interface port-channel 2
+  switchport mode trunk
+  switchport trunk native vlan 99
+  switchport trunk allowed vlan 10,20,99
+  interface range fa0/21 - 22
+  channel-group 3 mode on
+  interface port-channel 3
+  switchport mode access
+  switchport access vlan 20
+  end
+cours: |
+  ## PAgP et EtherChannel statique
+
+  LACP est le protocole d'agrégation standard, mais on rencontre encore :
+
+  - **PAgP** (*Port Aggregation Protocol*), propriétaire Cisco, sur d'anciens switchs ;
+  - l'agrégation **statique** (`mode on`), sans aucun protocole, pour certains serveurs ou
+    équipements qui ne négocient pas.
+
+  | Côté A \ Côté B | desirable | auto    | on       |
+  |-----------------|-----------|---------|----------|
+  | **desirable**   | canal     | canal   | ✗        |
+  | **auto**        | canal     | ✗       | ✗        |
+  | **on**          | ✗         | ✗       | canal    |
+
+  `desirable` propose activement, `auto` attend une proposition (comme `active`/`passive` en
+  LACP). `on` ne forme un canal qu'avec `on` en face.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# interface range gi0/3 - 4
+  SW1(config-if-range)# channel-group 6 mode desirable
+  SW1(config-if-range)# interface port-channel 6
+  SW1(config-if)# switchport mode trunk
+  SW1(config-if)# switchport trunk allowed vlan 40,50,990
+  SW1(config)# interface range fa0/45 - 46
+  SW1(config-if-range)# channel-group 7 mode on
+  SW1(config-if-range)# interface port-channel 7
+  SW1(config-if)# switchport mode access
+  SW1(config-if)# switchport access vlan 50
+  SW1# show etherchannel summary
+  6      Po6(SU)     PAgP     Gi0/3(P) Gi0/4(P)
+  7      Po7(SU)       -      Fa0/45(P) Fa0/46(P)
+  ```
+
+  ### Pourquoi le mode on est risqué
+
+  Sans protocole, aucune vérification n'est faite : si l'autre côté n'est **pas** configuré en
+  agrégation (ou si un câble est mal branché), les deux liens se comportent comme des liens
+  indépendants... et peuvent créer une **boucle** ou dupliquer des trames. LACP ou PAgP
+  détectent ces erreurs et suspendent les ports incompatibles. On réserve donc `on` aux cas où
+  l'équipement d'en face ne négocie pas.
+
+  ### Pièges fréquents
+
+  - Mélanger LACP et PAgP dans un même groupe (refusé).
+  - `auto` des deux côtés.
+  - Membres aux configurations différentes (ports suspendus).
+
+  ### Pour le CCNA
+
+  Le CCNA demande de connaître les modes LACP, PAgP et statique et leurs combinaisons valides.
+docs:
+  - title: "Wikipédia — Agrégation de liens"
+    url: https://fr.wikipedia.org/wiki/Agr%C3%A9gation_de_liens
+  - title: "Cisco Catalyst 2960-X — guides de configuration"
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html

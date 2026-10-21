@@ -1,0 +1,50 @@
+[
+  {
+    "Nom": "PC-COMPTA-01",
+    "OS": "Windows 11",
+    "RamGo": 16,
+    "DisqueLibreGo": 12.5
+  },
+  {
+    "Nom": "PC-COMPTA-02",
+    "OS": "Windows 11",
+    "RamGo": 16,
+    "DisqueLibreGo": 85.0
+  },
+  {
+    "Nom": "PC-RH-01",
+    "OS": "Windows 11",
+    "RamGo": 8,
+    "DisqueLibreGo": 40.1
+  },
+  {
+    "Nom": "PC-RH-02",
+    "OS": "Windows 10",
+    "RamGo": 8,
+    "DisqueLibreGo": 8.0
+  },
+  {
+    "Nom": "PC-INFO-01",
+    "OS": "Ubuntu 24.04",
+    "RamGo": 32,
+    "DisqueLibreGo": 210.4
+  },
+  {
+    "Nom": "SRV-FICHIERS",
+    "OS": "Windows Server 2022",
+    "RamGo": 32,
+    "DisqueLibreGo": 18.2
+  },
+  {
+    "Nom": "SRV-AD01",
+    "OS": "Windows Server 2022",
+    "RamGo": 16,
+    "DisqueLibreGo": 55.0
+  },
+  {
+    "Nom": "SRV-WEB",
+    "OS": "Ubuntu 24.04",
+    "RamGo": 8,
+    "DisqueLibreGo": 24.9
+  }
+]

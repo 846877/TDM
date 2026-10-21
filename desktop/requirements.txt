@@ -1,0 +1,4 @@
+-r ../backend/requirements.txt
+pywebview>=5.0
+pywinpty>=2.0; sys_platform == "win32"
+pyinstaller>=6.6

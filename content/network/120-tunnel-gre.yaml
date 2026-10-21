@@ -1,0 +1,112 @@
+title: Tunnel GRE entre deux sites
+level: intermediaire
+order: 20
+device: router
+hostname: R-SIEGE
+tags: [gre, tunnel, vpn, mtu]
+summary: Relier deux LAN privés à travers Internet avec un tunnel GRE.
+description: |
+  Le siège (`192.168.1.0/24`) et l'agence (`192.168.2.0/24`) sont reliés à Internet. On veut que
+  les deux LAN privés communiquent comme s'ils étaient voisins : on crée un **tunnel GRE**.
+
+  Sur `R-SIEGE` (adresse publique `203.0.113.2` sur `G0/1`) :
+
+  1. `interface tunnel 0` : description `GRE-AGENCE`, adresse `172.16.0.1/30` ;
+  2. source du tunnel : `G0/1` ; destination : l'adresse publique de l'agence `198.51.100.2` ;
+  3. l'encapsulation GRE ajoute 24 octets : `ip mtu 1400` et `ip tcp adjust-mss 1360` ;
+  4. route vers le LAN de l'agence `192.168.2.0/24` via l'extrémité du tunnel `172.16.0.2`.
+
+  Contrôle avec `show interfaces tunnel 0`.
+initial: |
+  interface g0/0
+  ip address 192.168.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 203.0.113.2 255.255.255.252
+  no shutdown
+  ip route 0.0.0.0 0.0.0.0 203.0.113.1
+checks:
+  - desc: Tunnel0 en 172.16.0.1/30 avec la description GRE-AGENCE
+    expr: intf("tunnel0").ip == "172.16.0.1" and intf("tunnel0").mask == "255.255.255.252" and intf("tunnel0").description == "GRE-AGENCE"
+  - desc: Source G0/1 et destination 198.51.100.2
+    expr: intf("tunnel0").tunnel_source in (ifname("g0/1"), "203.0.113.2") and intf("tunnel0").tunnel_destination == "198.51.100.2"
+  - desc: MTU 1400 et MSS TCP 1360
+    expr: intf("tunnel0").ip_mtu == 1400 and intf("tunnel0").tcp_mss == 1360
+  - desc: Route vers 192.168.2.0/24 via 172.16.0.2
+    expr: route("192.168.2.0", "255.255.255.0", "172.16.0.2")
+solution: |
+  configure terminal
+  interface tunnel 0
+  description GRE-AGENCE
+  ip address 172.16.0.1 255.255.255.252
+  tunnel source g0/1
+  tunnel destination 198.51.100.2
+  ip mtu 1400
+  ip tcp adjust-mss 1360
+  exit
+  ip route 192.168.2.0 255.255.255.0 172.16.0.2
+  end
+cours: |
+  ## Le principe d'un tunnel
+
+  Internet ne sait pas acheminer des adresses privées (`192.168.x.x`). Un **tunnel** encapsule le
+  paquet privé dans un nouveau paquet dont les adresses sont **publiques** :
+
+  ```
+  [ IP publique 203.0.113.2 -> 198.51.100.2 | GRE | IP privée 192.168.1.10 -> 192.168.2.20 | données ]
+  ```
+
+  À l'arrivée, le routeur de l'agence retire l'en-tête externe et route le paquet d'origine.
+
+  **GRE** (*Generic Routing Encapsulation*, protocole IP 47) est le tunnel le plus simple : il
+  transporte n'importe quoi, y compris le **multicast**, donc les protocoles de routage (OSPF,
+  EIGRP) peuvent fonctionner à travers lui. En revanche, il **ne chiffre rien** : en production,
+  on le protège avec IPsec (« GRE over IPsec », niveau expert).
+
+  ### Configuration (côté agence, pour l'exemple)
+
+  ```
+  R2(config)# interface tunnel 5
+  R2(config-if)# ip address 10.255.5.2 255.255.255.252
+  R2(config-if)# tunnel source g0/0
+  R2(config-if)# tunnel destination 203.0.113.2
+  R2(config-if)# ip mtu 1400
+  R2(config-if)# ip tcp adjust-mss 1360
+  R2(config)# ip route 10.10.0.0 255.255.0.0 10.255.5.1
+  R2# show interfaces tunnel 5
+  Tunnel5 is up, line protocol is up
+    Tunnel source 198.51.100.2 (GigabitEthernet0/0), destination 203.0.113.2
+    Tunnel protocol/transport GRE/IP
+  ```
+
+  Les deux extrémités doivent être « en miroir » : la source de l'une est la destination de
+  l'autre, et les adresses du tunnel sont dans le même sous-réseau.
+
+  ### MTU et MSS
+
+  GRE ajoute 24 octets (20 d'en-tête IP + 4 de GRE). Un paquet de 1500 octets devient trop gros
+  pour Internet et doit être fragmenté, voire jeté. On réduit donc :
+
+  - `ip mtu 1400` : taille maximale des paquets IP envoyés dans le tunnel ;
+  - `ip tcp adjust-mss 1360` : le routeur réécrit la taille de segment TCP négociée (MSS = MTU − 40)
+    pour que les hôtes n'envoient jamais de paquets trop gros.
+
+  ### Pièges fréquents
+
+  - **Routage récursif** : si la route vers la destination du tunnel passe par le tunnel lui-même,
+    il tombe en boucle (`%TUN-5-RECURDOWN`). La destination doit être joignable par Internet.
+  - L'interface tunnel est `up/up` dès que la destination est routable, même si l'autre côté
+    n'est pas configuré : activer `keepalive 10 3` pour détecter une extrémité morte.
+  - Un pare-feu qui bloque le protocole IP 47.
+
+  ### Pour le CCNP ENCOR
+
+  GRE, la récursivité et l'association GRE + IPsec font partie du programme ENCOR (virtualisation
+  et VPN).
+docs:
+  - title: RFC 2784 — Generic Routing Encapsulation (GRE)
+    url: https://www.rfc-editor.org/rfc/rfc2784
+  - title: Wikipédia — Generic Routing Encapsulation
+    url: https://fr.wikipedia.org/wiki/Generic_Routing_Encapsulation
+  - title: Wikipédia (EN) — Maximum segment size
+    url: https://en.wikipedia.org/wiki/Maximum_segment_size

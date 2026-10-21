@@ -1,0 +1,112 @@
+title: Première session eBGP avec un opérateur
+level: avance
+order: 19
+device: router
+hostname: R-BORDURE
+tags: [bgp, ebgp, opérateur, null0]
+summary: Établir une session eBGP et annoncer le bloc public de l'entreprise.
+description: |
+  L'entreprise (AS `65010`) a obtenu le bloc public `198.51.100.0/24`, découpé en deux `/25` sur
+  `G0/0` et `G0/2`. L'opérateur de transit (AS `64500`) a configuré sa session vers
+  `203.0.113.2` ; son routeur est `203.0.113.1` sur `G0/1`.
+
+  1. processus BGP AS `65010`, router-id `10.255.0.1` ;
+  2. voisin `203.0.113.1` dans l'AS `64500`, description `FAI-TRANSIT`, mot de passe MD5
+     `Bgp-Tr4nsit` (exigé par l'opérateur) ;
+  3. annonce `198.51.100.0/24` ;
+  4. `network` n'annonce un préfixe que s'il existe **exactement** dans la table de routage :
+     ancre le `/24` avec une route statique vers `Null0`.
+
+  Contrôle avec `show ip bgp summary` et `show ip bgp`.
+initial: |
+  interface loopback 0
+  ip address 10.255.0.1 255.255.255.255
+  interface g0/0
+  ip address 198.51.100.1 255.255.255.128
+  no shutdown
+  interface g0/2
+  ip address 198.51.100.129 255.255.255.128
+  no shutdown
+  interface g0/1
+  ip address 203.0.113.2 255.255.255.252
+  no shutdown
+checks:
+  - desc: BGP AS 65010, router-id 10.255.0.1
+    expr: bgp.asn == 65010 and bgp.router_id == "10.255.0.1"
+  - desc: Voisin 203.0.113.1 en AS 64500, description FAI-TRANSIT
+    expr: bgp.neighbors["203.0.113.1"].remote_as == 64500 and bgp.neighbors["203.0.113.1"].description == "FAI-TRANSIT"
+  - desc: Session protégée par le mot de passe Bgp-Tr4nsit
+    expr: bgp.neighbors["203.0.113.1"].password == "Bgp-Tr4nsit"
+  - desc: 198.51.100.0/24 annoncé et ancré sur Null0
+    expr: bgp.has_network("198.51.100.0", "255.255.255.0") and route("198.51.100.0", "255.255.255.0", "Null0")
+solution: |
+  configure terminal
+  ip route 198.51.100.0 255.255.255.0 Null0
+  router bgp 65010
+  bgp router-id 10.255.0.1
+  neighbor 203.0.113.1 remote-as 64500
+  neighbor 203.0.113.1 description FAI-TRANSIT
+  neighbor 203.0.113.1 password Bgp-Tr4nsit
+  network 198.51.100.0 mask 255.255.255.0
+  end
+cours: |
+  ## BGP en quelques idées
+
+  BGP (*Border Gateway Protocol*, RFC 4271) est le protocole de routage **entre systèmes
+  autonomes** (AS) : c'est lui qui fait fonctionner Internet. Ses particularités :
+
+  - c'est un protocole à **vecteur de chemins** : chaque route porte la liste des AS traversés
+    (`AS_PATH`), ce qui évite les boucles ;
+  - il utilise **TCP port 179** : les voisins (*peers*) sont configurés **explicitement**, il n'y
+    a pas de découverte automatique ;
+  - il choisit les chemins selon des **attributs** (weight, local-preference, AS_PATH, MED...)
+    plutôt qu'une métrique de coût ;
+  - **eBGP** relie deux AS différents (souvent des voisins directement connectés), **iBGP** des
+    routeurs du même AS.
+
+  Les AS privés vont de 64512 à 65534 (16 bits) ; un client mono-opérateur peut en utiliser un.
+
+  ### Configuration type (autres valeurs)
+
+  ```
+  R1(config)# ip route 192.0.2.0 255.255.255.0 Null0
+  R1(config)# router bgp 65123
+  R1(config-router)# bgp router-id 172.31.255.1
+  R1(config-router)# neighbor 198.18.0.1 remote-as 3215
+  R1(config-router)# neighbor 198.18.0.1 description TRANSIT-A
+  R1(config-router)# neighbor 198.18.0.1 password S3ss10n
+  R1(config-router)# network 192.0.2.0 mask 255.255.255.0
+  R1# show ip bgp summary
+  Neighbor     V    AS MsgRcvd MsgSent  TblVer  InQ OutQ Up/Down  State/PfxRcd
+  198.18.0.1   4  3215    1204      12      45    0    0 00:09:51   950000
+  R1# show ip bgp
+     Network          Next Hop      Metric LocPrf Weight Path
+  *> 192.0.2.0        0.0.0.0            0         32768 i
+  ```
+
+  `State/PfxRcd` affiche un **nombre** quand la session est établie ; sinon l'état (`Idle`,
+  `Active`, `Connect`...). `*>` désigne la meilleure route.
+
+  ### La commande network en BGP
+
+  Contrairement à OSPF ou EIGRP, `network` **n'active pas** BGP sur des interfaces : elle désigne un
+  préfixe à annoncer, qui doit exister **à l'identique** (même masque) dans la table de routage.
+  La route statique vers Null0 garantit cette présence en permanence, et la règle de la
+  correspondance la plus longue laisse les /25 réels prioritaires.
+
+  ### Pièges fréquents
+
+  - Masque oublié : `network 198.51.100.0` sans `mask` désigne le réseau de classe.
+  - Mot de passe différent de celui de l'opérateur : la session reste en `Active`.
+  - Annoncer par erreur des préfixes reçus d'un autre opérateur (devenir AS de transit) : on filtre
+    les annonces sortantes (prefix-list, voir l'exercice multihoming).
+
+  ### Pour le CCNP ENCOR
+
+  ENCOR attend la configuration d'eBGP entre deux AS, l'annonce de préfixes et la lecture de
+  `show ip bgp summary`.
+docs:
+  - title: RFC 4271 — A Border Gateway Protocol 4 (BGP-4)
+    url: https://www.rfc-editor.org/rfc/rfc4271
+  - title: Wikipédia — Border Gateway Protocol
+    url: https://fr.wikipedia.org/wiki/Border_Gateway_Protocol

@@ -1,0 +1,90 @@
+title: Configurer un trunk 802.1Q
+level: intermediaire
+order: 1
+device: switch
+tags: [trunk, vlan, 802.1q]
+summary: Faire circuler plusieurs VLAN sur un lien.
+description: |
+  Le port `Gi0/1` relie ce switch au switch de distribution. Configure-le en **trunk** :
+
+  - mode trunk,
+  - VLAN natif `99`,
+  - seuls les VLAN `10`, `20` et `99` sont autorisés.
+
+  Vérifie avec `show interfaces trunk`.
+initial: |
+  vlan 10
+  name ADMIN
+  vlan 20
+  name COMPTA
+  vlan 99
+  name MGMT
+checks:
+  - desc: Gi0/1 en mode trunk
+    expr: intf("g0/1").mode == "trunk"
+  - desc: VLAN natif 99
+    expr: intf("g0/1").native_vlan == 99
+  - desc: VLAN autorisés 10, 20 et 99 uniquement
+    expr: intf("g0/1").allowed_vlans() == {10, 20, 99}
+solution: |
+  configure terminal
+  interface g0/1
+  switchport mode trunk
+  switchport trunk native vlan 99
+  switchport trunk allowed vlan 10,20,99
+  end
+cours: |
+  ## Faire passer plusieurs VLAN sur un câble
+
+  Entre deux switchs, il serait absurde de tirer un câble par VLAN. Un **trunk** transporte
+  tous les VLAN sur un seul lien en **étiquetant** chaque trame avec le numéro de son VLAN : c'est
+  la norme **IEEE 802.1Q**, qui insère 4 octets dans l'en-tête Ethernet (dont 12 bits de VLAN ID
+  et 3 bits de priorité).
+
+  Exception : les trames du **VLAN natif** circulent **sans étiquette**. Par défaut, c'est le
+  VLAN 1 ; on le remplace par un VLAN dédié, sans utilisateurs, et il doit être **identique**
+  aux deux extrémités.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# interface gi0/2
+  SW1(config-if)# switchport mode trunk
+  SW1(config-if)# switchport trunk native vlan 199
+  SW1(config-if)# switchport trunk allowed vlan 40,50,199
+  SW1# show interfaces trunk
+  Port   Mode   Encapsulation  Status    Native vlan
+  Gi0/2  on     802.1q         trunking  199
+  Port   Vlans allowed on trunk
+  Gi0/2  40,50,199
+  Port   Vlans allowed and active in management domain
+  Gi0/2  40,50,199
+  ```
+
+  - `switchport mode trunk` force le trunk (les switchs plus anciens demandent d'abord
+    `switchport trunk encapsulation dot1q`) ;
+  - `allowed vlan` limite les VLAN transportés : moins de broadcasts inutiles et moins de
+    surface d'attaque ;
+  - les VLAN doivent **exister** sur les deux switchs pour être transportés.
+
+  ### DTP
+
+  Les ports Cisco négocient le trunk avec **DTP** (*Dynamic Trunking Protocol*) : modes
+  `dynamic auto` et `dynamic desirable`. Forcer `mode trunk` (et éventuellement `switchport
+  nonegotiate`) évite les surprises et les attaques par *switch spoofing*.
+
+  ### Pièges fréquents
+
+  - VLAN natif différent des deux côtés : message `NATIVE_VLAN_MISMATCH`, VLAN fusionnés.
+  - Oublier un VLAN dans `allowed vlan` : il ne traverse pas.
+  - Taper `allowed vlan 30` en voulant **ajouter** le 30 : la liste est remplacée (utiliser
+    `allowed vlan add 30`).
+
+  ### Pour le CCNA
+
+  Le trunk 802.1Q, le VLAN natif, DTP et `show interfaces trunk` sont des incontournables.
+docs:
+  - title: "Wikipédia — IEEE 802.1Q"
+    url: https://fr.wikipedia.org/wiki/IEEE_802.1Q
+  - title: "Wikipédia (EN) — Dynamic Trunking Protocol"
+    url: https://en.wikipedia.org/wiki/Dynamic_Trunking_Protocol

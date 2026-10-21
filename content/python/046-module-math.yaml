@@ -1,0 +1,141 @@
+title: Importer un module
+level: debutant
+order: 46
+tags: [modules, import, math]
+summary: Utiliser la bibliothèque standard avec import (math).
+description: |
+  Utilise le module `math` (avec `import math` en haut du fichier).
+
+  1. `aire_disque(rayon)` renvoie l'aire `π × r²` arrondie à 2 décimales (utilise `math.pi`).
+  2. `hypotenuse(a, b)` renvoie la longueur de l'hypoténuse d'un triangle rectangle, arrondie
+     à 2 décimales (`math.sqrt` ou `math.hypot`).
+  3. `nb_disques(donnees_go, capacite_go)` renvoie le **nombre de disques** nécessaires pour
+     stocker les données : on arrondit toujours **au-dessus** (`math.ceil`). 0 Go de données
+     nécessite 0 disque.
+  4. `bits_necessaires(n)` renvoie le nombre de bits nécessaires pour numéroter `n` éléments
+     différents (`n ≥ 1`), c'est-à-dire le plus petit `b` tel que `2 ** b >= n`
+     (`math.log2` puis `math.ceil`). Par exemple, 200 hôtes → 8 bits.
+
+  ```python
+  aire_disque(2)           # 12.57
+  hypotenuse(3, 4)         # 5.0
+  nb_disques(2500, 1000)   # 3
+  bits_necessaires(200)    # 8
+  bits_necessaires(1)      # 0
+  ```
+starter: |
+  def aire_disque(rayon):
+      pass
+
+
+  def hypotenuse(a, b):
+      pass
+
+
+  def nb_disques(donnees_go, capacite_go):
+      pass
+
+
+  def bits_necessaires(n):
+      pass
+tests: |
+  def test_aire():
+      "aire_disque"
+      assert solution.aire_disque(2) == 12.57, solution.aire_disque(2)
+      assert solution.aire_disque(0) == 0
+      assert solution.aire_disque(10) == 314.16
+
+  def test_hypotenuse():
+      "hypotenuse"
+      assert solution.hypotenuse(3, 4) == 5.0
+      assert solution.hypotenuse(1, 1) == 1.41
+
+  def test_disques():
+      "nb_disques arrondit au-dessus"
+      assert solution.nb_disques(2500, 1000) == 3
+      assert solution.nb_disques(2000, 1000) == 2
+      assert solution.nb_disques(1, 1000) == 1
+      assert solution.nb_disques(0, 1000) == 0
+      assert isinstance(solution.nb_disques(2500, 1000), int)
+
+  def test_bits():
+      "bits_necessaires"
+      for n, att in [(200, 8), (256, 8), (257, 9), (2, 1), (1, 0), (1000, 10)]:
+          r = solution.bits_necessaires(n)
+          assert r == att, f"bits_necessaires({n}) devrait valoir {att}, obtenu {r!r}"
+solution: |
+  import math
+
+
+  def aire_disque(rayon):
+      return round(math.pi * rayon ** 2, 2)
+
+
+  def hypotenuse(a, b):
+      return round(math.hypot(a, b), 2)
+
+
+  def nb_disques(donnees_go, capacite_go):
+      return math.ceil(donnees_go / capacite_go)
+
+
+  def bits_necessaires(n):
+      return math.ceil(math.log2(n))
+cours: |
+  ## Les modules
+
+  Un **module** est un fichier Python qui regroupe des fonctions et des constantes. La
+  **bibliothèque standard**, installée avec Python, en fournit des centaines : `math`,
+  `random`, `datetime`, `os`, `json`, `csv`, `re`, `ipaddress`… « Piles incluses », dit la
+  devise de Python.
+
+  ## Les formes d'import
+
+  ```python
+  import math                 # on écrit ensuite math.sqrt(2)
+  from math import sqrt, pi   # on écrit directement sqrt(2)
+  import math as m            # alias : m.sqrt(2)
+  ```
+
+  - `import module` est la forme la plus claire : on voit d'où vient chaque fonction.
+  - `from module import *` importe tout : à éviter, on ne sait plus d'où viennent les noms
+    et on risque d'en écraser.
+  - Les imports se placent **en haut** du fichier, par convention.
+
+  ## Le module `math`
+
+  | Nom | Rôle |
+  |-----|------|
+  | `math.pi`, `math.e` | constantes |
+  | `math.sqrt(x)`, `math.hypot(a, b)` | racine carrée, hypoténuse |
+  | `math.ceil(x)` / `math.floor(x)` | arrondi supérieur / inférieur (renvoie un `int`) |
+  | `math.log2(x)`, `math.log10(x)`, `math.log(x)` | logarithmes |
+  | `math.gcd(a, b)` | plus grand commun diviseur |
+  | `math.isclose(a, b)` | comparaison de flottants avec tolérance |
+
+  ## Arrondir vers le haut
+
+  Dès qu'on répartit des quantités dans des contenants (disques, baies, bus, pages), on
+  arrondit **au-dessus** : 2,5 disques, c'est 3 disques. `round` arrondit au plus proche, et
+  `int()` tronque vers zéro : ni l'un ni l'autre ne convient.
+
+  ## Le logarithme en base 2
+
+  `log2(n)` répond à la question « 2 à quelle puissance donne n ? ». C'est le calcul de
+  base du **sous-réseautage** : pour 200 hôtes, il faut 8 bits d'hôte (2⁸ = 256), donc un
+  masque /24. Pour 1000 hôtes, 10 bits : un /22.
+
+  ## Découvrir un module
+
+  Dans la console : `import math` puis `help(math)` ou `dir(math)`. La documentation en
+  ligne de chaque module donne la liste complète, avec des exemples.
+
+  ## Tes propres modules
+
+  Un fichier `outils.py` à côté de ton programme s'importe avec `import outils` : c'est ainsi
+  qu'on découpe un projet en plusieurs fichiers.
+docs:
+  - title: Module math
+    url: https://docs.python.org/fr/3/library/math.html
+  - title: Tutoriel — les modules
+    url: https://docs.python.org/fr/3/tutorial/modules.html

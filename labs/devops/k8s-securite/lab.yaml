@@ -1,0 +1,381 @@
+title: Sécuriser un cluster Kubernetes
+level: expert
+order: 6
+tags: [kubernetes, k3s, rbac, pod security, networkpolicy, secrets, quotas]
+summary: Durcir une application sur Kubernetes - RBAC et comptes de service, kubeconfig restreint, Pod Security Admission, securityContext, NetworkPolicy, secrets montés en fichiers, quotas et limites.
+compose: docker-compose.yml
+service: ops
+shell: bash
+workdir: /root/securite
+setup: |
+  for i in $(seq 1 90); do kubectl get --raw /readyz >/dev/null 2>&1 && kubectl get ns boutique >/dev/null 2>&1 && break; sleep 2; done
+description: |
+  Un vrai cluster **k3s** (Kubernetes 1.30, avec le contrôleur de **NetworkPolicy** intégré) dans un
+  conteneur, et ce poste **ops** avec `kubectl` déjà configuré (tu es `root`). Range tes manifestes dans
+  **`/root/securite`**.
+
+  Au démarrage, une application a été déployée **sans aucune précaution** dans le namespace
+  **`boutique`** : le déploiement **`vitrine`** (2 réplicas `nginx:1.27-alpine`, qui tournent en root) et
+  son service `vitrine` (port 8080). Un namespace **`externe`** représente le reste du cluster.
+
+  Tu vas appliquer les mesures attendues d'un cluster de production : droits minimaux, admission des pods
+  selon les **Pod Security Standards**, conteneurs non privilégiés, cloisonnement réseau, secrets et
+  quotas. Images utiles : **`nginxinc/nginx-unprivileged:1.27-alpine`** (Nginx sans root, port 8080).
+
+  Si le cluster vient de démarrer, attends que `kubectl get pods -A` montre tous les pods prêts.
+cours: |
+  ## Sécuriser Kubernetes : défense en profondeur
+
+  Un cluster Kubernetes par défaut est **permissif** : tout pod peut tourner en root, parler à tous les
+  autres pods, et un compte qui obtient des droits larges contrôle tout. La sécurité repose sur plusieurs
+  couches complémentaires, chacune limitant les dégâts si une autre cède.
+
+  ```
+   qui peut agir sur l'API ?      RBAC : Role/ClusterRole + RoleBinding, ServiceAccount, jetons courts
+            │
+   que peut-on lancer ?           admission : Pod Security Standards (privileged/baseline/restricted)
+            │
+   avec quels privilèges ?        securityContext : non-root, sans capacités, système de fichiers
+            │                     en lecture seule, seccomp
+   qui parle à qui ?              NetworkPolicy : refus par défaut, puis autorisations explicites
+            │
+   avec quels secrets ?           Secret monté en fichier, droits minimaux, chiffrement au repos
+            │
+   avec quelles ressources ?      ResourceQuota, LimitRange (éviter qu'un pod affame les autres)
+  ```
+
+  ### RBAC
+
+  Un **Role** (dans un namespace) ou un **ClusterRole** (global ou réutilisable) liste des **verbes**
+  (`get`, `list`, `watch`, `create`, `update`, `patch`, `delete`) sur des **ressources** (`pods`,
+  `deployments`, `pods/log`, `secrets`…). Un **RoleBinding** ou **ClusterRoleBinding** les accorde à des
+  utilisateurs, des groupes ou des **ServiceAccounts** (identités des programmes). Tout est refusé par
+  défaut ; il n'existe pas de règle d'interdiction. `kubectl auth can-i ... --as ...` teste un droit.
+
+  ### Pod Security Admission
+
+  Les **Pod Security Standards** définissent trois profils : `privileged` (tout est permis), `baseline`
+  (bloque les escalades connues) et `restricted` (bonnes pratiques strictes : non-root, pas de capacités,
+  seccomp…). Un label sur le namespace choisit le mode : `enforce` (refus), `warn` (avertissement),
+  `audit` (journal).
+
+  ### NetworkPolicy
+
+  Dès qu'une politique sélectionne un pod, seul le trafic qu'elle autorise lui parvient. Le schéma
+  classique : une politique de **refus par défaut** par namespace, puis des politiques qui ouvrent le strict
+  nécessaire (qui, vers quels pods, sur quel port). Il faut un CNI qui les applique (k3s en intègre un).
+
+  ### Mémo
+
+  | Commande | Usage |
+  |---|---|
+  | `kubectl auth can-i --list --as system:serviceaccount:ns:sa` | droits d'un compte de service |
+  | `kubectl create token sa -n ns --duration=1h` | jeton à durée limitée |
+  | `kubectl label ns ns pod-security.kubernetes.io/enforce=restricted` | profil d'admission |
+  | `kubectl create --dry-run=server -f pod.yaml` | tester l'admission sans rien créer |
+  | `kubectl describe networkpolicy -n ns` | règles réseau appliquées |
+  | `kubectl describe quota,limitrange -n ns` | consommation et limites |
+
+  ### Pièges
+
+  - `cluster-admin` donné « pour aller plus vite », ou des droits sur `secrets` en lecture (lire un secret,
+    c'est souvent obtenir d'autres accès).
+  - Les jetons de ServiceAccount montés automatiquement dans tous les pods (`automountServiceAccountToken:
+    false` quand l'application n'appelle pas l'API).
+  - Une NetworkPolicy de refus qui bloque aussi le DNS en sortie (`policyTypes: [Egress]`).
+  - Les Secrets ne sont qu'encodés en base64 : sans chiffrement au repos ni RBAC strict, ils sont lisibles.
+
+  ### Bonnes pratiques
+
+  Moindre privilège partout, `restricted` par défaut (exceptions documentées), images non-root et
+  épinglées, refus réseau par défaut, quotas par namespace, et audit régulier avec des outils comme
+  kube-bench, kubescape ou les règles de Kyverno et d'OPA Gatekeeper.
+docs:
+  - title: Kubernetes - Utiliser l'autorisation RBAC
+    url: https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+  - title: Kubernetes - Pod Security Standards
+    url: https://kubernetes.io/docs/concepts/security/pod-security-standards/
+  - title: Kubernetes - Network Policies
+    url: https://kubernetes.io/docs/concepts/services-networking/network-policies/
+  - title: Kubernetes - Configurer un securityContext
+    url: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
+exercises:
+  - id: ks-rbac-lecture
+    title: Un compte de service en lecture seule
+    description: |
+      L'outil de supervision doit **lire** l'état de l'application, sans rien pouvoir modifier. Dans le
+      namespace `boutique`, crée :
+      - un ServiceAccount **`auditeur`** ;
+      - un Role **`lecture`** qui autorise `get`, `list` et `watch` sur les `pods`, les `services` et les
+        `deployments` (groupe `apps`) ;
+      - un RoleBinding qui accorde ce rôle à `auditeur`.
+
+      `auditeur` ne doit lire **ni les secrets**, ni quoi que ce soit hors de `boutique`.
+    hint: "kubectl create serviceaccount, kubectl create role lecture --verb=get,list,watch --resource=pods,services,deployments.apps, kubectl create rolebinding ... --serviceaccount=boutique:auditeur"
+    cours: |
+      Les programmes qui appellent l'API Kubernetes (supervision, CI, opérateurs) s'identifient avec un
+      **ServiceAccount**, propre à un namespace. Ses droits viennent uniquement des **bindings** qui le
+      citent : par défaut, il ne peut presque rien.
+
+      Un **Role** décrit des règles : `apiGroups` (`""` pour le cœur : pods, services, secrets ; `apps` pour
+      deployments), `resources` et `verbs`. Il ne vaut que dans son namespace, tout comme le **RoleBinding**
+      qui l'attribue. Les permissions s'additionnent ; il n'existe pas de règle « interdire ».
+
+      Pour vérifier sans deviner : `kubectl auth can-i list pods -n boutique --as
+      system:serviceaccount:boutique:auditeur`, ou `--list` pour tout afficher. C'est le réflexe à avoir
+      avant et après toute modification de droits.
+    checks:
+      - desc: auditeur peut lister pods, services et déploiements de boutique
+        run: |
+          a=system:serviceaccount:boutique:auditeur; for r in pods services deployments.apps; do test "$(kubectl auth can-i list $r -n boutique --as $a)" = yes || exit 1; done
+      - desc: auditeur ne peut ni modifier, ni lire les secrets, ni sortir de boutique
+        run: |
+          a=system:serviceaccount:boutique:auditeur; kubectl get sa auditeur -n boutique >/dev/null 2>&1 && test "$(kubectl auth can-i delete pods -n boutique --as $a)" = no && test "$(kubectl auth can-i list secrets -n boutique --as $a)" = no && test "$(kubectl auth can-i list pods -n default --as $a)" = no
+  - id: ks-rbac-deploiement
+    title: Un compte de déploiement limité
+    description: |
+      La CI doit pouvoir **mettre à jour** les déploiements de `boutique` (changer l'image) et lire les
+      journaux des pods, rien de plus. Crée :
+      - un **ClusterRole** **`deploiement`** : `get`, `list`, `patch`, `update` sur `deployments` (groupe
+        `apps`), et `get` sur `pods` et `pods/log` ;
+      - un ServiceAccount **`ci`** dans `boutique`, lié à ce ClusterRole par un **RoleBinding** (et non un
+        ClusterRoleBinding), pour que les droits ne valent que dans `boutique`.
+    hint: "kubectl create clusterrole deploiement --verb=get,list,patch,update --resource=deployments.apps puis ajoute une règle pour pods et pods/log (kubectl edit, ou un manifeste) ; kubectl create rolebinding ci-deploiement -n boutique --clusterrole=deploiement --serviceaccount=boutique:ci"
+    cours: |
+      Un **ClusterRole** n'est pas forcément « global » : c'est surtout un rôle **réutilisable**. Accordé par
+      un **RoleBinding**, il ne donne ses droits que dans le namespace du binding ; accordé par un
+      **ClusterRoleBinding**, il les donne partout. On définit ainsi une seule fois « le droit de déployer »,
+      puis on le lie namespace par namespace.
+
+      Les **sous-ressources** se nomment avec une barre : `pods/log` (journaux), `pods/exec` (exécuter une
+      commande, un droit très puissant), `deployments/scale`. Donner `get` sur `pods` ne donne pas accès
+      aux journaux.
+
+      Une CI qui ne fait que mettre à jour une image n'a besoin ni de `create`, ni de `delete`, ni d'accès
+      aux secrets. Plus le jeton de la CI est limité, moins une fuite de ce jeton est grave.
+    checks:
+      - desc: ci peut mettre à jour les déploiements et lire les journaux dans boutique
+        run: |
+          a=system:serviceaccount:boutique:ci; test "$(kubectl auth can-i patch deployments.apps -n boutique --as $a)" = yes && test "$(kubectl auth can-i get pods --subresource=log -n boutique --as $a)" = yes
+      - desc: ci ne peut rien hors de boutique, ni supprimer, ni lire les secrets
+        run: |
+          a=system:serviceaccount:boutique:ci; test "$(kubectl auth can-i patch deployments.apps -n kube-system --as $a)" = no && test "$(kubectl auth can-i delete deployments.apps -n boutique --as $a)" = no && test "$(kubectl auth can-i get secrets -n boutique --as $a)" = no
+      - desc: Le ClusterRole deploiement est lié par un RoleBinding dans boutique
+        run: |
+          kubectl get clusterrole deploiement >/dev/null 2>&1 && kubectl get rolebindings -n boutique -o jsonpath='{range .items[*]}{.roleRef.kind}/{.roleRef.name}{"\n"}{end}' | grep -qx 'ClusterRole/deploiement' && ! kubectl get clusterrolebindings -o jsonpath='{range .items[*]}{.roleRef.name}{"\n"}{end}' | grep -qx deploiement
+  - id: ks-kubeconfig
+    title: Un kubeconfig restreint et à durée limitée
+    description: |
+      Fournis à l'équipe de supervision un fichier **`/root/securite/auditeur.kubeconfig`** qui se connecte au
+      cluster avec l'identité de **`auditeur`**, grâce à un **jeton à durée limitée** (24 h au plus).
+
+      Test : `kubectl --kubeconfig /root/securite/auditeur.kubeconfig get pods -n boutique` fonctionne, mais
+      `get secrets` est refusé.
+    hint: "t=$(kubectl create token auditeur -n boutique --duration=24h) ; kubectl config --kubeconfig=auditeur.kubeconfig set-cluster k3s --server=https://k3s:6443 --certificate-authority=... --embed-certs ; set-credentials auditeur --token=$t ; set-context ; use-context"
+    cours: |
+      Un fichier **kubeconfig** réunit un **cluster** (adresse de l'API et autorité de certification), des
+      **identités** (certificat client ou jeton) et des **contextes** qui associent les deux.
+      `kubectl config set-cluster`, `set-credentials`, `set-context` et `use-context` le construisent, avec
+      `--kubeconfig fichier` pour ne pas toucher au tien.
+
+      Depuis Kubernetes 1.24, les ServiceAccounts n'ont plus de jeton permanent créé automatiquement.
+      **`kubectl create token`** demande à l'API un jeton **signé et à durée limitée** (`--duration`) : s'il
+      fuit, il expire de lui-même. Les jetons permanents (Secret de type
+      `kubernetes.io/service-account-token`) sont à éviter.
+
+      L'autorité de certification du cluster se trouve dans ton propre kubeconfig
+      (`certificate-authority-data`) : `kubectl config view --raw` l'affiche.
+    checks:
+      - desc: Le kubeconfig permet de lister les pods de boutique
+        run: kubectl --kubeconfig /root/securite/auditeur.kubeconfig get pods -n boutique >/dev/null 2>&1
+      - desc: Il utilise l'identité auditeur, sans accès aux secrets
+        run: |
+          k=/root/securite/auditeur.kubeconfig; ! kubectl --kubeconfig $k get secrets -n boutique >/dev/null 2>&1 && kubectl --kubeconfig $k auth whoami -o jsonpath='{.status.userInfo.username}' 2>/dev/null | grep -qx 'system:serviceaccount:boutique:auditeur'
+      - desc: Le jeton expire dans moins de 25 heures
+        run: |
+          t=$(kubectl --kubeconfig /root/securite/auditeur.kubeconfig config view --raw -o jsonpath='{.users[0].user.token}') && p=$(echo "$t" | cut -d. -f2 | tr '_-' '/+') && while [ $(( ${#p} % 4 )) -ne 0 ]; do p="$p="; done && exp=$(echo "$p" | base64 -d 2>/dev/null | jq -r .exp) && test "$exp" != null && test $(( exp - $(date +%s) )) -le 90000
+  - id: ks-psa
+    title: Imposer le profil restricted
+    description: |
+      Active la **Pod Security Admission** sur le namespace `boutique` : profil **`restricted`** en mode
+      **`enforce`** (refus) et en mode **`warn`** (avertissement).
+
+      Observe : les pods `vitrine` déjà lancés continuent de tourner, mais Kubernetes refuse désormais tout
+      nouveau pod non conforme (essaie `kubectl rollout restart deploy/vitrine -n boutique` puis regarde
+      les événements du ReplicaSet).
+    hint: "kubectl label ns boutique pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/warn=restricted"
+    cours: |
+      La **Pod Security Admission** est intégrée à Kubernetes (elle remplace les PodSecurityPolicy,
+      supprimées en 1.25). Elle se configure par **labels** sur les namespaces :
+      `pod-security.kubernetes.io/<mode>=<profil>`, avec les modes `enforce`, `warn` et `audit`, et les
+      profils `privileged`, `baseline` et `restricted`. Un label `...-version` fige la version des règles.
+
+      Le contrôle a lieu à l'**admission**, c'est-à-dire à la création des pods : les pods existants ne
+      sont pas arrêtés, mais un déploiement non conforme ne pourra plus recréer ses pods. Le ReplicaSet
+      affiche alors des événements `FailedCreate` qui détaillent chaque règle violée.
+
+      `kubectl label --dry-run=server --overwrite ns boutique pod-security.kubernetes.io/enforce=restricted`
+      liste à l'avance les pods existants qui seraient refusés : idéal pour une migration progressive.
+    checks:
+      - desc: boutique est en restricted (enforce et warn)
+        run: |
+          test "$(kubectl get ns boutique -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}')" = restricted && test "$(kubectl get ns boutique -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/warn}')" = restricted
+      - desc: Un pod privilégié est refusé dans boutique
+        run: |
+          ! kubectl run tdm-privilegie -n boutique --image=busybox:1.36 --privileged --dry-run=server --restart=Never -- sleep 1 >/dev/null 2>&1
+  - id: ks-securitycontext
+    title: Rendre l'application conforme
+    description: |
+      Corrige le déploiement **`vitrine`** pour qu'il redémarre dans le namespace restreint, avec ses
+      **2 réplicas prêts** :
+      - image **`nginxinc/nginx-unprivileged:1.27-alpine`**, port nommé `http` = **8080** ;
+      - exécution **non root**, **sans escalade de privilèges**, **toutes les capacités retirées**, profil
+        **seccomp** `RuntimeDefault` ;
+      - **système de fichiers racine en lecture seule**, avec un volume `emptyDir` monté sur **`/tmp`**
+        (Nginx y écrit ses fichiers temporaires).
+    hint: "securityContext du pod : runAsNonRoot: true, seccompProfile: {type: RuntimeDefault} ; du conteneur : allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true ; volumes: [{name: tmp, emptyDir: {}}]"
+    cours: |
+      Le **securityContext** se règle au niveau du pod (`runAsNonRoot`, `runAsUser`, `fsGroup`,
+      `seccompProfile`) et du conteneur (`allowPrivilegeEscalation`, `capabilities`,
+      `readOnlyRootFilesystem`, `privileged`). Le profil `restricted` exige notamment : non-root, pas
+      d'escalade de privilèges, `drop: ["ALL"]` et un profil seccomp `RuntimeDefault` ou `Localhost`.
+
+      Encore faut-il que l'**image** le permette : l'image officielle `nginx` démarre en root pour écouter
+      sur le port 80. **`nginx-unprivileged`** tourne sous l'UID 101 et écoute sur 8080. Un port nommé
+      (`http`) permet au service de suivre le changement sans modification.
+
+      Un **système de fichiers en lecture seule** empêche un attaquant d'y déposer des outils ; les dossiers
+      qui doivent rester inscriptibles deviennent des volumes `emptyDir`. Les `Events` et `kubectl rollout
+      status` disent pourquoi un pod ne démarre pas.
+    checks:
+      - desc: vitrine a 2 réplicas prêts avec l'image non privilégiée
+        timeout: 120
+        run: |
+          kubectl -n boutique rollout status deploy/vitrine --timeout=90s >/dev/null 2>&1 && test "$(kubectl -n boutique get deploy vitrine -o jsonpath='{.status.readyReplicas}')" = 2 && kubectl -n boutique get deploy vitrine -o jsonpath='{.spec.template.spec.containers[0].image}' | grep -q '^nginxinc/nginx-unprivileged:1.27-alpine$'
+      - desc: Le conteneur est durci (lecture seule, sans capacités, sans escalade)
+        run: |
+          d=$(kubectl -n boutique get deploy vitrine -o json) && echo "$d" | jq -e '.spec.template.spec as $p | ($p.containers[0].securityContext // {}) as $c | $c.readOnlyRootFilesystem == true and $c.allowPrivilegeEscalation == false and ($c.capabilities.drop | index("ALL")) != null and (($p.securityContext.runAsNonRoot // $c.runAsNonRoot) == true) and ([$p.volumes[]? | select(.emptyDir != null)] | length) >= 1' >/dev/null
+      - desc: Le service répond sur le port 8080
+        timeout: 90
+        run: tdm-sonde externe tdm=sonde http://vitrine.boutique:8080/
+  - id: ks-netpol-refus
+    title: Refuser tout le trafic entrant par défaut
+    description: |
+      Crée dans `boutique` une NetworkPolicy **`refus-par-defaut`** qui sélectionne **tous** les pods du
+      namespace et **n'autorise aucun trafic entrant**.
+
+      Après cela, plus personne ne doit pouvoir joindre `vitrine`, pas même depuis le namespace `externe`.
+    hint: "spec: podSelector: {} ; policyTypes: [Ingress] (sans section ingress)"
+    cours: |
+      Sans NetworkPolicy, tous les pods du cluster peuvent se joindre, quel que soit leur namespace : un pod
+      compromis peut attaquer toutes les bases de données. Dès qu'une **NetworkPolicy** sélectionne un pod
+      (`podSelector`), ce pod n'accepte plus que le trafic explicitement autorisé par l'ensemble des
+      politiques qui le sélectionnent.
+
+      `podSelector: {}` sélectionne tous les pods du namespace ; `policyTypes: [Ingress]` sans liste
+      `ingress` n'autorise **rien** en entrée. C'est la politique de **refus par défaut**, première brique
+      de toute segmentation. La même chose existe en sortie (`Egress`), en pensant à laisser passer le DNS.
+
+      Les politiques sont appliquées par le **plugin réseau** (CNI) : Calico, Cilium, ou le contrôleur
+      intégré de k3s. Avec un CNI qui ne les gère pas, elles sont acceptées… et ignorées.
+    checks:
+      - desc: Une politique sans règle d'entrée sélectionne tous les pods de boutique
+        run: |
+          kubectl -n boutique get networkpolicy refus-par-defaut -o json 2>/dev/null | jq -e '.spec.podSelector == {} and (.spec.policyTypes | index("Ingress")) != null and ((.spec.ingress // []) | length) == 0' >/dev/null
+      - desc: vitrine n'est plus joignable depuis externe
+        timeout: 90
+        run: |
+          kubectl -n boutique get networkpolicy refus-par-defaut >/dev/null 2>&1 && tdm-sonde externe tdm=sonde http://vitrine.boutique:8080/; test $? = 1
+  - id: ks-netpol-autoriser
+    title: N'ouvrir que le nécessaire
+    description: |
+      Seul le frontal doit parler à la vitrine. Ajoute une NetworkPolicy **`vitrine-depuis-frontal`** qui
+      autorise vers les pods `app=vitrine`, sur le **port 8080** uniquement, le trafic venant des pods
+      portant le label **`role=frontal`** **du namespace `boutique`**.
+
+      Un pod `role=frontal` d'un **autre** namespace, ou un pod sans ce label, doit rester bloqué.
+    hint: "podSelector: {matchLabels: {app: vitrine}} ; ingress: [{from: [{podSelector: {matchLabels: {role: frontal}}}], ports: [{port: 8080, protocol: TCP}]}]"
+    cours: |
+      Une règle `ingress` combine des **sources** (`from`) et des **ports**. Les sources possibles :
+      - `podSelector` seul : des pods **du même namespace** que la politique ;
+      - `namespaceSelector` seul : tous les pods des namespaces sélectionnés (par leurs labels, par exemple
+        `kubernetes.io/metadata.name: supervision`) ;
+      - les deux **dans le même élément** : certains pods de certains namespaces (un « ET ») ; dans deux
+        éléments séparés de la liste, c'est un « OU » ;
+      - `ipBlock` : des plages d'adresses.
+
+      Cette subtilité de l'indentation est la source d'erreur la plus fréquente : un tiret de trop
+      transforme une restriction en ouverture large. Les politiques s'**additionnent** : celle-ci complète
+      le refus par défaut. Le port indiqué est celui du **conteneur** (8080), pas celui du service.
+    checks:
+      - desc: Un pod role=frontal de boutique joint la vitrine
+        timeout: 90
+        run: tdm-sonde boutique role=frontal http://vitrine.boutique:8080/
+      - desc: Un pod sans label, ou role=frontal d'un autre namespace, reste bloqué
+        timeout: 150
+        run: |
+          kubectl -n boutique get networkpolicy vitrine-depuis-frontal >/dev/null 2>&1 || exit 1; tdm-sonde boutique role=autre http://vitrine.boutique:8080/; a=$?; tdm-sonde externe role=frontal http://vitrine.boutique:8080/; b=$?; test "$a" = 1 && test "$b" = 1
+  - id: ks-secret
+    title: Un secret monté en fichier
+    description: |
+      La vitrine a besoin d'un jeton d'API. Crée le Secret **`vitrine-api`** (clé **`token`**, valeur
+      **`jeton-vitrine-2025`**) et monte-le dans le conteneur de `vitrine`, **en lecture seule**, dans
+      **`/etc/vitrine/secrets`**, avec des droits **`0400`** sur les fichiers (`defaultMode`).
+
+      Ne l'expose **pas** en variable d'environnement.
+    hint: "kubectl create secret generic vitrine-api -n boutique --from-literal=token=jeton-vitrine-2025 ; volumes: [{name: api, secret: {secretName: vitrine-api, defaultMode: 0400}}] ; volumeMounts: [{name: api, mountPath: /etc/vitrine/secrets, readOnly: true}]"
+    cours: |
+      Un **Secret** stocke des données sensibles, **encodées** en base64 (et non chiffrées) dans etcd. Sa
+      protection repose sur le RBAC (qui peut le lire), le **chiffrement au repos** d'etcd et, en
+      complément, des solutions externes (External Secrets, Sealed Secrets, SOPS, Vault).
+
+      Deux façons de le fournir à un conteneur :
+      - en **variable d'environnement** : simple, mais les variables apparaissent dans `kubectl describe`,
+        les journaux d'erreur, et sont héritées par tous les processus enfants ;
+      - en **fichier** via un volume `secret` : lisible seulement dans le conteneur, avec des droits fins
+        (`defaultMode`), et **mis à jour automatiquement** quand le Secret change.
+
+      Le montage en lecture seule et des droits `0400` limitent encore l'exposition. Le jeton reste lisible
+      par l'utilisateur du conteneur (UID 101 ici), ce qui est voulu.
+    checks:
+      - desc: Le jeton est lisible dans le conteneur, à l'emplacement prévu
+        timeout: 120
+        run: |
+          kubectl -n boutique rollout status deploy/vitrine --timeout=90s >/dev/null 2>&1 && test "$(kubectl -n boutique exec deploy/vitrine -- cat /etc/vitrine/secrets/token 2>/dev/null)" = jeton-vitrine-2025
+      - desc: Monté en lecture seule, en 0400, et absent des variables d'environnement
+        run: |
+          d=$(kubectl -n boutique get deploy vitrine -o json) && echo "$d" | jq -e '.spec.template.spec as $p | ([$p.volumes[]? | select(.secret.secretName == "vitrine-api" and .secret.defaultMode == 256)] | length) == 1 and ([$p.containers[0].volumeMounts[]? | select(.mountPath == "/etc/vitrine/secrets" and .readOnly == true)] | length) == 1 and ([$p.containers[0].env[]?, $p.containers[0].envFrom[]? | tostring | select(test("vitrine-api"))] | length) == 0' >/dev/null
+  - id: ks-quotas
+    title: Quotas et limites par défaut
+    description: |
+      Empêche le namespace `boutique` de consommer tout le cluster :
+      - un **LimitRange** **`defauts`** qui donne à chaque conteneur sans indication une limite de
+        **128Mi** de mémoire et **200m** de CPU, et une demande (*request*) de **64Mi** et **50m** ;
+      - un **ResourceQuota** **`boutique`** qui plafonne le namespace à **10 pods**, **1 CPU** demandé
+        (`requests.cpu`) et **1Gi** de mémoire en limites (`limits.memory`).
+
+      La vitrine doit continuer à tourner.
+    hint: "LimitRange : spec.limits: [{type: Container, default: {memory: 128Mi, cpu: 200m}, defaultRequest: {memory: 64Mi, cpu: 50m}}] ; ResourceQuota : spec.hard: {pods: '10', requests.cpu: '1', limits.memory: 1Gi}"
+    cours: |
+      Sans limites, un seul pod (une fuite mémoire, une boucle) peut épuiser un nœud et faire expulser les
+      autres. Kubernetes fournit deux objets par namespace :
+      - **LimitRange** : des valeurs **par défaut** (`default` pour les limites, `defaultRequest` pour les
+        demandes) et des bornes min/max appliquées à chaque conteneur à sa création ;
+      - **ResourceQuota** : un **plafond global** pour le namespace (nombre de pods, total des demandes et
+        des limites de CPU et de mémoire, nombre de services, de PVC…).
+
+      Quand un quota porte sur une ressource, chaque nouveau pod **doit** déclarer cette ressource, sinon il
+      est refusé : le LimitRange comble les oublis. Les **requests** servent à l'ordonnanceur pour placer les
+      pods ; les **limits** sont imposées à l'exécution (le conteneur est tué s'il dépasse sa mémoire).
+      `kubectl describe quota -n boutique` montre la consommation.
+    checks:
+      - desc: Le quota boutique a les bons plafonds
+        run: |
+          kubectl -n boutique get resourcequota boutique -o json 2>/dev/null | jq -e '.spec.hard.pods == "10" and .spec.hard["requests.cpu"] == "1" and .spec.hard["limits.memory"] == "1Gi"' >/dev/null
+      - desc: Un pod sans ressources reçoit les valeurs par défaut
+        run: |
+          r=$(tdm-pod-conforme tdm-defauts boutique | kubectl create --dry-run=server -o json -f - 2>/dev/null) && echo "$r" | jq -e '.spec.containers[0].resources as $r | $r.limits.memory == "128Mi" and $r.limits.cpu == "200m" and $r.requests.memory == "64Mi" and $r.requests.cpu == "50m"' >/dev/null
+      - desc: La vitrine tourne toujours avec 2 réplicas prêts
+        timeout: 120
+        run: |
+          for i in $(seq 1 40); do test "$(kubectl -n boutique get deploy vitrine -o jsonpath='{.status.readyReplicas}')" = 2 && exit 0; sleep 2; done; exit 1

@@ -1,0 +1,206 @@
+title: OpenShift 3 avec Minishift
+level: expert
+order: 1
+tags: [openshift, minishift, oc, vagrant]
+summary: Déployer des applications sur OpenShift avec la commande oc.
+vagrant: minishift/minishift_centos7
+machine: minishift
+description: |
+  Lab Vagrant de ta formation : deux VM CentOS 7, `openshift` (192.168.99.11, l'hôte Docker) et
+  `minishift` (192.168.99.10, qui pilote OpenShift 3.10). Le déploiement prend plus de 10 minutes.
+
+  Le terminal s'ouvre sur `minishift`. `oc` s'utilise en root : `sudo -i`, puis
+  `oc login -u developer -p developer`. Console : https://192.168.99.11:8443.
+cours: |
+  ## OpenShift 3 avec Minishift
+
+  **OpenShift** est la plateforme Kubernetes d'entreprise de Red Hat. Elle ajoute à Kubernetes des couches
+  orientées développeurs et sécurité : projets, routes, construction d'images depuis le code source (S2I),
+  registre intégré, console web, gestion des utilisateurs, et une politique de sécurité stricte par défaut.
+  **OKD** est sa version communautaire ; **Minishift** faisait tourner OpenShift 3 sur un poste de travail.
+
+  OpenShift 3 est aujourd'hui en fin de vie, remplacé par OpenShift 4 (voir le lab CodeReady Containers),
+  mais ses concepts restent ceux d'OpenShift 4.
+
+  ### Ce qu'OpenShift ajoute à Kubernetes
+
+  | OpenShift | Équivalent Kubernetes | Particularité |
+  |---|---|---|
+  | **Project** | Namespace | créé en libre-service, avec quotas et droits |
+  | **Route** | Ingress | expose un service sous un nom d'hôte, TLS possible, géré par le routeur HAProxy |
+  | **DeploymentConfig** | Deployment | déclencheurs (nouvelle image, changement de config), hooks ; remplacé par Deployment dans OpenShift 4 |
+  | **ImageStream** | (aucun) | suit les versions d'une image et déclenche des redéploiements |
+  | **BuildConfig** / S2I | (aucun) | construit une image depuis un dépôt Git |
+  | **SCC** | Pod Security | interdit par défaut les conteneurs en root |
+
+  ### Chemin d'une requête
+
+  ```
+   navigateur ─▶ hello-demo.<ip>.nip.io ─▶ routeur OpenShift (HAProxy) ─▶ Service hello ─▶ pods hello (×2)
+                     (Route)                                                    ▲
+                                      DeploymentConfig hello ── ReplicationController ┘
+  ```
+
+  ### Sécurité par défaut
+
+  Les **Security Context Constraints** (SCC) font tourner chaque conteneur avec un UID aléatoire, non root.
+  Beaucoup d'images Docker Hub qui supposent être root (nginx officiel par exemple) échouent : il faut des
+  images compatibles (`nginxinc/nginx-unprivileged`, images Red Hat UBI) ou des droits accordés
+  explicitement par un administrateur.
+
+  ### Mémo `oc`
+
+  `oc` reprend toutes les commandes de `kubectl` et en ajoute :
+
+  ```bash
+  oc login -u developer -p developer https://192.168.99.11:8443
+  oc new-project demo ; oc project demo ; oc projects
+  oc new-app openshift/hello-openshift --name=hello
+  oc new-app https://github.com/sclorg/nodejs-ex          # S2I depuis Git
+  oc expose svc/hello ; oc get route
+  oc scale dc/hello --replicas=2
+  oc set env dc/hello --from=configmap/hello-config
+  oc set probe dc/hello --readiness --get-url=http://:8080/
+  oc set resources dc/hello --requests=cpu=50m,memory=32Mi --limits=memory=64Mi
+  oc rollout status dc/hello ; oc rollout latest dc/hello ; oc rollout undo dc/hello
+  oc status ; oc get all ; oc logs dc/hello ; oc rsh POD
+  ```
+
+  ### Pièges courants
+
+  - Une image qui exige root : pod en `CrashLoopBackOff` avec une erreur de permission.
+  - Oublier que `dc` (DeploymentConfig) et `deploy` (Deployment) sont deux objets différents.
+  - Une route créée avant que le service n'ait d'endpoints : erreur 503 du routeur.
+  - Travailler en `system:admin` alors que l'exercice demande les droits d'un développeur.
+
+  ### Bonnes pratiques
+
+  Un projet par application et par environnement, des images non root, des sondes et des ressources sur
+  chaque déploiement, la configuration dans des ConfigMaps et des Secrets, et les manifestes versionnés plutôt
+  que des modifications à la main dans la console.
+
+  ### Pour réviser
+
+  - Qu'apporte une Route par rapport à un Service de type NodePort ?
+  - Quels déclencheurs peut porter une DeploymentConfig ?
+  - Pourquoi OpenShift fait-il tourner les conteneurs avec un UID aléatoire ?
+  - Quelle différence entre une requête et une limite de ressources ?
+docs:
+  - title: Documentation OKD
+    url: https://docs.okd.io/
+  - title: Documentation Red Hat OpenShift
+    url: https://docs.redhat.com/en/documentation/openshift_container_platform/
+  - title: Documentation Kubernetes (français)
+    url: https://kubernetes.io/fr/docs/home/
+exercises:
+  - id: projet
+    title: Projet et application
+    description: |
+      Connecté en `developer`, crée le projet `demo` et déploie l'application
+      `openshift/hello-openshift` sous le nom `hello`.
+    hint: "oc new-project demo, oc new-app openshift/hello-openshift --name=hello"
+    cours: |
+      Un **projet** OpenShift est un namespace Kubernetes enrichi : description, droits des membres, quotas.
+      Un développeur peut en créer en libre-service avec `oc new-project`, qui en fait aussi le projet courant.
+
+      `oc new-app` est un assistant : à partir d'une image (ou d'un dépôt Git, ou d'un modèle), il crée en une
+      commande les objets nécessaires, dont une DeploymentConfig, un Service et un ImageStream. L'option `--name`
+      fixe le nom commun de ces objets.
+
+      `oc status` résume ce qui tourne dans le projet ; `oc get all` liste les objets. Vérifie avec `oc whoami`
+      que tu es bien connecté en `developer`.
+    checks:
+      - desc: Le projet demo existe
+        run: sudo oc get project demo
+      - desc: Un pod hello tourne
+        run: sudo oc -n demo get pods --no-headers | grep hello | grep -q Running
+  - id: route
+    title: Exposer avec une route
+    description: |
+      Expose le service `hello` par une route `hello` et monte l'application à 2 réplicas.
+    hint: "oc expose svc/hello, oc scale"
+    cours: |
+      Une **Route** expose un Service à l'extérieur du cluster sous un nom d'hôte. Le **routeur** d'OpenShift
+      (un HAProxy) reçoit les requêtes HTTP(S) et les envoie aux pods du service. Sans nom explicite, OpenShift
+      génère `<route>-<projet>.<domaine par défaut>`.
+
+      `oc expose svc/NOM` crée la route ; `oc get route` affiche l'hôte attribué. Une route peut aussi terminer le
+      TLS (`edge`), le relayer (`passthrough`) ou le rechiffrer (`reencrypt`).
+
+      `oc scale dc/hello --replicas=2` ajuste le nombre de pods ; le routeur répartit la charge entre eux.
+    checks:
+      - desc: La route hello existe
+        run: sudo oc -n demo get route hello
+      - desc: 2 pods hello en cours
+        run: test "$(sudo oc -n demo get pods --no-headers | grep hello | grep -c Running)" -ge 2
+      - desc: L'application répond par la route
+        run: curl -fsS --max-time 10 "http://$(sudo oc -n demo get route hello -o jsonpath='{.spec.host}')" | grep -qi hello
+  - id: configuration
+    title: Configuration par ConfigMap
+    description: |
+      Crée dans `demo` la ConfigMap `hello-config` contenant `RESPONSE=Bonjour depuis OpenShift`, puis injecte-la
+      dans la DeploymentConfig `hello` comme variables d'environnement (l'image `hello-openshift` affiche la
+      variable `RESPONSE`). Un nouveau déploiement est déclenché automatiquement.
+    hint: "oc create configmap hello-config --from-literal=RESPONSE='Bonjour depuis OpenShift' ; oc set env dc/hello --from=configmap/hello-config"
+    cours: |
+      Une **ConfigMap** sépare la configuration de l'image. `oc create configmap NOM --from-literal=CLE=valeur`
+      la crée ; `oc set env dc/NOM --from=configmap/NOM` injecte toutes ses clés comme variables
+      d'environnement dans le modèle de pod.
+
+      Une DeploymentConfig possède des **déclencheurs** (*triggers*) : `ConfigChange` lance un nouveau
+      déploiement dès que son modèle de pod change, `ImageChange` quand l'ImageStream suivi reçoit une nouvelle
+      image. Modifier l'environnement déclenche donc automatiquement un redéploiement.
+
+      `oc set env dc/hello --list` affiche les variables, et `curl` sur la route montre le nouveau message.
+    checks:
+      - desc: La ConfigMap hello-config existe
+        run: sudo oc -n demo get configmap hello-config -o jsonpath='{.data.RESPONSE}' | grep -q 'Bonjour'
+      - desc: hello utilise la ConfigMap
+        run: sudo oc -n demo get dc hello -o yaml | grep -q 'hello-config'
+      - desc: La route affiche le nouveau message
+        run: curl -fsS --max-time 10 "http://$(sudo oc -n demo get route hello -o jsonpath='{.spec.host}')" | grep -q 'Bonjour depuis OpenShift'
+  - id: sondes
+    title: Sondes de santé
+    description: |
+      Ajoute à `dc/hello` une sonde de disponibilité (*readiness*) et une sonde de vie (*liveness*) HTTP sur le
+      port **8080**, chemin `/`.
+    hint: "oc set probe dc/hello --readiness --get-url=http://:8080/ puis la même chose avec --liveness"
+    cours: |
+      Comme dans Kubernetes, la sonde de **disponibilité** (*readiness*) retire un pod du service tant qu'il n'est
+      pas prêt, et la sonde de **vie** (*liveness*) redémarre un conteneur bloqué.
+
+      `oc set probe` ajoute les sondes sans éditer de YAML : `--readiness` ou `--liveness`, avec une vérification
+      HTTP (`--get-url=http://:8080/`), TCP (`--open-tcp=8080`) ou une commande. Les options `--initial-delay-seconds`
+      et `--timeout-seconds` affinent le réglage.
+
+      `oc describe dc/hello` affiche les sondes configurées. Le changement crée un nouveau déploiement : suis-le
+      avec `oc rollout status dc/hello`.
+    checks:
+      - desc: readinessProbe définie
+        run: sudo oc -n demo get dc hello -o jsonpath='{.spec.template.spec.containers[0].readinessProbe.httpGet.port}' | grep -q 8080
+      - desc: livenessProbe définie
+        run: sudo oc -n demo get dc hello -o jsonpath='{.spec.template.spec.containers[0].livenessProbe.httpGet.port}' | grep -q 8080
+  - id: ressources
+    title: Requêtes et limites de ressources
+    description: |
+      Fixe pour `dc/hello` une requête de **50m** CPU et **32Mi** de mémoire, et une limite de **64Mi** de mémoire.
+      Vérifie que les 2 pods redémarrent correctement.
+    hint: "oc set resources dc/hello --requests=cpu=50m,memory=32Mi --limits=memory=64Mi"
+    cours: |
+      Les **requêtes** (*requests*) sont ce que le scheduler réserve pour placer un pod ; les **limites**
+      (*limits*) sont le maximum autorisé à l'exécution. Une limite mémoire dépassée provoque l'arrêt du
+      conteneur (`OOMKilled`). CPU en millicœurs (`50m`), mémoire avec les suffixes binaires (`Mi`).
+
+      `oc set resources dc/hello --requests=... --limits=...` modifie le modèle de pod et déclenche un nouveau
+      déploiement. Dans OpenShift, les projets ont souvent des **LimitRanges** qui fixent des valeurs par défaut
+      et des maximums : une valeur trop élevée est refusée.
+
+      `oc get pods` et `oc describe pod` vérifient que les pods ont redémarré avec les nouvelles valeurs.
+    checks:
+      - desc: Requêtes définies
+        run: |
+          sudo oc -n demo get dc hello -o jsonpath='{.spec.template.spec.containers[0].resources.requests.cpu}' | grep -qx 50m && sudo oc -n demo get dc hello -o jsonpath='{.spec.template.spec.containers[0].resources.requests.memory}' | grep -qx 32Mi
+      - desc: Limite mémoire de 64Mi
+        run: sudo oc -n demo get dc hello -o jsonpath='{.spec.template.spec.containers[0].resources.limits.memory}' | grep -qx 64Mi
+      - desc: 2 pods hello prêts
+        run: test "$(sudo oc -n demo get dc hello -o jsonpath='{.status.readyReplicas}')" = 2

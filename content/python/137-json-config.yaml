@@ -1,0 +1,175 @@
+title: Configuration JSON
+level: intermediaire
+order: 37
+tags: [json, dictionnaires, exceptions]
+summary: Lire, compléter, valider et écrire une configuration JSON.
+description: |
+  Utilise le module `json`.
+
+  1. `charger(texte)` analyse un texte JSON qui doit représenter un **objet** et renvoie un
+     dictionnaire où les valeurs manquantes sont complétées par celles de
+     `DEFAUTS = {"port": 8080, "debug": False, "hotes": []}` (à définir dans ton code).
+     Si le JSON est mal formé **ou** n'est pas un objet, lève `ValueError`.
+     Le dictionnaire `DEFAUTS` ne doit jamais être modifié (attention à la liste !).
+  2. `serveurs_actifs(texte)` reçoit un JSON de la forme
+     `{"serveurs": [{"nom": ..., "actif": true/false, "ip": ...}, ...]}` et renvoie la liste
+     triée des noms des serveurs actifs. Une clé `actif` absente vaut `true`.
+  3. `exporter(config)` renvoie le texte JSON de la configuration, indenté de 2 espaces,
+     clés triées, et **avec les accents tels quels** (pas de `é`).
+
+  ```python
+  charger('{"port": 443}')
+  # {"port": 443, "debug": False, "hotes": []}
+  serveurs_actifs('{"serveurs": [{"nom": "web2"}, {"nom": "db", "actif": false}, {"nom": "web1", "actif": true}]}')
+  # ["web1", "web2"]
+  print(exporter({"nom": "équipe", "port": 22}))
+  # {
+  #   "nom": "équipe",
+  #   "port": 22
+  # }
+  ```
+starter: |
+  import json
+
+
+  def charger(texte):
+      pass
+
+
+  def serveurs_actifs(texte):
+      pass
+
+
+  def exporter(config):
+      pass
+tests: |
+  import json
+
+  def test_charger_defauts():
+      "charger complète avec les valeurs par défaut"
+      r = solution.charger('{"port": 443}')
+      assert r == {"port": 443, "debug": False, "hotes": []}, f"obtenu {r!r}"
+
+  def test_charger_complet():
+      "charger garde les valeurs fournies"
+      r = solution.charger('{"port": 22, "debug": true, "hotes": ["a"], "extra": null}')
+      assert r == {"port": 22, "debug": True, "hotes": ["a"], "extra": None}, f"obtenu {r!r}"
+
+  def test_defauts_non_modifies():
+      "Les valeurs par défaut ne sont pas partagées"
+      a = solution.charger("{}")
+      a["hotes"].append("pollution")
+      b = solution.charger("{}")
+      assert b["hotes"] == [], "la liste par défaut a été partagée entre deux appels"
+      assert solution.DEFAUTS == {"port": 8080, "debug": False, "hotes": []}
+
+  def test_charger_invalide():
+      "JSON invalide ou pas un objet -> ValueError"
+      for texte in ['{"port": 80', "[1, 2]", "42", "{'port': 80}"]:
+          try:
+              solution.charger(texte)
+          except ValueError:
+              continue
+          raise AssertionError(f"charger({texte!r}) devrait lever ValueError")
+
+  def test_actifs():
+      "serveurs_actifs"
+      texte = '{"serveurs": [{"nom": "web2"}, {"nom": "db", "actif": false}, {"nom": "web1", "actif": true}]}'
+      assert solution.serveurs_actifs(texte) == ["web1", "web2"]
+      assert solution.serveurs_actifs('{"serveurs": []}') == []
+
+  def test_exporter():
+      "exporter : indenté, trié, accents conservés"
+      r = solution.exporter({"port": 22, "nom": "équipe"})
+      assert r == '{\n  "nom": "équipe",\n  "port": 22\n}', f"obtenu {r!r}"
+      assert json.loads(r) == {"port": 22, "nom": "équipe"}
+solution: |
+  import copy
+  import json
+
+  DEFAUTS = {"port": 8080, "debug": False, "hotes": []}
+
+
+  def charger(texte):
+      try:
+          donnees = json.loads(texte)
+      except json.JSONDecodeError as erreur:
+          raise ValueError(f"JSON invalide : {erreur}") from erreur
+      if not isinstance(donnees, dict):
+          raise ValueError("la configuration doit être un objet JSON")
+      config = copy.deepcopy(DEFAUTS)
+      config.update(donnees)
+      return config
+
+
+  def serveurs_actifs(texte):
+      donnees = json.loads(texte)
+      return sorted(s["nom"] for s in donnees["serveurs"] if s.get("actif", True))
+
+
+  def exporter(config):
+      return json.dumps(config, indent=2, sort_keys=True, ensure_ascii=False)
+cours: |
+  ## JSON en deux mots
+
+  JSON (*JavaScript Object Notation*) est le format d'échange de données le plus répandu :
+  API web, fichiers de configuration, sorties de commandes (`ip -j addr`, `docker inspect`,
+  `kubectl -o json`). Sa syntaxe ressemble à celle des dictionnaires Python, avec quelques
+  différences : guillemets **doubles** obligatoires, `true` / `false` / `null`, pas de
+  virgule finale.
+
+  ## Correspondance des types
+
+  | JSON | Python |
+  |------|--------|
+  | objet `{}` | `dict` |
+  | tableau `[]` | `list` |
+  | chaîne | `str` |
+  | nombre | `int` ou `float` |
+  | `true` / `false` | `True` / `False` |
+  | `null` | `None` |
+
+  ## Les quatre fonctions
+
+  ```python
+  import json
+  donnees = json.loads('{"port": 22}')       # texte -> objet Python
+  texte = json.dumps({"port": 22})           # objet Python -> texte
+  with open("conf.json", encoding="utf-8") as f:
+      conf = json.load(f)                    # depuis un fichier
+  with open("conf.json", "w", encoding="utf-8") as f:
+      json.dump(conf, f, indent=2)           # vers un fichier
+  ```
+
+  Mnémotechnique : le `s` de `loads` / `dumps` signifie *string*.
+
+  ## Options utiles de `dumps`
+
+  - `indent=2` : sortie lisible sur plusieurs lignes ;
+  - `sort_keys=True` : clés triées (sortie stable, pratique pour comparer deux versions) ;
+  - `ensure_ascii=False` : garde les accents au lieu de `é`.
+
+  ## Erreurs
+
+  Un JSON mal formé lève `json.JSONDecodeError`, qui est une sous-classe de `ValueError`.
+  Mais un JSON **valide** peut contenir autre chose qu'un objet (`[1, 2]`, `42`) : vérifie
+  le type avec `isinstance` avant de t'en servir comme dictionnaire.
+
+  `raise NouvelleErreur(...) from erreur` conserve la cause d'origine dans le traceback.
+
+  ## Valeurs par défaut sans effets de bord
+
+  `dict.update(autre)` copie les clés de `autre` dans le dictionnaire. Pour partir des valeurs
+  par défaut, il faut les **copier** : `dict(DEFAUTS)` copie le dictionnaire mais **pas** la
+  liste qu'il contient, qui serait partagée entre toutes les configurations. `copy.deepcopy`
+  copie récursivement. On peut aussi écrire `{**DEFAUTS, **donnees}` (copie superficielle
+  elle aussi).
+
+  ## `get` avec défaut
+
+  Pour une clé facultative : `serveur.get("actif", True)`.
+docs:
+  - title: Module json
+    url: https://docs.python.org/fr/3/library/json.html
+  - title: Tutoriel — sauvegarder des données structurées avec json
+    url: https://docs.python.org/fr/3/tutorial/inputoutput.html#saving-structured-data-with-json

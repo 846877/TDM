@@ -1,0 +1,133 @@
+title: Regrouper avec defaultdict
+level: intermediaire
+order: 18
+tags: [collections, defaultdict, dictionnaires]
+summary: Construire des groupes sans tester l'existence des clés.
+description: |
+  `collections.defaultdict(list)` crée automatiquement une liste vide pour toute clé absente.
+
+  1. `regrouper_par_initiale(mots)` : renvoie un dictionnaire `{lettre: [mots]}` où la lettre est
+     l'initiale **en minuscule**, et où chaque liste est **triée** (sans tenir compte de la casse).
+  2. `ventes_par_vendeur(ventes)` : `ventes` est une liste de tuples `(vendeur, montant)` ;
+     renvoie `{vendeur: total}`.
+
+  Les deux fonctions doivent renvoyer un `dict` classique (pas un `defaultdict`) : utilise
+  `dict(...)` pour convertir à la fin.
+
+  ```python
+  regrouper_par_initiale(["Pomme", "poire", "abricot"])
+  # {"p": ["poire", "Pomme"], "a": ["abricot"]}
+  ventes_par_vendeur([("Ana", 10), ("Bo", 5), ("Ana", 7)])
+  # {"Ana": 17, "Bo": 5}
+  ```
+starter: |
+  from collections import defaultdict
+
+
+  def regrouper_par_initiale(mots):
+      pass
+
+
+  def ventes_par_vendeur(ventes):
+      pass
+tests: |
+  def test_initiales():
+      "Exemple de l'énoncé"
+      r = solution.regrouper_par_initiale(["Pomme", "poire", "abricot"])
+      assert r == {"p": ["poire", "Pomme"], "a": ["abricot"]}, f"obtenu {r!r}"
+
+  def test_initiales_dict():
+      "Le résultat est un dict classique"
+      r = solution.regrouper_par_initiale(["x"])
+      assert type(r) is dict, f"attendu dict, obtenu {type(r).__name__}"
+      r = solution.ventes_par_vendeur([("a", 1)])
+      assert type(r) is dict, f"attendu dict, obtenu {type(r).__name__}"
+
+  def test_initiales_vide():
+      "Liste vide et mot vide ignoré"
+      assert solution.regrouper_par_initiale([]) == {}
+      r = solution.regrouper_par_initiale(["", "Bus"])
+      assert r == {"b": ["Bus"]}, f"les mots vides doivent être ignorés, obtenu {r!r}"
+
+  def test_ventes():
+      "Totaux par vendeur"
+      r = solution.ventes_par_vendeur([("Ana", 10), ("Bo", 5), ("Ana", 7)])
+      assert r == {"Ana": 17, "Bo": 5}, f"obtenu {r!r}"
+
+  def test_ventes_vide():
+      "Aucune vente"
+      assert solution.ventes_par_vendeur([]) == {}
+solution: |
+  from collections import defaultdict
+
+
+  def regrouper_par_initiale(mots):
+      groupes = defaultdict(list)
+      for mot in mots:
+          if mot:
+              groupes[mot[0].lower()].append(mot)
+      return {lettre: sorted(liste, key=str.lower) for lettre, liste in groupes.items()}
+
+
+  def ventes_par_vendeur(ventes):
+      totaux = defaultdict(int)
+      for vendeur, montant in ventes:
+          totaux[vendeur] += montant
+      return dict(totaux)
+cours: |
+  ## Le problème de la première insertion
+
+  Pour regrouper des éléments dans des listes, il faut créer la liste la première fois
+  qu'on rencontre une clé :
+
+  ```python
+  par_vlan = {}
+  for hote, vlan in [("pc1", 10), ("pc2", 20), ("pc3", 10)]:
+      if vlan not in par_vlan:
+          par_vlan[vlan] = []
+      par_vlan[vlan].append(hote)
+  ```
+
+  Trois solutions plus concises existent.
+
+  ## `setdefault`
+
+  `d.setdefault(cle, defaut)` renvoie `d[cle]` si la clé existe, sinon l'insère avec
+  `defaut` et le renvoie : `par_vlan.setdefault(vlan, []).append(hote)`.
+
+  ## `defaultdict`
+
+  `defaultdict(fabrique)` appelle `fabrique()` pour créer la valeur de toute clé absente :
+
+  ```python
+  from collections import defaultdict
+  par_vlan = defaultdict(list)    # list() -> []
+  par_vlan[10].append("pc1")
+  totaux = defaultdict(int)       # int() -> 0
+  totaux["Ana"] += 12
+  ```
+
+  On passe la **fonction** (`list`, `int`, `set`), sans parenthèses. `lambda: "?"` marche
+  aussi.
+
+  **Attention** : simplement *lire* une clé absente (`par_vlan[99]`) la crée ! Pour tester
+  sans créer, utilise `in` ou `get`. C'est pour cette raison (et pour une comparaison ou un
+  affichage propres) qu'on reconvertit souvent le résultat en `dict(...)` avant de le
+  renvoyer.
+
+  ## Trier sans tenir compte de la casse
+
+  `sorted(mots, key=str.lower)` compare les versions minuscules tout en renvoyant les mots
+  d'origine. `str.lower` est passé comme fonction, sans l'appeler. Pour un tri
+  international plus correct, `str.casefold` ou le module `locale`.
+
+  ## Agrégations
+
+  Regrouper puis agréger (somme, comptage, max) est l'opération « GROUP BY » des bases de
+  données et des tableaux croisés dynamiques : une compétence centrale pour produire des
+  rapports.
+docs:
+  - title: collections.defaultdict
+    url: https://docs.python.org/fr/3/library/collections.html#collections.defaultdict
+  - title: Méthode dict.setdefault
+    url: https://docs.python.org/fr/3/library/stdtypes.html#dict.setdefault

@@ -1,0 +1,108 @@
+title: NAT avec un pool d'adresses publiques
+level: expert
+order: 6
+device: router
+hostname: R-SIEGE
+tags: [nat, pool, pat]
+summary: Traduire deux LAN vers une plage d'adresses publiques.
+description: |
+  Le FAI a attribué au siège la plage `203.0.113.16/28`. Les adresses `.17` à `.30` sont utilisables
+  pour la traduction des postes ; le lien vers le FAI est sur `G0/1`.
+
+  1. `G0/0` (bureaux, `10.10.1.0/24`) et `G0/2` (atelier, `10.10.2.0/24`) sont `inside` ; `G0/1` est `outside` ;
+  2. ACL standard numérotée `10` autorisant **les deux LAN** en une seule ligne : `10.10.0.0 0.0.255.255` ;
+  3. pool `PUBLIC` : `ip nat pool PUBLIC 203.0.113.17 203.0.113.30 netmask 255.255.255.240` ;
+  4. traduction avec surcharge sur le pool :
+     `ip nat inside source list 10 pool PUBLIC overload`.
+initial: |
+  interface g0/0
+  ip address 10.10.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 198.51.100.2 255.255.255.252
+  no shutdown
+  interface g0/2
+  ip address 10.10.2.1 255.255.255.0
+  no shutdown
+  ip route 0.0.0.0 0.0.0.0 198.51.100.1
+checks:
+  - desc: G0/0 et G0/2 inside, G0/1 outside
+    expr: intf("g0/0").nat == "inside" and intf("g0/2").nat == "inside" and intf("g0/1").nat == "outside"
+  - desc: ACL 10 autorise 10.10.0.0/16
+    expr: '"permit 10.10.0.0 0.0.255.255" in acl(10)'
+  - desc: Pool PUBLIC de 203.0.113.17 à 203.0.113.30
+    expr: nat("ip nat pool PUBLIC 203.0.113.17 203.0.113.30 netmask 255.255.255.240")
+    hint: "ip nat pool PUBLIC 203.0.113.17 203.0.113.30 netmask 255.255.255.240"
+  - desc: Traduction de la liste 10 vers le pool avec surcharge
+    expr: nat("ip nat inside source list 10 pool PUBLIC overload")
+solution: |
+  configure terminal
+  interface range g0/0, g0/2
+  ip nat inside
+  interface g0/1
+  ip nat outside
+  exit
+  access-list 10 permit 10.10.0.0 0.0.255.255
+  ip nat pool PUBLIC 203.0.113.17 203.0.113.30 netmask 255.255.255.240
+  ip nat inside source list 10 pool PUBLIC overload
+  end
+cours: |
+  ## NAT dynamique avec un pool
+
+  Quand l'opérateur fournit un **bloc** d'adresses publiques, on peut traduire vers une plage
+  plutôt que vers l'adresse de l'interface. On définit un **pool** :
+
+  ```
+  ip nat pool <nom> <première> <dernière> netmask <masque>
+  ```
+
+  Deux comportements :
+
+  - **sans** `overload` (NAT dynamique) : chaque poste qui sort prend une adresse du pool **pour
+    lui seul** ; quand le pool est épuisé, les suivants ne sortent plus ;
+  - **avec** `overload` (PAT sur pool) : les adresses du pool sont partagées par port ; le routeur
+    passe à l'adresse suivante quand les ports d'une adresse sont épuisés.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# interface range gi0/0 , gi0/3
+  R1(config-if-range)# ip nat inside
+  R1(config)# interface gi0/2
+  R1(config-if)# ip nat outside
+  R1(config)# access-list 20 permit 172.20.0.0 0.0.255.255
+  R1(config)# ip nat pool OPERATEUR 198.51.100.33 198.51.100.46 netmask 255.255.255.240
+  R1(config)# ip nat inside source list 20 pool OPERATEUR overload
+  R1# show ip nat statistics
+  Total active translations: 214 (0 static, 214 dynamic; 214 extended)
+  Pool OPERATEUR: netmask 255.255.255.240
+      start 198.51.100.33 end 198.51.100.46
+      type generic, total addresses 14, allocated 1 (7%), misses 0
+  ```
+
+  ### Calcul du bloc
+
+  Un `/28` (`255.255.255.240`) contient 16 adresses : réseau (`.32`), broadcast (`.47`), 14
+  utilisables. L'adresse de l'interface du routeur et celle de la passerelle de l'opérateur
+  doivent être **exclues** du pool si elles sont dans le même bloc.
+
+  ### Une ACL pour plusieurs LAN
+
+  Une seule ACL peut couvrir plusieurs réseaux internes avec un masque générique large
+  (`172.20.0.0 0.0.255.255` couvre `172.20.0.0/16`) ; toutes les interfaces LAN concernées
+  doivent être `inside`.
+
+  ### Pièges fréquents
+
+  - Oublier `overload` avec un petit pool : pannes aléatoires quand le pool est plein.
+  - Masque du pool incohérent avec les adresses.
+  - Inclure dans le pool l'adresse de la passerelle de l'opérateur.
+
+  ### Pour le CCNA
+
+  Le NAT dynamique avec pool, avec ou sans surcharge, fait partie des variantes à connaître.
+docs:
+  - title: "Cisco — NAT Frequently Asked Questions"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/network-address-translation-nat/26704-nat-faq-00.html
+  - title: "RFC 1918 — Address Allocation for Private Internets"
+    url: https://www.rfc-editor.org/rfc/rfc1918

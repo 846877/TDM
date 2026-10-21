@@ -1,0 +1,246 @@
+title: Évaluateur en notation polonaise inversée
+level: expert
+order: 24
+tags: [piles, parsing, exceptions, stdin]
+summary: Une calculatrice RPN robuste avec des messages d'erreur précis.
+mode: stdio
+description: |
+  En **notation polonaise inversée** (RPN), l'opérateur suit ses opérandes : `3 4 +` vaut 7 et
+  `5 1 2 + 4 * + 3 -` vaut 14. Pas besoin de parenthèses : une **pile** suffit.
+
+  Ton programme lit des expressions sur l'entrée standard, **une par ligne** (jetons séparés par des
+  espaces), et affiche le résultat de chacune. Les lignes vides sont ignorées (rien n'est affiché).
+
+  | Jeton | Effet sur la pile |
+  |-------|-------------------|
+  | nombre (`42`, `-4`, `2.5`) | empile la valeur (entier si possible, sinon décimal) |
+  | `+ - * / ^` | dépile `b` puis `a`, empile `a op b` (`/` division réelle, `^` puissance) |
+  | `neg` | remplace le sommet par son opposé |
+  | `sqrt` | remplace le sommet par sa racine carrée |
+  | `dup` | duplique le sommet |
+  | `swap` | échange les deux éléments du sommet |
+
+  **Affichage** : un résultat entier (y compris un décimal comme `10.0`) s'affiche sans décimale ;
+  sinon il est arrondi à 6 décimales, sans zéros inutiles (`3.5`, `0.333333`, `0.3`).
+
+  **Erreurs** : la ligne affiche `erreur: <message>` et on passe à la suivante :
+
+  - `erreur: pile insuffisante` — pas assez d'opérandes pour un opérateur ;
+  - `erreur: division par zero` ;
+  - `erreur: racine negative` ;
+  - `erreur: jeton inconnu 'x'` — jeton qui n'est ni un nombre ni un opérateur connu (`nan`, `inf`
+    sont refusés aussi) ;
+  - `erreur: expression incomplete` — il reste plus d'une valeur sur la pile à la fin.
+
+  Astuce : définis ta propre exception (`class ErreurRPN(Exception)`) pour sortir proprement de
+  l'évaluation d'une ligne.
+starter: |
+  import math
+  import sys
+
+  for ligne in sys.stdin.read().splitlines():
+      pass
+cases:
+  - name: Expressions valides
+    input: |
+      3 4 +
+      5 1 2 + 4 * + 3 -
+      7 2 /
+      2 10 ^
+
+      2 sqrt
+      1 3 /
+      -4 neg 2.5 *
+      3 dup *
+      1 2 swap -
+    output: |
+      7
+      14
+      3.5
+      1024
+      1.414214
+      0.333333
+      10
+      9
+      1
+  - name: Erreurs
+    input: |
+      1 +
+      4 0 /
+      1 2
+      2 x +
+      -9 sqrt
+      +
+      nan
+      swap
+    output: |
+      erreur: pile insuffisante
+      erreur: division par zero
+      erreur: expression incomplete
+      erreur: jeton inconnu 'x'
+      erreur: racine negative
+      erreur: pile insuffisante
+      erreur: jeton inconnu 'nan'
+      erreur: pile insuffisante
+  - name: Flottants et puissances
+    input: |
+      0.1 0.2 +
+      2 0.5 ^
+      2 -1 ^
+      10 4 / 4 *
+      3 2 ^ 2 ^
+    output: |
+      0.3
+      1.414214
+      0.5
+      10
+      81
+  - name: Les erreurs n'arrêtent pas le programme
+    input: |
+      1 0 /
+      6 7 *
+      dup
+      100 dup dup * swap /
+    output: |
+      erreur: division par zero
+      42
+      erreur: pile insuffisante
+      100
+solution: |
+  import math
+  import sys
+
+  BINAIRES = {
+      "+": lambda a, b: a + b,
+      "-": lambda a, b: a - b,
+      "*": lambda a, b: a * b,
+      "/": lambda a, b: a / b,
+      "^": lambda a, b: a ** b,
+  }
+
+
+  class ErreurRPN(Exception):
+      pass
+
+
+  def nombre(jeton):
+      try:
+          return int(jeton)
+      except ValueError:
+          pass
+      try:
+          valeur = float(jeton)
+      except ValueError:
+          raise ErreurRPN(f"jeton inconnu '{jeton}'") from None
+      if not math.isfinite(valeur):
+          raise ErreurRPN(f"jeton inconnu '{jeton}'")
+      return valeur
+
+
+  def depiler(pile, n):
+      if len(pile) < n:
+          raise ErreurRPN("pile insuffisante")
+      valeurs = pile[-n:]
+      del pile[-n:]
+      return valeurs
+
+
+  def evaluer(jetons):
+      pile = []
+      for jeton in jetons:
+          if jeton in BINAIRES:
+              a, b = depiler(pile, 2)
+              if jeton == "/" and b == 0:
+                  raise ErreurRPN("division par zero")
+              pile.append(BINAIRES[jeton](a, b))
+          elif jeton == "neg":
+              (a,) = depiler(pile, 1)
+              pile.append(-a)
+          elif jeton == "sqrt":
+              (a,) = depiler(pile, 1)
+              if a < 0:
+                  raise ErreurRPN("racine negative")
+              pile.append(math.sqrt(a))
+          elif jeton == "dup":
+              (a,) = depiler(pile, 1)
+              pile.extend([a, a])
+          elif jeton == "swap":
+              a, b = depiler(pile, 2)
+              pile.extend([b, a])
+          else:
+              pile.append(nombre(jeton))
+      if len(pile) != 1:
+          raise ErreurRPN("expression incomplete")
+      return pile[0]
+
+
+  def formater(valeur):
+      if isinstance(valeur, float):
+          if valeur.is_integer():
+              return str(int(valeur))
+          return f"{valeur:.6f}".rstrip("0").rstrip(".")
+      return str(valeur)
+
+
+  for ligne in sys.stdin.read().splitlines():
+      jetons = ligne.split()
+      if not jetons:
+          continue
+      try:
+          print(formater(evaluer(jetons)))
+      except ErreurRPN as exc:
+          print(f"erreur: {exc}")
+cours: |
+  ## La notation postfixée
+
+  En RPN, l'opérateur vient **après** ses opérandes : `(3 + 4) × 2` s'écrit `3 4 + 2 *`.
+  Aucune parenthèse, aucune règle de priorité : l'ordre des jetons suffit. C'était la
+  notation des calculatrices HP, et c'est le principe des machines virtuelles à pile
+  (bytecode Python, JVM, PostScript).
+
+  ## Évaluation avec une pile
+
+  - un **nombre** est empilé ;
+  - un **opérateur binaire** dépile deux valeurs, calcule, empile le résultat ;
+  - à la fin, la pile doit contenir **exactement une** valeur.
+
+  **Ordre des opérandes** : le premier dépilé est l'opérande de **droite**. Pour `10 2 -`, on
+  dépile 2 puis 10, et on calcule `10 - 2`. L'inverser est l'erreur classique (visible
+  seulement avec `-`, `/` et `^`).
+
+  ## Une table d'opérations
+
+  Plutôt qu'une longue cascade de `if`, un dictionnaire associe chaque jeton à une fonction :
+
+  ```python
+  import operator
+  BINAIRES = {"+": operator.add, "-": operator.sub, "*": operator.mul}
+  UNAIRES = {"abs": abs}
+  ```
+
+  Ajouter un opérateur revient à ajouter une entrée. Les opérations de manipulation de pile
+  (`dup`, `swap`) se traitent à part.
+
+  ## Erreurs : une ligne, un message
+
+  Chaque ligne est indépendante : une erreur (pile insuffisante, jeton inconnu, division par
+  zéro, racine d'un négatif, résidu de plusieurs valeurs) doit produire un message et laisser
+  le programme passer à la ligne suivante. Une exception personnalisée levée au cœur de
+  l'évaluation et attrapée dans la boucle principale rend le code très lisible.
+
+  ## Nombres
+
+  Lire un jeton comme entier si possible (`int`), sinon comme flottant (`float`), sinon
+  c'est un opérateur. `float.is_integer()` indique si un flottant a une valeur entière, pour
+  l'affichage. Attention : `float("nan")` et `float("inf")` sont acceptés par Python, ce qui
+  peut surprendre.
+
+  ## Lien avec les parsers
+
+  L'algorithme de la gare de triage (*shunting-yard*) de Dijkstra convertit une expression
+  infixe en RPN : c'est une autre façon d'écrire une calculatrice.
+docs:
+  - title: Wikipédia — Notation polonaise inverse
+    url: https://fr.wikipedia.org/wiki/Notation_polonaise_inverse
+  - title: Tutoriel — utiliser les listes comme des piles
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#using-lists-as-stacks

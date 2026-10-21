@@ -1,0 +1,105 @@
+title: Ma première ACL standard
+level: debutant
+order: 32
+device: router
+hostname: R-ECOLE
+tags: [acl, filtrage, wildcard]
+summary: Interdire un poste et autoriser le reste de son réseau.
+description: |
+  Le poste d'un stagiaire (`192.168.1.66`) ne doit plus atteindre le réseau des serveurs,
+  derrière `G0/1`. Les autres postes du LAN `192.168.1.0/24` doivent continuer à y accéder.
+
+  1. crée l'ACL standard numérotée `5` :
+     - refuser l'hôte `192.168.1.66` ;
+     - autoriser `192.168.1.0 0.0.0.255` ;
+  2. applique-la en **sortie** de `G0/1` (`ip access-group 5 out`).
+
+  L'ordre compte : la **première** ligne qui correspond s'applique. Et toute ACL se termine par un
+  `deny any` **implicite**. Contrôle avec `show access-lists`.
+initial: |
+  interface g0/0
+  ip address 192.168.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.10.10.1 255.255.255.0
+  no shutdown
+checks:
+  - desc: ACL 5 refuse d'abord l'hôte 192.168.1.66
+    expr: acl("5")[:1] in (["deny host 192.168.1.66"], ["deny 192.168.1.66"], ["deny 192.168.1.66 0.0.0.0"])
+    hint: "access-list 5 deny host 192.168.1.66 (avant la ligne permit)"
+  - desc: ACL 5 autorise ensuite le LAN 192.168.1.0/24
+    expr: acl("5")[1:2] == ["permit 192.168.1.0 0.0.0.255"]
+  - desc: ACL 5 appliquée en sortie de G0/1
+    expr: intf("g0/1").access_groups.get("out") == "5"
+solution: |
+  configure terminal
+  access-list 5 deny host 192.168.1.66
+  access-list 5 permit 192.168.1.0 0.0.0.255
+  interface g0/1
+  ip access-group 5 out
+  end
+cours: |
+  ## Qu'est-ce qu'une ACL ?
+
+  Une **liste de contrôle d'accès** (ACL) est une suite de règles `permit`/`deny` que le routeur
+  compare à chaque paquet, **de haut en bas**. Dès qu'une règle correspond, elle s'applique et la
+  lecture s'arrête. Si aucune ne correspond, le paquet est rejeté par le **`deny any` implicite**
+  de fin de liste.
+
+  Une ACL **standard** ne regarde que l'adresse **source** du paquet.
+
+  | Type      | Numéros            | Critères                                   |
+  |-----------|--------------------|--------------------------------------------|
+  | standard  | 1–99, 1300–1999    | adresse source                             |
+  | étendue   | 100–199, 2000–2699 | source, destination, protocole, ports      |
+
+  ### Le masque générique (wildcard)
+
+  Le wildcard est l'**inverse** du masque : un bit à 0 doit correspondre, un bit à 1 est ignoré.
+
+  | Ce qu'on veut désigner | Écriture                                 |
+  |------------------------|------------------------------------------|
+  | un hôte                | `host 172.16.4.9` ou `172.16.4.9 0.0.0.0` |
+  | un /24                 | `172.16.4.0 0.0.0.255`                    |
+  | un /27                 | `172.16.4.32 0.0.0.31`                    |
+  | tout                   | `any` (= `0.0.0.0 255.255.255.255`)        |
+
+  ### Écrire et appliquer
+
+  ```
+  R1(config)# access-list 12 deny host 172.16.4.9
+  R1(config)# access-list 12 permit 172.16.4.0 0.0.0.255
+  R1(config)# interface g0/2
+  R1(config-if)# ip access-group 12 out
+  R1# show access-lists
+  Standard IP access list 12
+      10 deny   172.16.4.9
+      20 permit 172.16.4.0, wildcard bits 0.0.0.255
+  ```
+
+  Une ACL ne fait **rien** tant qu'elle n'est pas appliquée à une interface, dans un sens :
+  `in` (paquets qui entrent dans le routeur par cette interface) ou `out` (qui en sortent).
+  Une seule ACL par interface, par sens et par protocole.
+
+  ### Où placer une ACL standard ?
+
+  Comme elle ne connaît pas la destination, on la place **au plus près de la destination** :
+  placée en entrée côté utilisateurs, elle couperait le stagiaire de **tout**, Internet compris.
+
+  ### Pièges fréquents
+
+  - Mettre le `permit` du réseau **avant** le `deny` de l'hôte : le `deny` n'est jamais atteint.
+  - Oublier toute ligne `permit` : le `deny any` implicite bloque tout le trafic de l'interface.
+  - Confondre masque et wildcard (`255.255.255.0` au lieu de `0.0.0.255`).
+  - Ajouter une ligne à une ACL numérotée : elle va **à la fin**. Pour insérer, on utilise les
+    numéros de séquence (ACL nommées, niveau expert).
+
+  ### Pour le CCNA
+
+  Calcul des wildcards, ordre de lecture, `deny` implicite et règles de placement (standard près
+  de la destination, étendue près de la source) sont incontournables.
+docs:
+  - title: Cisco — Configure and Filter IP Access Lists
+    url: https://www.cisco.com/c/en/us/support/docs/security/ios-firewall/23602-confaccesslists.html
+  - title: Cisco — Configure Commonly Used IP ACLs
+    url: https://www.cisco.com/c/en/us/support/docs/ip/access-lists/26448-ACLsamples.html

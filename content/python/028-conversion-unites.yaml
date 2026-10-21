@@ -1,0 +1,119 @@
+title: Convertisseur de longueurs
+level: debutant
+order: 28
+tags: [dictionnaires, input, conversions, f-string]
+summary: Lire une saisie, la découper et convertir des unités.
+mode: stdio
+description: |
+  Chaque ligne d'entrée contient une valeur, une unité de départ et une unité d'arrivée,
+  séparées par des espaces. Les unités possibles sont `mm`, `cm`, `m` et `km`.
+  La **première ligne** donne le nombre de conversions à faire.
+
+  Pour chaque conversion, affiche `<valeur> <unité> = <résultat> <unité>`. Les nombres sont
+  affichés avec le format `:g`, qui supprime les zéros inutiles (`1500.0` devient `1500`,
+  `0.25` reste `0.25`). Si une unité est inconnue, affiche `Unité inconnue`.
+
+  Entrée :
+
+  ```
+  3
+  1.5 km m
+  250 mm cm
+  3 m pouce
+  ```
+
+  Sortie :
+
+  ```
+  1.5 km = 1500 m
+  250 mm = 25 cm
+  Unité inconnue
+  ```
+
+  Astuce : un dictionnaire `{"mm": 0.001, "cm": 0.01, "m": 1, "km": 1000}` donne la valeur de
+  chaque unité en mètres. `ligne.split()` découpe la saisie.
+starter: |
+  n = int(input())
+cases:
+  - name: "Exemple de l'énoncé"
+    input: "3\n1.5 km m\n250 mm cm\n3 m pouce\n"
+    output: |
+      1.5 km = 1500 m
+      250 mm = 25 cm
+      Unité inconnue
+  - name: "Vers une plus grande unité"
+    input: "2\n42195 m km\n5 cm m\n"
+    output: |
+      42195 m = 42.195 km
+      5 cm = 0.05 m
+  - name: "Même unité"
+    input: "1\n7 m m\n"
+    output: "7 m = 7 m"
+  - name: "Unité de départ inconnue"
+    input: "1\n2 mile km\n"
+    output: "Unité inconnue"
+solution: |
+  EN_METRES = {"mm": 0.001, "cm": 0.01, "m": 1, "km": 1000}
+
+  n = int(input())
+  for _ in range(n):
+      valeur, source, cible = input().split()
+      if source not in EN_METRES or cible not in EN_METRES:
+          print("Unité inconnue")
+          continue
+      nombre = float(valeur)
+      resultat = round(nombre * EN_METRES[source] / EN_METRES[cible], 6)
+      print(f"{nombre:g} {source} = {resultat:g} {cible}")
+cours: |
+  ## Les données plutôt que les `if`
+
+  Pour convertir entre de nombreuses unités, écrire un `if` par couple d'unités serait
+  interminable (4 unités = 12 couples). L'astuce : passer par une **unité pivot**. On
+  convertit l'unité de départ vers le pivot, puis le pivot vers l'unité d'arrivée.
+
+  ```python
+  en_octets = {"o": 1, "Ko": 1024, "Mo": 1024 ** 2, "Go": 1024 ** 3}
+  valeur = 3 * en_octets["Go"] / en_octets["Mo"]   # 3 Go en Mo = 3072.0
+  ```
+
+  Ajouter une unité revient à ajouter **une ligne** dans le dictionnaire. C'est le principe de
+  la programmation **pilotée par les données** (*data-driven*).
+
+  ## Vérifier qu'une clé existe
+
+  Avant d'accéder au dictionnaire, teste la présence des deux unités avec `in` ; sinon,
+  `d[cle]` lève une `KeyError` qui interromprait tout le programme.
+
+  ## Lire N lignes
+
+  Quand la première ligne annonce le nombre de lignes à lire :
+
+  ```python
+  n = int(input())
+  for _ in range(n):
+      ligne = input()
+      ...
+  ```
+
+  Le nom `_` signale une variable dont on ne se sert pas. Pour découper une ligne en trois
+  morceaux : `valeur, depart, arrivee = ligne.split()` (déballage).
+
+  ## Le format `g`
+
+  `f"{x:g}"` choisit automatiquement la représentation la plus courte et retire les zéros
+  inutiles :
+
+  ```python
+  f"{1500.0:g}"   # "1500"
+  f"{0.25:g}"     # "0.25"
+  f"{2.50:g}"     # "2.5"
+  ```
+
+  Il bascule en notation scientifique pour les très grands ou très petits nombres (plus de
+  6 chiffres significatifs par défaut), ce qui n'arrive pas dans les tests de cet exercice.
+  Affiche la valeur d'entrée **et** le résultat avec ce format.
+docs:
+  - title: Mini-langage de format (type g)
+    url: https://docs.python.org/fr/3/library/string.html#format-specification-mini-language
+  - title: Tutoriel — les dictionnaires
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#dictionaries

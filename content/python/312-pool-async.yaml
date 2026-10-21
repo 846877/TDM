@@ -1,0 +1,260 @@
+title: Pool de connexions asynchrone
+level: expert
+order: 12
+tags: [asyncio, async with, context manager, concurrence]
+summary: Gestionnaires de contexte asynchrones (__aenter__ / __aexit__) et Semaphore.
+description: |
+  Un pool réutilise un nombre limité de connexions coûteuses à créer. Crée une classe
+  `PoolConnexions(fabrique, taille)` :
+
+  - `fabrique` est une fonction **asynchrone** sans argument qui crée une connexion
+    (`conn = await fabrique()`). Les connexions sont créées **à la demande**, jamais plus de `taille`
+    au total ; l'attribut `creees` compte les connexions créées ;
+  - `pool.acquerir()` renvoie un **gestionnaire de contexte asynchrone** :
+
+    ```python
+    async with pool.acquerir() as conn:
+        await conn.requete("SELECT 1")
+    ```
+
+    - si une connexion libre existe, elle est **réutilisée** ; sinon on en crée une si la limite
+      n'est pas atteinte ; sinon on **attend** qu'une connexion soit rendue ;
+    - à la sortie du bloc, la connexion est rendue au pool, **même si une exception** a été levée
+      (l'exception se propage) ;
+  - `await pool.fermer()` appelle `await conn.fermer()` sur chaque connexion créée ; ensuite,
+    entrer dans `pool.acquerir()` lève `RuntimeError` ;
+  - le pool est lui-même un gestionnaire de contexte asynchrone qui se ferme en sortant :
+    `async with PoolConnexions(fabrique, 2) as pool: ...`
+
+  Écris explicitement les méthodes `__aenter__` et `__aexit__`. Indice : `asyncio.Semaphore(taille)`
+  pour limiter, une liste pour les connexions libres.
+starter: |
+  import asyncio
+
+
+  class PoolConnexions:
+      def __init__(self, fabrique, taille):
+          pass
+
+      def acquerir(self):
+          pass
+
+      async def fermer(self):
+          pass
+tests: |
+  import asyncio
+
+  class Conn:
+      def __init__(self, n, suivi):
+          self.n, self.suivi, self.fermee = n, suivi, False
+      async def requete(self):
+          self.suivi["actives"] += 1
+          self.suivi["max"] = max(self.suivi["max"], self.suivi["actives"])
+          await asyncio.sleep(0.01)
+          self.suivi["actives"] -= 1
+          return self.n
+      async def fermer(self):
+          self.fermee = True
+
+  def fabrique_suivie():
+      suivi = {"actives": 0, "max": 0, "toutes": []}
+      async def fabrique():
+          await asyncio.sleep(0)
+          c = Conn(len(suivi["toutes"]), suivi)
+          suivi["toutes"].append(c)
+          return c
+      return fabrique, suivi
+
+  def test_reutilisation():
+      "Une connexion libre est réutilisée"
+      fabrique, suivi = fabrique_suivie()
+      async def scenario():
+          pool = solution.PoolConnexions(fabrique, 3)
+          for _ in range(5):
+              async with pool.acquerir() as c:
+                  await c.requete()
+          return pool.creees
+      assert asyncio.run(scenario()) == 1, "une seule connexion suffit pour des usages successifs"
+
+  def test_limite():
+      "Jamais plus de `taille` connexions"
+      fabrique, suivi = fabrique_suivie()
+      async def travail(pool):
+          async with pool.acquerir() as c:
+              return await c.requete()
+      async def scenario():
+          pool = solution.PoolConnexions(fabrique, 3)
+          resultats = await asyncio.gather(*(travail(pool) for _ in range(12)))
+          return pool, resultats
+      pool, resultats = asyncio.run(scenario())
+      assert pool.creees == 3 and len(suivi["toutes"]) == 3, f"{len(suivi['toutes'])} connexions créées (attendu 3)"
+      assert suivi["max"] == 3, f"{suivi['max']} connexions utilisées en même temps (attendu 3)"
+      assert sorted(set(resultats)) == [0, 1, 2]
+
+  def test_exception():
+      "Connexion rendue même en cas d'exception"
+      fabrique, suivi = fabrique_suivie()
+      async def scenario():
+          pool = solution.PoolConnexions(fabrique, 1)
+          try:
+              async with pool.acquerir():
+                  raise KeyError("boum")
+          except KeyError:
+              pass
+          else:
+              raise AssertionError("l'exception ne doit pas être avalée")
+          async with pool.acquerir() as c:      # bloquerait si la connexion n'avait pas été rendue
+              return c.n
+      assert asyncio.run(asyncio.wait_for(scenario(), 2)) == 0
+
+  def test_fermer():
+      "fermer ferme toutes les connexions"
+      fabrique, suivi = fabrique_suivie()
+      async def travail(pool):
+          async with pool.acquerir() as c:
+              await c.requete()
+      async def scenario():
+          pool = solution.PoolConnexions(fabrique, 2)
+          await asyncio.gather(travail(pool), travail(pool))
+          await pool.fermer()
+          try:
+              async with pool.acquerir():
+                  pass
+          except RuntimeError:
+              return True
+          return False
+      assert asyncio.run(scenario()), "acquerir après fermer doit lever RuntimeError"
+      assert len(suivi["toutes"]) == 2 and all(c.fermee for c in suivi["toutes"])
+
+  def test_async_with_pool():
+      "Le pool est un gestionnaire de contexte asynchrone"
+      fabrique, suivi = fabrique_suivie()
+      async def scenario():
+          async with solution.PoolConnexions(fabrique, 2) as pool:
+              assert isinstance(pool, solution.PoolConnexions), "async with doit donner le pool"
+              async with pool.acquerir() as c:
+                  await c.requete()
+      asyncio.run(scenario())
+      assert suivi["toutes"] and all(c.fermee for c in suivi["toutes"])
+
+  def test_methodes_async():
+      "__aenter__ et __aexit__ définis"
+      assert hasattr(solution.PoolConnexions, "__aenter__") and hasattr(solution.PoolConnexions, "__aexit__")
+solution: |
+  import asyncio
+
+
+  class _Emprunt:
+      def __init__(self, pool):
+          self.pool = pool
+          self.conn = None
+
+      async def __aenter__(self):
+          self.conn = await self.pool._prendre()
+          return self.conn
+
+      async def __aexit__(self, type_exc, exc, tb):
+          self.pool._rendre(self.conn)
+          return False
+
+
+  class PoolConnexions:
+      def __init__(self, fabrique, taille):
+          self.fabrique = fabrique
+          self.taille = taille
+          self.creees = 0
+          self._libres = []
+          self._toutes = []
+          self._semaphore = asyncio.Semaphore(taille)
+          self._ferme = False
+
+      def acquerir(self):
+          return _Emprunt(self)
+
+      async def _prendre(self):
+          if self._ferme:
+              raise RuntimeError("pool fermé")
+          await self._semaphore.acquire()
+          try:
+              if self._libres:
+                  return self._libres.pop()
+              self.creees += 1
+              conn = await self.fabrique()
+              self._toutes.append(conn)
+              return conn
+          except BaseException:
+              self._semaphore.release()
+              raise
+
+      def _rendre(self, conn):
+          self._libres.append(conn)
+          self._semaphore.release()
+
+      async def fermer(self):
+          self._ferme = True
+          for conn in self._toutes:
+              await conn.fermer()
+
+      async def __aenter__(self):
+          return self
+
+      async def __aexit__(self, type_exc, exc, tb):
+          await self.fermer()
+          return False
+cours: |
+  ## Pourquoi un pool ?
+
+  Ouvrir une connexion (base de données, SSH, TLS) est coûteux : handshake, authentification.
+  Un **pool** garde un petit nombre de connexions ouvertes et les **prête** aux tâches qui en
+  ont besoin. Il limite aussi la charge sur le serveur (une base n'accepte qu'un nombre
+  limité de connexions).
+
+  ## Gestionnaire de contexte asynchrone
+
+  `async with` appelle `await obj.__aenter__()` et `await obj.__aexit__(...)`. Le plus simple
+  pour en écrire un est `contextlib.asynccontextmanager` :
+
+  ```python
+  from contextlib import asynccontextmanager
+
+  @asynccontextmanager
+  async def session(pool):
+      conn = await pool.prendre()
+      try:
+          yield conn            # valeur liée par "as"
+      finally:
+          pool.rendre(conn)     # exécuté même en cas d'exception
+  ```
+
+  Le `try / finally` autour du `yield` garantit la restitution, et l'exception éventuelle
+  continue sa propagation.
+
+  ## Attendre une ressource
+
+  Quand toutes les connexions sont prêtées et que la limite est atteinte, la tâche doit
+  **attendre** sans bloquer la boucle d'événements. Outils possibles :
+
+  - une `asyncio.Queue` des connexions libres (`await file.get()` attend qu'une connexion
+    soit rendue, `put_nowait` la rend) ;
+  - un `asyncio.Semaphore(taille)` qui compte les places, plus une liste des connexions
+    libres ;
+  - une `asyncio.Condition` pour des règles plus fines.
+
+  ## Création paresseuse et concurrence
+
+  Les connexions sont créées à la demande. Attention : entre la décision « je peux en créer
+  une » et la fin du `await fabrique()`, d'autres tâches s'exécutent. Il faut **réserver**
+  la place (incrémenter le compteur) **avant** l'`await`, sinon plusieurs tâches pourraient
+  dépasser la limite. C'est la règle d'or de la programmation asynchrone : l'état peut
+  changer à chaque `await`.
+
+  ## Fermeture
+
+  Fermer le pool, c'est fermer toutes les connexions **créées** (libres ou non selon la
+  politique choisie) et refuser les nouvelles demandes. Les vrais pools (asyncpg, aiohttp)
+  gèrent aussi l'expiration des connexions inactives et la vérification de leur santé.
+docs:
+  - title: asyncio — primitives de synchronisation
+    url: https://docs.python.org/fr/3/library/asyncio-sync.html
+  - title: contextlib.asynccontextmanager
+    url: https://docs.python.org/fr/3/library/contextlib.html#contextlib.asynccontextmanager
