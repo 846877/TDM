@@ -109,7 +109,7 @@ module TDM
           vb.cpus = cpus
           vb.linked_clone = true
           vb.gui = false
-          vb.customize ["modifyvm", :id, "--vram", "128"]
+          vb.customize ["modifyvm", :id, "--vram", "128", "--graphicscontroller", "vboxsvga"]  # carte conseillée pour Windows
         end
 
         args = ["-PublicKeyB64", @pub_b64, "-LanMac", mac.scan(/../).join("-")]

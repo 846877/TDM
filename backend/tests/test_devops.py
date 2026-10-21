@@ -128,3 +128,17 @@ def test_agent_cycle_de_vie(agent):
             break
         time.sleep(0.1)
     assert vagrant.status(lab)[0] == "stopped"
+
+
+def test_agent_journal_progression_sans_fin_de_ligne():
+    """Sans terminal, Vagrant écrit la progression d'un téléchargement sans retour à la ligne."""
+    import io
+
+    job = vagrant_agent.Job.__new__(vagrant_agent.Job)
+    job.log = vagrant_agent.deque(maxlen=200)
+    flux = io.BufferedReader(io.BytesIO(
+        "Downloading: https://x/box\n    default: Progress: 10% (Rate: 5M/s)    default: Progress: 40% "
+        "(Rate: 6M/s)\n==> default: Successfully added box 'é'\n".encode()))
+    job._read(flux)
+    assert list(job.log) == ["Downloading: https://x/box", "Progress: 40% (Rate: 6M/s)",
+                             "==> default: Successfully added box 'é'"]

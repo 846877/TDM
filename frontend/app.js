@@ -781,7 +781,9 @@ async function renderLab(id, cat = "devops") {
   const STATUS_LABELS = {
     running: "En cours d'exécution",
     stopped: "Arrêté",
-    starting: isVm ? "Démarrage de la VM (plusieurs minutes au premier lancement)…" : "Démarrage…",
+    starting: !isVm ? "Démarrage…" : lab.os === "windows"
+      ? "Démarrage de la VM : au premier lancement, la box Windows (plusieurs Go) est téléchargée puis Windows se prépare, comptez de 20 à 60 minutes…"
+      : "Démarrage de la VM (plusieurs minutes au premier lancement)…",
     stopping: "Arrêt en cours…",
     error: "Échec du dernier lancement (voir le journal)",
     unavailable: isVm ? "Agent Vagrant injoignable" : "Docker indisponible",

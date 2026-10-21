@@ -29,6 +29,7 @@ l'application Windows se décompresse dans un dossier temporaire différent à c
 from __future__ import annotations
 
 import argparse
+import codecs
 import filecmp
 import hmac
 import json
@@ -92,6 +93,11 @@ def sync_tree(src: Path, dest: Path) -> list[str]:
     return copied
 
 
+def _last_progress(text: str) -> str:
+    """« Progress: 10% …Progress: 40% … » (progressions collées) -> « Progress: 40% … »."""
+    return "Progress:" + text.rsplit("Progress:", 1)[1] if "Progress:" in text else text
+
+
 class Job:
     """Une suite de commandes vagrant exécutées l'une après l'autre en arrière-plan."""
 
@@ -106,14 +112,47 @@ class Job:
         code = 0
         for argv in commands:
             self.log.append("$ vagrant " + " ".join(argv[1:]))
-            process = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                       text=True, encoding="utf-8", errors="replace")
-            for line in process.stdout:
-                self.log.append(line.rstrip())
+            process = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            self._read(process.stdout)
             code = process.wait()
             if code != 0:
                 break
         self.returncode = code
+
+    def _read(self, stream) -> None:
+        """Recopie la sortie de vagrant dans le journal, ligne par ligne.
+
+        Sans terminal, Vagrant écrit la progression du téléchargement d'une box (« Progress: 12% … »)
+        sans jamais aller à la ligne : une lecture par lignes resterait bloquée jusqu'à la fin du
+        téléchargement (plusieurs Go pour une box Windows). On lit donc par blocs, et la dernière
+        progression reçue remplace la ligne en cours.
+        """
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        pending = ""
+        partial = False  # la dernière entrée du journal est une ligne pas encore terminée
+        while True:
+            chunk = stream.read1(4096) if hasattr(stream, "read1") else stream.read(4096)
+            text = decoder.decode(chunk or b"", final=not chunk)
+            pending += text
+            parts = re.split(r"\r\n|\r|\n", pending)
+            pending = parts.pop()
+            for line in parts:
+                self._append(_last_progress(line), partial)
+                partial = False
+            pending = _last_progress(pending)
+            if pending.strip():
+                self._append(pending, partial)
+                partial = True
+            if not chunk:
+                break
+        stream.close()
+
+    def _append(self, line: str, replace: bool) -> None:
+        line = line.rstrip()
+        if replace and self.log:
+            self.log[-1] = line
+        else:
+            self.log.append(line)
 
     @property
     def running(self) -> bool:
