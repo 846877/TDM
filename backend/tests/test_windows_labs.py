@@ -74,6 +74,17 @@ def test_exercices_windows_complets():
                 assert not any(c.get("machine") for c in exercise["checks"]), f"{where} : ci sur une autre VM"
 
 
+def test_exercices_avances_et_experts_documentes():
+    for lab in _windows_labs():
+        if lab["level"] not in {"avance", "expert"}:
+            continue
+        for exercise in lab["exercises"]:
+            where = f"{lab['id']}/{exercise['id']}"
+            assert 1 <= len(exercise.get("docs") or []) <= 4, where
+            for doc in exercise["docs"]:
+                assert doc["title"] and doc["url"].startswith("https://learn.microsoft.com/fr-fr/"), where
+
+
 def test_identifiants_exercices_windows_uniques_partout():
     all_ids = [e["id"] for lab in labs.load_labs() for e in lab["exercises"]]
     for lab in _windows_labs():
