@@ -418,11 +418,20 @@ exercises:
     checks:
       - desc: Ouverture de session et validation des identifiants auditées en réussite et échec
         run: |
-          $v = foreach ($g in '{0CCE9215-69AE-11D9-BED3-505054503030}', '{0CCE923F-69AE-11D9-BED3-505054503030}') { [int](auditpol /get /subcategory:$g /r | ConvertFrom-Csv).'Setting Value' }
+          # auditpol /r ne donne que le libellé traduit ; la sauvegarde CSV donne la valeur numérique
+          $f = Join-Path $env:TEMP 'tdm-audit.csv'
+          auditpol /backup /file:$f | Out-Null
+          $lignes = Import-Csv $f
+          Remove-Item $f
+          $v = foreach ($g in '{0CCE9215-69AE-11D9-BED3-505054503030}', '{0CCE923F-69AE-11D9-BED3-505054503030}') { [int]($lignes | Where-Object { $_.'Subcategory GUID' -eq $g } | Select-Object -First 1).'Setting Value' }
           @($v | Where-Object { $_ -ne 3 }).Count -eq 0
       - desc: Création de processus auditée avec la ligne de commande
         run: |
-          $v = [int](auditpol /get /subcategory:'{0CCE922B-69AE-11D9-BED3-505054503030}' /r | ConvertFrom-Csv).'Setting Value'
+          $f = Join-Path $env:TEMP 'tdm-audit.csv'
+          auditpol /backup /file:$f | Out-Null
+          $lignes = Import-Csv $f
+          Remove-Item $f
+          $v = [int]($lignes | Where-Object { $_.'Subcategory GUID' -eq '{0CCE922B-69AE-11D9-BED3-505054503030}' } | Select-Object -First 1).'Setting Value'
           ($v -band 1) -and (Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System\Audit).ProcessCreationIncludeCmdLine_Enabled -eq 1
       - desc: Sous-catégories forcées et journal Security de 256 Mo
         run: |
