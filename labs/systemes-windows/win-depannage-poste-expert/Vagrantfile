@@ -1,0 +1,9 @@
+# Lab « Dépannage avancé d'un poste » : PC01, un Windows 11 autonome (3 Go) volontairement dégradé par
+# scenario.ps1 (services, persistance suspecte, certificat racine douteux, journaux, mises à jour...).
+require_relative "../_commun/tdm"
+
+Vagrant.configure("2") do |config|
+  TDM.lab(config, __dir__) do |lab|
+    lab.client "pc01", hostname: "PC01", ip: "192.168.10.101", primary: true, scenario: "scenario.ps1"
+  end
+end
