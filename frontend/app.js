@@ -794,6 +794,8 @@ async function renderLab(id, cat = "devops") {
     const busy = status === "starting" || status === "stopping";
     statusDot.className = `status-dot ${status}`;
     statusText.textContent = STATUS_LABELS[status] || status;
+    // Lab Docker qui attend le moteur Docker de TDM (VM) : « Moteur Docker en démarrage… ».
+    if (!isVm && status === "starting" && log.startsWith("Moteur Docker")) statusText.textContent = log.split("\n")[0];
     startBtn.style.display = status === "running" || busy ? "none" : "";
     stopBtn.style.display = resetBtn.style.display = status === "running" ? "" : "none";
     startBtn.disabled = status === "unavailable";
@@ -819,7 +821,12 @@ async function renderLab(id, cat = "devops") {
     try {
       closeTerminal();
       const res = await api(`/api/devops/labs/${encodeURIComponent(id)}/${name}`, { method: "POST" });
-      setStatus(res.status);
+      // Ce qui a été arrêté ou mis en pause pour faire de la place (labs Windows / labs Docker).
+      for (const notice of res.notices || []) {
+        errorBox.append(h("div", { class: "info-box" }, "⏸ " + notice));
+        toast(notice);
+      }
+      setStatus(res.status, res.status === "starting" && !isVm ? "Moteur Docker en démarrage…" : "");
     } catch (err) {
       errorBox.replaceChildren(h("div", { class: "error-box" }, err.message));
     } finally {
@@ -834,8 +841,37 @@ async function renderLab(id, cat = "devops") {
   if (lab.status === "unavailable") {
     errorBox.append(h("div", { class: "error-box" }, isVm
       ? "Ce lab tourne dans une machine virtuelle : lance l'agent Vagrant sur ta machine (start.bat le démarre automatiquement si Vagrant est installé)."
-      : "Docker n'est pas disponible : installe-le et lance-le pour utiliser les labs DevOps."));
+      : lab.engine === "desktop"
+        ? "Docker ne répond pas : lance Docker Desktop, ou mets TDM_DOCKER=auto dans les réglages pour que TDM utilise son propre moteur Docker (une petite VM VirtualBox)."
+        : "Aucun moteur Docker : installe VirtualBox et Vagrant (TDM démarre alors son propre moteur Docker, une petite VM, au premier lab) ou Docker Desktop."));
   }
+}
+
+/* --- Hyperviseur Windows : avertissement affiché une seule fois ---------- */
+
+/* Docker Desktop (WSL2) laisse l'hyperviseur Windows actif : VirtualBox perd VT-x et les VM Windows
+   des labs rampent. Quand TDM n'utilise pas Docker Desktop, on le signale une fois, en texte seulement :
+   TDM ne touche jamais à la configuration de démarrage de Windows. */
+async function hypervisorNotice() {
+  if (storage.get("hypervisorNoticeSeen", false)) return;
+  let info;
+  try {
+    info = await api("/api/system/hypervisor");
+  } catch {
+    return;
+  }
+  if (!info.show) return;
+  storage.set("hypervisorNoticeSeen", true);
+  const message = h("p", {},
+    "L'hyperviseur Windows est actif (Docker Desktop/WSL2, Hyper-V ou « Intégrité de la mémoire ») : ",
+    "VirtualBox tourne alors en mode lent et les VM Windows des labs peuvent rester longtemps sur un écran noir. ",
+    "TDM n'en a pas besoin : son moteur Docker est une petite VM VirtualBox. ",
+    "Le README des labs Windows explique comment le désactiver soi-même, et comment revenir en arrière.");
+  const closeBtn = h("button", { class: "btn small" }, "Compris");
+  const banner = h("div", { class: "notice-banner" }, h("strong", {}, "⚠ VM Windows ralenties"), message,
+    h("div", { class: "notice-actions" }, closeBtn));
+  closeBtn.addEventListener("click", () => banner.remove());
+  document.querySelector(".topbar").after(banner);
 }
 
 /* --- Profils, XP et classement ----------------------------------------- */
@@ -1039,3 +1075,4 @@ api("/api/health").then((health) => {
 }).catch(() => {});
 
 profile.load().then(router);
+hypervisorNotice();

@@ -10,7 +10,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException, Request, WebSocket
+from fastapi import FastAPI, Header, HTTPException, WebSocket
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -97,22 +97,8 @@ def docker_engine_state():
 
 @app.get("/api/system/hypervisor")
 def hypervisor_notice():
+    """Avertissement (texte seulement) : hyperviseur Windows actif alors que TDM n'utilise pas Docker Desktop."""
     return hypervisor.notice()
-
-
-class ConfirmIn(BaseModel):
-    confirm: bool = False
-
-
-@app.post("/api/system/hypervisor/disable")
-def hypervisor_disable(body: ConfirmIn, request: Request):
-    # Seulement après un clic explicite dans TDM : JSON avec confirmation, et jamais depuis un autre site.
-    origin = request.headers.get("origin")
-    if not body.confirm or "application/json" not in request.headers.get("content-type", ""):
-        raise HTTPException(400, "Confirmation manquante.")
-    if origin and origin.split("://", 1)[-1] != request.headers.get("host"):
-        raise HTTPException(403, "Origine refusée.")
-    return hypervisor.disable()
 
 
 @app.get("/api/categories")

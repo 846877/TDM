@@ -81,6 +81,13 @@ main { flex: 1; min-height: 0; overflow: auto; }
 
 .muted { color: var(--muted); }
 .error-box { border: 1px solid #6b2422; background: #2a1213; color: #ffb3ae; padding: 12px 14px; border-radius: var(--radius); }
+.info-box { border: 1px solid #5a4a1a; background: #1d1808; color: var(--amber); padding: 10px 14px; border-radius: var(--radius); margin-top: 8px; }
+.notice-banner { margin: 12px auto 0; max-width: 1100px; padding: 14px 18px; border: 1px solid #5a4a1a; background: #1d1808;
+  border-radius: var(--radius); color: var(--text); }
+.notice-banner strong { color: var(--amber); }
+.notice-banner p { margin: 6px 0 10px; color: var(--muted); }
+.notice-banner code { color: var(--text); }
+.notice-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* --- Accueil ------------------------------------------------------------ */
 .hero h1 { font-size: 34px; margin: 0 0 6px; }

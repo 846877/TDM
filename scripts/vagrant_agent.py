@@ -203,7 +203,8 @@ def preflight_warnings(vagrantfile: Path, vagrant: str) -> list[str]:
     if hypervisor_present():
         warnings.append("⚠ Hyper-V est actif (Docker Desktop/WSL2 ou « Intégrité de la mémoire ») : VirtualBox tourne "
                         "en mode lent (tortue verte) et Windows peut rester longtemps sur un écran noir. "
-                        "Voir le cours du lab ou le README des labs Windows pour le désactiver.")
+                        "TDM n'a pas besoin de Docker Desktop (il a son propre moteur Docker) : voir le README "
+                        "des labs Windows pour désactiver l'hyperviseur soi-même.")
     missing = sorted({box for box, _ in machines} - installed_boxes(vagrant))
     for box in missing:
         warnings.append(f"ℹ Box {box} pas encore téléchargée : environ 8 Go à télécharger une seule fois "
@@ -453,7 +454,7 @@ class Agent:
             return None
         if result.returncode != 0:
             return None
-        return set(re.findall(r"\{([0-9a-fA-F-]+)\}", result.stdout))
+        return set(re.findall(r"\{([^{}\s]+)\}", result.stdout))
 
     def exclusive(self, lab: str) -> list[str]:
         """Met en pause (en arrière-plan) les labs embarqués qui tournent, sauf ``lab`` ; renvoie leurs noms.

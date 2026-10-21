@@ -2,8 +2,13 @@
 
 Au lancement :
 - lit les réglages de ``%APPDATA%\\TDM\\tdm.env`` (créé au premier lancement) ;
-- démarre l'agent Vagrant dans le même processus, pour les labs en machine virtuelle ;
+- démarre l'agent Vagrant dans le même processus, pour les labs en machine virtuelle et le moteur
+  Docker de TDM (petite VM VirtualBox démarrée au premier lab Docker, sans Docker Desktop) ;
 - démarre le serveur sur 127.0.0.1 et l'affiche dans une fenêtre (WebView2, via pywebview).
+
+À la fermeture de la fenêtre, les VM lancées par TDM (labs, moteur Docker) sont mises en pause
+(``vagrant suspend``) pour libérer la mémoire. Si TDM est tué brutalement, elles restent simplement
+allumées et sont reprises au lancement suivant.
 
 ``TDM.exe --no-window`` démarre seulement le serveur (utile pour les tests).
 """
@@ -37,6 +42,13 @@ TDM_VAGRANT_DIR={vagrant_dir}
 
 # Exécution du code Python des exercices : local (rapide) ou docker (isolé, Docker Desktop requis).
 TDM_SANDBOX=local
+
+# Moteur Docker des labs : auto (Docker Desktop s'il répond, sinon le moteur de TDM : une petite VM
+# VirtualBox démarrée au premier lab Docker), desktop (toujours Docker Desktop) ou vm (toujours la VM).
+# Avec la VM, l'hyperviseur Windows peut rester désactivé : les VM Windows des labs vont bien plus vite.
+TDM_DOCKER=auto
+# Mémoire de la VM moteur en Mo (GitLab, k3s : 4096 conseillés).
+# TDM_DOCKER_VM_MEMORY=2048
 """
 
 
@@ -106,7 +118,31 @@ def free_port(preferred: int) -> int:
             return sock.getsockname()[1]
 
 
-def start_vagrant_agent(settings: dict[str, str]) -> None:
+def setup_docker_cli() -> None:
+    """Client docker embarqué (docker.exe + plugin compose) quand aucun n'est installé (pas de Docker Desktop).
+
+    Il ne sert qu'à parler au moteur Docker de TDM (VM). Le plugin compose est copié dans
+    %LOCALAPPDATA%\\TDM\\docker\\cli-plugins, désigné par DOCKER_CONFIG.
+    """
+    from app import config
+
+    bundled = config.ROOT_DIR / "docker"
+    if shutil.which("docker") or not (bundled / "docker.exe").exists():
+        return
+    os.environ["PATH"] = str(bundled) + os.pathsep + os.environ.get("PATH", "")
+    docker_config = data_dir() / "docker"
+    plugin = bundled / "cli-plugins" / "docker-compose.exe"
+    target = docker_config / "cli-plugins" / "docker-compose.exe"
+    if plugin.exists() and (not target.exists() or target.stat().st_size != plugin.stat().st_size):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copyfile(plugin, target)
+        except OSError as exc:  # plugin en cours d'utilisation par un ancien TDM : on garde l'ancien
+            print(f"Plugin compose non mis à jour : {exc}", flush=True)
+    os.environ.setdefault("DOCKER_CONFIG", str(docker_config))
+
+
+def start_vagrant_agent(settings: dict[str, str]):
     import vagrant_agent
 
     from app import config
@@ -115,8 +151,9 @@ def start_vagrant_agent(settings: dict[str, str]) -> None:
     vagrant = shutil.which("vagrant") or "vagrant"
     # Les labs Windows embarqués sont dans le dossier temporaire de l'exe (_MEIPASS) : l'agent les copie
     # dans %LOCALAPPDATA%\TDM\vagrant avant chaque `vagrant up`, pour que l'état des VM survive.
+    # Il en va de même du moteur Docker de TDM (labs/moteur-docker).
     agent = vagrant_agent.Agent(Path(settings.get("TDM_VAGRANT_DIR") or guess_vagrant_dir()), vagrant, relay=False,
-                                bundled=config.WINDOWS_LABS_DIR,
+                                bundled=config.WINDOWS_LABS_DIR, engine_dir=config.DOCKER_ENGINE_DIR,
                                 work_dir=Path(settings.get("TDM_VAGRANT_WORK_DIR") or data_dir() / "vagrant"))
     server = ThreadingHTTPServer(("127.0.0.1", 0), vagrant_agent.make_handler(agent, token))
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -125,6 +162,18 @@ def start_vagrant_agent(settings: dict[str, str]) -> None:
         "TDM_VAGRANT_TOKEN": token,
         "TDM_VAGRANT_HOST": "127.0.0.1",
     })
+    return agent
+
+
+def suspend_vms(agent) -> None:
+    """Fermeture : met en pause les VM lancées par TDM (labs, moteur Docker) pour libérer la mémoire."""
+    try:
+        paused = agent.suspend_all()
+    except Exception as exc:  # noqa: BLE001 - la fermeture ne doit jamais échouer pour ça
+        print(f"Mise en pause des VM impossible : {exc!r}", flush=True)
+        return
+    if paused:
+        print("VM mises en pause : " + ", ".join(paused), flush=True)
 
 
 def start_server(port: int):
@@ -183,7 +232,8 @@ def main() -> int:
     for key, value in settings.items():
         os.environ.setdefault(key, value)
     os.environ.setdefault("TDM_SANDBOX", "local")
-    start_vagrant_agent(settings)
+    setup_docker_cli()
+    agent = start_vagrant_agent(settings)
     server, url = start_server(free_port(args.port))
     print(f"TDM prêt sur {url}", flush=True)
 
@@ -202,6 +252,8 @@ def main() -> int:
         while True:
             time.sleep(1)
     server.should_exit = True
+    if not args.window_test:
+        suspend_vms(agent)
     return 0
 
 
