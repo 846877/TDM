@@ -202,3 +202,44 @@ def test_agent_verifications_prealables(tmp_path, monkeypatch):
     monkeypatch.setattr(vagrant_agent, "hypervisor_present", lambda: False)
     monkeypatch.setattr(vagrant_agent, "installed_boxes", lambda v: {vagrant_agent.SERVER_BOX, vagrant_agent.CLIENT_BOX})
     assert vagrant_agent.preflight_warnings(vagrantfile, "vagrant") == []
+
+
+FAKE_VAGRANT_LENT = """#!/bin/sh
+echo "$*" >> calls
+case "$1" in
+  up) echo "Waiting for machine to boot"; exec sleep 60 ;;
+  status) echo "1,srv01,state,poweroff" ;;
+esac
+exit 0
+"""
+
+
+def test_agent_annule_un_demarrage_bloque(tmp_path):
+    """« Annuler le démarrage » : `vagrant up` est tué, puis les VM jamais préparées sont détruites."""
+    if sys.platform == "win32":
+        pytest.skip("faux vagrant en shell")
+    bundled = tmp_path / "bundled"
+    (bundled / "win-lab").mkdir(parents=True)
+    (bundled / "win-lab" / "Vagrantfile").write_text("")
+    fake = tmp_path / "vagrant"
+    fake.write_text(FAKE_VAGRANT_LENT)
+    fake.chmod(0o755)
+    ag = vagrant_agent.Agent(None, str(fake), bundled=bundled, work_dir=tmp_path / "work")
+    work = tmp_path / "work" / "win-lab"
+    action, steps = ag.lab_actions("tdm:win-lab")["/up"]
+    ag.run_job("tdm:win-lab", action, *steps)
+    for _ in range(50):
+        if "Waiting for machine to boot" in "\n".join(ag.jobs["tdm:win-lab"].log):
+            break
+        time.sleep(0.1)
+    started = time.monotonic()
+    action, steps = ag.lab_actions("tdm:win-lab")["/halt"]
+    ag.run_job("tdm:win-lab", action, *steps)
+    ag.jobs["tdm:win-lab"].wait(20)
+    assert time.monotonic() - started < 15
+    assert (work / "calls").read_text().splitlines()[-1] == "destroy -f"
+    assert ag.status("tdm:win-lab")["status"] == "stopped"
+    # Une fois la première préparation terminée, l'annulation éteint seulement (halt --force).
+    (work / ".tdm").mkdir(exist_ok=True)
+    (work / ".tdm" / vagrant_agent.READY).write_text("ok")
+    assert ag.cancel_steps("tdm:win-lab", work) == [[str(fake), "halt", "--force"]]

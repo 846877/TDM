@@ -797,7 +797,11 @@ async function renderLab(id, cat = "devops") {
     // Lab Docker qui attend le moteur Docker de TDM (VM) : « Moteur Docker en démarrage… ».
     if (!isVm && status === "starting" && log.startsWith("Moteur Docker")) statusText.textContent = log.split("\n")[0];
     startBtn.style.display = status === "running" || busy ? "none" : "";
-    stopBtn.style.display = resetBtn.style.display = status === "running" ? "" : "none";
+    // Une VM peut rester bloquée au démarrage : on doit toujours pouvoir l'annuler.
+    const cancellable = isVm && status === "starting";
+    stopBtn.style.display = status === "running" || cancellable ? "" : "none";
+    stopBtn.replaceChildren(cancellable ? "■ Annuler le démarrage" : stopLabel);
+    resetBtn.style.display = status === "running" ? "" : "none";
     startBtn.disabled = status === "unavailable";
     logBox.style.display = log && (busy || status === "error") ? "" : "none";
     logBox.textContent = log;
@@ -835,7 +839,7 @@ async function renderLab(id, cat = "devops") {
     }
   };
   startBtn.addEventListener("click", () => action("start", startBtn, "▶ Démarrer le lab"));
-  stopBtn.addEventListener("click", () => action("stop", stopBtn, stopLabel));
+  stopBtn.addEventListener("click", () => action("stop", stopBtn, stopBtn.textContent));
   resetBtn.addEventListener("click", () => action("reset", resetBtn, "↺ Réinitialiser"));
   setStatus(lab.status, lab.log);
   if (lab.status === "unavailable") {

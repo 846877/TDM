@@ -58,6 +58,8 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 BUNDLED_PREFIX = "tdm:"
 SHARED_DIR = "_commun"  # fichiers partagés par les labs embarqués (copiés à côté de chaque lab)
 MANIFEST = ".tdm-manifest"
+READY = "pret"  # .tdm/pret : la première préparation des VM d'un lab embarqué est allée au bout
+CANCELLED = 130  # code de retour d'un job annulé
 SNAPSHOT = "tdm-initial"  # instantané des VM d'un lab embarqué juste après leur préparation
 _BUNDLED_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 ENGINE_NAME = "moteur-docker"  # VM du moteur Docker de TDM (labs/moteur-docker)
@@ -231,6 +233,8 @@ class Job:
         self.warnings: list[str] = []  # affichés en tête du journal tant que le job est le dernier du lab
         self.returncode: int | None = None
         self.then: list = []  # étapes ajoutées pendant l'exécution (ex. pause demandée pendant `vagrant up`)
+        self.cancelled = False
+        self._process: subprocess.Popen | None = None
         self._thread = threading.Thread(target=self._run, args=(commands,), daemon=True)
         self._thread.start()
 
@@ -239,21 +243,45 @@ class Job:
         try:
             for step in commands:
                 code = step(self) if callable(step) else self.call(step)
-                if code != 0:
+                if code != 0 or self.cancelled:
                     break
-            while code == 0 and self.then:
+            while code == 0 and self.then and not self.cancelled:
                 step = self.then.pop(0)
                 code = step(self) if callable(step) else self.call(step)
         except Exception as exc:  # une étape en Python ne doit pas laisser le job « en cours » pour toujours
             self.log.append(f"Erreur : {exc}")
             code = 1
-        self.returncode = code
+        self.returncode = CANCELLED if self.cancelled else code
 
     def call(self, argv: list[str]) -> int:
+        if self.cancelled:
+            return CANCELLED
         self.log.append("$ vagrant " + " ".join(argv[1:]))
         process = subprocess.Popen(argv, cwd=self.cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self._process = process
         self._read(process.stdout)
-        return process.wait()
+        code = process.wait()
+        self._process = None
+        return code
+
+    def cancel(self) -> None:
+        """Interrompt le job (ex. `vagrant up` bloqué) : la commande en cours est tuée, la suite abandonnée."""
+        self.cancelled = True
+        self.then.clear()
+        self.log.append("Démarrage annulé.")
+        process = self._process
+        if process and process.poll() is None:
+            try:
+                if sys.platform == "win32":  # tue aussi les processus enfants (ruby, VBoxManage...)
+                    subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, timeout=30,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                else:
+                    process.terminate()
+            except (OSError, subprocess.SubprocessError):
+                process.kill()
+
+    def wait(self, timeout: float | None = None) -> None:
+        self._thread.join(timeout)
 
     def _read(self, stream) -> None:
         """Recopie la sortie de vagrant dans le journal, ligne par ligne.
@@ -374,6 +402,11 @@ class Agent:
         with self.lock:
             job = self.jobs.get(lab)
             if job and job.running:
+                if action != "halt" or job.action != "up":
+                    return
+                # Arrêt demandé pendant un démarrage (bloqué ?) : on l'annule, puis on éteint de force.
+                job.cancel()
+                self.jobs[lab] = Job("halt", [lambda j, old=job: (old.wait(120), 0)[1], *self.cancel_steps(lab, path)], path)
                 return
             if action == "up":
                 self.prepare(lab)
@@ -397,15 +430,30 @@ class Agent:
             }
         if lab == ENGINE:
             return {
-                "/up": ("up", [self._wait_pauses, [self.vagrant, "up"], self._reload_engine]),
+                "/up": ("up", [self._wait_pauses, [self.vagrant, "up"], self._mark_ready, self._reload_engine]),
                 "/halt": ("halt", [[self.vagrant, "suspend"]]),
-                "/reset": ("up", [self._wait_pauses, [self.vagrant, "destroy", "-f"], [self.vagrant, "up"]]),
+                "/reset": ("up", [self._wait_pauses, [self.vagrant, "destroy", "-f"], [self.vagrant, "up"], self._mark_ready]),
             }
         return {
-            "/up": ("up", [self._wait_pauses, self._preflight, [self.vagrant, "up"], self._snapshot_once]),
+            "/up": ("up", [self._wait_pauses, self._preflight, [self.vagrant, "up"], self._mark_ready, self._snapshot_once]),
             "/halt": ("halt", [[self.vagrant, "suspend"]]),
             "/reset": ("up", [self._wait_pauses, self._preflight, self._restore_or_rebuild]),
         }
+
+    def cancel_steps(self, lab: str, path: Path) -> list:
+        """Après un démarrage annulé : extinction forcée. Si la première préparation n'est jamais allée
+        au bout (pas de marqueur « pret »), les VM sont détruites : un `vagrant up` suivant ne relancerait
+        pas les provisionnements interrompus, autant repartir proprement."""
+        if lab.startswith(BUNDLED_PREFIX) and not (path / ".tdm" / READY).exists():
+            return [[self.vagrant, "destroy", "-f"]]
+        return [[self.vagrant, "halt", "--force"]]
+
+    @staticmethod
+    def _mark_ready(job: Job) -> int:
+        marker = job.cwd / ".tdm" / READY
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("ok", encoding="utf-8")
+        return 0
 
     def _reload_engine(self, job: Job) -> int:
         if not self.engine_reload:
@@ -551,9 +599,12 @@ class Agent:
                 return job.call([self.vagrant, "up", "--no-provision"])  # reprend une VM restaurée en pause
             job.log.append("Restauration impossible : reconstruction complète des VM.")
             marker.unlink(missing_ok=True)
+        (job.cwd / ".tdm" / READY).unlink(missing_ok=True)
         code = job.call([self.vagrant, "destroy", "-f"])
         if code == 0:
             code = job.call([self.vagrant, "up"])
+        if code == 0:
+            self._mark_ready(job)
         return self._snapshot_once(job) if code == 0 else code
 
     def status(self, lab: str) -> dict:
@@ -568,7 +619,10 @@ class Agent:
         states = re.findall(r"^\d*,[^,]*,state,([^,\n]+)", result.stdout, re.MULTILINE)
         running = bool(states) and all(s == "running" for s in states)
         if job and job.returncode not in (0, None) and not running:
-            return {"status": "error", "log": log}
+            return {"status": "stopped" if job.cancelled else "error", "log": log}
+        if running and lab.startswith(BUNDLED_PREFIX) and not (path / ".tdm" / READY).exists():
+            (path / ".tdm").mkdir(exist_ok=True)  # VM préparées avant l'arrivée du marqueur
+            (path / ".tdm" / READY).write_text("ok", encoding="utf-8")
         return {"status": "running" if running else "stopped", "log": log}
 
     def ssh(self, lab: str, machine: str = "") -> dict:
