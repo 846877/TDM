@@ -227,19 +227,37 @@ def run_lab(lab_id: str) -> int:
     return 1 if errors else 0
 
 
+# Fichiers dont la modification oblige à rejouer tous les labs.
+SHARED = ("labs/systemes-windows/_commun/", "scripts/windows_labs_ci.py", "backend/app/devops/windows.py",
+          ".github/workflows/windows.yml")
+
+
+def changed_labs(labs: list[str], changed: list[str]) -> list[str]:
+    """Labs à rejouer d'après les chemins modifiés (économise les minutes de CI Windows)."""
+    if "TOUT" in changed or any(path.startswith(SHARED) for path in changed):
+        return labs
+    touched = {path.split("/")[2] for path in changed if path.startswith("labs/systemes-windows/") and path.count("/") >= 3}
+    return [lab for lab in labs if lab in touched]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="action", required=True)
     st = sub.add_parser("static")
     st.add_argument("--commands", action="store_true", help="vérifie aussi que chaque commande existe")
-    sub.add_parser("list")
+    ls = sub.add_parser("list")
+    ls.add_argument("--changed", help="fichier listant les chemins modifiés (un par ligne) : seuls les labs "
+                                     "touchés sont gardés ; « TOUT » ou un fichier commun modifié garde tout")
     rn = sub.add_parser("run")
     rn.add_argument("--lab", required=True)
     args = parser.parse_args()
     if args.action == "static":
         return static(args.commands)
     if args.action == "list":
-        print(json.dumps(ci_labs()))
+        labs = ci_labs()
+        if args.changed:
+            labs = changed_labs(labs, Path(args.changed).read_text(encoding="utf-8").split())
+        print(json.dumps(labs))
         return 0
     return run_lab(args.lab)
 

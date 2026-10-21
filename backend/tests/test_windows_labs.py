@@ -279,3 +279,11 @@ def test_ci_powershell_51_sans_psmodulepath_de_pwsh(monkeypatch):
     assert "psmodulepath" not in {k.lower() for k in windows_labs_ci.ps_env()}
     monkeypatch.setattr(windows_labs_ci, "powershell", lambda: "/usr/bin/pwsh")
     assert "psmodulepath" in {k.lower() for k in windows_labs_ci.ps_env()}
+
+
+def test_ci_ne_rejoue_que_les_labs_modifies():
+    labs = ["win-a", "win-b"]
+    assert windows_labs_ci.changed_labs(labs, ["labs/systemes-windows/win-b/lab.yaml", "README.md"]) == ["win-b"]
+    assert windows_labs_ci.changed_labs(labs, ["frontend/app.js"]) == []
+    assert windows_labs_ci.changed_labs(labs, ["labs/systemes-windows/_commun/tdm.rb"]) == labs
+    assert windows_labs_ci.changed_labs(labs, ["TOUT"]) == labs
