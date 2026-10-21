@@ -1,0 +1,486 @@
+title: Modèle d'administration en tiers
+level: expert
+order: 6
+tags: [active directory, tiering, modèle en tiers, comptes privilégiés, protected users, silos d'authentification, kerberoasting, krbtgt, durcissement]
+summary: Cloisonner l'administration d'Active Directory - OU d'administration par tier, comptes séparés, Admins du domaine nettoyés, Protected Users, interdictions de connexion par GPO, silo d'authentification, comptes de service à risque et réinitialisation de krbtgt.
+vagrant: bundled
+machine: dc01
+description: |
+  **Contexte.** Un audit de sécurité des *Ateliers Durand* a rendu un verdict sévère : le technicien Julien
+  Roux lit ses courriels et navigue avec un compte **administrateur du domaine**, le directeur aussi « au
+  cas où », le compte de service de la sauvegarde `svc-backup` (un SPN, un mot de passe de 2019 qui n'expire
+  jamais) est lui aussi administrateur du domaine, et le mot de passe du compte `krbtgt` n'a jamais été
+  changé. Il suffirait d'un poste compromis pour perdre tout le domaine. Ta mission : mettre en place le
+  **modèle d'administration en tiers**.
+
+  **Machines** (prévoir **8 Go de RAM libres**) :
+
+  | VM | Système | Adresse LAN | Rôle |
+  |----|---------|-------------|------|
+  | `SRV-DC01` (terminal) | Windows Server 2022 (2 Go) | 192.168.10.10 | contrôleur de `durand.lan` (niveau fonctionnel 2016) |
+  | `PC01` | Windows 11 (3 Go) | 192.168.10.101 | poste joint, dans l'OU `Postes` |
+
+  L'annuaire contient `Ateliers Durand` (`Utilisateurs`, `Groupes`, `Postes`, `Serveurs`, `Services`), les
+  comptes `hgirard`, `jroux`, `mdupont`, `cmoreau` (mot de passe `Bienvenue2024!`) et `svc-backup`. Le
+  compte `DURAND\vagrant`, utilisé par la plateforme, reste administrateur du domaine : c'est le compte de
+  secours du lab, ne le retire d'aucun groupe. Pour agir sur PC01 : `Invoke-Command -ComputerName PC01 { ... }`.
+cours: |
+  ## Pourquoi cloisonner l'administration
+
+  Dans un domaine Active Directory, la plupart des compromissions totales suivent le même chemin : un poste
+  est infecté (pièce jointe, navigateur), l'attaquant y récupère en mémoire les **empreintes** ou les
+  **tickets Kerberos** des comptes qui s'y sont connectés, et rebondit de machine en machine jusqu'à tomber
+  sur un compte d'administrateur du domaine. Si un administrateur du domaine ouvre une session, même une
+  seule fois, sur un poste de travail, ce poste devient une porte d'entrée vers tout l'annuaire.
+
+  ## Le modèle en tiers
+
+  Le modèle d'administration en tiers (Microsoft parle aujourd'hui de *modèle d'accès entreprise*, avec
+  des plans de contrôle, de gestion et d'accès, mais le principe est identique) range chaque ressource dans
+  un **niveau de confiance** :
+
+  | Tier | Contenu | Comptes d'administration |
+  |------|---------|--------------------------|
+  | 0 | contrôleurs de domaine, AD CS, ADFS, tout ce qui contrôle l'identité | `adm0-...`, très peu nombreux |
+  | 1 | serveurs et applications métier | `adm1-...` |
+  | 2 | postes de travail, imprimantes, terminaux | `adm2-...`, le support |
+
+  Une seule règle, appliquée sans exception : **un compte d'un tier ne se connecte jamais à une machine
+  d'un tier inférieur**, car il y exposerait ses secrets. Un compte tier 0 n'ouvre jamais de session sur un
+  poste ; le support administre les postes avec son compte tier 2, qui n'a aucun droit sur les serveurs.
+  Chaque administrateur a donc **plusieurs comptes** : un compte nominatif ordinaire pour la messagerie et
+  la navigation, et un compte d'administration par tier où il intervient.
+
+  ## Les outils de Windows Server
+
+  - **OU d'administration** séparées, à héritage bloqué, pour que les comptes et groupes sensibles ne
+    reçoivent ni les GPO ni les délégations des OU métier.
+  - **Groupes d'administration minimaux** : *Admins du domaine* presque vide, *Admins de l'entreprise* et
+    *Admins du schéma* vides en temps normal.
+  - **Protected Users** : les membres n'utilisent plus NTLM, ni DES ou RC4, ni la délégation, et leurs
+    identifiants ne sont plus mis en cache.
+  - **Droits de connexion refusés par GPO** : *Interdire l'ouverture d'une session locale*, *par les
+    services Bureau à distance*, *l'accès à cet ordinateur à partir du réseau*... pour les comptes tier 0
+    sur les postes.
+  - **Stratégies et silos d'authentification** : restreindre où un compte peut s'authentifier et raccourcir
+    la durée de vie de ses tickets.
+  - **Hygiène Kerberos** : comptes de service avec SPN et mot de passe faible (*kerberoasting*), rotation du
+    mot de passe de `krbtgt`.
+
+  Le modèle ne se déploie pas en un jour sur un parc réel : on commence par inventorier les comptes
+  privilégiés, puis on crée les comptes séparés, on vide les groupes, et seulement ensuite on pose les
+  interdictions de connexion, après avoir vérifié qu'aucun service ne tourne sous un compte tier 0.
+docs:
+  - title: Modèle d'accès entreprise
+    url: https://learn.microsoft.com/fr-fr/security/privileged-access-workstations/privileged-access-access-model
+  - title: Bonnes pratiques de sécurisation d'Active Directory
+    url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/plan/security-best-practices/best-practices-for-securing-active-directory
+  - title: Groupe de sécurité Utilisateurs protégés
+    url: https://learn.microsoft.com/fr-fr/windows-server/security/credentials-protection-and-management/protected-users-security-group
+  - title: Stratégies et silos d'authentification
+    url: https://learn.microsoft.com/fr-fr/windows-server/security/credentials-protection-and-management/authentication-policies-and-authentication-policy-silos
+exercises:
+  - id: win-tier-ou
+    title: Les OU d'administration
+    description: |
+      À la racine du domaine, crée l'OU **`Admin`** contenant **`Tier0`**, **`Tier1`** et **`Tier2`**, chacune
+      avec deux sous-OU **`Comptes`** et **`Groupes`**, toutes protégées contre la suppression accidentelle.
+      **Bloque l'héritage** des GPO sur `Admin`.
+    hint: New-ADOrganizationalUnit -Name Admin -Path 'DC=durand,DC=lan' ; boucle sur 0..2 ; Set-GPInheritance -Target 'OU=Admin,DC=durand,DC=lan' -IsBlocked Yes
+    cours: |
+      ```powershell
+      New-ADOrganizationalUnit -Name Admin -Path 'DC=durand,DC=lan'
+      foreach ($t in 0..2) {
+          New-ADOrganizationalUnit -Name "Tier$t" -Path 'OU=Admin,DC=durand,DC=lan'
+          'Comptes', 'Groupes' | ForEach-Object { New-ADOrganizationalUnit -Name $_ -Path "OU=Tier$t,OU=Admin,DC=durand,DC=lan" }
+      }
+      Set-GPInheritance -Target 'OU=Admin,DC=durand,DC=lan' -IsBlocked Yes
+      ```
+
+      Les comptes d'administration ne doivent pas vivre au milieu des comptes métier : une délégation donnée
+      au support sur `Ateliers Durand\Utilisateurs` (réinitialiser les mots de passe) lui permettrait sinon de
+      prendre la main sur un administrateur. Une arborescence dédiée permet de poser des ACL strictes et de
+      **bloquer l'héritage** des GPO métier ; seules les GPO liées directement (ou *appliquées*) s'y
+      appliquent. `New-ADOrganizationalUnit` protège par défaut l'OU contre la suppression accidentelle.
+    docs:
+      - title: New-ADOrganizationalUnit
+        url: https://learn.microsoft.com/fr-fr/powershell/module/activedirectory/new-adorganizationalunit
+      - title: Set-GPInheritance
+        url: https://learn.microsoft.com/fr-fr/powershell/module/grouppolicy/set-gpinheritance
+    checks:
+      - desc: Les six OU Comptes et Groupes des trois tiers existent et sont protégées
+        run: |
+          $dns = @(Get-ADOrganizationalUnit -Filter * -Properties ProtectedFromAccidentalDeletion | Where-Object ProtectedFromAccidentalDeletion).DistinguishedName
+          $attendus = foreach ($t in 0..2) { foreach ($s in 'Comptes', 'Groupes') { "OU=$s,OU=Tier$t,OU=Admin,DC=durand,DC=lan" } }
+          @($attendus | Where-Object { $_ -notin $dns }).Count -eq 0
+      - desc: L'héritage des GPO est bloqué sur l'OU Admin
+        run: |
+          try { [bool](Get-GPInheritance -Target 'OU=Admin,DC=durand,DC=lan').GpoInheritanceBlocked } catch { $false }
+    solution: |
+      New-ADOrganizationalUnit -Name Admin -Path 'DC=durand,DC=lan'
+      foreach ($t in 0..2) {
+          New-ADOrganizationalUnit -Name "Tier$t" -Path 'OU=Admin,DC=durand,DC=lan'
+          foreach ($s in 'Comptes', 'Groupes') { New-ADOrganizationalUnit -Name $s -Path "OU=Tier$t,OU=Admin,DC=durand,DC=lan" }
+      }
+      Set-GPInheritance -Target 'OU=Admin,DC=durand,DC=lan' -IsBlocked Yes | Out-Null
+
+  - id: win-tier-comptes
+    title: Un compte d'administration par tier
+    description: |
+      Crée pour Julien Roux les comptes **`adm0-jroux`**, **`adm1-jroux`** et **`adm2-jroux`**, chacun dans
+      l'OU `Comptes` de son tier, activés, avec l'option **« le compte est sensible et ne peut pas être
+      délégué »**. Crée les groupes globaux **`GG_Admins_T0`**, **`GG_Admins_T1`**, **`GG_Admins_T2`** dans
+      l'OU `Groupes` de leur tier, chacun contenant le compte correspondant.
+    hint: New-ADUser adm0-jroux -AccountNotDelegated $true -Path 'OU=Comptes,OU=Tier0,OU=Admin,DC=durand,DC=lan' ... ; New-ADGroup GG_Admins_T0 -GroupScope Global -Path 'OU=Groupes,OU=Tier0,...' ; Add-ADGroupMember
+    cours: |
+      ```powershell
+      $mdp = Read-Host -AsSecureString 'Mot de passe'
+      foreach ($t in 0..2) {
+          $base = "OU=Tier$t,OU=Admin,DC=durand,DC=lan"
+          New-ADUser -Name "adm$t-jroux" -SamAccountName "adm$t-jroux" -AccountPassword $mdp -Enabled $true `
+              -AccountNotDelegated $true -Path "OU=Comptes,$base"
+          New-ADGroup -Name "GG_Admins_T$t" -GroupScope Global -GroupCategory Security -Path "OU=Groupes,$base"
+          Add-ADGroupMember "GG_Admins_T$t" -Members "adm$t-jroux"
+      }
+      ```
+
+      Le compte nominatif `jroux` reste un utilisateur ordinaire : messagerie, navigation, documents. Les
+      comptes `admN-` ne servent qu'à administrer, chacun sur son tier, avec un mot de passe distinct (dans un
+      coffre de mots de passe). L'option *sensible et ne peut pas être déléguée* (`AccountNotDelegated`)
+      empêche un serveur configuré pour la délégation Kerberos de réutiliser l'identité de l'administrateur
+      ailleurs. Les droits se donnent aux **groupes** `GG_Admins_TN`, jamais aux comptes.
+    docs:
+      - title: Set-ADUser (AccountNotDelegated)
+        url: https://learn.microsoft.com/fr-fr/powershell/module/activedirectory/set-aduser
+      - title: Sécuriser les comptes privilégiés
+        url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/plan/security-best-practices/implementing-least-privilege-administrative-models
+    checks:
+      - desc: adm0-jroux, adm1-jroux et adm2-jroux existent dans leur OU, activés et non délégables
+        run: |
+          $ok = foreach ($t in 0..2) {
+              $u = Get-ADUser -Filter "SamAccountName -eq 'adm$t-jroux'" -Properties AccountNotDelegated
+              [bool]$u -and $u.Enabled -and $u.AccountNotDelegated -and $u.DistinguishedName -like "*,OU=Comptes,OU=Tier$t,OU=Admin,DC=durand,DC=lan"
+          }
+          @($ok | Where-Object { -not $_ }).Count -eq 0
+      - desc: Les groupes GG_Admins_T0 à T2 sont dans leur OU et contiennent le bon compte
+        run: |
+          $ok = foreach ($t in 0..2) {
+              $g = Get-ADGroup -Filter "Name -eq 'GG_Admins_T$t'"
+              [bool]$g -and $g.DistinguishedName -like "*,OU=Groupes,OU=Tier$t,OU=Admin,DC=durand,DC=lan" -and @((Get-ADGroupMember $g).SamAccountName) -contains "adm$t-jroux"
+          }
+          @($ok | Where-Object { -not $_ }).Count -eq 0
+    solution: |
+      $mdp = ConvertTo-SecureString 'Tiers-Adm1n-2024!' -AsPlainText -Force
+      foreach ($t in 0..2) {
+          $base = "OU=Tier$t,OU=Admin,DC=durand,DC=lan"
+          New-ADUser -Name "adm$t-jroux" -SamAccountName "adm$t-jroux" -UserPrincipalName "adm$t-jroux@durand.lan" `
+              -AccountPassword $mdp -Enabled $true -AccountNotDelegated $true -Path "OU=Comptes,$base"
+          New-ADGroup -Name "GG_Admins_T$t" -GroupScope Global -GroupCategory Security -Path "OU=Groupes,$base"
+          Add-ADGroupMember "GG_Admins_T$t" -Members "adm$t-jroux"
+      }
+
+  - id: win-tier-da
+    title: Vider les Admins du domaine
+    description: |
+      Le groupe **Admins du domaine** ne doit plus contenir que `Administrator`, `vagrant` (compte de secours
+      du lab) et **`adm0-jroux`**. Plus aucun compte du quotidien ni compte de service ne doit être, même
+      indirectement, membre du groupe local intégré **Administrateurs** du domaine.
+    hint: Get-ADGroup "$((Get-ADDomain).DomainSID)-512" ; Remove-ADGroupMember ... -Members jroux, hgirard, svc-backup -Confirm:$false ; Add-ADGroupMember ... adm0-jroux ; vérifier avec Get-ADGroupMember S-1-5-32-544 -Recursive
+    cours: |
+      ```powershell
+      $da = Get-ADGroup "$((Get-ADDomain).DomainSID)-512"      # RID 512, quel que soit le nom
+      Get-ADGroupMember $da | Select-Object SamAccountName, objectClass
+      Remove-ADGroupMember $da -Members jroux, hgirard, svc-backup -Confirm:$false
+      Add-ADGroupMember $da -Members adm0-jroux
+      Get-ADGroupMember S-1-5-32-544 -Recursive | Select-Object SamAccountName
+      ```
+
+      Désigner les groupes par leur **SID** (RID 512 pour *Admins du domaine*, 519 *Admins de l'entreprise*,
+      518 *Admins du schéma*, `S-1-5-32-544` *Administrateurs*) rend les scripts indépendants de la langue.
+      Un compte de service n'a presque jamais besoin d'être administrateur du domaine : on lui donne les
+      droits précis dont il a besoin, idéalement sous forme de **compte de service géré** (gMSA). Attention :
+      les anciens membres gardent `adminCount = 1` et une ACL figée par SDProp, à nettoyer ensuite.
+    docs:
+      - title: Sécuriser le groupe Admins du domaine
+        url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/plan/security-best-practices/appendix-e--securing-domain-admins-groups-in-active-directory
+    checks:
+      - desc: Admins du domaine contient exactement Administrator, vagrant et adm0-jroux
+        run: |
+          $m = @((Get-ADGroupMember "$((Get-ADDomain).DomainSID)-512").SamAccountName | Sort-Object)
+          ($m -join ',') -eq 'adm0-jroux,Administrator,vagrant'
+      - desc: jroux, hgirard et svc-backup ne sont plus administrateurs, même par imbrication
+        run: |
+          $r = @((Get-ADGroupMember 'S-1-5-32-544' -Recursive).SamAccountName)
+          @($r | Where-Object { $_ -in 'jroux', 'hgirard', 'svc-backup' }).Count -eq 0
+    solution: |
+      $da = Get-ADGroup "$((Get-ADDomain).DomainSID)-512"
+      Remove-ADGroupMember $da -Members jroux, hgirard, svc-backup -Confirm:$false
+      Add-ADGroupMember $da -Members adm0-jroux
+
+  - id: win-tier-protected
+    title: Protected Users et compte Administrator
+    description: |
+      Ajoute **`adm0-jroux`** au groupe **Protected Users** et marque le compte intégré **`Administrator`**
+      comme « sensible et ne peut pas être délégué ».
+    hint: Add-ADGroupMember "$((Get-ADDomain).DomainSID)-525" -Members adm0-jroux ; Set-ADUser Administrator -AccountNotDelegated $true
+    cours: |
+      ```powershell
+      Add-ADGroupMember "$((Get-ADDomain).DomainSID)-525" -Members adm0-jroux   # Protected Users (RID 525)
+      Set-ADUser Administrator -AccountNotDelegated $true
+      ```
+
+      Pour les membres de **Protected Users**, les postes et contrôleurs récents refusent NTLM, Digest et la
+      mise en cache des identifiants, n'utilisent plus DES ni RC4 pour Kerberos, interdisent toute délégation
+      et limitent la durée du ticket TGT à quatre heures. C'est exactement le comportement voulu pour un
+      compte tier 0. On n'y place **pas** les comptes de service ni les comptes d'ordinateur, et on garde un
+      compte de secours hors du groupe (ici `vagrant`) en cas de problème d'authentification Kerberos.
+    docs:
+      - title: Groupe de sécurité Utilisateurs protégés
+        url: https://learn.microsoft.com/fr-fr/windows-server/security/credentials-protection-and-management/protected-users-security-group
+    checks:
+      - desc: adm0-jroux est membre de Protected Users
+        run: |
+          @((Get-ADGroupMember "$((Get-ADDomain).DomainSID)-525").SamAccountName) -contains 'adm0-jroux'
+      - desc: Administrator ne peut pas être délégué
+        run: |
+          (Get-ADUser Administrator -Properties AccountNotDelegated).AccountNotDelegated -eq $true
+    solution: |
+      Add-ADGroupMember "$((Get-ADDomain).DomainSID)-525" -Members adm0-jroux
+      Set-ADUser Administrator -AccountNotDelegated $true
+
+  - id: win-tier-interdictions
+    title: Interdire les comptes tier 0 sur les postes
+    description: |
+      Crée la GPO **`C - Restrictions Tier0`**, liée à l'OU `Postes`, qui refuse à **`GG_Admins_T0`** les
+      droits d'ouverture de session **locale**, **par le Bureau à distance**, **depuis le réseau**, **en tant
+      que tâche** et **en tant que service**. Applique-la sur PC01.
+    hint: 'GptTmpl.inf, section [Privilege Rights] : SeDenyInteractiveLogonRight, SeDenyRemoteInteractiveLogonRight, SeDenyNetworkLogonRight, SeDenyBatchLogonRight, SeDenyServiceLogonRight = *<SID> ; extension sécurité dans gPCMachineExtensionNames ; version +1 ; gpupdate sur PC01'
+    cours: |
+      ```powershell
+      $gpo = New-GPO -Name 'C - Restrictions Tier0'
+      $gpo | New-GPLink -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+      $sid = (Get-ADGroup GG_Admins_T0).SID.Value
+      # Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf (UTF-16) :
+      # [Privilege Rights]
+      # SeDenyInteractiveLogonRight = *S-1-5-21-...
+      # SeDenyRemoteInteractiveLogonRight = *S-1-5-21-...   (et réseau, tâche, service)
+      ```
+
+      Ces paramètres se trouvent dans *Configuration ordinateur › Stratégies › Paramètres Windows ›
+      Paramètres de sécurité › Stratégies locales › Attribution des droits utilisateur*. Un refus l'emporte
+      toujours sur une autorisation. Sur un vrai parc, on y place aussi *Admins du domaine*, *Admins de
+      l'entreprise* et les comptes tier 1 ; le lab épargne volontairement *Admins du domaine* pour que
+      `DURAND\vagrant` puisse encore piloter PC01 par WinRM. Sur PC01, `secedit /export /areas USER_RIGHTS`
+      permet de vérifier les droits effectivement appliqués.
+    docs:
+      - title: Interdire l'ouverture d'une session locale
+        url: https://learn.microsoft.com/fr-fr/previous-versions/windows/it-pro/windows-10/security/threat-protection/security-policy-settings/deny-log-on-locally
+      - title: Interdire l'accès à cet ordinateur à partir du réseau
+        url: https://learn.microsoft.com/fr-fr/previous-versions/windows/it-pro/windows-10/security/threat-protection/security-policy-settings/deny-access-to-this-computer-from-the-network
+    checks:
+      - desc: La GPO est liée à Postes et refuse les cinq droits de connexion à GG_Admins_T0
+        run: |
+          $g = Get-GPO -Name 'C - Restrictions Tier0' -ErrorAction Stop
+          $sid = [regex]::Escape('*' + (Get-ADGroup GG_Admins_T0).SID.Value)
+          $inf = Get-Content "C:\Windows\SYSVOL\sysvol\durand.lan\Policies\{$($g.Id)}\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf" -Raw
+          $lien = (Get-GPInheritance -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan').GpoLinks | Where-Object DisplayName -eq 'C - Restrictions Tier0'
+          $droits = 'SeDenyInteractiveLogonRight', 'SeDenyRemoteInteractiveLogonRight', 'SeDenyNetworkLogonRight', 'SeDenyBatchLogonRight', 'SeDenyServiceLogonRight'
+          [bool]$lien -and @($droits | Where-Object { $inf -notmatch "(?m)^$_\s*=.*$sid" }).Count -eq 0
+      - desc: Sur PC01, GG_Admins_T0 n'a plus le droit d'ouvrir une session locale
+        machine: pc01
+        run: |
+          $f = Join-Path $env:TEMP 'droits-tdm.inf'
+          secedit /export /cfg $f /areas USER_RIGHTS | Out-Null
+          $sid = (New-Object Security.Principal.NTAccount 'DURAND\GG_Admins_T0').Translate([Security.Principal.SecurityIdentifier]).Value
+          $ligne = Get-Content $f | Where-Object { $_ -match '^SeDenyInteractiveLogonRight' }
+          [bool]($ligne -match [regex]::Escape($sid))
+    solution: |
+      $gpo = New-GPO -Name 'C - Restrictions Tier0'
+      $gpo | New-GPLink -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' | Out-Null
+      $sid = (Get-ADGroup GG_Admins_T0).SID.Value
+      $racine = "C:\Windows\SYSVOL\sysvol\durand.lan\Policies\{$($gpo.Id)}"
+      New-Item "$racine\Machine\Microsoft\Windows NT\SecEdit" -ItemType Directory -Force | Out-Null
+      $droits = 'SeDenyInteractiveLogonRight', 'SeDenyRemoteInteractiveLogonRight', 'SeDenyNetworkLogonRight', 'SeDenyBatchLogonRight', 'SeDenyServiceLogonRight'
+      $lignes = $droits | ForEach-Object { "$_ = *$sid" }
+      "[Unicode]`r`nUnicode=yes`r`n[Version]`r`nsignature=`"`$CHICAGO`$`"`r`nRevision=1`r`n[Privilege Rights]`r`n$($lignes -join "`r`n")" | Set-Content "$racine\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf" -Encoding Unicode
+      $dn = "CN={$($gpo.Id)},CN=Policies,CN=System,DC=durand,DC=lan"
+      $v = (Get-ADObject $dn -Properties versionNumber).versionNumber + 1
+      Set-ADObject $dn -Replace @{ versionNumber = $v; gPCMachineExtensionNames = '[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]' }
+      Set-Content "$racine\GPT.INI" "[General]`r`nVersion=$v" -Encoding Ascii
+      Invoke-Command -ComputerName PC01 { gpupdate /target:computer /force } | Out-Null
+
+  - id: win-tier-admins-postes
+    title: Le tier 2 administre les postes
+    description: |
+      Crée la GPO **`C - Admins Tier2`**, liée à l'OU `Postes`, qui ajoute **`GG_Admins_T2`** au groupe local
+      **Administrateurs** des postes (groupes restreints, mode « membre de »). Applique-la sur PC01.
+    hint: 'GptTmpl.inf, section [Group Membership] : *<SID de GG_Admins_T2>__Memberof = *S-1-5-32-544 et *<SID>__Members = ; extension sécurité ; version +1 ; gpupdate sur PC01'
+    cours: |
+      ```powershell
+      $gpo = New-GPO -Name 'C - Admins Tier2'
+      $gpo | New-GPLink -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+      $sid = (Get-ADGroup GG_Admins_T2).SID.Value
+      # [Group Membership]
+      # *S-1-5-21-...__Memberof = *S-1-5-32-544
+      # *S-1-5-21-...__Members =
+      ```
+
+      C'est l'autre moitié du modèle : puisque les administrateurs du domaine ne vont plus sur les postes,
+      il faut que le **support** (tier 2) y soit administrateur, et **seulement là**. Le groupe n'a aucun
+      droit sur les serveurs ni sur l'annuaire. Couplé à Windows LAPS pour le compte administrateur local, ce
+      réglage supprime le besoin de tout compte d'administration partagé sur les postes. Sur PC01,
+      `Get-LocalGroupMember -SID S-1-5-32-544` montre le résultat.
+    docs:
+      - title: Groupes restreints
+        url: https://learn.microsoft.com/fr-fr/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/dd392249(v=ws.10)
+    checks:
+      - desc: La GPO C - Admins Tier2 est liée à Postes avec la règle « membre de » pour GG_Admins_T2
+        run: |
+          $g = Get-GPO -Name 'C - Admins Tier2' -ErrorAction Stop
+          $sid = (Get-ADGroup GG_Admins_T2).SID.Value
+          $inf = Get-Content "C:\Windows\SYSVOL\sysvol\durand.lan\Policies\{$($g.Id)}\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf" -Raw
+          $lien = (Get-GPInheritance -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan').GpoLinks | Where-Object DisplayName -eq 'C - Admins Tier2'
+          [bool]$lien -and $inf -match ([regex]::Escape("*$sid") + '__Memberof\s*=\s*\*S-1-5-32-544')
+      - desc: GG_Admins_T2 est administrateur local de PC01
+        machine: pc01
+        run: |
+          [bool](Get-LocalGroupMember -SID S-1-5-32-544 | Where-Object Name -like '*\GG_Admins_T2')
+    solution: |
+      $gpo = New-GPO -Name 'C - Admins Tier2'
+      $gpo | New-GPLink -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' | Out-Null
+      $sid = (Get-ADGroup GG_Admins_T2).SID.Value
+      $racine = "C:\Windows\SYSVOL\sysvol\durand.lan\Policies\{$($gpo.Id)}"
+      New-Item "$racine\Machine\Microsoft\Windows NT\SecEdit" -ItemType Directory -Force | Out-Null
+      "[Unicode]`r`nUnicode=yes`r`n[Version]`r`nsignature=`"`$CHICAGO`$`"`r`nRevision=1`r`n[Group Membership]`r`n*$($sid)__Memberof = *S-1-5-32-544`r`n*$($sid)__Members =" | Set-Content "$racine\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf" -Encoding Unicode
+      $dn = "CN={$($gpo.Id)},CN=Policies,CN=System,DC=durand,DC=lan"
+      $v = (Get-ADObject $dn -Properties versionNumber).versionNumber + 1
+      Set-ADObject $dn -Replace @{ versionNumber = $v; gPCMachineExtensionNames = '[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]' }
+      Set-Content "$racine\GPT.INI" "[General]`r`nVersion=$v" -Encoding Ascii
+      Invoke-Command -ComputerName PC01 { gpupdate /target:computer /force } | Out-Null
+
+  - id: win-tier-silo
+    title: Stratégie et silo d'authentification tier 0
+    description: |
+      Crée la stratégie d'authentification **`AP-Tier0`** (durée de vie du TGT utilisateur **240 minutes**,
+      appliquée) et le silo **`Silo-Tier0`** (appliqué) qui l'utilise pour les utilisateurs, les ordinateurs
+      et les services. Autorise `adm0-jroux` et `SRV-DC01$` dans le silo, puis **affecte** le silo à
+      `adm0-jroux`.
+    hint: New-ADAuthenticationPolicy AP-Tier0 -UserTGTLifetimeMins 240 -Enforce ; New-ADAuthenticationPolicySilo Silo-Tier0 -UserAuthenticationPolicy AP-Tier0 -ComputerAuthenticationPolicy AP-Tier0 -ServiceAuthenticationPolicy AP-Tier0 -Enforce ; Grant-ADAuthenticationPolicySiloAccess ; Set-ADUser -AuthenticationPolicySilo
+    cours: |
+      ```powershell
+      New-ADAuthenticationPolicy -Name AP-Tier0 -UserTGTLifetimeMins 240 -Enforce
+      New-ADAuthenticationPolicySilo -Name Silo-Tier0 -UserAuthenticationPolicy AP-Tier0 `
+          -ComputerAuthenticationPolicy AP-Tier0 -ServiceAuthenticationPolicy AP-Tier0 -Enforce
+      Grant-ADAuthenticationPolicySiloAccess -Identity Silo-Tier0 -Account adm0-jroux
+      Grant-ADAuthenticationPolicySiloAccess -Identity Silo-Tier0 -Account 'SRV-DC01$'
+      Set-ADUser adm0-jroux -AuthenticationPolicySilo Silo-Tier0
+      ```
+
+      Un **silo** regroupe des comptes (utilisateurs, ordinateurs, services) qui ne doivent s'authentifier
+      qu'entre eux ; la **stratégie** associée fixe la durée de vie des tickets et, avec une condition de
+      contrôle d'accès (`-UserAllowedToAuthenticateFrom`), les machines depuis lesquelles le compte peut
+      obtenir un ticket. C'est la traduction technique de « un compte tier 0 ne s'authentifie que depuis un
+      équipement tier 0 ». Prérequis : niveau fonctionnel 2012 R2 et la prise en charge des revendications et
+      du blindage Kerberos activée sur les KDC (GPO des contrôleurs) et les clients. Mode *audit* d'abord
+      (sans `-Enforce`) sur un vrai parc.
+    docs:
+      - title: Stratégies et silos d'authentification
+        url: https://learn.microsoft.com/fr-fr/windows-server/security/credentials-protection-and-management/authentication-policies-and-authentication-policy-silos
+      - title: New-ADAuthenticationPolicySilo
+        url: https://learn.microsoft.com/fr-fr/powershell/module/activedirectory/new-adauthenticationpolicysilo
+    checks:
+      - desc: La stratégie AP-Tier0 est appliquée avec un TGT de 240 minutes
+        run: |
+          $p = Get-ADAuthenticationPolicy -Filter "Name -eq 'AP-Tier0'" -Properties *
+          [bool]$p -and $p.Enforce -and $p.UserTGTLifetimeMins -eq 240
+      - desc: Le silo Silo-Tier0 est appliqué, utilise AP-Tier0 et est affecté à adm0-jroux
+        run: |
+          $s = Get-ADAuthenticationPolicySilo -Filter "Name -eq 'Silo-Tier0'" -Properties *
+          $o = if ($s) { Get-ADObject $s.DistinguishedName -Properties 'msDS-AuthNPolicySiloMembers' }
+          $u = Get-ADUser adm0-jroux -Properties 'msDS-AssignedAuthNPolicySilo'
+          [bool]$s -and $s.Enforce -and "$($s.UserAuthenticationPolicy)" -like 'CN=AP-Tier0,*' -and
+              @($o.'msDS-AuthNPolicySiloMembers') -contains $u.DistinguishedName -and
+              "$($u.'msDS-AssignedAuthNPolicySilo')" -eq $s.DistinguishedName
+    solution: |
+      New-ADAuthenticationPolicy -Name AP-Tier0 -UserTGTLifetimeMins 240 -Enforce
+      New-ADAuthenticationPolicySilo -Name Silo-Tier0 -UserAuthenticationPolicy AP-Tier0 -ComputerAuthenticationPolicy AP-Tier0 -ServiceAuthenticationPolicy AP-Tier0 -Enforce
+      Grant-ADAuthenticationPolicySiloAccess -Identity Silo-Tier0 -Account adm0-jroux
+      Grant-ADAuthenticationPolicySiloAccess -Identity Silo-Tier0 -Account 'SRV-DC01$'
+      Set-ADUser adm0-jroux -AuthenticationPolicySilo Silo-Tier0
+
+  - id: win-tier-kerberoast
+    title: Comptes de service à risque
+    description: |
+      Exporte dans **`C:\Admin\comptes-a-risque.csv`** les comptes utilisateurs activés qui ont un **SPN** ou
+      un mot de passe **sans expiration** (colonnes `SamAccountName`, `SPN`, `MotDePasseSansExpiration`).
+      Puis corrige `svc-backup` : chiffrement Kerberos **AES uniquement** et nouveau mot de passe **long**.
+    hint: Get-ADUser -Filter 'Enabled -eq $true' -Properties servicePrincipalName, PasswordNeverExpires | Where-Object ... | Select-Object ... | Export-Csv ; Set-ADUser svc-backup -Replace @{'msDS-SupportedEncryptionTypes'=24} ; Set-ADAccountPassword svc-backup -Reset
+    cours: |
+      ```powershell
+      Get-ADUser -Filter 'Enabled -eq $true' -Properties servicePrincipalName, PasswordNeverExpires |
+          Where-Object { $_.servicePrincipalName -or $_.PasswordNeverExpires } |
+          Select-Object SamAccountName, @{ n = 'SPN'; e = { $_.servicePrincipalName -join ';' } },
+              @{ n = 'MotDePasseSansExpiration'; e = { $_.PasswordNeverExpires } } |
+          Export-Csv C:\Admin\comptes-a-risque.csv -NoTypeInformation -Encoding UTF8
+      Set-ADUser svc-backup -Replace @{ 'msDS-SupportedEncryptionTypes' = 24 }   # AES128 + AES256
+      Set-ADAccountPassword svc-backup -Reset -NewPassword (Read-Host -AsSecureString)
+      ```
+
+      Tout utilisateur du domaine peut demander un ticket de service pour n'importe quel SPN ; ce ticket est
+      chiffré avec une clé dérivée du mot de passe du compte de service, que l'attaquant peut ensuite casser
+      hors ligne : c'est le **kerberoasting**. Avec RC4 et un mot de passe court, c'est l'affaire de minutes.
+      Les remèdes : passer les services sur des **gMSA** (mot de passe de 120 caractères changé
+      automatiquement), sinon un mot de passe très long, AES seulement, et jamais de droits d'administration.
+    docs:
+      - title: Comptes de service administrés de groupe
+        url: https://learn.microsoft.com/fr-fr/windows-server/security/group-managed-service-accounts/group-managed-service-accounts-overview
+      - title: Get-ADUser
+        url: https://learn.microsoft.com/fr-fr/powershell/module/activedirectory/get-aduser
+    checks:
+      - desc: Le fichier C:\Admin\comptes-a-risque.csv liste svc-backup avec son SPN
+        run: |
+          $l = @(Import-Csv C:\Admin\comptes-a-risque.csv -ErrorAction SilentlyContinue | Where-Object SamAccountName -eq 'svc-backup')
+          $l.Count -eq 1 -and $l[0].SPN -match 'MSSQLSvc/' -and $null -ne $l[0].MotDePasseSansExpiration
+      - desc: svc-backup n'accepte plus que AES et son mot de passe a été changé
+        run: |
+          $u = Get-ADUser svc-backup -Properties 'msDS-SupportedEncryptionTypes', pwdLastSet, whenCreated
+          $u.'msDS-SupportedEncryptionTypes' -eq 24 -and [datetime]::FromFileTime($u.pwdLastSet) -gt $u.whenCreated.AddMinutes(1)
+    solution: |
+      Get-ADUser -Filter 'Enabled -eq $true' -Properties servicePrincipalName, PasswordNeverExpires |
+          Where-Object { $_.servicePrincipalName -or $_.PasswordNeverExpires } |
+          Select-Object SamAccountName, @{ n = 'SPN'; e = { $_.servicePrincipalName -join ';' } }, @{ n = 'MotDePasseSansExpiration'; e = { $_.PasswordNeverExpires } } |
+          Export-Csv C:\Admin\comptes-a-risque.csv -NoTypeInformation -Encoding UTF8
+      Set-ADUser svc-backup -Replace @{ 'msDS-SupportedEncryptionTypes' = 24 }
+      Set-ADAccountPassword svc-backup -Reset -NewPassword (ConvertTo-SecureString 'Une-Phrase-De-Passe-Tres-Longue-Pour-La-Sauvegarde-2024!' -AsPlainText -Force)
+
+  - id: win-tier-krbtgt
+    title: Réinitialiser le mot de passe de krbtgt
+    description: |
+      Le mot de passe du compte **`krbtgt`** n'a jamais changé depuis la création du domaine (sa date est
+      notée dans `C:\Admin\krbtgt-initial.txt`). Réinitialise-le **une fois**.
+    hint: Set-ADAccountPassword krbtgt -Reset -NewPassword (ConvertTo-SecureString ... -AsPlainText -Force) ; comparer (Get-ADUser krbtgt -Properties pwdLastSet).pwdLastSet
+    cours: |
+      ```powershell
+      [datetime]::FromFileTime((Get-ADUser krbtgt -Properties pwdLastSet).pwdLastSet)
+      $mdp = ConvertTo-SecureString ([guid]::NewGuid().ToString() + 'Aa1!') -AsPlainText -Force
+      Set-ADAccountPassword krbtgt -Reset -NewPassword $mdp      # le KDC génère de toute façon sa propre valeur
+      repadmin /syncall /AdeP                                    # avec plusieurs contrôleurs
+      ```
+
+      Tous les tickets TGT du domaine sont signés avec la clé de `krbtgt`. Un attaquant qui l'a volée fabrique
+      des **golden tickets** valables tant que cette clé ne change pas. Le compte garde le mot de passe
+      actuel **et** le précédent : on réinitialise donc **deux fois**, en laissant passer entre les deux au
+      moins la durée de vie maximale d'un ticket (10 heures par défaut) et la réplication vers tous les
+      contrôleurs, sinon des authentifications légitimes échouent. Microsoft recommande une rotation
+      régulière (tous les 180 jours par exemple) et une double réinitialisation après toute compromission.
+    docs:
+      - title: Réinitialiser le mot de passe du compte krbtgt
+        url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/manage/forest-recovery-guide/ad-forest-recovery-resetting-the-krbtgt-password
+    checks:
+      - desc: Le mot de passe de krbtgt est plus récent que celui noté au début du lab
+        run: |
+          $avant = [int64](Get-Content C:\Admin\krbtgt-initial.txt -ErrorAction SilentlyContinue | Select-Object -First 1)
+          $avant -gt 0 -and (Get-ADUser krbtgt -Properties pwdLastSet).pwdLastSet -gt $avant
+    solution: |
+      $mdp = ConvertTo-SecureString ([guid]::NewGuid().ToString() + 'Aa1!') -AsPlainText -Force
+      Set-ADAccountPassword krbtgt -Reset -NewPassword $mdp
