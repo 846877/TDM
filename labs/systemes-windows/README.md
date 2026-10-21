@@ -25,7 +25,12 @@ labs/systemes-windows/
 - **Disque** : chaque box se télécharge une fois (≈ 7 Go pour Windows Server 2022, ≈ 8 Go pour
   Windows 11, ≈ 15 Go chacune une fois décompressée) ; chaque VM est ensuite un clone lié (2 à 6 Go).
 - Le premier démarrage d'un lab prend 10 à 30 min (téléchargement, puis provisionnement ; un domaine
-  Active Directory ajoute ≈ 10 min). Les suivants sont bien plus rapides (`vagrant halt` / `up`).
+  Active Directory ajoute ≈ 10 min). Ensuite, **Mettre en pause** fait un `vagrant suspend` (état
+  sauvegardé) : la reprise ne prend que quelques secondes, là où l'élève s'était arrêté.
+- **Hyper-V** (activé par Docker Desktop/WSL2, ou par l'intégrité de la mémoire) oblige VirtualBox à
+  passer par lui : une tortue verte apparaît en bas de la fenêtre de la VM et Windows devient très
+  lent (écran noir prolongé). Pour les labs Windows, mieux vaut désactiver Hyper-V
+  (`bcdedit /set hypervisorlaunchtype off`, puis redémarrer ; `auto` pour le réactiver).
 
 Boxes utilisées (fournisseur `virtualbox`, versions d'évaluation de Windows, renouvelées
 régulièrement par leur auteur) : `gusztavvargadr/windows-server-2022-standard` et
@@ -40,7 +45,10 @@ régulièrement par leur auteur) : `gusztavvargadr/windows-server-2022-standard`
    dans un dossier persistant — `%LOCALAPPDATA%\TDM\vagrant\<lab>` (réglable avec
    `TDM_VAGRANT_WORK_DIR`) — puis y lance `vagrant up`. Seuls les fichiers modifiés sont recopiés et
    `.vagrant` (l'état des VM) n'est jamais touché : l'application peut se décompresser ailleurs à chaque
-   lancement, les VM sont retrouvées. **Réinitialiser** = `vagrant destroy -f` puis `vagrant up`.
+   lancement, les VM sont retrouvées. Juste après la première préparation complète, l'agent prend un
+   instantané `tdm-initial` de toutes les VM (`vagrant snapshot save`). **Réinitialiser** le restaure
+   (une minute environ) ; sans instantané valable (lab mis à jour par une nouvelle version de TDM, VM
+   supprimées à la main...), il reconstruit tout : `vagrant destroy -f` puis `vagrant up`.
 3. Au premier `vagrant up`, `tdm.rb` génère une clé SSH propre au lab (`<copie>\.tdm\id_rsa`).
    Vagrant communique en **WinRM** (vagrant / vagrant) ; `provision/base.ps1` installe **OpenSSH
    Server**, met **Windows PowerShell 5.1** comme shell par défaut et autorise la clé du lab.

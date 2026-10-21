@@ -49,6 +49,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 BUNDLED_PREFIX = "tdm:"
 SHARED_DIR = "_commun"  # fichiers partagés par les labs embarqués (copiés à côté de chaque lab)
 MANIFEST = ".tdm-manifest"
+SNAPSHOT = "tdm-initial"  # instantané des VM d'un lab embarqué juste après leur préparation
 _BUNDLED_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
 
@@ -99,25 +100,37 @@ def _last_progress(text: str) -> str:
 
 
 class Job:
-    """Une suite de commandes vagrant exécutées l'une après l'autre en arrière-plan."""
+    """Une suite d'étapes exécutées l'une après l'autre en arrière-plan.
 
-    def __init__(self, action: str, commands: list[list[str]], cwd: Path):
+    Une étape est une commande (liste d'arguments) ou une fonction ``étape(job) -> code`` qui peut
+    elle-même lancer des commandes avec ``job.call``.
+    """
+
+    def __init__(self, action: str, commands: list, cwd: Path):
         self.action = action
+        self.cwd = cwd
         self.log: deque[str] = deque(maxlen=200)
         self.returncode: int | None = None
-        self._thread = threading.Thread(target=self._run, args=(commands, cwd), daemon=True)
+        self._thread = threading.Thread(target=self._run, args=(commands,), daemon=True)
         self._thread.start()
 
-    def _run(self, commands: list[list[str]], cwd: Path) -> None:
+    def _run(self, commands: list) -> None:
         code = 0
-        for argv in commands:
-            self.log.append("$ vagrant " + " ".join(argv[1:]))
-            process = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            self._read(process.stdout)
-            code = process.wait()
-            if code != 0:
-                break
+        try:
+            for step in commands:
+                code = step(self) if callable(step) else self.call(step)
+                if code != 0:
+                    break
+        except Exception as exc:  # une étape en Python ne doit pas laisser le job « en cours » pour toujours
+            self.log.append(f"Erreur : {exc}")
+            code = 1
         self.returncode = code
+
+    def call(self, argv: list[str]) -> int:
+        self.log.append("$ vagrant " + " ".join(argv[1:]))
+        process = subprocess.Popen(argv, cwd=self.cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self._read(process.stdout)
+        return process.wait()
 
     def _read(self, stream) -> None:
         """Recopie la sortie de vagrant dans le journal, ligne par ligne.
@@ -200,16 +213,18 @@ class Agent:
         if not lab.startswith(BUNDLED_PREFIX):
             return
         source, work = self.bundled_dirs(lab)
-        sync_tree(source, work)
+        changed = sync_tree(source, work)
         shared = self.bundled / SHARED_DIR
         if shared.is_dir():
-            sync_tree(shared, self.work_dir / SHARED_DIR)
+            changed += sync_tree(shared, self.work_dir / SHARED_DIR)
+        if changed:  # lab mis à jour : la prochaine réinitialisation reconstruit les VM avec la nouvelle version
+            (work / ".tdm" / "instantane-initial").unlink(missing_ok=True)
 
     def _vagrant(self, path: Path, *args: str, timeout: float = 120) -> subprocess.CompletedProcess:
         return subprocess.run([self.vagrant, *args], cwd=path, capture_output=True, text=True, encoding="utf-8",
                               errors="replace", timeout=timeout)
 
-    def run_job(self, lab: str, action: str, *commands: list[str]) -> None:
+    def run_job(self, lab: str, action: str, *steps) -> None:
         path = self.lab_dir(lab)
         with self.lock:
             job = self.jobs.get(lab)
@@ -219,7 +234,55 @@ class Agent:
                 self.prepare(lab)
             elif not (path / "Vagrantfile").exists():
                 return  # lab embarqué jamais démarré : rien à arrêter
-            self.jobs[lab] = Job(action, [[self.vagrant, *c] for c in commands], path)
+            self.jobs[lab] = Job(action, list(steps), path)
+
+    # --- Labs embarqués (VM Windows) : pause et instantané pour aller vite ----------------------
+    # Une VM Windows met de longues minutes à démarrer et à se préparer (OpenSSH, domaine...). Pour les
+    # labs embarqués, l'agent :
+    #   - met les VM en pause (`vagrant suspend`, état sauvegardé) au lieu de les éteindre : le
+    #     démarrage suivant reprend en quelques secondes, là où l'élève s'était arrêté ;
+    #   - prend un instantané « tdm-initial » juste après la première préparation complète : la
+    #     réinitialisation restaure cet instantané au lieu de tout détruire et reconstruire.
+    def lab_actions(self, lab: str) -> dict[str, tuple[str, list]]:
+        if not lab.startswith(BUNDLED_PREFIX):
+            return {
+                "/up": ("up", [[self.vagrant, "up"]]),
+                "/halt": ("halt", [[self.vagrant, "halt"]]),
+                "/reset": ("up", [[self.vagrant, "destroy", "-f"], [self.vagrant, "up"]]),
+            }
+        return {
+            "/up": ("up", [[self.vagrant, "up"], self._snapshot_once]),
+            "/halt": ("halt", [[self.vagrant, "suspend"]]),
+            "/reset": ("up", [self._restore_or_rebuild]),
+        }
+
+    @staticmethod
+    def _snapshot_marker(job: Job) -> Path:
+        return job.cwd / ".tdm" / "instantane-initial"  # voir aussi prepare()
+
+    def _snapshot_once(self, job: Job) -> int:
+        marker = self._snapshot_marker(job)
+        if marker.exists():
+            return 0
+        job.log.append("Instantané de l'état initial (pour des réinitialisations rapides)…")
+        if job.call([self.vagrant, "snapshot", "save", SNAPSHOT, "--force"]) == 0:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(SNAPSHOT, encoding="utf-8")
+        else:
+            job.log.append("Instantané impossible : la réinitialisation reconstruira les VM.")
+        return 0  # le lab tourne : un instantané manqué n'est pas un échec
+
+    def _restore_or_rebuild(self, job: Job) -> int:
+        marker = self._snapshot_marker(job)
+        if marker.exists():
+            if job.call([self.vagrant, "snapshot", "restore", SNAPSHOT, "--no-provision"]) == 0:
+                return job.call([self.vagrant, "up", "--no-provision"])  # reprend une VM restaurée en pause
+            job.log.append("Restauration impossible : reconstruction complète des VM.")
+            marker.unlink(missing_ok=True)
+        code = job.call([self.vagrant, "destroy", "-f"])
+        if code == 0:
+            code = job.call([self.vagrant, "up"])
+        return self._snapshot_once(job) if code == 0 else code
 
     def status(self, lab: str) -> dict:
         path = self.lab_dir(lab)
@@ -325,12 +388,8 @@ def make_handler(agent: Agent, token: str):
                     return self._reply(200, agent.status(lab))
                 if method == "GET" and url.path == "/ssh":
                     return self._reply(200, agent.ssh(lab, query.get("machine", "")))
-                actions = {
-                    "/up": ("up", [["up"]]),
-                    "/halt": ("halt", [["halt"]]),
-                    "/reset": ("up", [["destroy", "-f"], ["up"]]),
-                }
-                if method == "POST" and url.path in actions:
+                actions = agent.lab_actions(lab) if method == "POST" else {}
+                if url.path in actions:
                     action, commands = actions[url.path]
                     agent.run_job(lab, action, *commands)
                     return self._reply(202, {"status": "starting" if action == "up" else "stopping"})

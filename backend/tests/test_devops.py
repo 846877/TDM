@@ -142,3 +142,47 @@ def test_agent_journal_progression_sans_fin_de_ligne():
     job._read(flux)
     assert list(job.log) == ["Downloading: https://x/box", "Progress: 40% (Rate: 6M/s)",
                              "==> default: Successfully added box 'é'"]
+
+
+FAKE_VAGRANT_SNAPSHOT = """#!/bin/sh
+echo "$*" >> calls
+case "$1" in
+  snapshot) [ "$2" = restore ] && [ -f casse ] && exit 1 ; exit 0 ;;
+esac
+exit 0
+"""
+
+
+def test_agent_labs_embarques_pause_et_instantane(tmp_path):
+    """VM Windows : pause au lieu d'arrêt, instantané après la 1re préparation, restauration au reset."""
+    if sys.platform == "win32":
+        pytest.skip("faux vagrant en shell")
+    bundled = tmp_path / "bundled"
+    (bundled / "win-lab").mkdir(parents=True)
+    (bundled / "win-lab" / "Vagrantfile").write_text("v1")
+    fake = tmp_path / "vagrant"
+    fake.write_text(FAKE_VAGRANT_SNAPSHOT)
+    fake.chmod(0o755)
+    ag = vagrant_agent.Agent(None, str(fake), bundled=bundled, work_dir=tmp_path / "work")
+    work = tmp_path / "work" / "win-lab"
+
+    def run(path):
+        action, steps = ag.lab_actions("tdm:win-lab")[path]
+        ag.run_job("tdm:win-lab", action, *steps)
+        ag.jobs["tdm:win-lab"]._thread.join(10)
+        assert ag.jobs["tdm:win-lab"].returncode == 0
+        calls = (work / "calls").read_text().splitlines()
+        (work / "calls").unlink()
+        return calls
+
+    assert run("/up") == ["up", "snapshot save tdm-initial --force"]
+    assert run("/up") == ["up"]  # instantané déjà pris
+    assert run("/halt") == ["suspend"]
+    assert run("/reset") == ["snapshot restore tdm-initial --no-provision", "up --no-provision"]
+    (work / "casse").write_text("")  # instantané perdu (VM supprimées à la main...) : reconstruction
+    assert run("/reset") == ["snapshot restore tdm-initial --no-provision", "destroy -f", "up",
+                             "snapshot save tdm-initial --force"]
+    (bundled / "win-lab" / "Vagrantfile").write_text("v2")  # lab mis à jour : l'instantané est périmé
+    assert run("/reset") == ["destroy -f", "up", "snapshot save tdm-initial --force"]
+    # Les labs de l'utilisateur gardent le comportement d'origine.
+    assert ag.lab_actions("k8s/ubuntu")["/halt"] == ("halt", [[str(fake), "halt"]])

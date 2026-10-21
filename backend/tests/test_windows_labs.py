@@ -206,7 +206,7 @@ FAKE_VAGRANT = """#!/bin/sh
 case "$1" in
   status) if [ -f .vagrant/up ]; then s=running; else s=poweroff; fi; echo "1,dc01,state,$s" ;;
   up) mkdir -p .vagrant; touch .vagrant/up; echo "up depuis $PWD" ;;
-  halt) rm -f .vagrant/up ;;
+  halt|suspend) rm -f .vagrant/up ;;
   destroy) rm -rf .vagrant ;;
   ssh-config) printf '  HostName 127.0.0.1\\n  User vagrant\\n  Port %s\\n  IdentityFile "%s/.tdm/id_rsa"\\n' "$SSH_PORT" "$PWD" ;;
 esac
@@ -253,7 +253,7 @@ def test_agent_lab_embarque(tmp_path, monkeypatch):
         assert (work / "win-lab" / "Vagrantfile").exists() and (work / "_commun" / "tdm.rb").exists()
         assert "up depuis " + str(work / "win-lab") in vagrant.status(lab)[1]
         # Clé générée par le Vagrantfile dans la copie : la plateforme la lit sur place (même machine).
-        (work / "win-lab" / ".tdm").mkdir()
+        (work / "win-lab" / ".tdm").mkdir(exist_ok=True)
         (work / "win-lab" / ".tdm" / "id_rsa").write_text("CLE")
         argv = vagrant.ssh_argv(lab, "$true")
         assert Path(argv[argv.index("-i") + 1]) == work / "win-lab" / ".tdm" / "id_rsa"

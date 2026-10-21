@@ -707,7 +707,9 @@ async function renderLab(id, cat = "devops") {
   const statusDot = h("span", { class: "status-dot" });
   const statusText = h("span", { class: "muted" });
   const startBtn = h("button", { class: "btn primary" }, "▶ Démarrer le lab");
-  const stopBtn = h("button", { class: "btn danger" }, "■ Arrêter");
+  // VM Windows : « Arrêter » met en pause (reprise en quelques secondes), voir scripts/vagrant_agent.py.
+  const stopLabel = lab.kind === "vagrant" && lab.os === "windows" ? "⏸ Mettre en pause" : "■ Arrêter";
+  const stopBtn = h("button", { class: "btn danger" }, stopLabel);
   const resetBtn = h("button", { class: "btn small" }, "↺ Réinitialiser");
   const errorBox = h("div");
   const termArea = h("div", { class: "xterm-host" });
@@ -782,7 +784,7 @@ async function renderLab(id, cat = "devops") {
     running: "En cours d'exécution",
     stopped: "Arrêté",
     starting: !isVm ? "Démarrage…" : lab.os === "windows"
-      ? "Démarrage de la VM : au premier lancement, la box Windows (plusieurs Go) est téléchargée puis Windows se prépare, comptez de 20 à 60 minutes…"
+      ? "Démarrage des VM : le tout premier lancement télécharge la box Windows (plusieurs Go) et prépare Windows, comptez de 20 à 60 minutes ; ensuite, la reprise après une pause ne prend que quelques secondes…"
       : "Démarrage de la VM (plusieurs minutes au premier lancement)…",
     stopping: "Arrêt en cours…",
     error: "Échec du dernier lancement (voir le journal)",
@@ -826,7 +828,7 @@ async function renderLab(id, cat = "devops") {
     }
   };
   startBtn.addEventListener("click", () => action("start", startBtn, "▶ Démarrer le lab"));
-  stopBtn.addEventListener("click", () => action("stop", stopBtn, "■ Arrêter"));
+  stopBtn.addEventListener("click", () => action("stop", stopBtn, stopLabel));
   resetBtn.addEventListener("click", () => action("reset", resetBtn, "↺ Réinitialiser"));
   setStatus(lab.status, lab.log);
   if (lab.status === "unavailable") {
