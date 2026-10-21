@@ -186,3 +186,19 @@ def test_agent_labs_embarques_pause_et_instantane(tmp_path):
     assert run("/reset") == ["destroy -f", "up", "snapshot save tdm-initial --force"]
     # Les labs de l'utilisateur gardent le comportement d'origine.
     assert ag.lab_actions("k8s/ubuntu")["/halt"] == ("halt", [[str(fake), "halt"]])
+
+
+def test_agent_verifications_prealables(tmp_path, monkeypatch):
+    vagrantfile = tmp_path / "Vagrantfile"
+    vagrantfile.write_text('lab.server "dc01", hostname: "DC01"\n    lab.client "pc01", hostname: "PC01", memory: 4096\n')
+    assert vagrant_agent.lab_machines(vagrantfile) == [(vagrant_agent.SERVER_BOX, 2048), (vagrant_agent.CLIENT_BOX, 4096)]
+    monkeypatch.setattr(vagrant_agent, "free_memory_mb", lambda: 3000)
+    monkeypatch.setattr(vagrant_agent, "hypervisor_present", lambda: True)
+    monkeypatch.setattr(vagrant_agent, "installed_boxes", lambda v: {vagrant_agent.SERVER_BOX})
+    warnings = vagrant_agent.preflight_warnings(vagrantfile, "vagrant")
+    assert len(warnings) == 3 and "Mémoire" in warnings[0] and "Hyper-V" in warnings[1]
+    assert vagrant_agent.CLIENT_BOX in warnings[2]
+    monkeypatch.setattr(vagrant_agent, "free_memory_mb", lambda: 16000)
+    monkeypatch.setattr(vagrant_agent, "hypervisor_present", lambda: False)
+    monkeypatch.setattr(vagrant_agent, "installed_boxes", lambda v: {vagrant_agent.SERVER_BOX, vagrant_agent.CLIENT_BOX})
+    assert vagrant_agent.preflight_warnings(vagrantfile, "vagrant") == []

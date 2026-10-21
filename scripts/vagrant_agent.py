@@ -94,6 +94,85 @@ def sync_tree(src: Path, dest: Path) -> list[str]:
     return copied
 
 
+# --- Vérifications avant de lancer les VM Windows d'un lab embarqué ------------------------------
+# Valeurs par défaut de _commun/tdm.rb (à garder en phase).
+SERVER_BOX = os.environ.get("TDM_WIN_SERVER_BOX") or "gusztavvargadr/windows-server-2022-standard"
+CLIENT_BOX = os.environ.get("TDM_WIN_CLIENT_BOX") or "gusztavvargadr/windows-11"
+_MACHINE = re.compile(r"^\s*lab\.(server|client)\s+\"[^\"]+\"(.*)$", re.MULTILINE)
+
+
+def lab_machines(vagrantfile: Path) -> list[tuple[str, int]]:
+    """[(box, mémoire en Mo)] des VM déclarées par ``lab.server`` / ``lab.client`` dans un Vagrantfile."""
+    machines = []
+    for kind, rest in _MACHINE.findall(vagrantfile.read_text(encoding="utf-8", errors="replace")):
+        memory = re.search(r"memory:\s*(\d+)", rest)
+        default = 2048 if kind == "server" else 3072
+        machines.append((SERVER_BOX if kind == "server" else CLIENT_BOX, int(memory.group(1)) if memory else default))
+    return machines
+
+
+def free_memory_mb() -> int | None:
+    if sys.platform == "win32":
+        import ctypes
+
+        class MemoryStatus(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+        status = MemoryStatus()
+        status.dwLength = ctypes.sizeof(MemoryStatus)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return None
+        return status.ullAvailPhys // (1024 * 1024)
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) // 1024
+    except OSError:
+        pass
+    return None
+
+
+def hypervisor_present() -> bool:
+    """Hyper-V (WSL2, Docker Desktop, intégrité de la mémoire...) actif : VirtualBox perd VT-x."""
+    if sys.platform != "win32":
+        return False
+    result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                             "(Get-CimInstance Win32_ComputerSystem).HypervisorPresent"],
+                            capture_output=True, text=True, timeout=30,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return result.stdout.strip().lower() == "true"
+
+
+def installed_boxes(vagrant: str) -> set[str]:
+    result = subprocess.run([vagrant, "box", "list", "--machine-readable"], capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", timeout=60)
+    return set(re.findall(r"^\d*,[^,]*,box-name,([^,\n]+)", result.stdout, re.MULTILINE))
+
+
+def preflight_warnings(vagrantfile: Path, vagrant: str) -> list[str]:
+    machines = lab_machines(vagrantfile)
+    if not machines:
+        return []
+    warnings = []
+    needed, free = sum(m for _, m in machines), free_memory_mb()
+    if free is not None and free < needed + 1024:
+        warnings.append(f"⚠ Mémoire libre : {free / 1024:.1f} Go pour {needed / 1024:.1f} Go de VM (plus 1 Go de marge). "
+                        "Ferme les applications gourmandes (navigateur, jeux...) sinon Windows sera très lent.")
+    if hypervisor_present():
+        warnings.append("⚠ Hyper-V est actif (Docker Desktop/WSL2 ou « Intégrité de la mémoire ») : VirtualBox tourne "
+                        "en mode lent (tortue verte) et Windows peut rester longtemps sur un écran noir. "
+                        "Voir le cours du lab ou le README des labs Windows pour le désactiver.")
+    missing = sorted({box for box, _ in machines} - installed_boxes(vagrant))
+    for box in missing:
+        warnings.append(f"ℹ Box {box} pas encore téléchargée : environ 8 Go à télécharger une seule fois "
+                        "(la progression s'affiche ci-dessous ; ne relance pas pendant ce temps).")
+    return warnings
+
+
 def _last_progress(text: str) -> str:
     """« Progress: 10% …Progress: 40% … » (progressions collées) -> « Progress: 40% … »."""
     return "Progress:" + text.rsplit("Progress:", 1)[1] if "Progress:" in text else text
@@ -110,6 +189,7 @@ class Job:
         self.action = action
         self.cwd = cwd
         self.log: deque[str] = deque(maxlen=200)
+        self.warnings: list[str] = []  # affichés en tête du journal tant que le job est le dernier du lab
         self.returncode: int | None = None
         self._thread = threading.Thread(target=self._run, args=(commands,), daemon=True)
         self._thread.start()
@@ -251,10 +331,18 @@ class Agent:
                 "/reset": ("up", [[self.vagrant, "destroy", "-f"], [self.vagrant, "up"]]),
             }
         return {
-            "/up": ("up", [[self.vagrant, "up"], self._snapshot_once]),
+            "/up": ("up", [self._preflight, [self.vagrant, "up"], self._snapshot_once]),
             "/halt": ("halt", [[self.vagrant, "suspend"]]),
-            "/reset": ("up", [self._restore_or_rebuild]),
+            "/reset": ("up", [self._preflight, self._restore_or_rebuild]),
         }
+
+    def _preflight(self, job: Job) -> int:
+        """Prévient (sans bloquer) de ce qui rendra le lancement lent ou impossible."""
+        try:
+            job.warnings = preflight_warnings(job.cwd / "Vagrantfile", self.vagrant)
+        except Exception as exc:  # une vérification ratée ne doit jamais empêcher le lab de démarrer
+            job.log.append(f"(vérifications préalables impossibles : {exc})")
+        return 0
 
     @staticmethod
     def _snapshot_marker(job: Job) -> Path:
@@ -287,7 +375,7 @@ class Agent:
     def status(self, lab: str) -> dict:
         path = self.lab_dir(lab)
         job = self.jobs.get(lab)
-        log = "\n".join(list(job.log)[-15:]) if job else ""
+        log = "\n".join(job.warnings + list(job.log)[-15:]) if job else ""
         if job and job.running:
             return {"status": "starting" if job.action == "up" else "stopping", "log": log}
         if not (path / "Vagrantfile").exists():
