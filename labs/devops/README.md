@@ -32,11 +32,19 @@ workdir: /home/eleve
 setup: |                          # commandes lancées une fois le conteneur démarré
   ...
 
+cours: |                          # Markdown : le cours du lab (notions, schémas, « Pour réviser »)
+  ...
+docs:                             # liens vers la documentation officielle (1 à 4)
+  - title: Documentation de Nginx
+    url: https://nginx.org/en/docs/
+
 exercises:
   - id: site
     title: Publier un site
     description: Markdown de l'énoncé
     hint: Indice affiché en cas d'échec
+    cours: |                                         # Markdown : rappel de cours propre à l'exercice
+      ...
     check: test -f /etc/nginx/sites-enabled/tdm      # une vérification simple…
     checks:                                          # …ou plusieurs, chacune avec son libellé
       - desc: Le site répond
