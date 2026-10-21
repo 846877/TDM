@@ -23,7 +23,6 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import vagrant_agent  # noqa: E402
 
 client = TestClient(app)
-shell_only = pytest.mark.skipif(sys.platform == "win32", reason="faux docker/vagrant en shell")
 
 # Répond à `docker info` seulement si le fichier ok-<moteur> existe (local : Docker de la machine,
 # vm : moteur de TDM joint par DOCKER_HOST=tcp://127.0.0.1:23750).

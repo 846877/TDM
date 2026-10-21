@@ -177,15 +177,6 @@ def wait_ready(timeout: float = 1800, interval: float = 2,
     return current
 
 
-def suspend() -> bool:
-    """Met la VM moteur en pause (labs Windows) ; False si elle ne tournait pas."""
-    if kind() != "vm" or not vm_ready():
-        return False
-    vagrant.stop(ENGINE_LAB)
-    _cache.pop("vm", None)
-    return True
-
-
 # ---------------------------------------------------------------------------
 # Ports publiés par les labs : redirigés de l'hôte (127.0.0.1) vers la VM moteur
 # ---------------------------------------------------------------------------
