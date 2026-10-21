@@ -14,6 +14,7 @@ Il expose une API HTTP protégée par un jeton (variable TDM_VAGRANT_TOKEN ou fi
     POST /halt?lab=<dossier>          -> `vagrant halt` en arrière-plan
     POST /reset?lab=<dossier>         -> `vagrant destroy -f` puis `vagrant up`
     GET  /ssh?lab=<dossier>&machine=  -> {"port": ..., "user": ..., "key": "..."}
+    POST /exclusive?lab=<dossier>     -> met en pause les autres labs embarqués qui tournent -> {"paused": [...]}
 
 ``<dossier>`` est un chemin relatif à ``--root`` contenant un Vagrantfile. Pour /ssh, l'agent ouvre
 un relais TCP accessible depuis Docker vers le port SSH de la VM (que VirtualBox n'écoute que sur
@@ -24,6 +25,13 @@ option ``--bundled``). Avant chaque ``vagrant up``, l'agent copie le lab (et le 
 ``_commun``) dans un dossier persistant (``--work-dir``, par défaut ``%LOCALAPPDATA%\\TDM\\vagrant``) et
 lance Vagrant depuis cette copie : l'état ``.vagrant`` et la clé SSH générée y survivent, même quand
 l'application Windows se décompresse dans un dossier temporaire différent à chaque lancement.
+
+Moteur Docker (``lab=tdm:moteur-docker``) : petite VM Linux livrée avec TDM (``labs/moteur-docker``) qui
+remplace Docker Desktop, voir ``backend/app/devops/engine.py``. ``POST /up`` accepte ``ports=8080,8929``
+(ports publiés par les labs, redirigés vers l'hôte) ; « arrêter » le moteur le met en pause.
+
+Une seule famille de labs tourne à la fois : avant de démarrer un lab Windows ou le moteur Docker, la
+plateforme appelle ``/exclusive``, qui met en pause (``vagrant suspend``) les autres labs embarqués.
 """
 
 from __future__ import annotations
@@ -40,6 +48,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -51,6 +60,8 @@ SHARED_DIR = "_commun"  # fichiers partagés par les labs embarqués (copiés à
 MANIFEST = ".tdm-manifest"
 SNAPSHOT = "tdm-initial"  # instantané des VM d'un lab embarqué juste après leur préparation
 _BUNDLED_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+ENGINE_NAME = "moteur-docker"  # VM du moteur Docker de TDM (labs/moteur-docker)
+ENGINE = BUNDLED_PREFIX + ENGINE_NAME
 
 
 def default_work_dir() -> Path:
@@ -65,6 +76,33 @@ def default_work_dir() -> Path:
 def default_bundled_dir() -> Path:
     explicit = os.environ.get("TDM_WINDOWS_LABS_DIR")
     return Path(explicit).expanduser() if explicit else ROOT_DIR / "labs" / "systemes-windows"
+
+
+def default_engine_dir() -> Path:
+    explicit = os.environ.get("TDM_DOCKER_ENGINE_DIR")
+    return Path(explicit).expanduser() if explicit else ROOT_DIR / "labs" / ENGINE_NAME
+
+
+def find_vboxmanage() -> str | None:
+    """VBoxManage (pas toujours dans le PATH sous Windows) : sert à lister vite les VM allumées."""
+    found = shutil.which("VBoxManage")
+    if found:
+        return found
+    for base in (os.environ.get("VBOX_MSI_INSTALL_PATH"), os.environ.get("VBOX_INSTALL_PATH"),
+                 r"C:\Program Files\Oracle\VirtualBox"):
+        if base and (Path(base) / "VBoxManage.exe").exists():
+            return str(Path(base) / "VBoxManage.exe")
+    return None
+
+
+def parse_ports(text: str) -> list[int]:
+    """« 8080,8929 » -> [8080, 8929] ; refuse tout ce qui n'est pas un port non privilégié."""
+    ports = []
+    for item in filter(None, (p.strip() for p in text.split(","))):
+        if not item.isdigit() or not 1024 <= int(item) <= 65535:
+            raise ValueError(f"port invalide : {item}")
+        ports.append(int(item))
+    return sorted(set(ports))
 
 
 def sync_tree(src: Path, dest: Path) -> list[str]:
@@ -191,6 +229,7 @@ class Job:
         self.log: deque[str] = deque(maxlen=200)
         self.warnings: list[str] = []  # affichés en tête du journal tant que le job est le dernier du lab
         self.returncode: int | None = None
+        self.then: list = []  # étapes ajoutées pendant l'exécution (ex. pause demandée pendant `vagrant up`)
         self._thread = threading.Thread(target=self._run, args=(commands,), daemon=True)
         self._thread.start()
 
@@ -201,6 +240,9 @@ class Job:
                 code = step(self) if callable(step) else self.call(step)
                 if code != 0:
                     break
+            while code == 0 and self.then:
+                step = self.then.pop(0)
+                code = step(self) if callable(step) else self.call(step)
         except Exception as exc:  # une étape en Python ne doit pas laisser le job « en cours » pour toujours
             self.log.append(f"Erreur : {exc}")
             code = 1
@@ -254,11 +296,15 @@ class Job:
 
 class Agent:
     def __init__(self, root: Path | None, vagrant: str, relay: bool = True, bundled: Path | None = None,
-                 work_dir: Path | None = None):
+                 work_dir: Path | None = None, engine_dir: Path | None = None, vboxmanage: str | None = ""):
         self.root = root.resolve() if root else None  # None : seulement les labs embarqués
         self.bundled = (bundled or default_bundled_dir()).resolve()
+        self.engine_dir = (engine_dir or default_engine_dir()).resolve()
         self.work_dir = (work_dir or default_work_dir()).resolve()
         self.vagrant = vagrant
+        self.vboxmanage = find_vboxmanage() if vboxmanage == "" else vboxmanage  # None : via `vagrant status`
+        self.engine_ports: list[int] | None = None  # ports à rediriger, fournis par la plateforme
+        self.engine_reload = False  # ports changés alors que la VM existe déjà : `vagrant reload` après `up`
         self.use_relay = relay  # False quand la plateforme tourne sur la même machine (application Windows)
         self.jobs: dict[str, Job] = {}
         self.relays: dict[int, int] = {}  # port SSH de la VM -> port du relais
@@ -283,7 +329,7 @@ class Agent:
         name = lab[len(BUNDLED_PREFIX):]
         if not _BUNDLED_NAME.match(name):
             raise ValueError("nom de lab embarqué invalide")
-        source = self.bundled / name
+        source = self.engine_dir if name == ENGINE_NAME else self.bundled / name
         if not (source / "Vagrantfile").exists():
             raise ValueError(f"lab embarqué introuvable : {name}")
         return source, self.work_dir / name
@@ -294,11 +340,29 @@ class Agent:
             return
         source, work = self.bundled_dirs(lab)
         changed = sync_tree(source, work)
+        if lab == ENGINE:
+            self._write_engine_ports(work)
+            return
         shared = self.bundled / SHARED_DIR
         if shared.is_dir():
             changed += sync_tree(shared, self.work_dir / SHARED_DIR)
         if changed:  # lab mis à jour : la prochaine réinitialisation reconstruit les VM avec la nouvelle version
             (work / ".tdm" / "instantane-initial").unlink(missing_ok=True)
+
+    def _write_engine_ports(self, work: Path) -> None:
+        if self.engine_ports is None:
+            return
+        ports_file = work / "ports.txt"
+        content = "\n".join(map(str, self.engine_ports))
+        previous = ports_file.read_text(encoding="utf-8") if ports_file.exists() else None
+        if previous != content:
+            ports_file.write_text(content, encoding="utf-8")
+            # Les redirections de ports ne s'appliquent qu'au démarrage de la VM.
+            self.engine_reload = self._created(work)
+
+    @staticmethod
+    def _created(path: Path) -> bool:
+        return any(path.glob(".vagrant/machines/*/virtualbox/id"))
 
     def _vagrant(self, path: Path, *args: str, timeout: float = 120) -> subprocess.CompletedProcess:
         return subprocess.run([self.vagrant, *args], cwd=path, capture_output=True, text=True, encoding="utf-8",
@@ -330,11 +394,130 @@ class Agent:
                 "/halt": ("halt", [[self.vagrant, "halt"]]),
                 "/reset": ("up", [[self.vagrant, "destroy", "-f"], [self.vagrant, "up"]]),
             }
+        if lab == ENGINE:
+            return {
+                "/up": ("up", [self._wait_pauses, [self.vagrant, "up"], self._reload_engine]),
+                "/halt": ("halt", [[self.vagrant, "suspend"]]),
+                "/reset": ("up", [self._wait_pauses, [self.vagrant, "destroy", "-f"], [self.vagrant, "up"]]),
+            }
         return {
-            "/up": ("up", [self._preflight, [self.vagrant, "up"], self._snapshot_once]),
+            "/up": ("up", [self._wait_pauses, self._preflight, [self.vagrant, "up"], self._snapshot_once]),
             "/halt": ("halt", [[self.vagrant, "suspend"]]),
-            "/reset": ("up", [self._preflight, self._restore_or_rebuild]),
+            "/reset": ("up", [self._wait_pauses, self._preflight, self._restore_or_rebuild]),
         }
+
+    def _reload_engine(self, job: Job) -> int:
+        if not self.engine_reload:
+            return 0
+        job.log.append("Nouveaux ports publiés par les labs : redémarrage du moteur Docker…")
+        code = job.call([self.vagrant, "reload"])
+        if code == 0:
+            self.engine_reload = False
+        return code
+
+    # --- Une seule famille de labs à la fois ---------------------------------------------------
+    # Les VM Windows et le moteur Docker ne tournent jamais en même temps (la mémoire ne suffirait pas) :
+    # avant d'en démarrer un, la plateforme demande /exclusive, qui met les autres en pause.
+    def running_bundled(self) -> list[str]:
+        """Labs embarqués (moteur Docker compris) dont une VM tourne ou est en train de démarrer."""
+        if not self.work_dir.is_dir():
+            return []
+        running_ids = self._running_vm_ids()
+        labs = []
+        for path in sorted(p for p in self.work_dir.iterdir() if p.is_dir() and p.name != SHARED_DIR):
+            lab = BUNDLED_PREFIX + path.name
+            job = self.jobs.get(lab)
+            if job and job.running:
+                if job.action == "up":
+                    labs.append(lab)
+                continue
+            if not self._created(path):
+                continue
+            if running_ids is not None:
+                ids = {f.read_text(encoding="utf-8").strip() for f in path.glob(".vagrant/machines/*/virtualbox/id")}
+                if ids & running_ids:
+                    labs.append(lab)
+            else:
+                result = self._vagrant(path, "status", "--machine-readable")
+                if "running" in re.findall(r"^\d*,[^,]*,state,([^,\n]+)", result.stdout, re.MULTILINE):
+                    labs.append(lab)
+        return labs
+
+    def _running_vm_ids(self) -> set[str] | None:
+        if not self.vboxmanage:
+            return None
+        try:
+            result = subprocess.run([self.vboxmanage, "list", "runningvms"], capture_output=True, text=True,
+                                    encoding="utf-8", errors="replace", timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0:
+            return None
+        return set(re.findall(r"\{([0-9a-fA-F-]+)\}", result.stdout))
+
+    def exclusive(self, lab: str) -> list[str]:
+        """Met en pause (en arrière-plan) les labs embarqués qui tournent, sauf ``lab`` ; renvoie leurs noms.
+
+        Un lab encore en train de démarrer sera mis en pause dès la fin de son démarrage.
+        """
+        suspend = [self.vagrant, "suspend"]
+        paused = []
+        for other in self.running_bundled():
+            if other == lab:
+                continue
+            job = self.jobs.get(other)
+            if job and job.running:
+                if suspend not in job.then:
+                    job.then.append(suspend)
+                if job.running or suspend not in job.then:
+                    paused.append(other)
+                    continue
+                job.then.remove(suspend)  # le démarrage vient de se terminer : pause normale ci-dessous
+            self.run_job(other, "halt", suspend)
+            paused.append(other)
+        return paused
+
+    def _wait_pauses(self, job: Job) -> int:
+        """Attend la fin des mises en pause en cours : la mémoire des autres VM est alors libérée."""
+        deadline = time.monotonic() + 900
+        announced = False
+        while time.monotonic() < deadline:
+            if not any(other is not job and other.running and other.action == "halt"
+                       for other in list(self.jobs.values())):
+                break
+            if not announced:
+                job.log.append("Mise en pause des autres labs pour libérer la mémoire…")
+                announced = True
+            time.sleep(0.5)
+        return 0
+
+    def suspend_all(self, timeout: float = 300) -> list[str]:
+        """Fermeture de TDM : met en pause les VM qu'il a lancées (labs embarqués, moteur Docker, labs de
+        l'utilisateur démarrés pendant la session). Renvoie les labs concernés.
+
+        Sans risque si TDM est tué avant la fin : la VM reste allumée et sera reprise au prochain lancement.
+        """
+        labs = self.running_bundled()
+        labs += [lab for lab, job in list(self.jobs.items())
+                 if not lab.startswith(BUNDLED_PREFIX) and job.action == "up" and job.returncode == 0]
+        threads = []
+        for lab in labs:
+            try:
+                path = self.lab_dir(lab)
+            except ValueError:
+                continue
+            thread = threading.Thread(target=self._suspend_quietly, args=(path, timeout), daemon=True)
+            thread.start()
+            threads.append(thread)
+        for thread in threads:
+            thread.join(timeout)
+        return labs
+
+    def _suspend_quietly(self, path: Path, timeout: float) -> None:
+        try:
+            self._vagrant(path, "suspend", timeout=timeout)
+        except (OSError, subprocess.SubprocessError):
+            pass  # la VM reste allumée : elle sera reprise au prochain lancement
 
     def _preflight(self, job: Job) -> int:
         """Prévient (sans bloquer) de ce qui rendra le lancement lent ou impossible."""
@@ -465,7 +648,10 @@ def make_handler(agent: Agent, token: str):
             url = urlparse(self.path)
             if url.path == "/health":
                 return self._reply(200, {"status": "ok", "root": str(agent.root), "bundled": str(agent.bundled),
-                                         "work_dir": str(agent.work_dir)})
+                                         "work_dir": str(agent.work_dir),
+                                         "vagrant": bool(shutil.which(agent.vagrant)),
+                                         "virtualbox": bool(agent.vboxmanage),
+                                         "engine": (agent.engine_dir / "Vagrantfile").exists()})
             supplied = self.headers.get("Authorization", "").removeprefix("Bearer ")
             if not token or not hmac.compare_digest(supplied, token):
                 return self._reply(401, {"detail": "jeton invalide"})
@@ -476,6 +662,10 @@ def make_handler(agent: Agent, token: str):
                     return self._reply(200, agent.status(lab))
                 if method == "GET" and url.path == "/ssh":
                     return self._reply(200, agent.ssh(lab, query.get("machine", "")))
+                if method == "POST" and url.path == "/exclusive":
+                    return self._reply(200, {"paused": agent.exclusive(lab)})
+                if method == "POST" and url.path == "/up" and lab == ENGINE and "ports" in query:
+                    agent.engine_ports = parse_ports(query["ports"])
                 actions = agent.lab_actions(lab) if method == "POST" else {}
                 if url.path in actions:
                     action, commands = actions[url.path]

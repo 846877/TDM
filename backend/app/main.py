@@ -10,13 +10,14 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException, WebSocket
+from fastapi import FastAPI, Header, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, profiles, sandbox, terminal
+from . import config, hypervisor, profiles, sandbox, terminal
 from .catalog import LEVEL_LABELS, LEVELS, Catalog, summary
+from .devops import engine as docker_engine
 from .devops import labs as devops
 from .network import grader as net_grader
 from .python import grader as py_grader
@@ -86,6 +87,32 @@ def health():
         "sandbox": "docker" if config.use_docker_sandbox() else "local",
         "docker": config.docker_available(),
     }
+
+
+@app.get("/api/docker/engine")
+def docker_engine_state():
+    """Moteur Docker des labs : Docker Desktop, VM moteur de TDM (et son état) ou aucun."""
+    return docker_engine.state()
+
+
+@app.get("/api/system/hypervisor")
+def hypervisor_notice():
+    return hypervisor.notice()
+
+
+class ConfirmIn(BaseModel):
+    confirm: bool = False
+
+
+@app.post("/api/system/hypervisor/disable")
+def hypervisor_disable(body: ConfirmIn, request: Request):
+    # Seulement après un clic explicite dans TDM : JSON avec confirmation, et jamais depuis un autre site.
+    origin = request.headers.get("origin")
+    if not body.confirm or "application/json" not in request.headers.get("content-type", ""):
+        raise HTTPException(400, "Confirmation manquante.")
+    if origin and origin.split("://", 1)[-1] != request.headers.get("host"):
+        raise HTTPException(403, "Origine refusée.")
+    return hypervisor.disable()
 
 
 @app.get("/api/categories")
@@ -272,7 +299,10 @@ def devops_labs(category: str = "devops"):
 def devops_lab(lab_id: str):
     lab = _lab(lab_id)
     status, log = devops.status_with_log(lab)
-    return devops.public(lab) | {"status": status, "log": log}
+    data = devops.public(lab) | {"status": status, "log": log}
+    if "vagrant" not in lab:
+        data["engine"] = docker_engine.kind()  # desktop, vm (moteur Docker de TDM) ou none
+    return data
 
 
 def _lab_action(fn, *args):
@@ -284,7 +314,7 @@ def _lab_action(fn, *args):
 
 @app.post("/api/devops/labs/{lab_id}/start")
 def devops_start(lab_id: str):
-    return {"status": _lab_action(devops.start, _lab(lab_id))}
+    return _lab_action(devops.launch, _lab(lab_id))
 
 
 @app.post("/api/devops/labs/{lab_id}/stop")
@@ -295,7 +325,7 @@ def devops_stop(lab_id: str):
 @app.post("/api/devops/labs/{lab_id}/reset")
 def devops_reset(lab_id: str):
     lab = _lab(lab_id)
-    return {"status": _lab_action(devops.reset, lab)}
+    return _lab_action(devops.relaunch, lab)
 
 
 @app.post("/api/devops/labs/{lab_id}/exercises/{exercise_id}/check")

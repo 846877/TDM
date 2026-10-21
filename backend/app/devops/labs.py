@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ import yaml
 
 from .. import config
 from ..catalog import LEVELS
-from . import vagrant
+from . import engine, vagrant
 
 
 class LabError(RuntimeError):
@@ -112,9 +113,20 @@ def public(lab: dict[str, Any]) -> dict[str, Any]:
 # Docker
 # ---------------------------------------------------------------------------
 
+def _no_engine_message(current: dict[str, str]) -> str:
+    if current["engine"] == "desktop":
+        return ("Docker ne répond pas : lance Docker Desktop, ou mets TDM_DOCKER=auto pour utiliser le moteur "
+                "Docker de TDM (une petite VM VirtualBox).")
+    return ("Aucun moteur Docker : installe VirtualBox et Vagrant (TDM démarre alors son propre moteur Docker, "
+            "une petite VM) ou Docker Desktop.")
+
+
 def _require_docker() -> None:
-    if not config.docker_available():
-        raise LabError("Docker n'est pas disponible sur cette machine : il est nécessaire pour lancer les labs DevOps.")
+    current = engine.state()
+    if current["status"] == "unavailable":
+        raise LabError(_no_engine_message(current))
+    if current["status"] != "ready":
+        raise LabError("Le moteur Docker démarre encore : patiente un peu puis réessaie.")
 
 
 def _run(cmd: list[str], timeout: float = 600, cwd: str | None = None) -> subprocess.CompletedProcess:
@@ -140,22 +152,83 @@ def status(lab: dict[str, Any]) -> str:
 def status_with_log(lab: dict[str, Any]) -> tuple[str, str]:
     if "vagrant" in lab:
         return vagrant.status(lab)
-    return _docker_status(lab), ""
+    return _docker_status(lab)
 
 
-def _docker_status(lab: dict[str, Any]) -> str:
-    if not config.docker_available():
-        return "unavailable"
+# Labs Docker lancés pendant que la VM moteur démarre : id -> {"thread", "error", "cancel"}.
+_pending: dict[str, dict[str, Any]] = {}
+
+
+def _docker_status(lab: dict[str, Any]) -> tuple[str, str]:
+    pending = _pending.get(lab["id"])
+    if pending and pending["thread"].is_alive():
+        current = engine.state()
+        if current["status"] == "ready":
+            return "starting", "Moteur Docker prêt : lancement du lab (construction de l'image au premier lancement)…"
+        return "starting", ("Moteur Docker en démarrage… (le tout premier lancement télécharge la VM moteur "
+                            "et installe Docker : quelques minutes)\n" + current.get("log", "")).strip()
+    if pending and pending["error"]:
+        return "error", pending["error"]
+    current = engine.state()
+    if current["status"] == "unavailable":
+        return "unavailable", ""
+    if current["status"] != "ready":
+        return "stopped", ""  # moteur en pause ou arrêté : il redémarrera au lancement du lab
     if "compose" in lab:
         result = _run(_compose_base(lab) + ["ps", "--status", "running", "-q", lab.get("service", "")], timeout=20)
-        return "running" if result.returncode == 0 and result.stdout.strip() else "stopped"
+        return ("running" if result.returncode == 0 and result.stdout.strip() else "stopped"), ""
     result = _run(["docker", "inspect", "-f", "{{.State.Running}}", container_name(lab)], timeout=20)
-    return "running" if result.stdout.strip() == "true" else "stopped"
+    return ("running" if result.stdout.strip() == "true" else "stopped"), ""
 
 
 def start(lab: dict[str, Any]) -> str:
+    return launch(lab)["status"]
+
+
+def launch(lab: dict[str, Any]) -> dict[str, Any]:
+    """Démarre un lab ; ``notices`` dit ce qui a été arrêté ou mis en pause pour lui faire de la place.
+
+    Les labs Windows embarqués et les labs Docker ne tournent jamais en même temps (ni deux labs Windows) :
+    la mémoire ne suffirait pas.
+    """
     if "vagrant" in lab:
-        return _agent(vagrant.start, lab)
+        notices = _make_room_for_vm(lab) if _exclusive(lab) else []
+        return {"status": _agent(vagrant.start, lab), "notices": notices}
+    pending = _pending.get(lab["id"])
+    if pending and pending["thread"].is_alive():
+        return {"status": "starting", "notices": []}
+    notices = _make_room_for_docker()
+    current = engine.state()
+    if current["status"] == "unavailable":
+        raise LabError(_no_engine_message(current))
+    if current["status"] == "ready":
+        return {"status": _docker_start(lab), "notices": notices}
+    _agent(engine.ensure)  # VM moteur arrêtée ou en pause : le lab démarrera dès qu'elle sera prête
+    _start_when_ready(lab)
+    return {"status": "starting", "notices": notices}
+
+
+def _start_when_ready(lab: dict[str, Any]) -> None:
+    entry: dict[str, Any] = {"error": "", "cancel": False}
+
+    def run() -> None:
+        try:
+            current = engine.wait_ready(should_stop=lambda: entry["cancel"])
+            if entry["cancel"]:
+                return
+            if current["status"] != "ready":
+                entry["error"] = ("Le moteur Docker n'a pas démarré.\n" + current.get("log", "")).strip()
+                return
+            _docker_start(lab)
+        except (LabError, vagrant.AgentError) as exc:
+            entry["error"] = str(exc)
+
+    entry["thread"] = threading.Thread(target=run, daemon=True)
+    _pending[lab["id"]] = entry
+    entry["thread"].start()
+
+
+def _docker_start(lab: dict[str, Any]) -> str:
     _require_docker()
     if status(lab) == "running":
         return "running"
@@ -195,7 +268,11 @@ def start(lab: dict[str, Any]) -> str:
 def stop(lab: dict[str, Any]) -> str:
     if "vagrant" in lab:
         return _agent(vagrant.stop, lab)
-    _require_docker()
+    pending = _pending.pop(lab["id"], None)
+    if pending:
+        pending["cancel"] = True
+    if not engine.ready():
+        return "stopped"  # moteur arrêté ou en pause : rien ne tourne (et on ne le démarre pas pour ça)
     if "compose" in lab:
         _run(_compose_base(lab) + ["down", "-v"], cwd=lab["dir"])
     else:
@@ -204,10 +281,78 @@ def stop(lab: dict[str, Any]) -> str:
 
 
 def reset(lab: dict[str, Any]) -> str:
+    return relaunch(lab)["status"]
+
+
+def relaunch(lab: dict[str, Any]) -> dict[str, Any]:
     if "vagrant" in lab:
-        return _agent(vagrant.reset, lab)
+        notices = _make_room_for_vm(lab) if _exclusive(lab) else []
+        return {"status": _agent(vagrant.reset, lab), "notices": notices}
     stop(lab)
-    return start(lab)
+    return launch(lab)
+
+
+# ---------------------------------------------------------------------------
+# Une seule famille de labs à la fois : labs Docker ou un lab Windows
+# ---------------------------------------------------------------------------
+
+def _exclusive(lab: dict[str, Any]) -> bool:
+    """Lab Windows embarqué : il prend toute la place (VM gourmandes)."""
+    return lab.get("os") == "windows" and str(lab.get("vagrant", "")).startswith(BUNDLED_PREFIX)
+
+
+def stop_docker_labs() -> list[str]:
+    """Arrête (``docker stop``) les conteneurs des labs Docker ; renvoie les identifiants des labs arrêtés.
+
+    Ne démarre jamais le moteur : s'il est arrêté ou en pause, aucun lab Docker ne tourne.
+    """
+    if not engine.ready():
+        return []
+    result = _run(["docker", "ps", "--filter", "name=^tdm-lab-", "--format",
+                   '{{.Names}}\t{{.Label "com.docker.compose.project"}}'], timeout=30)
+    if result.returncode != 0:
+        return []
+    names, lab_ids = [], []
+    for line in result.stdout.splitlines():
+        name, _, project = line.strip().partition("\t")
+        if not name.startswith("tdm-lab-"):
+            continue
+        names.append(name)
+        lab_id = (project or name).removeprefix("tdm-lab-")
+        if lab_id not in lab_ids:
+            lab_ids.append(lab_id)
+    if names:
+        _run(["docker", "stop", *names], timeout=180)
+    return lab_ids
+
+
+def _make_room_for_vm(lab: dict[str, Any]) -> list[str]:
+    for pending in _pending.values():
+        pending["cancel"] = True  # un lab Docker en attente du moteur ne doit pas le rallumer
+    titles = {other["id"]: other["title"] for other in load_labs()}
+    notices = [f"Le lab Docker « {titles.get(lab_id, lab_id)} » a été arrêté pour libérer la mémoire."
+               for lab_id in stop_docker_labs()]
+    return notices + _paused_notices(_agent(vagrant.exclusive, lab["vagrant"]))
+
+
+def _make_room_for_docker() -> list[str]:
+    try:
+        paused = vagrant.exclusive(engine.ENGINE_LAB["vagrant"])
+    except vagrant.AgentError:
+        return []  # pas d'agent Vagrant (Docker Desktop seul) : aucune VM à mettre en pause
+    return _paused_notices(paused)
+
+
+def _paused_notices(paused: list[str]) -> list[str]:
+    titles = {lab["vagrant"]: lab["title"] for lab in load_labs() if "vagrant" in lab}
+    notices = []
+    for name in paused:
+        if name == engine.ENGINE_LAB["vagrant"]:
+            notices.append("Le moteur Docker a été mis en pause pour libérer la mémoire "
+                           "(il reprendra au prochain lab Docker).")
+        else:
+            notices.append(f"Le lab Windows « {titles.get(name, name)} » a été mis en pause pour libérer la mémoire.")
+    return notices
 
 
 def _agent(fn, *args):

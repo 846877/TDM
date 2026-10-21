@@ -1,0 +1,47 @@
+# Moteur Docker de TDM : une petite VM Linux (VirtualBox) qui remplace Docker Desktop.
+#
+# Docker Desktop (WSL2) garde l'hyperviseur Windows actif, ce qui prive VirtualBox de VT-x et rend les
+# VM Windows des labs très lentes. Avec ce moteur, l'hyperviseur Windows peut rester désactivé.
+#
+# Ne lance pas `vagrant up` ici : l'agent Vagrant de TDM (scripts/vagrant_agent.py, lab « tdm:moteur-docker »)
+# copie ce dossier dans %LOCALAPPDATA%\TDM\vagrant\moteur-docker et le démarre à la demande, au premier
+# lab Docker. Il y écrit aussi ports.txt : les ports publiés par les labs, redirigés vers l'hôte.
+#
+# Réglages (variables d'environnement, voir le README de TDM) :
+#   TDM_DOCKER_VM_PORT    port de l'API Docker sur l'hôte (127.0.0.1 seulement), 23750 par défaut
+#   TDM_DOCKER_VM_MEMORY  mémoire de la VM en Mo, 2048 par défaut
+#   TDM_DOCKER_VM_CPUS    nombre de processeurs, 2 par défaut
+#   TDM_DOCKER_VM_BOX     box Vagrant, bento/ubuntu-24.04 par défaut
+
+api_port = (ENV["TDM_DOCKER_VM_PORT"] || "23750").to_i
+ports_file = File.join(__dir__, "ports.txt")
+lab_ports = File.exist?(ports_file) ? File.read(ports_file).split.map(&:to_i) : []
+lab_ports = lab_ports.select { |p| p.between?(1024, 65535) && p != api_port && p != 2722 }.uniq.sort
+
+Vagrant.configure("2") do |config|
+  config.vm.box = ENV["TDM_DOCKER_VM_BOX"] || "bento/ubuntu-24.04"
+  config.vm.box_check_update = false
+  config.vm.hostname = "tdm-moteur-docker"
+  config.vm.boot_timeout = 600
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+
+  # Tout n'écoute que sur 127.0.0.1 : ni l'API Docker ni les labs ne sont visibles depuis le réseau.
+  config.vm.network "forwarded_port", id: "ssh", guest: 22, host: 2722, host_ip: "127.0.0.1", auto_correct: true
+  # API Docker (dockerd écoute en tcp dans la VM, sans TLS) : port fixe, le backend le connaît.
+  config.vm.network "forwarded_port", id: "docker", guest: 2375, host: api_port, host_ip: "127.0.0.1"
+  # Ports publiés par les labs (lab.yaml et docker-compose.yml) : même numéro sur l'hôte. Un port déjà pris
+  # sur l'hôte est déplacé par Vagrant (auto_correct) plutôt que d'empêcher le moteur de démarrer.
+  lab_ports.each do |port|
+    config.vm.network "forwarded_port", id: "lab-#{port}", guest: port, host: port, host_ip: "127.0.0.1",
+                      auto_correct: true
+  end
+
+  config.vm.provider "virtualbox" do |vb|
+    vb.name = "tdm-moteur-docker"
+    vb.memory = (ENV["TDM_DOCKER_VM_MEMORY"] || "2048").to_i
+    vb.cpus = (ENV["TDM_DOCKER_VM_CPUS"] || "2").to_i
+    vb.gui = false
+  end
+
+  config.vm.provision "shell", path: "provision.sh"
+end

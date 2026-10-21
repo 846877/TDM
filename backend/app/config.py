@@ -25,6 +25,13 @@ SYSTEMS_LABS_DIR = _path_env("TDM_SYSTEMS_LABS_DIR", ROOT_DIR / "labs" / "system
 # Labs Windows (VM Vagrant livrées avec TDM), rangés dans la catégorie Systèmes & réseaux.
 WINDOWS_LABS_DIR = _path_env("TDM_WINDOWS_LABS_DIR", ROOT_DIR / "labs" / "systemes-windows")
 FRONTEND_DIR = ROOT_DIR / "frontend"
+# VM du moteur Docker de TDM (voir devops/engine.py), lancée par l'agent Vagrant.
+DOCKER_ENGINE_DIR = _path_env("TDM_DOCKER_ENGINE_DIR", ROOT_DIR / "labs" / "moteur-docker")
+
+# Moteur Docker des labs : "auto" (Docker déjà joignable, sinon la VM moteur de TDM), "desktop"
+# (Docker Desktop ou tout Docker déjà configuré) ou "vm" (toujours la VM moteur).
+DOCKER_MODE = os.environ.get("TDM_DOCKER", "auto").lower()
+DOCKER_VM_HOST = f"tcp://127.0.0.1:{os.environ.get('TDM_DOCKER_VM_PORT', '23750')}"
 
 
 
@@ -85,7 +92,13 @@ def use_docker_sandbox() -> bool:
         return True
     if SANDBOX_MODE == "local":
         return False
-    return docker_available()
+    # Le moteur Docker de TDM (VM) sert aux labs seulement : le code Python reste exécuté localement.
+    return not docker_is_tdm_vm() and docker_available()
+
+
+def docker_is_tdm_vm() -> bool:
+    """Les commandes docker visent-elles la VM moteur de TDM (DOCKER_HOST posé par devops/engine.py) ?"""
+    return os.environ.get("DOCKER_HOST") == DOCKER_VM_HOST
 
 
 def running_in_container() -> bool:

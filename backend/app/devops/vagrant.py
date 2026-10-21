@@ -59,12 +59,26 @@ def _request(method: str, path: str, params: dict[str, str] | None = None, timeo
         ) from exc
 
 
+def health() -> dict[str, Any]:
+    return _request("GET", "/health", timeout=2)
+
+
 def available() -> bool:
     try:
-        _request("GET", "/health", timeout=2)
+        health()
     except AgentError:
         return False
     return True
+
+
+def exclusive(name: str) -> list[str]:
+    """Met en pause les labs embarqués qui tournent (VM Windows, moteur Docker), sauf ``name``."""
+    return _request("POST", "/exclusive", {"lab": name}, timeout=300).get("paused", [])
+
+
+def start_engine(lab: dict[str, Any], ports: list[int]) -> str:
+    """Démarre la VM moteur Docker en lui donnant les ports publiés par les labs."""
+    return _request("POST", "/up", {"lab": lab["vagrant"], "ports": ",".join(map(str, ports))})["status"]
 
 
 def status(lab: dict[str, Any]) -> tuple[str, str]:
