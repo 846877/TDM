@@ -276,7 +276,8 @@ def test_agent_bureau_a_distance(tmp_path, monkeypatch):
                     'echo \'Forwarding(1)="ssh,tcp,127.0.0.1,2222,,22"\'\n')
     vbox.chmod(0o755)
     fake = tmp_path / "vagrant"
-    fake.write_text('#!/bin/sh\n[ "$1" = port ] && echo "1,$2,forwarded_port,3389,33390"\n')
+    fake.write_text('#!/bin/sh\n[ "$1" = port ] && echo "1,$2,forwarded_port,3389,33390"\n'
+                    '[ "$1" = ssh ] && echo "$2 $3 $4" >> ssh-calls\nexit 0\n')
     fake.chmod(0o755)
     ag = vagrant_agent.Agent(None, str(fake), bundled=bundled, work_dir=tmp_path / "work", vboxmanage=str(vbox))
     ag.prepare("tdm:win-lab")
@@ -288,3 +289,13 @@ def test_agent_bureau_a_distance(tmp_path, monkeypatch):
     monkeypatch.setattr(vagrant_agent.sys, "platform", "linux")
     with pytest.raises(ValueError):
         ag.open_desktop("tdm:win-lab", "srv01")
+    # VM Linux sans Bureau à distance : XFCE + xrdp installés en arrière-plan, une seule fois.
+    state = ag._linux_desktop("tdm:win-lab", "pc01")
+    assert state["status"] == "installing"
+    for _ in range(100):
+        if state["status"] != "installing":
+            break
+        time.sleep(0.05)
+    assert state["status"] == "ready"
+    assert ag._linux_desktop("tdm:win-lab", "pc01") is state
+    assert "pc01 -c echo" in (work / "ssh-calls").read_text()

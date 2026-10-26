@@ -37,6 +37,7 @@ plateforme appelle ``/exclusive``, qui met en pause (``vagrant suspend``) les au
 from __future__ import annotations
 
 import argparse
+import base64
 import codecs
 import filecmp
 import hmac
@@ -212,6 +213,30 @@ def installed_boxes(vagrant: str) -> set[str]:
 _USER_WIN_CPUS = os.environ.get("TDM_WIN_CPUS")  # choix explicite de l'utilisateur : jamais modifié
 
 
+# Bureau graphique léger pour les VM Linux des labs (Ubuntu/Debian, ou CentOS/RHEL avec EPEL), installé
+# au premier clic sur « Bureau » : XFCE + xrdp, session XFCE pour vagrant (mot de passe vagrant).
+LINUX_DESKTOP_SCRIPT = r"""set -e
+if [ ! -x /usr/sbin/xrdp ]; then
+  echo "Installation de XFCE et xrdp..."
+  if command -v apt-get >/dev/null 2>&1; then
+    sudo DEBIAN_FRONTEND=noninteractive apt-get update -q
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+      xfce4 xfce4-terminal xorgxrdp xrdp dbus-x11 xterm
+  else
+    sudo yum install -y -q epel-release
+    sudo yum groupinstall -y -q Xfce
+    sudo yum install -y -q xrdp
+  fi
+fi
+echo xfce4-session > ~/.xsession
+echo 'vagrant:vagrant' | sudo chpasswd
+getent group ssl-cert >/dev/null && sudo usermod -aG ssl-cert xrdp || true
+sudo systemctl enable xrdp >/dev/null 2>&1 || true
+sudo systemctl restart xrdp
+echo "Bureau prêt."
+"""
+
+
 def apply_cpu_limit(hypervisor: bool) -> None:
     """Avec l'hyperviseur Windows actif, VirtualBox reste bloqué au tout début du démarrage d'une VM Windows
     à 2 processeurs (constaté avec VirtualBox 7.2) ; à 1 processeur elle démarre normalement. Les Vagrantfile
@@ -374,6 +399,7 @@ class Agent:
         self.use_relay = relay  # False quand la plateforme tourne sur la même machine (application Windows)
         self.jobs: dict[str, Job] = {}
         self.relays: dict[int, int] = {}  # port SSH de la VM -> port du relais
+        self.desktop_setup: dict[tuple[str, str], dict] = {}  # (lab, VM Linux) -> installation du bureau
         self.lock = threading.Lock()
 
     def lab_dir(self, lab: str) -> Path:
@@ -675,14 +701,13 @@ class Agent:
 
     # --- Bureau à distance (interface graphique des VM Windows) ------------------------------------
     def desktops(self, lab: str) -> list[dict]:
-        """VM créées du lab et port de l'hôte redirigé vers leur Bureau à distance (3389)."""
+        """VM créées du lab et port de l'hôte redirigé vers leur Bureau à distance (3389), None si aucun
+        (VM Linux dont le bureau n'est pas encore installé : voir open_desktop)."""
         path = self.lab_dir(lab)
         found = []
         for id_file in sorted(path.glob(".vagrant/machines/*/virtualbox/id")):
             machine = id_file.parent.parent.name
-            port = self._rdp_port(path, machine, id_file.read_text(encoding="utf-8").strip())
-            if port:
-                found.append({"machine": machine, "port": port})
+            found.append({"machine": machine, "port": self._rdp_port(path, machine, id_file.read_text(encoding="utf-8").strip())})
         return found
 
     def _rdp_port(self, path: Path, machine: str, vm_id: str) -> int | None:
@@ -708,8 +733,14 @@ class Agent:
             raise ValueError("le Bureau à distance ne s'ouvre que sous Windows (mstsc)")
         target = next((d for d in self.desktops(lab) if d["machine"] == machine), None)
         if not target:
-            raise ValueError(f"VM {machine or '?'} introuvable ou sans Bureau à distance")
-        rdp = self.lab_dir(lab) / ".tdm" / f"bureau-{machine}.rdp"
+            raise ValueError(f"VM {machine or '?'} introuvable")
+        if not target["port"]:  # VM Linux : bureau XFCE + xrdp installé au premier clic
+            state = self._linux_desktop(lab, machine)
+            if state["status"] != "ready":
+                return {"machine": machine, **state}
+            target["port"] = self._forward_rdp(lab, machine)
+        rdp = (self.lab_dir(lab) / ".tdm" if lab.startswith(BUNDLED_PREFIX) else self.work_dir / "bureaux") \
+            / f"bureau-{lab.replace('/', '-').replace(':', '-')}-{machine}.rdp"  # jamais dans les dossiers de l'utilisateur
         rdp.parent.mkdir(parents=True, exist_ok=True)
         rdp.write_text("\r\n".join([
             f"full address:s:127.0.0.1:{target['port']}", "username:s:vagrant",
@@ -722,7 +753,55 @@ class Agent:
         subprocess.run(["cmdkey", "/generic:TERMSRV/127.0.0.1", "/user:vagrant", "/pass:vagrant"],
                        capture_output=True, timeout=30, creationflags=flags)
         subprocess.Popen(["mstsc", str(rdp)], creationflags=flags)
-        return target
+        return {**target, "status": "opened"}
+
+    def _linux_desktop(self, lab: str, machine: str) -> dict:
+        """Installe (une fois, en arrière-plan) XFCE et xrdp dans la VM Linux ; renvoie l'état de l'installation.
+
+        Le script ne réinstalle rien si xrdp est déjà là : après un redémarrage de l'agent, il ne fait que
+        vérifier. Une erreur est renvoyée une fois, le clic suivant relance l'installation."""
+        key = (lab, machine)
+        with self.lock:
+            state = self.desktop_setup.get(key)
+            if state and state["status"] == "error":
+                del self.desktop_setup[key]
+                return state
+            if state:
+                return state
+            state = self.desktop_setup[key] = {"status": "installing", "log": ""}
+        path = self.lab_dir(lab)
+
+        def install():
+            try:
+                # Script passé en base64 : pas de souci de guillemets ni de retours à la ligne sous Windows.
+                encoded = base64.b64encode(LINUX_DESKTOP_SCRIPT.encode()).decode()
+                result = subprocess.run([self.vagrant, "ssh", machine, "-c", f"echo {encoded} | base64 -d | bash"], cwd=path,
+                                        capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                        timeout=3600)
+                ok = result.returncode == 0
+                log = (result.stdout + result.stderr).strip()
+            except (OSError, subprocess.SubprocessError) as exc:
+                ok, log = False, str(exc)
+            state.update(status="ready" if ok else "error", log="\n".join(log.splitlines()[-10:]))
+
+        threading.Thread(target=install, daemon=True).start()
+        return state
+
+    def _forward_rdp(self, lab: str, machine: str) -> int:
+        """Redirige 127.0.0.1:<port libre> vers le 3389 de la VM (règle NAT ajoutée à chaud : le Vagrantfile
+        du lab n'est pas modifié ; Vagrant l'efface au prochain démarrage, elle est alors recréée)."""
+        if not self.vboxmanage:
+            raise ValueError("VBoxManage introuvable : impossible de rediriger le Bureau à distance")
+        vm_id = (self.lab_dir(lab) / ".vagrant" / "machines" / machine / "virtualbox" / "id").read_text(encoding="utf-8").strip()
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        subprocess.run([self.vboxmanage, "controlvm", vm_id, "natpf1", "delete", "tdm-rdp"], capture_output=True, timeout=30)
+        result = subprocess.run([self.vboxmanage, "controlvm", vm_id, "natpf1", f"tdm-rdp,tcp,127.0.0.1,{port},,3389"],
+                                capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            raise ValueError("redirection du Bureau à distance impossible : " + (result.stderr.strip() or "VBoxManage"))
+        return port
 
     def ssh(self, lab: str, machine: str = "") -> dict:
         path = self.lab_dir(lab)
