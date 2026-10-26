@@ -349,6 +349,18 @@ def devops_open_desktop(lab_id: str, machine: str):
         raise HTTPException(503, str(exc)) from exc
 
 
+@app.post("/api/devops/labs/{lab_id}/gui")
+def devops_gui(lab_id: str):
+    """Ouvre le bureau Kali graphique (noVNC) d'une machine offensive conteneurisée."""
+    lab = _lab(lab_id)
+    if not lab.get("is_machine") or "compose" not in lab:
+        raise HTTPException(400, "Cette machine n'a pas d'interface graphique.")
+    try:
+        return devops.open_gui(lab)
+    except devops.LabError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
 @app.post("/api/devops/labs/{lab_id}/exercises/{exercise_id}/check")
 def devops_check(lab_id: str, exercise_id: str, profile: int | None = ProfileHeader):
     lab = _lab(lab_id)

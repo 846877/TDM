@@ -9,7 +9,7 @@
 #
 # Réglages (variables d'environnement, voir le README de TDM) :
 #   TDM_DOCKER_VM_PORT    port de l'API Docker sur l'hôte (127.0.0.1 seulement), 23750 par défaut
-#   TDM_DOCKER_VM_MEMORY  mémoire de la VM en Mo, 2048 par défaut
+#   TDM_DOCKER_VM_MEMORY  mémoire de la VM en Mo, 4096 par défaut (bureau Kali graphique des machines)
 #   TDM_DOCKER_VM_CPUS    nombre de processeurs, 2 par défaut
 #   TDM_DOCKER_VM_BOX     box Vagrant, bento/ubuntu-24.04 par défaut
 
@@ -38,7 +38,7 @@ Vagrant.configure("2") do |config|
 
   config.vm.provider "virtualbox" do |vb|
     vb.name = "tdm-moteur-docker"
-    vb.memory = (ENV["TDM_DOCKER_VM_MEMORY"] || "2048").to_i
+    vb.memory = (ENV["TDM_DOCKER_VM_MEMORY"] || "4096").to_i
     vb.cpus = (ENV["TDM_DOCKER_VM_CPUS"] || "2").to_i
     vb.gui = false
   end

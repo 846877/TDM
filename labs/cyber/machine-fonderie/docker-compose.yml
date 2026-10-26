@@ -1,12 +1,13 @@
 # Machine « Fonderie » : deux conteneurs isolés sur un réseau interne.
 #  - attaquant : poste d'où l'on travaille (terminal du lab) ;
 #  - cible     : serveur vulnérable, joignable seulement depuis « attaquant » (hôte « cible »).
-# Rien n'est publié vers l'hôte : tout reste dans le réseau du lab.
+# Seul le bureau Kali (port 6080, 127.0.0.1) est publié ; la cible vulnérable ne l'est jamais.
 services:
   attaquant:
     image: tdm-kali-attaquant:latest
     build: ../_attaquant
     command: ["sleep", "infinity"]
+    ports: ["6080:6080"]   # bureau Kali (noVNC) ; publie 6080 sur 127.0.0.1 via la VM moteur
     networks: [fonderie]
     depends_on: [cible]
 

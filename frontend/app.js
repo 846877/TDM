@@ -896,6 +896,35 @@ async function renderLab(id, cat = "devops") {
   };
   onLeave(() => { desktopsLoaded = true; });
 
+  // Machine offensive conteneurisée : un bouton ouvre le bureau Kali graphique (noVNC) dans le navigateur.
+  const loadGui = () => {
+    if (desktopsLoaded) return;
+    desktopsLoaded = true;
+    const btn = h("button", { class: "btn small", title: "Ouvre un bureau Kali graphique (Firefox, Burp, outils) dans le navigateur" },
+      "🖥 Interface graphique");
+    const link = h("a", { class: "btn small", target: "_blank", rel: "noopener" }, "↗ Ouvrir le bureau Kali");
+    link.style.display = "none";
+    btn.addEventListener("click", async () => {
+      errorBox.replaceChildren();
+      btn.disabled = true;
+      btn.replaceChildren(h("span", { class: "spinner" }), " Démarrage du bureau…");
+      try {
+        const res = await api(`/api/devops/labs/${encodeURIComponent(id)}/gui`, { method: "POST" });
+        link.href = res.url;
+        link.style.display = "";
+        toast(res.opened
+          ? "Bureau Kali en cours d'ouverture (laisse quelques secondes au tout premier lancement)."
+          : "Clique sur « Ouvrir le bureau Kali » si la fenêtre ne s'ouvre pas.");
+      } catch (err) {
+        errorBox.replaceChildren(h("div", { class: "error-box" }, err.message));
+      } finally {
+        btn.disabled = false;
+        btn.replaceChildren("🖥 Interface graphique");
+      }
+    });
+    desktopBox.replaceChildren(btn, link);
+  };
+
   const STATUS_LABELS = {
     running: "En cours d'exécution",
     stopped: "Arrêté",
@@ -924,6 +953,7 @@ async function renderLab(id, cat = "devops") {
     logBox.textContent = log;
     if (status === "running") openTerminal(); else closeTerminal();
     if (status === "running" && isVm && lab.os === "windows") loadDesktops();
+    else if (status === "running" && lab.is_machine && !isVm) loadGui();
     else if (desktopsLoaded) { desktopBox.replaceChildren(); desktopsLoaded = false; }
     clearTimeout(pollTimer);
     if (busy) {

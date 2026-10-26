@@ -36,6 +36,7 @@ LAB_CATEGORIES = ("devops", "systemes", "cyber")
 BUNDLED_PREFIX = "tdm:"  # lab Vagrant embarqué (cf. scripts/vagrant_agent.py)
 CYBER_TRACKS = ("offensif", "defensif")  # parcours de la catégorie Cybersécurité (red team / blue team)
 FLAG_KEYS = ("user", "root")  # drapeaux d'une machine offensive : utilisateur puis administrateur
+GUI_PORT = 6080  # port publié du bureau Kali (noVNC) des machines offensives (127.0.0.1 via la VM moteur)
 
 
 def load_labs(labs_dir: Path | None = None, category: str | None = None) -> list[dict[str, Any]]:
@@ -434,6 +435,32 @@ def submit_flag(lab: dict[str, Any], value: str) -> dict[str, Any]:
         if expected and submitted.lower() == expected.strip().lower():
             return {"success": True, "which": which}
     return {"success": False, "which": None}
+
+
+def open_gui(lab: dict[str, Any]) -> dict[str, Any]:
+    """Démarre (à la demande, idempotent) le bureau Kali de la machine et ouvre le navigateur dessus.
+
+    Le bureau tourne dans le conteneur « attaquant » (XFCE via TigerVNC), exposé par noVNC sur le port
+    :data:`GUI_PORT`, publié sur 127.0.0.1 de l'hôte via la VM moteur. Renvoie l'URL noVNC.
+    """
+    _require_docker()
+    if "compose" not in lab:
+        raise LabError("Cette machine n'a pas d'interface graphique.")
+    if status(lab) != "running":
+        raise LabError("Démarre d'abord la machine pour ouvrir son bureau.")
+    # -d : détache (le bureau démarre en arrière-plan) ; le script est idempotent (déjà lancé = no-op).
+    argv = _compose_base(lab) + ["exec", "-d", "-T", lab["service"], "/opt/demarrer-bureau.sh"]
+    result = _run(argv, cwd=lab["dir"], timeout=60)
+    if result.returncode != 0:
+        raise LabError(result.stderr.strip()[-2000:] or "Échec du démarrage du bureau.")
+    url = f"http://127.0.0.1:{GUI_PORT}/vnc.html?autoconnect=true&resize=remote"
+    opened = False
+    try:
+        import webbrowser
+        opened = bool(webbrowser.open(url))
+    except Exception:  # noqa: BLE001 - l'ouverture auto du navigateur est best-effort
+        opened = False
+    return {"url": url, "opened": opened}
 
 
 def check(lab: dict[str, Any], exercise_id: str) -> dict[str, Any]:

@@ -116,3 +116,13 @@ def test_terminal_python_docker(monkeypatch):
         output = ""
         while "42" not in output:
             output += ws.receive_text()
+
+
+def test_gui_machine_uniquement():
+    # Un lab non-machine n'a pas d'interface graphique.
+    assert client.post("/api/devops/labs/linux-bases/gui").status_code == 400
+    # Une machine offensive : l'endpoint existe (hors Docker il répond 503, pas 404/400).
+    machines = [l for l in client.get("/api/devops/labs?category=cyber").json() if l["is_machine"]]
+    assert machines
+    code = client.post(f"/api/devops/labs/{machines[0]['id']}/gui").status_code
+    assert code not in (400, 404, 405)
