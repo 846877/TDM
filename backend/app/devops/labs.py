@@ -35,6 +35,7 @@ def _slug(text: str) -> str:
 LAB_CATEGORIES = ("devops", "systemes", "cyber")
 BUNDLED_PREFIX = "tdm:"  # lab Vagrant embarqué (cf. scripts/vagrant_agent.py)
 CYBER_TRACKS = ("offensif", "defensif")  # parcours de la catégorie Cybersécurité (red team / blue team)
+FLAG_KEYS = ("user", "root")  # drapeaux d'une machine offensive : utilisateur puis administrateur
 
 
 def load_labs(labs_dir: Path | None = None, category: str | None = None) -> list[dict[str, Any]]:
@@ -100,6 +101,12 @@ def _load_dir(root: Path, default_category: str, os_name: str = "linux", bundled
         data.setdefault("os", os_name)
         if default_category == "cyber":
             data["track"] = data.get("track") if data.get("track") in CYBER_TRACKS else "offensif"
+            # Les machines offensives (style Hack The Box) se valident en capturant des drapeaux.
+            # Les valeurs des drapeaux restent côté serveur : jamais renvoyées par public().
+            flags = data.get("flags") if isinstance(data.get("flags"), dict) else {}
+            data["flags"] = {k: str(v) for k, v in flags.items() if k in FLAG_KEYS and v}
+            data["is_machine"] = data["track"] == "offensif" and bool(data["flags"])
+            data["machine_os"] = data.get("machine_os") if data.get("machine_os") in ("linux", "windows") else "linux"
         data.setdefault("shell", "powershell" if data["os"] == "windows" else "bash")
         data.setdefault("exercises", [])
         for index, exercise in enumerate(data["exercises"], start=1):
@@ -121,6 +128,10 @@ def public(lab: dict[str, Any]) -> dict[str, Any]:
         "category": lab["category"],
         "os": lab.get("os", "linux"),
         "track": lab.get("track"),
+        "is_machine": lab.get("is_machine", False),
+        "machine_os": lab.get("machine_os") if lab.get("is_machine") else None,
+        # Les labels des drapeaux présents (user/root), jamais leurs valeurs.
+        "flags": [k for k in FLAG_KEYS if k in lab.get("flags", {})] if lab.get("is_machine") else [],
         "cours": lab.get("cours", ""),
         "docs": lab.get("docs", []),
         "exercises": [
@@ -408,6 +419,21 @@ def exec_argv(lab: dict[str, Any], command: list[str], interactive: bool) -> lis
             flags = ["-T"] + flags
         return _compose_base(lab) + ["exec"] + [f for f in flags if f != "-it"] + [lab["service"]] + command
     return ["docker", "exec"] + flags + [container_name(lab)] + command
+
+
+def submit_flag(lab: dict[str, Any], value: str) -> dict[str, Any]:
+    """Compare un drapeau soumis aux drapeaux de la machine (comparaison côté serveur).
+
+    Renvoie ``{"success": bool, "which": "user"|"root"|None}``. La casse et les espaces autour sont
+    ignorés ; le format attendu reste ``TDM{...}``.
+    """
+    submitted = (value or "").strip()
+    flags = lab.get("flags", {})
+    for which in FLAG_KEYS:
+        expected = flags.get(which)
+        if expected and submitted.lower() == expected.strip().lower():
+            return {"success": True, "which": which}
+    return {"success": False, "which": None}
 
 
 def check(lab: dict[str, Any], exercise_id: str) -> dict[str, Any]:

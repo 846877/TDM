@@ -52,6 +52,21 @@ def test_categorie_cyber_offensif_defensif():
     assert all(lab["category"] == "cyber" for lab in cyber)
 
 
+def test_machine_offensive_et_drapeaux():
+    machines = [lab for lab in labs.load_labs(category="cyber") if lab.get("is_machine")]
+    assert machines, "aucune machine offensive"
+    for machine in machines:
+        pub = labs.public(machine)
+        assert pub["is_machine"] and pub["machine_os"] in ("linux", "windows")
+        assert set(pub["flags"]) <= set(labs.FLAG_KEYS) and pub["flags"]
+        # Les valeurs des drapeaux ne doivent jamais fuiter côté client.
+        assert "TDM{" not in json.dumps(pub), machine["id"]
+        for which, value in machine["flags"].items():
+            assert labs.submit_flag(machine, value) == {"success": True, "which": which}
+            assert labs.submit_flag(machine, f"  {value.upper()} ")["success"]  # casse/espaces tolérés
+        assert labs.submit_flag(machine, "TDM{mauvais}") == {"success": False, "which": None}
+
+
 def test_labs_compose_sans_montage_de_dossier():
     # La plateforme pilote le Docker de l'hôte depuis un conteneur : un montage relatif ne marcherait pas.
     for compose in (ROOT / "labs").glob("*/*/docker-compose.yml"):

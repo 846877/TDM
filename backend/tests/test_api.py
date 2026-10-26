@@ -76,6 +76,16 @@ def test_categorie_cyber_exposee():
     cyber = client.get("/api/devops/labs?category=cyber").json()
     assert cyber and all(lab["track"] in ("offensif", "defensif") for lab in cyber)
     assert all(lab["exercise_count"] > 0 for lab in cyber)
+    assert '"TDM{' not in json.dumps(cyber)  # aucune valeur de drapeau exposée dans la liste
+
+
+def test_machine_soumission_drapeau():
+    machines = [lab for lab in client.get("/api/devops/labs?category=cyber").json() if lab["is_machine"]]
+    assert machines, "aucune machine offensive"
+    mid = machines[0]["id"]
+    assert client.post(f"/api/devops/labs/{mid}/flag", json={"flag": "TDM{faux}"}).json()["success"] is False
+    # Un lab non-machine refuse la soumission de drapeau.
+    assert client.post("/api/devops/labs/offensif-recon-web/flag", json={"flag": "x"}).status_code == 400
 
 
 def test_terminal_python_local(tmp_path, monkeypatch):

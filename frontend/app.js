@@ -368,14 +368,19 @@ async function renderList(cat) {
       body.append(h("section", { class: "level-section" },
         h("h2", {}, `${label} · ${group.length}`),
         h("div", { class: "ex-list" }, group.map((it) => {
-          const done = meta.labs ? labDoneCount(cat, it) === it.exercise_count && it.exercise_count > 0 : progress.isDone(cat, it.id);
-          return h("a", { class: `ex-item ${done ? "done" : ""}`, href: `#/${cat}/${it.id}` },
-            h("span", { class: "check" }, done ? "✓" : ""),
+          const flagsOwned = machineFlagsOwned(cat, it);
+          const done = it.is_machine ? it.flags.length > 0 && flagsOwned === it.flags.length
+            : meta.labs ? labDoneCount(cat, it) === it.exercise_count && it.exercise_count > 0 : progress.isDone(cat, it.id);
+          // Une machine offensive affiche son système, sa difficulté et ses drapeaux capturés.
+          const line = it.is_machine
+            ? `${it.machine_os === "windows" ? "🪟 Windows" : "🐧 Linux"} · ${LEVEL_LABEL[it.level] || it.level} · 🏴 ${flagsOwned} / ${it.flags.length} drapeau(x)`
+            : `${it.kind === "vagrant" ? (it.os === "windows" ? "🪟 VM Windows" : "🖥 VM Vagrant") : "🐳 Docker"} · ${labDoneCount(cat, it)} / ${it.exercise_count} exercice(s)`;
+          return h("a", { class: `ex-item ${done ? "done" : ""} ${it.is_machine ? "machine" : ""}`, href: `#/${cat}/${it.id}` },
+            h("span", { class: "check" }, done ? "✓" : it.is_machine ? "🖥" : ""),
             h("div", {},
               h("div", { class: "title" }, it.title),
               it.summary ? h("div", { class: "summary" }, it.summary) : null,
-              meta.labs ? h("div", { class: "summary" },
-                `${it.kind === "vagrant" ? (it.os === "windows" ? "🪟 VM Windows" : "🖥 VM Vagrant") : "🐳 Docker"} · ${labDoneCount(cat, it)} / ${it.exercise_count} exercice(s)`) : null,
+              meta.labs ? h("div", { class: "summary" }, line) : null,
               h("div", { class: "tags" }, (it.tags || []).map((t) => h("span", { class: "tag" }, t)))));
         }))));
     }
@@ -405,6 +410,63 @@ async function renderList(cat) {
 
 function labDoneCount(cat, lab) {
   return progress.items(cat).filter((item) => item.startsWith(lab.id + "/")).length;
+}
+
+// Nombre de drapeaux capturés sur une machine offensive (item « <machine>/flag-user|root »).
+function machineFlagsOwned(cat, lab) {
+  return (lab.flags || []).filter((k) => progress.isDone(cat, `${lab.id}/flag-${k}`)).length;
+}
+
+const FLAG_META = {
+  user: { label: "🏴 Drapeau utilisateur", hint: "Trouvé après le premier accès à la machine (ex. ~/user.txt)." },
+  root: { label: "🏴 Drapeau root", hint: "Trouvé après l'élévation de privilèges (ex. /root/root.txt)." },
+};
+
+// Panneau de soumission des drapeaux d'une machine (style Hack The Box).
+function buildFlagPanel(id, cat, lab) {
+  const rows = lab.flags.map((which) => {
+    const owned = progress.isDone(cat, `${id}/flag-${which}`);
+    const input = h("input", { class: "flag-input", type: "text", placeholder: "TDM{...}", spellcheck: "false" });
+    const submit = h("button", { class: "btn small primary" }, "Valider");
+    const state = h("span", { class: `flag-state ${owned ? "owned" : ""}` }, owned ? "✓ capturé" : "");
+    const row = h("div", { class: `flag-row ${owned ? "owned" : ""}` },
+      h("div", { class: "flag-label" }, FLAG_META[which].label, h("div", { class: "muted small" }, FLAG_META[which].hint)),
+      h("div", { class: "flag-entry" }, input, submit, state));
+    const send = async () => {
+      const value = input.value.trim();
+      if (!value) return;
+      submit.disabled = true;
+      submit.replaceChildren(h("span", { class: "spinner" }));
+      try {
+        const res = await api(`/api/devops/labs/${encodeURIComponent(id)}/flag`, { method: "POST", body: { flag: value } });
+        if (res.success) {
+          progress.markDone(cat, `${id}/flag-${res.which}`);
+          celebrate(res.reward);
+          if (res.which === which) {
+            state.textContent = "✓ capturé"; state.classList.add("owned"); row.classList.add("owned");
+            input.value = ""; input.disabled = true;
+          } else {
+            router();  // le drapeau saisi correspondait à l'autre case : on rafraîchit la page
+          }
+        } else {
+          state.textContent = "✗ incorrect"; state.classList.remove("owned");
+        }
+      } catch (err) {
+        state.textContent = err.message;
+      } finally {
+        submit.disabled = false;
+        submit.replaceChildren("Valider");
+      }
+    };
+    submit.addEventListener("click", send);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+    if (owned) input.disabled = true;
+    return row;
+  });
+  return h("div", { class: "flag-panel" },
+    h("h3", {}, "🚩 Drapeaux"),
+    h("p", { class: "muted small" }, "Exploite la machine pour récupérer chaque drapeau, puis valide-le ici. La machine est réussie quand tous ses drapeaux sont capturés."),
+    ...rows);
 }
 
 function neighbours(items, id) {
@@ -763,13 +825,23 @@ async function renderLab(id, cat = "devops") {
     return card;
   });
 
+  // Machine offensive (style Hack The Box) : système, difficulté, et soumission des drapeaux.
+  const machineBanner = lab.is_machine ? h("div", { class: "machine-banner" },
+    h("span", { class: "badge" }, lab.machine_os === "windows" ? "🪟 Windows" : "🐧 Linux"),
+    levelBadge(lab.level),
+    h("span", { class: "muted" }, `🏴 ${lab.flags.length} drapeau(x) à capturer`)) : null;
+  const flagPanel = lab.is_machine ? buildFlagPanel(id, cat, lab) : null;
+
   app.replaceChildren(h("div", { class: "workspace" },
     h("section", { class: "left" }, ...exerciseHeader(cat, lab),
+      machineBanner,
       lab.kind === "vagrant" ? h("p", {}, h("span", { class: "badge warn" },
         lab.os === "windows" ? "🪟 Machine virtuelle Windows (Vagrant)" : "🖥 Machine virtuelle Vagrant")) : null,
       withCours([markdown(lab.description)], lab.cours, lab.docs),
       h("div", { class: "lab-controls" }, statusDot, statusText, startBtn, stopBtn, resetBtn, desktopBox), errorBox,
-      h("h3", {}, `Exercices (${lab.exercises.length})`), ...exerciseCards,
+      flagPanel,
+      lab.exercises.length ? h("h3", {}, lab.is_machine ? `Guide (${lab.exercises.length} étapes)` : `Exercices (${lab.exercises.length})`) : null,
+      ...exerciseCards,
       exerciseNav(cat, items, id)),
     right));
 

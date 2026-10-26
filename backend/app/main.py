@@ -356,6 +356,23 @@ def devops_check(lab_id: str, exercise_id: str, profile: int | None = ProfileHea
     return _reward(result, profile, lab["category"], f"{lab_id}/{exercise_id}", lab["level"])
 
 
+class FlagIn(BaseModel):
+    flag: str = Field(min_length=1, max_length=256)
+
+
+@app.post("/api/devops/labs/{lab_id}/flag")
+def devops_flag(lab_id: str, body: FlagIn, profile: int | None = ProfileHeader):
+    """Soumission d'un drapeau d'une machine offensive (style Hack The Box)."""
+    lab = _lab(lab_id)
+    if not lab.get("is_machine"):
+        raise HTTPException(400, "Ce lab n'est pas une machine à drapeaux.")
+    result = devops.submit_flag(lab, body.flag)
+    if result["success"]:
+        result = _reward(result | {"success": True}, profile, lab["category"],
+                         f"{lab_id}/flag-{result['which']}", lab["level"])
+    return result
+
+
 @app.websocket("/ws/devops/{lab_id}")
 async def devops_terminal(websocket: WebSocket, lab_id: str):
     await websocket.accept()
@@ -381,7 +398,8 @@ def _totals() -> dict[str, int]:
     return {
         "python": len(python_catalog.all()),
         "reseaux": len(network_catalog.all()),
-        **{category: sum(len(lab["exercises"]) for lab in devops.load_labs(category=category))
+        # Pour une machine offensive, les drapeaux (user/root) comptent aussi comme objectifs.
+        **{category: sum(len(lab["exercises"]) + len(lab.get("flags", {})) for lab in devops.load_labs(category=category))
            for category in devops.LAB_CATEGORIES},
     }
 
@@ -419,9 +437,12 @@ def _item_title(category: str, item_id: str) -> str:
         found = python_catalog.get(item_id)
     elif category == "reseaux":
         found = network_catalog.get(item_id)
-    else:  # labs DevOps ou Systèmes & réseaux
+    else:  # labs DevOps, Systèmes & réseaux ou Cybersécurité
         lab_id, _, exercise_id = item_id.partition("/")
         lab = next((lab for lab in devops.load_labs() if lab["id"] == lab_id), None)
+        if lab and exercise_id in ("flag-user", "flag-root"):
+            drapeau = "drapeau utilisateur" if exercise_id == "flag-user" else "drapeau root"
+            return f"{lab['title']} · {drapeau}"
         exercise = next((e for e in lab["exercises"] if e["id"] == exercise_id), None) if lab else None
         return f"{lab['title']} · {exercise['title']}" if exercise else item_id
     return found["title"] if found else item_id

@@ -458,3 +458,20 @@ details.cours > summary { cursor: pointer; color: var(--accent); font-weight: 60
 }
 .os-btn.active { color: var(--accent); border-color: var(--accent); box-shadow: var(--glow); }
 .os-count { margin-left: 8px; font-size: 0.8em; opacity: 0.7; }
+
+/* --- Cybersécurité : machines offensives et drapeaux --- */
+.ex-item.machine .check { font-size: 1.1em; }
+.machine-banner { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0 14px; }
+.flag-panel { margin: 18px 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px;
+  background: rgba(0, 0, 0, 0.15); }
+.flag-panel h3 { margin: 0 0 4px; }
+.flag-row { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start;
+  padding: 10px 0; border-top: 1px solid var(--border); flex-wrap: wrap; }
+.flag-row:first-of-type { border-top: none; }
+.flag-row.owned .flag-label { opacity: 0.7; }
+.flag-label { min-width: 200px; }
+.flag-entry { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.flag-input { width: 230px; max-width: 60vw; padding: 6px 10px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--bg); color: var(--fg); font-family: var(--mono, monospace); }
+.flag-state { font-size: 0.9em; color: var(--muted); }
+.flag-state.owned { color: var(--accent); }
