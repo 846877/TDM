@@ -67,6 +67,21 @@ def test_machine_offensive_et_drapeaux():
         assert labs.submit_flag(machine, "TDM{mauvais}") == {"success": False, "which": None}
 
 
+def test_plusieurs_machines_sur_les_quatre_niveaux():
+    """Le parcours offensif doit proposer plusieurs machines couvrant les 4 niveaux, chacune
+    isolée (compose, réseau interne) et avec un drapeau utilisateur + un drapeau root."""
+    machines = [lab for lab in labs.load_labs(category="cyber") if lab.get("is_machine")]
+    assert len(machines) >= 4, "il faut plusieurs machines comme Fonderie"
+    niveaux = {m["level"] for m in machines}
+    assert {"debutant", "intermediaire", "avance", "expert"} <= niveaux
+    for machine in machines:
+        assert machine.get("compose"), f"{machine['id']} doit être une machine conteneurisée"
+        assert set(machine["flags"]) == {"user", "root"}, machine["id"]
+        # Les drapeaux de chaque machine sont distincts les uns des autres (failles différentes).
+    toutes = [v for m in machines for v in m["flags"].values()]
+    assert len(toutes) == len(set(toutes)), "des drapeaux sont dupliqués entre machines"
+
+
 def test_labs_compose_sans_montage_de_dossier():
     # La plateforme pilote le Docker de l'hôte depuis un conteneur : un montage relatif ne marcherait pas.
     for compose in (ROOT / "labs").glob("*/*/docker-compose.yml"):

