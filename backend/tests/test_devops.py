@@ -262,3 +262,29 @@ def test_agent_annule_un_demarrage_bloque(tmp_path):
     (work / ".tdm").mkdir(exist_ok=True)
     (work / ".tdm" / vagrant_agent.READY).write_text("ok")
     assert ag.cancel_steps("tdm:win-lab", work) == [[str(fake), "halt", "--force"]]
+
+
+def test_agent_bureau_a_distance(tmp_path, monkeypatch):
+    """Port du Bureau à distance de chaque VM : VBoxManage d'abord, `vagrant port` en secours."""
+    if sys.platform == "win32":
+        pytest.skip("faux outils en shell")
+    bundled = tmp_path / "bundled"
+    (bundled / "win-lab").mkdir(parents=True)
+    (bundled / "win-lab" / "Vagrantfile").write_text("v1")
+    vbox = tmp_path / "VBoxManage"
+    vbox.write_text('#!/bin/sh\n[ "$2" = "id-srv" ] && echo \'Forwarding(0)="rdp,tcp,127.0.0.1,33389,,3389"\'\n'
+                    'echo \'Forwarding(1)="ssh,tcp,127.0.0.1,2222,,22"\'\n')
+    vbox.chmod(0o755)
+    fake = tmp_path / "vagrant"
+    fake.write_text('#!/bin/sh\n[ "$1" = port ] && echo "1,$2,forwarded_port,3389,33390"\n')
+    fake.chmod(0o755)
+    ag = vagrant_agent.Agent(None, str(fake), bundled=bundled, work_dir=tmp_path / "work", vboxmanage=str(vbox))
+    ag.prepare("tdm:win-lab")
+    work = tmp_path / "work" / "win-lab"
+    for machine, vm_id in (("srv01", "id-srv"), ("pc01", "id-pc")):
+        (work / ".vagrant" / "machines" / machine / "virtualbox").mkdir(parents=True)
+        (work / ".vagrant" / "machines" / machine / "virtualbox" / "id").write_text(vm_id)
+    assert ag.desktops("tdm:win-lab") == [{"machine": "pc01", "port": 33390}, {"machine": "srv01", "port": 33389}]
+    monkeypatch.setattr(vagrant_agent.sys, "platform", "linux")
+    with pytest.raises(ValueError):
+        ag.open_desktop("tdm:win-lab", "srv01")

@@ -673,6 +673,57 @@ class Agent:
             (path / ".tdm" / READY).write_text("ok", encoding="utf-8")
         return {"status": "running" if running else "stopped", "log": log}
 
+    # --- Bureau à distance (interface graphique des VM Windows) ------------------------------------
+    def desktops(self, lab: str) -> list[dict]:
+        """VM créées du lab et port de l'hôte redirigé vers leur Bureau à distance (3389)."""
+        path = self.lab_dir(lab)
+        found = []
+        for id_file in sorted(path.glob(".vagrant/machines/*/virtualbox/id")):
+            machine = id_file.parent.parent.name
+            port = self._rdp_port(path, machine, id_file.read_text(encoding="utf-8").strip())
+            if port:
+                found.append({"machine": machine, "port": port})
+        return found
+
+    def _rdp_port(self, path: Path, machine: str, vm_id: str) -> int | None:
+        if self.vboxmanage:  # rapide : Forwarding(0)="rdp,tcp,127.0.0.1,33389,,3389"
+            try:
+                result = subprocess.run([self.vboxmanage, "showvminfo", vm_id, "--machinereadable"],
+                                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+                for host, guest in re.findall(r'^Forwarding\(\d+\)="[^,]*,tcp,[^,]*,(\d+),[^,]*,(\d+)"',
+                                              result.stdout, re.MULTILINE):
+                    if guest == "3389":
+                        return int(host)
+            except (OSError, subprocess.SubprocessError):
+                pass
+        result = self._vagrant(path, "port", machine, "--machine-readable")
+        for guest, host in re.findall(r"forwarded_port,(\d+),(\d+)", result.stdout):
+            if guest == "3389":
+                return int(host)
+        return None
+
+    def open_desktop(self, lab: str, machine: str) -> dict:
+        """Ouvre la fenêtre Bureau à distance (mstsc) de la VM, identifiants du lab déjà enregistrés."""
+        if sys.platform != "win32":
+            raise ValueError("le Bureau à distance ne s'ouvre que sous Windows (mstsc)")
+        target = next((d for d in self.desktops(lab) if d["machine"] == machine), None)
+        if not target:
+            raise ValueError(f"VM {machine or '?'} introuvable ou sans Bureau à distance")
+        rdp = self.lab_dir(lab) / ".tdm" / f"bureau-{machine}.rdp"
+        rdp.parent.mkdir(parents=True, exist_ok=True)
+        rdp.write_text("\r\n".join([
+            f"full address:s:127.0.0.1:{target['port']}", "username:s:vagrant",
+            "prompt for credentials:i:0", "authentication level:i:0",  # certificat auto-signé de la VM
+            "screen mode id:i:1", "desktopwidth:i:1600", "desktopheight:i:900",
+            "smart sizing:i:1", "dynamic resolution:i:1", "redirectclipboard:i:1", "audiomode:i:2", ""]),
+            encoding="utf-8")
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        # Mot de passe des VM des labs (vagrant/vagrant, public) : mstsc se connecte sans le demander.
+        subprocess.run(["cmdkey", "/generic:TERMSRV/127.0.0.1", "/user:vagrant", "/pass:vagrant"],
+                       capture_output=True, timeout=30, creationflags=flags)
+        subprocess.Popen(["mstsc", str(rdp)], creationflags=flags)
+        return target
+
     def ssh(self, lab: str, machine: str = "") -> dict:
         path = self.lab_dir(lab)
         if not (path / "Vagrantfile").exists():
@@ -765,6 +816,10 @@ def make_handler(agent: Agent, token: str):
                     return self._reply(200, agent.status(lab))
                 if method == "GET" and url.path == "/ssh":
                     return self._reply(200, agent.ssh(lab, query.get("machine", "")))
+                if method == "GET" and url.path == "/desktops":
+                    return self._reply(200, {"desktops": agent.desktops(lab)})
+                if method == "POST" and url.path == "/desktop":
+                    return self._reply(200, agent.open_desktop(lab, query.get("machine", "")))
                 if method == "POST" and url.path == "/exclusive":
                     return self._reply(200, {"paused": agent.exclusive(lab)})
                 if method == "POST" and url.path == "/up" and lab == ENGINE and "ports" in query:

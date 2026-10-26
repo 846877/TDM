@@ -101,6 +101,15 @@ def reset(lab: dict[str, Any]) -> str:
     return _request("POST", "/reset", {"lab": lab["vagrant"]})["status"]
 
 
+def desktops(lab: dict[str, Any]) -> list[dict[str, Any]]:
+    """[{"machine": "srv01", "port": 33389}, ...] : VM du lab joignables en Bureau à distance."""
+    return _request("GET", "/desktops", {"lab": lab["vagrant"]}, timeout=60).get("desktops", [])
+
+
+def open_desktop(lab: dict[str, Any], machine: str) -> dict[str, Any]:
+    return _request("POST", "/desktop", {"lab": lab["vagrant"], "machine": machine}, timeout=60)
+
+
 def ssh_argv(lab: dict[str, Any], command: str | None = None, machine: str | None = None) -> list[str]:
     """Commande ``ssh`` vers la VM : interactive si ``command`` est None.
 

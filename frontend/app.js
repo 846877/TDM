@@ -711,6 +711,8 @@ async function renderLab(id, cat = "devops") {
   const stopLabel = lab.kind === "vagrant" && lab.os === "windows" ? "⏸ Mettre en pause" : "■ Arrêter";
   const stopBtn = h("button", { class: "btn danger" }, stopLabel);
   const resetBtn = h("button", { class: "btn small" }, "↺ Réinitialiser");
+  // VM Windows : un bouton par machine ouvre son Bureau à distance (interface graphique).
+  const desktopBox = h("span", { class: "desktop-buttons" });
   const errorBox = h("div");
   const termArea = h("div", { class: "xterm-host" });
   const placeholder = h("div", { class: "term-placeholder" }, "Démarre le lab pour ouvrir le terminal.");
@@ -752,7 +754,7 @@ async function renderLab(id, cat = "devops") {
       lab.kind === "vagrant" ? h("p", {}, h("span", { class: "badge warn" },
         lab.os === "windows" ? "🪟 Machine virtuelle Windows (Vagrant)" : "🖥 Machine virtuelle Vagrant")) : null,
       withCours([markdown(lab.description)], lab.cours, lab.docs),
-      h("div", { class: "lab-controls" }, statusDot, statusText, startBtn, stopBtn, resetBtn), errorBox,
+      h("div", { class: "lab-controls" }, statusDot, statusText, startBtn, stopBtn, resetBtn, desktopBox), errorBox,
       h("h3", {}, `Exercices (${lab.exercises.length})`), ...exerciseCards,
       exerciseNav(cat, items, id)),
     right));
@@ -780,11 +782,39 @@ async function renderLab(id, cat = "devops") {
   let pollTimer = null;
   onLeave(() => clearTimeout(pollTimer));
 
+  let desktopsLoaded = false;
+  const loadDesktops = async () => {
+    if (desktopsLoaded) return;
+    desktopsLoaded = true;
+    try {
+      const { desktops } = await api(`/api/devops/labs/${encodeURIComponent(id)}/desktops`);
+      desktopBox.replaceChildren(...desktops.map(({ machine }) => {
+        const btn = h("button", { class: "btn small", title: "Ouvre le Bureau à distance de la VM (vagrant / vagrant)" },
+          `🖥 Bureau ${machine.toUpperCase()}`);
+        btn.addEventListener("click", async () => {
+          errorBox.replaceChildren();
+          btn.disabled = true;
+          try {
+            await api(`/api/devops/labs/${encodeURIComponent(id)}/desktop?machine=${encodeURIComponent(machine)}`, { method: "POST" });
+          } catch (err) {
+            errorBox.replaceChildren(h("div", { class: "error-box" }, err.message));
+          } finally {
+            setTimeout(() => { btn.disabled = false; }, 3000);
+          }
+        });
+        return btn;
+      }));
+    } catch {
+      desktopsLoaded = false;  // agent momentanément injoignable : on réessaiera au prochain état « running »
+    }
+  };
+  onLeave(() => { desktopsLoaded = true; });
+
   const STATUS_LABELS = {
     running: "En cours d'exécution",
     stopped: "Arrêté",
     starting: !isVm ? "Démarrage…" : lab.os === "windows"
-      ? "Démarrage des VM : le tout premier lancement télécharge la box Windows (plusieurs Go) et prépare Windows, comptez de 20 à 60 minutes ; ensuite, la reprise après une pause ne prend que quelques secondes…"
+      ? "Démarrage des VM : le tout premier lancement prépare Windows (environ 5 minutes par lab, plus le téléchargement de la box Windows la première fois) ; ensuite, la reprise après une pause prend environ 30 secondes…"
       : "Démarrage de la VM (plusieurs minutes au premier lancement)…",
     stopping: "Arrêt en cours…",
     checking: "Vérification de l'état…",
@@ -807,6 +837,8 @@ async function renderLab(id, cat = "devops") {
     logBox.style.display = log && (busy || status === "error") ? "" : "none";
     logBox.textContent = log;
     if (status === "running") openTerminal(); else closeTerminal();
+    if (status === "running" && isVm && lab.os === "windows") loadDesktops();
+    else if (desktopsLoaded) { desktopBox.replaceChildren(); desktopsLoaded = false; }
     clearTimeout(pollTimer);
     if (busy) {
       pollTimer = setTimeout(async () => {

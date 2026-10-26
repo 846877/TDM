@@ -227,6 +227,7 @@ main { flex: 1; min-height: 0; overflow: auto; }
 
 /* --- Labs DevOps -------------------------------------------------------- */
 .lab-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0 18px; }
+.desktop-buttons { display: inline-flex; gap: 8px; flex-wrap: wrap; }
 .status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
 .status-dot.running { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
 .status-dot.unavailable, .status-dot.error { background: var(--red); }

@@ -19,6 +19,7 @@ from . import config, hypervisor, profiles, sandbox, terminal
 from .catalog import LEVEL_LABELS, LEVELS, Catalog, summary
 from .devops import engine as docker_engine
 from .devops import labs as devops
+from .devops import vagrant
 from .network import grader as net_grader
 from .python import grader as py_grader
 
@@ -321,6 +322,28 @@ def devops_stop(lab_id: str):
 def devops_reset(lab_id: str):
     lab = _lab(lab_id)
     return _lab_action(devops.relaunch, lab)
+
+
+@app.get("/api/devops/labs/{lab_id}/desktops")
+def devops_desktops(lab_id: str):
+    lab = _lab(lab_id)
+    if "vagrant" not in lab:
+        return {"desktops": []}
+    try:
+        return {"desktops": vagrant.desktops(lab)}
+    except vagrant.AgentError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+@app.post("/api/devops/labs/{lab_id}/desktop")
+def devops_open_desktop(lab_id: str, machine: str):
+    lab = _lab(lab_id)
+    if "vagrant" not in lab:
+        raise HTTPException(400, "ce lab n'a pas de machine virtuelle")
+    try:
+        return vagrant.open_desktop(lab, machine)
+    except vagrant.AgentError as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 @app.post("/api/devops/labs/{lab_id}/exercises/{exercise_id}/check")
