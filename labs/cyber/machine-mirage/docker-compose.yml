@@ -4,7 +4,8 @@
 # Rien n'est publié vers l'hôte : tout reste dans le réseau du lab.
 services:
   attaquant:
-    build: ./attaquant
+    image: tdm-kali-attaquant:latest
+    build: ../_attaquant
     command: ["sleep", "infinity"]
     networks: [mirage]
     depends_on: [cible]
