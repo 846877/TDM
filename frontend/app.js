@@ -783,36 +783,24 @@ async function renderLab(id, cat = "devops") {
   onLeave(() => clearTimeout(pollTimer));
 
   let desktopsLoaded = false;
-  let desktopTimer = null;
-  onLeave(() => clearTimeout(desktopTimer));
   const loadDesktops = async () => {
     if (desktopsLoaded) return;
     desktopsLoaded = true;
     try {
       const { desktops } = await api(`/api/devops/labs/${encodeURIComponent(id)}/desktops`);
       desktopBox.replaceChildren(...desktops.map(({ machine }) => {
-        const label = `🖥 Bureau ${machine.toUpperCase()}`;
-        const btn = h("button", { class: "btn small", title: "Ouvre le Bureau à distance de la VM (vagrant / vagrant)" }, label);
-        // VM Linux : le premier clic installe un bureau XFCE + xrdp (quelques minutes, une seule fois).
-        const open = async () => {
-          try {
-            const res = await api(`/api/devops/labs/${encodeURIComponent(id)}/desktop?machine=${encodeURIComponent(machine)}`, { method: "POST" });
-            if (res.status === "installing") {
-              btn.replaceChildren(h("span", { class: "spinner" }), ` Installation du bureau sur ${machine.toUpperCase()} (quelques minutes, une seule fois)…`);
-              desktopTimer = setTimeout(open, 10000);
-              return;
-            }
-            if (res.status === "error") throw new Error(`Installation du bureau impossible :\n${res.log || ""}`);
-          } catch (err) {
-            errorBox.replaceChildren(h("div", { class: "error-box" }, err.message));
-          }
-          btn.replaceChildren(label);
-          setTimeout(() => { btn.disabled = false; }, 3000);
-        };
-        btn.addEventListener("click", () => {
+        const btn = h("button", { class: "btn small", title: "Ouvre le Bureau à distance de la VM (vagrant / vagrant)" },
+          `🖥 Bureau ${machine.toUpperCase()}`);
+        btn.addEventListener("click", async () => {
           errorBox.replaceChildren();
           btn.disabled = true;
-          open();
+          try {
+            await api(`/api/devops/labs/${encodeURIComponent(id)}/desktop?machine=${encodeURIComponent(machine)}`, { method: "POST" });
+          } catch (err) {
+            errorBox.replaceChildren(h("div", { class: "error-box" }, err.message));
+          } finally {
+            setTimeout(() => { btn.disabled = false; }, 3000);
+          }
         });
         return btn;
       }));
@@ -849,7 +837,7 @@ async function renderLab(id, cat = "devops") {
     logBox.style.display = log && (busy || status === "error") ? "" : "none";
     logBox.textContent = log;
     if (status === "running") openTerminal(); else closeTerminal();
-    if (status === "running" && isVm) loadDesktops();
+    if (status === "running" && isVm && lab.os === "windows") loadDesktops();
     else if (desktopsLoaded) { desktopBox.replaceChildren(); desktopsLoaded = false; }
     clearTimeout(pollTimer);
     if (busy) {
