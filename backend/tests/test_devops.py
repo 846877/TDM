@@ -39,6 +39,19 @@ def test_identifiants_uniques():
     assert len(ids) == len(set(ids)), sorted(i for i in ids if ids.count(i) > 1)
 
 
+def test_categorie_cyber_offensif_defensif():
+    cyber = labs.load_labs(category="cyber")
+    assert cyber, "aucun lab de cybersécurité"
+    tracks = {lab["track"] for lab in cyber}
+    assert tracks <= set(labs.CYBER_TRACKS)
+    assert {"offensif", "defensif"} <= tracks, "les deux parcours doivent exister"
+    for lab in cyber:
+        assert labs.public(lab)["track"] == lab["track"]
+        assert lab["category"] == "cyber"
+    # Le filtre par catégorie ne mélange pas les parcours avec le reste.
+    assert all(lab["category"] == "cyber" for lab in cyber)
+
+
 def test_labs_compose_sans_montage_de_dossier():
     # La plateforme pilote le Docker de l'hôte depuis un conteneur : un montage relatif ne marcherait pas.
     for compose in (ROOT / "labs").glob("*/*/docker-compose.yml"):

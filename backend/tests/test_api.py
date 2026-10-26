@@ -70,6 +70,14 @@ def test_labs_listes():
     assert all('"checks"' not in json.dumps(lab) and '"run"' not in json.dumps(lab) for lab in labs)
 
 
+def test_categorie_cyber_exposee():
+    cats = {c["id"] for c in client.get("/api/categories").json()["categories"]}
+    assert "cyber" in cats
+    cyber = client.get("/api/devops/labs?category=cyber").json()
+    assert cyber and all(lab["track"] in ("offensif", "defensif") for lab in cyber)
+    assert all(lab["exercise_count"] > 0 for lab in cyber)
+
+
 def test_terminal_python_local(tmp_path, monkeypatch):
     monkeypatch.setattr("app.config.WORKSPACES_DIR", tmp_path)
     monkeypatch.setattr("app.config.SANDBOX_MODE", "local")

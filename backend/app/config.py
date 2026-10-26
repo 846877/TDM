@@ -24,6 +24,7 @@ LABS_DIR = _path_env("TDM_LABS_DIR", ROOT_DIR / "labs" / "devops")
 SYSTEMS_LABS_DIR = _path_env("TDM_SYSTEMS_LABS_DIR", ROOT_DIR / "labs" / "systemes")
 # Labs Windows (VM Vagrant livrées avec TDM), rangés dans la catégorie Systèmes & réseaux.
 WINDOWS_LABS_DIR = _path_env("TDM_WINDOWS_LABS_DIR", ROOT_DIR / "labs" / "systemes-windows")
+CYBER_LABS_DIR = _path_env("TDM_CYBER_LABS_DIR", ROOT_DIR / "labs" / "cyber")
 FRONTEND_DIR = ROOT_DIR / "frontend"
 # VM du moteur Docker de TDM (voir devops/engine.py), lancée par l'agent Vagrant.
 DOCKER_ENGINE_DIR = _path_env("TDM_DOCKER_ENGINE_DIR", ROOT_DIR / "labs" / "moteur-docker")

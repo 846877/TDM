@@ -116,6 +116,9 @@ def categories():
                             "VLAN, routage, pare-feu, virtualisation, supervision."},
             {"id": "devops", "title": "DevOps", "count": len(devops.load_labs(category="devops")),
              "description": "Des labs lancés en un clic, en conteneur Docker ou en VM Vagrant, avec exercices vérifiés."},
+            {"id": "cyber", "title": "Cybersécurité", "count": len(devops.load_labs(category="cyber")),
+             "description": "Deux parcours dans l'esprit Hack The Box, offensif (red team) et défensif (blue team) : "
+                            "chaque lab démarre une cible volontairement vulnérable, isolée dans Docker."},
         ],
     }
 

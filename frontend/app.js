@@ -14,6 +14,7 @@ const CATEGORIES = {
   reseaux: { title: "Réseaux", icon: "🌐", api: "/api/network/exercises" },
   systemes: { title: "Systèmes & réseaux", icon: "🖧", api: "/api/devops/labs?category=systemes", labs: true },
   devops: { title: "DevOps", icon: "🚀", api: "/api/devops/labs?category=devops", labs: true },
+  cyber: { title: "Cybersécurité", icon: "🛡", api: "/api/devops/labs?category=cyber", labs: true },
 };
 
 /* --- Utilitaires --------------------------------------------------------- */
@@ -244,6 +245,8 @@ const routes = [
   [/^\/systemes\/(.+)$/, (id) => renderLab(id, "systemes")],
   [/^\/devops\/?$/, () => renderList("devops")],
   [/^\/devops\/(.+)$/, (id) => renderLab(id, "devops")],
+  [/^\/cyber\/?$/, () => renderList("cyber")],
+  [/^\/cyber\/(.+)$/, (id) => renderLab(id, "cyber")],
 ];
 
 async function router() {
@@ -337,14 +340,21 @@ async function renderList(cat) {
   const meta = CATEGORIES[cat];
   document.title = `TDM · ${meta.title}`;
   const allItems = await api(meta.api);
-  const osList = [["windows", "🪟 Windows"], ["linux", "🐧 Linux"]];
-  const hasOs = cat === "systemes";
-  let os = storage.get(`${cat}.os`, "windows");
-  let items = hasOs ? allItems.filter((it) => (it.os || "linux") === os) : allItems;
-  const osButtons = hasOs ? osList.map(([key, label]) => h("button", {
-    class: `os-btn ${key === os ? "active" : ""}`,
-    onclick: () => { storage.set(`${cat}.os`, key); router(); },
-  }, label, h("span", { class: "os-count" }, String(allItems.filter((it) => (it.os || "linux") === key).length)))) : [];
+  // Deux catégories se divisent en deux parcours : Systèmes par système (Windows/Linux) et
+  // Cybersécurité par posture (offensif/défensif). Même sélecteur, même mémorisation.
+  const facets = {
+    systemes: { field: "os", default: "windows", options: [["windows", "🪟 Windows"], ["linux", "🐧 Linux"]] },
+    cyber: { field: "track", default: "offensif", options: [["offensif", "🗡 Offensif"], ["defensif", "🛡 Défensif"]] },
+  };
+  const facet = facets[cat];
+  const facetOf = (it) => (facet ? it[facet.field] || facet.default : null);
+  let current = facet ? storage.get(`${cat}.${facet.field}`, facet.default) : null;
+  let items = facet ? allItems.filter((it) => facetOf(it) === current) : allItems;
+  const osButtons = facet ? facet.options.map(([key, label]) => h("button", {
+    class: `os-btn ${key === current ? "active" : ""}`,
+    onclick: () => { storage.set(`${cat}.${facet.field}`, key); router(); },
+  }, label, h("span", { class: "os-count" }, String(allItems.filter((it) => facetOf(it) === key).length)))) : [];
+  const hasOs = Boolean(facet);
   const search = h("input", { class: "search", type: "search", placeholder: "Filtrer (titre, notion…)" });
   const body = h("div");
 
@@ -369,7 +379,7 @@ async function renderList(cat) {
               h("div", { class: "tags" }, (it.tags || []).map((t) => h("span", { class: "tag" }, t)))));
         }))));
     }
-    if (!body.children.length) body.append(h("p", { class: "muted" }, q ? "Aucun résultat." : "Aucun lab pour ce système pour l'instant."));
+    if (!body.children.length) body.append(h("p", { class: "muted" }, q ? "Aucun résultat." : "Aucun lab pour ce parcours pour l'instant."));
   };
   search.addEventListener("input", draw);
   draw();
@@ -380,10 +390,14 @@ async function renderList(cat) {
       h("h1", {}, `${meta.icon} ${meta.title}`),
       doneCount !== null ? h("span", { class: "badge ok" }, `${doneCount} / ${items.length} validés`) : null,
       search),
-    hasOs ? h("div", { class: "os-switch" }, h("span", { class: "muted" }, "Système :"), ...osButtons) : null,
+    hasOs ? h("div", { class: "os-switch" },
+      h("span", { class: "muted" }, cat === "cyber" ? "Parcours :" : "Système :"), ...osButtons) : null,
     cat === "reseaux" ? h("p", { class: "muted" },
       "Les exercices se font dans un terminal Cisco IOS simulé (switch 2960 / routeur ISR) : mêmes modes, mêmes commandes, abréviations comprises.") : null,
-    meta.labs ? h("p", { class: "muted" }, hasOs && os === "windows"
+    cat === "cyber" ? h("p", { class: "muted" }, current === "offensif"
+      ? "Parcours offensif (red team) : chaque lab démarre une cible volontairement vulnérable, isolée dans Docker. Tu l'attaques depuis le terminal intégré, et les exercices vérifient que tu as bien obtenu le résultat attendu. Rien ne sort de ta machine."
+      : "Parcours défensif (blue team) : analyse d'incidents, durcissement, détection. Chaque lab démarre un environnement compromis ou à sécuriser dans Docker, avec les traces à exploiter.") : null,
+    meta.labs && cat !== "cyber" ? h("p", { class: "muted" }, current === "windows"
       ? "Chaque lab démarre de vraies machines virtuelles Windows Server et Windows 11 (Vagrant + VirtualBox) en un clic, avec un terminal PowerShell intégré et des exercices vérifiés automatiquement."
       : "Chaque lab démarre un environnement isolé dans Docker en un clic, avec un terminal intégré et des exercices vérifiés automatiquement.") : null,
     body));
@@ -923,7 +937,7 @@ async function hypervisorNotice() {
 
 /* --- Profils, XP et classement ----------------------------------------- */
 
-const CATEGORY_KEYS = ["python", "reseaux", "systemes", "devops"];
+const CATEGORY_KEYS = ["python", "reseaux", "systemes", "devops", "cyber"];
 
 function avatar(p, size = "") {
   return h("span", { class: `avatar ${size} ${p.title.god ? "god" : ""}` }, p.name.slice(0, 1).toUpperCase());

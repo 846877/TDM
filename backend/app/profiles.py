@@ -40,6 +40,7 @@ CATEGORY_TITLES = {
     "systemes": ["Technicien de proximité", "Technicien systèmes et réseaux", "Administrateur systèmes et réseaux",
                  "Maître de l'infra"],
     "devops": ["Bidouilleur", "Opérateur", "Ingénieur DevOps", "Maître SRE"],
+    "cyber": ["Script kiddie", "Analyste sécurité", "Pentester", "Maître hacker éthique"],
 }
 
 NAME_PATTERN = re.compile(r"^[\w .'-]{2,24}$", re.UNICODE)

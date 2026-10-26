@@ -32,20 +32,22 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9-]+", "-", text.lower()).strip("-")
 
 
-LAB_CATEGORIES = ("devops", "systemes")
+LAB_CATEGORIES = ("devops", "systemes", "cyber")
 BUNDLED_PREFIX = "tdm:"  # lab Vagrant embarqué (cf. scripts/vagrant_agent.py)
+CYBER_TRACKS = ("offensif", "defensif")  # parcours de la catégorie Cybersécurité (red team / blue team)
 
 
 def load_labs(labs_dir: Path | None = None, category: str | None = None) -> list[dict[str, Any]]:
-    """Labs DevOps (``labs/devops``) et labs Systèmes & réseaux (``labs/systemes``).
+    """Labs DevOps (``labs/devops``), Systèmes & réseaux (``labs/systemes``) et Cybersécurité (``labs/cyber``).
 
-    ``category`` filtre sur l'une des deux catégories ; ``labs_dir`` charge un seul dossier.
+    ``category`` filtre sur l'une des catégories ; ``labs_dir`` charge un seul dossier.
     """
     if labs_dir is not None:
         sources = [(labs_dir, "devops", {})]
     else:
         sources = [(config.LABS_DIR, "devops", {}), (config.SYSTEMS_LABS_DIR, "systemes", {}),
-                   (config.WINDOWS_LABS_DIR, "systemes", {"os_name": "windows", "bundled": True})]
+                   (config.WINDOWS_LABS_DIR, "systemes", {"os_name": "windows", "bundled": True}),
+                   (config.CYBER_LABS_DIR, "cyber", {})]
     labs = []
     for root, default_category, defaults in sources:
         if root.is_dir():
@@ -96,6 +98,8 @@ def _load_dir(root: Path, default_category: str, os_name: str = "linux", bundled
             else:
                 data["image"] = "ubuntu:24.04"
         data.setdefault("os", os_name)
+        if default_category == "cyber":
+            data["track"] = data.get("track") if data.get("track") in CYBER_TRACKS else "offensif"
         data.setdefault("shell", "powershell" if data["os"] == "windows" else "bash")
         data.setdefault("exercises", [])
         for index, exercise in enumerate(data["exercises"], start=1):
@@ -116,6 +120,7 @@ def public(lab: dict[str, Any]) -> dict[str, Any]:
         "kind": "vagrant" if "vagrant" in lab else "docker",
         "category": lab["category"],
         "os": lab.get("os", "linux"),
+        "track": lab.get("track"),
         "cours": lab.get("cours", ""),
         "docs": lab.get("docs", []),
         "exercises": [
