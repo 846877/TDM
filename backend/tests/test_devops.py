@@ -1,5 +1,6 @@
 """Tests des labs DevOps : définitions, labs Vagrant et agent Vagrant (avec un faux vagrant)."""
 
+import os
 import json
 import urllib.error
 import socket
@@ -206,6 +207,20 @@ def test_agent_verifications_prealables(tmp_path, monkeypatch):
     monkeypatch.setattr(vagrant_agent, "hypervisor_present", lambda: False)
     monkeypatch.setattr(vagrant_agent, "installed_boxes", lambda v: {vagrant_agent.SERVER_BOX, vagrant_agent.CLIENT_BOX})
     assert vagrant_agent.preflight_warnings(vagrantfile, "vagrant") == []
+
+
+def test_agent_un_processeur_avec_hyperviseur(monkeypatch):
+    monkeypatch.setattr(vagrant_agent, "_USER_WIN_CPUS", None)
+    monkeypatch.delenv("TDM_WIN_CPUS", raising=False)
+    vagrant_agent.apply_cpu_limit(True)
+    assert os.environ["TDM_WIN_CPUS"] == "1"
+    vagrant_agent.apply_cpu_limit(False)
+    assert "TDM_WIN_CPUS" not in os.environ
+    # Un choix explicite de l'utilisateur n'est jamais modifié.
+    monkeypatch.setattr(vagrant_agent, "_USER_WIN_CPUS", "4")
+    monkeypatch.setenv("TDM_WIN_CPUS", "4")
+    vagrant_agent.apply_cpu_limit(True)
+    assert os.environ["TDM_WIN_CPUS"] == "4"
 
 
 FAKE_VAGRANT_LENT = """#!/bin/sh

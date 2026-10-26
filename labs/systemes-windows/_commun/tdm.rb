@@ -106,7 +106,7 @@ module TDM
         m.vm.provider "virtualbox" do |vb|
           vb.name = "TDM-#{@name}-#{name}"
           vb.memory = memory
-          vb.cpus = cpus
+          vb.cpus = (ENV["TDM_WIN_CPUS"] || cpus).to_i  # 1 quand l'hyperviseur Windows est actif (agent TDM)
           vb.linked_clone = true
           vb.gui = false
           vb.customize ["modifyvm", :id, "--vram", "128", "--graphicscontroller", "vboxsvga"]  # carte conseillée pour Windows

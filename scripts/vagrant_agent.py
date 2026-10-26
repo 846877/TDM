@@ -209,7 +209,22 @@ def installed_boxes(vagrant: str) -> set[str]:
     return set(re.findall(r"^\d*,[^,]*,box-name,([^,\n]+)", result.stdout, re.MULTILINE))
 
 
-def preflight_warnings(vagrantfile: Path, vagrant: str) -> list[str]:
+_USER_WIN_CPUS = os.environ.get("TDM_WIN_CPUS")  # choix explicite de l'utilisateur : jamais modifié
+
+
+def apply_cpu_limit(hypervisor: bool) -> None:
+    """Avec l'hyperviseur Windows actif, VirtualBox reste bloqué au tout début du démarrage d'une VM Windows
+    à 2 processeurs (constaté avec VirtualBox 7.2) ; à 1 processeur elle démarre normalement. Les Vagrantfile
+    des labs Windows lisent TDM_WIN_CPUS (voir labs/systemes-windows/_commun/tdm.rb)."""
+    if _USER_WIN_CPUS:
+        return
+    if hypervisor:
+        os.environ["TDM_WIN_CPUS"] = "1"
+    else:
+        os.environ.pop("TDM_WIN_CPUS", None)
+
+
+def preflight_warnings(vagrantfile: Path, vagrant: str, hypervisor: bool | None = None) -> list[str]:
     machines = lab_machines(vagrantfile)
     if not machines:
         return []
@@ -218,7 +233,7 @@ def preflight_warnings(vagrantfile: Path, vagrant: str) -> list[str]:
     if free is not None and free < needed + 1024:
         warnings.append(f"⚠ Mémoire libre : {free / 1024:.1f} Go pour {needed / 1024:.1f} Go de VM (plus 1 Go de marge). "
                         "Ferme les applications gourmandes (navigateur, jeux...) sinon Windows sera très lent.")
-    if hypervisor_present():
+    if hypervisor_present() if hypervisor is None else hypervisor:
         if hypervisor_platform_enabled() is False:
             warnings.append("⚠ L'hyperviseur Windows est actif et la fonctionnalité « Plateforme de l'hyperviseur "
                             "Windows » est désactivée : VirtualBox ne peut pas démarrer les VM (« VT-x is not "
@@ -226,9 +241,9 @@ def preflight_warnings(vagrantfile: Path, vagrant: str) -> list[str]:
                             "puis redémarre Windows.")
         else:
             warnings.append("ℹ L'hyperviseur Windows est actif : VirtualBox passe par lui (tortue verte en bas de la "
-                            "fenêtre de la VM). Les VM fonctionnent mais démarrent plus lentement, surtout la première "
-                            "fois : laisse faire, même si l'écran reste noir plusieurs minutes. Ensuite, « Mettre en "
-                            "pause » puis reprendre ne prend que quelques secondes.")
+                            "fenêtre de la VM). Les VM Windows démarrent donc avec 1 processeur (avec 2, VirtualBox "
+                            "reste bloqué au démarrage) et plus lentement, surtout la première fois : laisse faire. "
+                            "Ensuite, « Mettre en pause » puis reprendre ne prend que quelques secondes.")
     missing = sorted({box for box, _ in machines} - installed_boxes(vagrant))
     for box in missing:
         warnings.append(f"ℹ Box {box} pas encore téléchargée : environ 8 Go à télécharger une seule fois "
@@ -604,7 +619,9 @@ class Agent:
     def _preflight(self, job: Job) -> int:
         """Prévient (sans bloquer) de ce qui rendra le lancement lent ou impossible."""
         try:
-            job.warnings = preflight_warnings(job.cwd / "Vagrantfile", self.vagrant)
+            hypervisor = hypervisor_present()
+            apply_cpu_limit(hypervisor)
+            job.warnings = preflight_warnings(job.cwd / "Vagrantfile", self.vagrant, hypervisor)
         except Exception as exc:  # une vérification ratée ne doit jamais empêcher le lab de démarrer
             job.log.append(f"(vérifications préalables impossibles : {exc})")
         return 0
