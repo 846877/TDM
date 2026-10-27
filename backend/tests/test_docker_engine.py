@@ -284,7 +284,9 @@ def test_agent_moteur_ports_et_rechargement(agent):
     assert _take_calls(agent) == ["moteur-docker up"]  # ports inchangés : simple reprise
     agent.engine_ports = [8080, 8929, 9000]  # nouveau lab : redirections à appliquer
     _run(agent, vagrant_agent.ENGINE, "/up")
-    assert _take_calls(agent) == ["moteur-docker up", "moteur-docker reload"]
+    # Le rechargement passe AVANT `up` : la VM ne sert dockerd qu'une fois, déjà bien configurée
+    # (sinon le backend lance le compose dès le premier `up`, puis le reload coupe l'API Docker).
+    assert _take_calls(agent) == ["moteur-docker reload", "moteur-docker up"]
     with pytest.raises(ValueError):
         vagrant_agent.parse_ports("8080,22")
 
