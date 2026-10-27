@@ -14,9 +14,12 @@
 #   TDM_DOCKER_VM_BOX     box Vagrant, bento/ubuntu-24.04 par défaut
 
 api_port = (ENV["TDM_DOCKER_VM_PORT"] || "23750").to_i
+# Bureau graphique (noVNC) des machines offensives : port fixe, publié par le conteneur Kali « attaquant ».
+# Redirigé en dur (ci-dessous) comme l'API Docker, pour ne dépendre ni de ports.txt ni d'un rechargement.
+gui_port = 6080
 ports_file = File.join(__dir__, "ports.txt")
 lab_ports = File.exist?(ports_file) ? File.read(ports_file).split.map(&:to_i) : []
-lab_ports = lab_ports.select { |p| p.between?(1024, 65535) && p != api_port && p != 2722 }.uniq.sort
+lab_ports = lab_ports.select { |p| p.between?(1024, 65535) && p != api_port && p != 2722 && p != gui_port }.uniq.sort
 
 Vagrant.configure("2") do |config|
   config.vm.box = ENV["TDM_DOCKER_VM_BOX"] || "bento/ubuntu-24.04"
@@ -29,6 +32,10 @@ Vagrant.configure("2") do |config|
   config.vm.network "forwarded_port", id: "ssh", guest: 22, host: 2722, host_ip: "127.0.0.1", auto_correct: true
   # API Docker (dockerd écoute en tcp dans la VM, sans TLS) : port fixe, le backend le connaît.
   config.vm.network "forwarded_port", id: "docker", guest: 2375, host: api_port, host_ip: "127.0.0.1"
+  # Bureau graphique des machines offensives (noVNC) : port fixe, toujours redirigé, qu'une machine tourne
+  # ou non. Le conteneur « attaquant » publie 6080 sur la VM ; cette règle l'amène jusqu'à l'hôte.
+  config.vm.network "forwarded_port", id: "gui", guest: gui_port, host: gui_port, host_ip: "127.0.0.1",
+                    auto_correct: true
   # Ports publiés par les labs (lab.yaml et docker-compose.yml) : même numéro sur l'hôte. Un port déjà pris
   # sur l'hôte est déplacé par Vagrant (auto_correct) plutôt que d'empêcher le moteur de démarrer.
   lab_ports.each do |port|

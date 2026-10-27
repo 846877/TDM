@@ -408,6 +408,10 @@ class Agent:
         changed = sync_tree(source, work)
         if lab == ENGINE:
             self._write_engine_ports(work)
+            if changed and self._created(work):
+                # Vagrantfile du moteur mis à jour (nouvel exe) : recharger pour appliquer les nouvelles
+                # redirections de ports (ex. bureau graphique noVNC), sans détruire la VM.
+                self.engine_reload = True
             return
         shared = self.bundled / SHARED_DIR
         if shared.is_dir():
