@@ -19,7 +19,7 @@ description: |
   Box : obtenir un accès, lire le **drapeau utilisateur** (`user.txt`), puis élever tes privilèges pour
   lire le **drapeau root** (`root.txt`). Valide chaque drapeau dans le panneau **🚩 Drapeaux**.
 
-  Tout est isolé dans le réseau du lab (`internal`) : rien ne sort de ta machine. **Réinitialiser**
+  La **cible** est isolée sur le réseau interne du lab : elle ne peut rien atteindre à l'extérieur. **Réinitialiser**
   reconstruit une cible neuve.
 
   **Pistes.**

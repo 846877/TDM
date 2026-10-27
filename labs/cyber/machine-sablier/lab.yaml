@@ -19,7 +19,7 @@ description: |
   passer pour un administrateur. Objectif : drapeau **utilisateur** (`user.txt`) puis élévation vers le
   drapeau **root** (`root.txt`).
 
-  Tout est isolé dans le réseau du lab (`internal`). **Réinitialiser** reconstruit une cible neuve.
+  La **cible** est isolée sur le réseau interne du lab : elle ne peut rien atteindre à l'extérieur. **Réinitialiser** reconstruit une cible neuve.
 
   **Pistes.**
 

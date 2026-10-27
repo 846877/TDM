@@ -8,7 +8,7 @@ services:
     build: ../_attaquant
     command: ["sleep", "infinity"]
     ports: ["6080:6080"]   # bureau Kali (noVNC) ; publie 6080 sur 127.0.0.1 via la VM moteur
-    networks: [fonderie]
+    networks: [fonderie, bureau]
     depends_on: [cible]
 
   cible:
@@ -18,4 +18,8 @@ services:
 
 networks:
   fonderie:
-    internal: true   # aucun accès à l'extérieur : le lab est confiné
+    internal: true   # cible isolée : réseau interne uniquement, rien ne sort
+  # Réseau normal (non interne) pour l'attaquant : il rend le bureau Kali (6080)
+  # joignable depuis l'hôte. Docker refuse de publier un port sur un réseau interne.
+  bureau:
+    driver: bridge
