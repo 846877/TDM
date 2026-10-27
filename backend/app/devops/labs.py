@@ -234,9 +234,11 @@ def launch(lab: dict[str, Any]) -> dict[str, Any]:
     current = engine.state()
     if current["status"] == "unavailable":
         raise LabError(_no_engine_message(current))
-    if current["status"] == "ready":
-        return {"status": _docker_start(lab), "notices": notices}
-    _agent(engine.ensure)  # VM moteur arrêtée ou en pause : le lab démarrera dès qu'elle sera prête
+    if current["status"] != "ready":
+        _agent(engine.ensure)  # VM moteur arrêtée ou en pause : le lab démarrera dès qu'elle sera prête
+    # On démarre TOUJOURS en arrière-plan, même moteur prêt : la construction d'une image lourde (Kali)
+    # peut durer longtemps ; la requête ne doit pas bloquer (sinon le navigateur expire et un reclic
+    # lancerait un second build en parallèle). Le garde ci-dessus (_pending vivant) empêche les doublons.
     _start_when_ready(lab)
     return {"status": "starting", "notices": notices}
 
@@ -266,8 +268,9 @@ def _docker_start(lab: dict[str, Any]) -> str:
     if status(lab) == "running":
         return "running"
     if "compose" in lab:
-        # Timeout large : la toute première construction d'une image (ex. Kali) peut durer longtemps.
-        result = _run(_compose_base(lab) + ["up", "-d", "--build"], cwd=lab["dir"], timeout=2400)
+        # Timeout très large : la toute première construction du Kali complet (plusieurs Go) est longue.
+        # L'image est découpée en couches : un build interrompu reprend au cache, il finit par aboutir.
+        result = _run(_compose_base(lab) + ["up", "-d", "--build"], cwd=lab["dir"], timeout=7200)
         if result.returncode != 0:
             raise LabError(result.stderr.strip()[-2000:])
         return "running"
