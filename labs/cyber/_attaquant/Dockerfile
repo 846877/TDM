@@ -1,35 +1,33 @@
-# Poste d'attaque commun à toutes les machines offensives : un vrai environnement Kali Linux,
-# en ligne de commande ET en interface graphique (bureau XFCE accessible dans le navigateur via noVNC).
+# Poste d'attaque commun à toutes les machines offensives : un environnement Kali Linux, en ligne de
+# commande ET en interface graphique (bureau léger accessible dans le navigateur via noVNC).
 # Image partagée (construite une seule fois, puis réutilisée par toutes les machines grâce au cache
 # Docker). Le conteneur n'atteint la cible que par le réseau interne du lab.
 #
-# NB : le tout premier démarrage télécharge l'image Kali et installe les outils + le bureau (plusieurs
-# minutes, une seule fois) ; ensuite les machines démarrent en quelques secondes. Le bureau graphique
-# n'est lancé qu'à la demande (bouton « Interface graphique »), pour ne pas ralentir le démarrage.
+# Image volontairement ALLÉGÉE pour se construire de façon fiable dans la VM moteur (bureau léger
+# Fluxbox + Firefox ; pas de métapaquet XFCE ni de Burp, qui faisaient planter la construction).
+# Le bureau n'est lancé qu'à la demande (bouton « Interface graphique »).
 FROM kalilinux/kali-rolling
 
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 
-# Outils de pentest en ligne de commande.
+# Couche 1 : outils de pentest en ligne de commande (l'essentiel pour résoudre les machines).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       nmap gobuster dirb nikto whatweb \
       sqlmap hydra \
       curl wget netcat-traditional \
-      python3 python3-pip python3-impacket \
+      python3 \
       iputils-ping dnsutils iproute2 net-tools \
       jq git vim less procps ca-certificates \
-      wordlists \
  && rm -rf /var/lib/apt/lists/*
-# (rockyou.txt reste compressé dans /usr/share/wordlists/ ; décompresse-le au besoin avec `gunzip`.)
 
-# Bureau graphique (XFCE) + serveur VNC + pont noVNC (accès par navigateur) + outils GUI (Firefox, Burp).
+# Couche 2 : bureau graphique léger (Fluxbox) + Firefox + serveur VNC + pont noVNC (accès navigateur).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      xfce4 xfce4-terminal dbus-x11 xterm \
+      fluxbox xterm dbus-x11 \
       tigervnc-standalone-server tigervnc-common \
       novnc websockify \
-      firefox-esr burpsuite \
+      firefox-esr \
  && rm -rf /var/lib/apt/lists/*
 
 # Script de démarrage du bureau (idempotent) : lance Xvnc sans mot de passe (lab local isolé) puis
@@ -37,7 +35,7 @@ RUN apt-get update \
 COPY demarrer-bureau.sh /opt/demarrer-bureau.sh
 RUN chmod +x /opt/demarrer-bureau.sh \
  && mkdir -p /root/reponses /root/.vnc \
- && printf '#!/bin/sh\nunset SESSION_MANAGER DBUS_SESSION_BUS_ADDRESS\nexec dbus-launch --exit-with-session startxfce4\n' > /root/.vnc/xstartup \
+ && printf '#!/bin/sh\nxterm -geometry 100x28+20+20 &\nfirefox-esr http://cible/ &\nexec fluxbox\n' > /root/.vnc/xstartup \
  && chmod +x /root/.vnc/xstartup
 
 WORKDIR /root

@@ -266,7 +266,8 @@ def _docker_start(lab: dict[str, Any]) -> str:
     if status(lab) == "running":
         return "running"
     if "compose" in lab:
-        result = _run(_compose_base(lab) + ["up", "-d", "--build"], cwd=lab["dir"])
+        # Timeout large : la toute première construction d'une image (ex. Kali) peut durer longtemps.
+        result = _run(_compose_base(lab) + ["up", "-d", "--build"], cwd=lab["dir"], timeout=2400)
         if result.returncode != 0:
             raise LabError(result.stderr.strip()[-2000:])
         return "running"
