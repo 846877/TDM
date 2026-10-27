@@ -30,13 +30,13 @@ RUN apt-get update \
       firefox-esr \
  && rm -rf /var/lib/apt/lists/*
 
-# Script de démarrage du bureau (idempotent) : lance Xvnc sans mot de passe (lab local isolé) puis
-# le pont noVNC sur le port 6080. Appelé à la demande par la plateforme.
+# Script de démarrage du bureau (idempotent) : lance Xtigervnc sans mot de passe (lab local isolé) puis
+# le pont noVNC sur le port 6080. Appelé à la demande par la plateforme. On n'utilise pas le script
+# `vncserver` (ni son xstartup) : il échoue sur Kali à la migration de /root/.vnc vers
+# /root/.config/tigervnc. Le script lance donc Xtigervnc et le gestionnaire de fenêtres lui-même.
 COPY demarrer-bureau.sh /opt/demarrer-bureau.sh
 RUN chmod +x /opt/demarrer-bureau.sh \
- && mkdir -p /root/reponses /root/.vnc \
- && printf '#!/bin/sh\nxterm -geometry 100x28+20+20 &\nfirefox-esr http://cible/ &\nexec fluxbox\n' > /root/.vnc/xstartup \
- && chmod +x /root/.vnc/xstartup
+ && mkdir -p /root/reponses
 
 WORKDIR /root
 CMD ["sleep", "infinity"]
