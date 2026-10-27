@@ -1,5 +1,5 @@
 #!/bin/sh
-# Démarre (une seule fois) le bureau léger (Fluxbox) via TigerVNC puis le pont noVNC sur le port 6080.
+# Démarre (une seule fois) le bureau Kali XFCE via TigerVNC puis le pont noVNC sur le port 6080.
 # Sans mot de passe : le lab est isolé et le port n'est exposé que sur 127.0.0.1 de ta machine.
 #
 # On lance le serveur X directement avec Xtigervnc (et PAS le script `vncserver`) : sur Kali, `vncserver`
@@ -28,9 +28,8 @@ while [ ! -S /tmp/.X11-unix/X1 ] && [ "$i" -lt 15 ]; do
   sleep 1
 done
 
-# Gestionnaire de fenêtres + terminal + navigateur, dans l'affichage VNC.
-fluxbox >/tmp/fluxbox.log 2>&1 &
-xterm -geometry 100x28+20+20 >/dev/null 2>&1 &
+# Session de bureau Kali (XFCE) dans l'affichage VNC, puis le navigateur ouvert sur la cible.
+dbus-launch --exit-with-session startxfce4 >/tmp/xfce.log 2>&1 &
 firefox-esr http://cible/ >/dev/null 2>&1 &
 
 # Pont noVNC : http://<hôte>:6080/vnc.html -> VNC local :5901. On écoute sur 0.0.0.0 pour que le port
