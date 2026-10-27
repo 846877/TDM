@@ -482,7 +482,7 @@ class Agent:
             }
         if lab == ENGINE:
             return {
-                "/up": ("up", [self._wait_pauses, [self.vagrant, "up"], self._mark_ready, self._reload_engine]),
+                "/up": ("up", [self._wait_pauses, self._reload_engine, [self.vagrant, "up"], self._mark_ready]),
                 "/halt": ("halt", [[self.vagrant, "suspend"]]),
                 "/reset": ("up", [self._wait_pauses, [self.vagrant, "destroy", "-f"], [self.vagrant, "up"], self._mark_ready]),
             }
@@ -510,7 +510,7 @@ class Agent:
     def _reload_engine(self, job: Job) -> int:
         if not self.engine_reload:
             return 0
-        job.log.append("Nouveaux ports publiés par les labs : redémarrage du moteur Docker…")
+        job.log.append("Mise à jour du moteur Docker (redirections de ports)…")
         code = job.call([self.vagrant, "reload"])
         if code == 0:
             self.engine_reload = False
