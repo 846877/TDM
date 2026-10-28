@@ -47,9 +47,10 @@ RUN apt-get update \
       burpsuite wireshark \
  && rm -rf /var/lib/apt/lists/*
 
-# Couche 5 : Metasploit Framework (gros paquet, isolé dans sa couche pour ne pas refaire le reste).
+# Couche 5 : Metasploit Framework (msfconsole) + exploitdb (searchsploit). Gros paquets isolés dans leur
+# couche pour ne pas refaire le reste si leur téléchargement est interrompu.
 RUN apt-get update \
- && apt-get install -y metasploit-framework \
+ && apt-get install -y metasploit-framework exploitdb \
  && rm -rf /var/lib/apt/lists/*
 
 # Couche 6 : outils d'énumération d'élévation de privilèges. unix-privesc-check via apt ; LinPEAS,
