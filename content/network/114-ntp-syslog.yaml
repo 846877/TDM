@@ -1,0 +1,104 @@
+title: Heure exacte et journaux centralisés
+level: intermediaire
+order: 14
+device: router
+hostname: R-LYON
+tags: [ntp, syslog, supervision]
+summary: Des journaux horodatés correctement et envoyés au serveur syslog.
+description: |
+  En cas d'incident, il faut pouvoir corréler les journaux de tous les équipements :
+  ils doivent être **à l'heure** et **centralisés**.
+
+  1. Fuseau horaire : `clock timezone CET 1` ;
+  2. serveurs de temps internes : `ntp server 10.0.0.10` et `ntp server 10.0.0.11` ;
+  3. horodatage des messages : `service timestamps log datetime msec` ;
+  4. envoie les journaux au serveur syslog `10.0.0.20` (`logging host 10.0.0.20`) ;
+  5. n'envoie que les messages de niveau **warnings** (4) et plus graves : `logging trap warnings`.
+
+  Contrôle avec `show ntp associations` et `show logging`.
+initial: |
+  interface g0/0
+  ip address 10.0.0.1 255.255.255.0
+  no shutdown
+checks:
+  - desc: Fuseau horaire CET +1
+    expr: d.clock_timezone == ("CET", 1)
+  - desc: Serveurs NTP 10.0.0.10 et 10.0.0.11
+    expr: '"10.0.0.10" in d.ntp_servers and "10.0.0.11" in d.ntp_servers'
+  - desc: Journaux envoyés à 10.0.0.20
+    expr: '"10.0.0.20" in d.logging_hosts'
+    hint: "logging host 10.0.0.20"
+  - desc: Niveau syslog warnings
+    expr: d.logging_trap == "warnings"
+    hint: "logging trap warnings (ou logging trap 4)"
+solution: |
+  configure terminal
+  clock timezone CET 1
+  ntp server 10.0.0.10
+  ntp server 10.0.0.11
+  service timestamps log datetime msec
+  logging host 10.0.0.20
+  logging trap warnings
+  end
+cours: |
+  ## L'heure, socle de l'exploitation
+
+  Des journaux mal horodatés sont inexploitables : impossible de corréler un incident entre un
+  pare-feu, un switch et un serveur. **NTP** (*Network Time Protocol*, UDP 123) synchronise
+  l'horloge sur des serveurs de référence organisés en **strates** (strate 1 = reliée à une
+  horloge atomique ou GPS).
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# clock timezone CET 1
+  R1(config)# clock summer-time CEST recurring last Sun Mar 2:00 last Sun Oct 3:00
+  R1(config)# ntp server 172.16.100.1 prefer
+  R1(config)# ntp server 172.16.100.2
+  R1# show ntp associations
+  R1# show clock detail
+  10:42:17.315 CET Mon Oct 19 2026
+  Time source is NTP
+  ```
+
+  Deux serveurs (ou plus) assurent la redondance ; un seul serveur faux n'est pas détectable.
+
+  ### Syslog : centraliser les journaux
+
+  Chaque message système a une **sévérité** de 0 à 7 :
+
+  | Niveau | Nom           | Niveau | Nom           |
+  |--------|---------------|--------|---------------|
+  | 0      | emergencies   | 4      | warnings      |
+  | 1      | alerts        | 5      | notifications |
+  | 2      | critical      | 6      | informational |
+  | 3      | errors        | 7      | debugging     |
+
+  `logging trap <niveau>` envoie au serveur les messages de ce niveau **et des niveaux plus
+  graves** (numéros inférieurs).
+
+  ```
+  R1(config)# service timestamps log datetime msec localtime show-timezone
+  R1(config)# logging host 172.16.100.30
+  R1(config)# logging trap notifications
+  R1# show logging
+  ```
+
+  Exemple de message : `%LINK-3-UPDOWN: Interface GigabitEthernet0/1, changed state to down`
+  (`LINK` = installation, `3` = sévérité, `UPDOWN` = mnémonique).
+
+  ### Pièges fréquents
+
+  - Oublier `service timestamps` : les messages portent un temps de fonctionnement au lieu d'une
+    date.
+  - `logging trap debugging` vers le serveur : avalanche de messages.
+  - Pare-feu qui bloque UDP 514 (syslog) ou 123 (NTP).
+
+  ### Pour le CCNA
+
+  NTP, syslog et les niveaux de sévérité sont au programme des services IP.
+docs:
+  - title: "Wikipédia — Network Time Protocol"
+    url: https://fr.wikipedia.org/wiki/Network_Time_Protocol
+  - title: "RFC 5424 — The Syslog Protocol"
+    url: https://www.rfc-editor.org/rfc/rfc5424

@@ -1,0 +1,97 @@
+title: Vitesse et duplex
+level: debutant
+order: 9
+device: switch
+hostname: SW-PROD
+tags: [speed, duplex, interface]
+summary: Forcer la vitesse et le duplex d'équipements anciens.
+description: |
+  Par défaut, un port négocie automatiquement sa **vitesse** et son **duplex** (`auto`).
+  Certains vieux équipements négocient mal : le lien monte en *half-duplex* et devient très lent.
+  On fixe alors les deux paramètres **des deux côtés**.
+
+  | Port    | Équipement             | Vitesse | Duplex |
+  |---------|------------------------|---------|--------|
+  | `Fa0/5` | Imprimante réseau      | 100     | full   |
+  | `Fa0/6` | Automate de production | 10      | half   |
+
+  ```
+  interface fa0/5
+   speed 100
+   duplex full
+  ```
+
+  Ne touche pas aux autres ports. Vérifie avec `show interfaces status` (colonnes *Duplex* et *Speed*).
+checks:
+  - desc: Fa0/5 en 100 Mbit/s full-duplex
+    expr: intf("fa0/5").speed == "100" and intf("fa0/5").duplex == "full"
+    hint: "interface fa0/5 puis speed 100 et duplex full"
+  - desc: Fa0/6 en 10 Mbit/s half-duplex
+    expr: intf("fa0/6").speed == "10" and intf("fa0/6").duplex == "half"
+  - desc: Les autres ports restent en négociation automatique
+    expr: all(i.speed == "auto" and i.duplex == "auto" for i in ports("fa0/1-4") + ports("fa0/7-24"))
+solution: |
+  configure terminal
+  interface fa0/5
+  speed 100
+  duplex full
+  interface fa0/6
+  speed 10
+  duplex half
+  end
+cours: |
+  ## Négociation automatique
+
+  Deux interfaces Ethernet qui se connectent négocient automatiquement (*auto-negotiation*,
+  IEEE 802.3) la **vitesse** (10, 100, 1000 Mbit/s) et le **mode duplex** :
+
+  - **half-duplex** : émission **ou** réception, comme un talkie-walkie ; les collisions sont
+    possibles (méthode CSMA/CD héritée des concentrateurs) ;
+  - **full-duplex** : émission **et** réception simultanées ; pas de collision. C'est le mode
+    normal sur un switch.
+
+  Par défaut, un port Cisco est en `speed auto` et `duplex auto`. On ne force les valeurs que pour
+  un équipement ancien ou capricieux (automate industriel, vieille imprimante) qui négocie mal.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# interface fa0/12
+  SW1(config-if)# speed 10
+  SW1(config-if)# duplex full
+  SW1# show interfaces fa0/12 status
+  Port    Name   Status     Vlan  Duplex  Speed Type
+  Fa0/12         connected  1     full    10    10/100BaseTX
+  SW1# show interfaces fa0/12 | include duplex
+    Full-duplex, 10Mb/s, media type is 10/100BaseTX
+  ```
+
+  Dans `show interfaces status`, une valeur préfixée `a-` (`a-full`, `a-100`) a été négociée ;
+  sans préfixe, elle est forcée.
+
+  ### Le piège du duplex mismatch
+
+  Si un côté est forcé en `full` et l'autre reste en `auto`, ce dernier ne reçoit pas de
+  négociation et se rabat sur **half-duplex** (règle de la norme). Résultat : le lien
+  « fonctionne », mais lentement, avec des erreurs :
+
+  - côté half : collisions et *late collisions* ;
+  - côté full : erreurs CRC et *runts*.
+
+  Règle : **forcer des deux côtés ou laisser `auto` des deux côtés**.
+
+  ### Pièges fréquents
+
+  - Forcer une seule extrémité (cause n° 1 des liens lents).
+  - Forcer `speed 1000` sur un port qui ne le supporte pas.
+  - Oublier de documenter pourquoi le port est forcé (`description`).
+
+  ### Pour le CCNA
+
+  Le CCNA demande de reconnaître un problème de duplex et de vitesse à partir des compteurs
+  d'erreurs de `show interfaces`.
+docs:
+  - title: "Cisco Catalyst 2960-X — guides de configuration"
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html
+  - title: "Wikipédia — Ethernet"
+    url: https://fr.wikipedia.org/wiki/Ethernet

@@ -1,0 +1,106 @@
+title: Générateur infini
+level: avance
+order: 2
+tags: [générateurs, yield]
+summary: Produire des valeurs à la demande avec yield.
+description: |
+  Écris un **générateur** `generer_premiers()` qui produit les nombres premiers à l'infini : 2, 3, 5, 7, 11...
+
+  Puis écris `n_premiers(n)` qui renvoie la liste des `n` premiers nombres premiers en utilisant
+  ton générateur (indice : `itertools.islice`).
+starter: |
+  import itertools
+
+
+  def generer_premiers():
+      pass
+
+
+  def n_premiers(n):
+      pass
+tests: |
+  import types
+
+  def test_generateur():
+      "generer_premiers est un générateur"
+      assert isinstance(solution.generer_premiers(), types.GeneratorType)
+
+  def test_debut():
+      "Les premières valeurs"
+      gen = solution.generer_premiers()
+      assert [next(gen) for _ in range(6)] == [2, 3, 5, 7, 11, 13]
+
+  def test_n_premiers():
+      "Le 1000e nombre premier est 7919"
+      assert solution.n_premiers(1000)[-1] == 7919
+solution: |
+  import itertools
+
+
+  def generer_premiers():
+      trouves = []
+      n = 2
+      while True:
+          if all(n % p for p in trouves if p * p <= n):
+              trouves.append(n)
+              yield n
+          n += 1
+
+
+  def n_premiers(n):
+      return list(itertools.islice(generer_premiers(), n))
+cours: |
+  ## `yield` : une fonction qui se met en pause
+
+  Une fonction contenant `yield` est une **fonction génératrice** : l'appeler ne lance pas
+  son code, mais renvoie un **générateur**. Chaque `next()` exécute le code jusqu'au
+  prochain `yield`, renvoie la valeur, et met la fonction en pause en conservant ses
+  variables locales.
+
+  ```python
+  def compte_a_rebours(n):
+      while n > 0:
+          yield n
+          n -= 1
+
+  g = compte_a_rebours(3)
+  next(g)        # 3
+  list(g)        # [2, 1]  (la suite)
+  next(g)        # StopIteration : épuisé
+  ```
+
+  ## Des suites infinies
+
+  Comme les valeurs sont calculées **à la demande** (évaluation paresseuse), un générateur
+  peut être infini : `while True: yield ...` ne bloque rien tant qu'on ne demande pas toutes
+  les valeurs. Évidemment, `list(generateur_infini)` ne termine jamais.
+
+  ## Prendre les n premiers éléments
+
+  `itertools.islice(iterable, n)` fournit les `n` premiers éléments de n'importe quel
+  itérable, sans le consommer davantage :
+
+  ```python
+  from itertools import islice, count
+  list(islice(count(10, 5), 4))   # [10, 15, 20, 25]
+  ```
+
+  `itertools.count(debut, pas)` est lui-même un générateur infini.
+
+  ## Tester efficacement
+
+  Pour décider si un nombre est premier, il suffit de tester les diviseurs jusqu'à sa racine
+  carrée. Mieux : le générateur peut **mémoriser les premiers déjà trouvés** et ne tester
+  que ceux-là comme diviseurs (tout nombre composé a un facteur premier ≤ √n). On passe de
+  O(√n) divisions à environ O(√n / log n).
+
+  ## Pourquoi c'est utile
+
+  Les générateurs séparent la **production** des valeurs de leur **consommation** : la
+  fonction qui génère les premiers ne sait pas combien on en voudra. On retrouve ce principe
+  pour lire un fichier ligne par ligne, paginer une API ou traiter un flux réseau.
+docs:
+  - title: Tutoriel — générateurs
+    url: https://docs.python.org/fr/3/tutorial/classes.html#generators
+  - title: itertools.islice et itertools.count
+    url: https://docs.python.org/fr/3/library/itertools.html

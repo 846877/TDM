@@ -1,0 +1,96 @@
+title: Accès SSH sécurisé
+level: intermediaire
+order: 5
+device: switch
+tags: [ssh, sécurité, vty]
+summary: Remplacer Telnet par SSH.
+description: |
+  Telnet fait circuler les mots de passe en clair. Configure l'administration en **SSH v2** :
+
+  1. nom d'hôte `SW-CORE` et nom de domaine `tdm.local` ;
+  2. utilisateur local `admin`, privilège 15, secret `Sup3rS3cret` ;
+  3. clés RSA de **2048 bits** : `crypto key generate rsa general-keys modulus 2048` ;
+  4. `ip ssh version 2` ;
+  5. lignes VTY 0 à 15 : authentification **locale** et **SSH uniquement**.
+checks:
+  - desc: Nom d'hôte SW-CORE et domaine tdm.local
+    expr: d.hostname == "SW-CORE" and d.domain_name == "tdm.local"
+  - desc: Utilisateur admin privilège 15 avec un secret
+    expr: d.users.get("admin", {}).get("privilege") == 15 and d.users["admin"].get("secret") == "Sup3rS3cret"
+  - desc: Clés RSA d'au moins 2048 bits
+    expr: (d.rsa_modulus or 0) >= 2048
+  - desc: SSH version 2
+    expr: d.ssh_version == 2
+  - desc: VTY en login local
+    expr: line("vty").login == "local"
+  - desc: VTY en SSH uniquement
+    expr: line("vty").transport_input == "ssh"
+solution: |
+  configure terminal
+  hostname SW-CORE
+  ip domain-name tdm.local
+  username admin privilege 15 secret Sup3rS3cret
+  crypto key generate rsa general-keys modulus 2048
+  ip ssh version 2
+  line vty 0 15
+  login local
+  transport input ssh
+  end
+cours: |
+  ## Pourquoi SSH ?
+
+  SSH (*Secure Shell*, TCP 22) remplace Telnet : la session est **chiffrée** (mots de passe et
+  commandes illisibles pour qui capture le trafic) et le serveur est **authentifié** par sa clé
+  publique. SSH version 2 est la seule à utiliser ; la version 1 a des failles connues.
+
+  ### Les prérequis sur IOS
+
+  1. un **nom d'hôte** différent de la valeur par défaut ;
+  2. un **nom de domaine** (`ip domain-name`) ;
+  3. une paire de **clés RSA** — SSH s'active automatiquement à leur création ;
+  4. des **comptes** pour s'authentifier ;
+  5. des lignes VTY qui acceptent SSH et utilisent ces comptes.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  Switch(config)# hostname SW-DIST2
+  SW-DIST2(config)# ip domain-name exemple.lan
+  SW-DIST2(config)# username ops privilege 15 secret 0ps-Reseau!
+  SW-DIST2(config)# crypto key generate rsa general-keys modulus 4096
+  The name for the keys will be: SW-DIST2.exemple.lan
+  SW-DIST2(config)# ip ssh version 2
+  SW-DIST2(config)# line vty 0 15
+  SW-DIST2(config-line)# login local
+  SW-DIST2(config-line)# transport input ssh
+  SW-DIST2# show ip ssh
+  SSH Enabled - version 2.0
+  ```
+
+  Depuis un poste : `ssh ops@10.199.0.22`.
+
+  ### Taille de clé
+
+  SSHv2 exige au moins 768 bits ; on utilise **2048** bits ou plus. La génération peut prendre
+  quelques secondes. `crypto key zeroize rsa` supprime les clés (et désactive SSH).
+
+  ### Durcir
+
+  - `ip ssh time-out 60` et `ip ssh authentication-retries 3` ;
+  - une ACL sur les VTY (`access-class`) pour n'accepter que le réseau d'administration ;
+  - `transport input ssh` seulement : Telnet refusé.
+
+  ### Pièges fréquents
+
+  - Générer les clés avant d'avoir défini le domaine (refusé).
+  - `login local` sans compte local.
+  - Oublier une partie des lignes (`vty 0 4` au lieu de `0 15`).
+
+  ### Pour le CCNA
+
+  La configuration complète de SSH est l'un des savoir-faire les plus demandés.
+docs:
+  - title: "Wikipédia — Secure Shell"
+    url: https://fr.wikipedia.org/wiki/Secure_Shell
+  - title: "RFC 4253 — SSH Transport Layer Protocol"
+    url: https://www.rfc-editor.org/rfc/rfc4253

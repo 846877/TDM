@@ -1,0 +1,11 @@
+#!/bin/sh
+# tdm-sonde NAMESPACE LABEL URL : lance un pod conforme dans NAMESPACE (avec LABEL, ex. role=frontal),
+# tente un wget vers URL et renvoie 0 si la requête aboutit (utilisé par les vérifications du lab).
+ns=$1; label=$2; url=$3
+nom="tdm-sonde-$(date +%s%N | tail -c 7)"
+tdm-pod-conforme "$nom" "$ns" "$label" | kubectl apply -f - >/dev/null || exit 2
+kubectl -n "$ns" wait --for=condition=Ready "pod/$nom" --timeout=60s >/dev/null 2>&1 || { kubectl -n "$ns" delete pod "$nom" --wait=false >/dev/null 2>&1; exit 2; }
+kubectl -n "$ns" exec "$nom" -- wget -q -T 4 -O /dev/null "$url" >/dev/null 2>&1
+r=$?
+kubectl -n "$ns" delete pod "$nom" --wait=false >/dev/null 2>&1
+exit $r

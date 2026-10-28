@@ -1,0 +1,162 @@
+title: Analyse de journaux et détection d'intrusion
+track: defensif
+level: debutant
+order: 1
+tags: [blue team, logs, siem, détection, ssh, nginx, forensic, durcissement]
+summary: Le réflexe de l'analyste SOC - reconstituer une intrusion à partir des journaux, identifier l'attaquant et le compte compromis, écrire une détection et durcir le serveur.
+build: .
+command: ["sleep", "infinity"]
+shell: bash
+workdir: /root
+description: |
+  **Cadre.** Tu es analyste SOC (*blue team*) chez *Ateliers Durand*. Une alerte signale une activité
+  suspecte sur le serveur `srv-intra`. On t'a copié ses journaux dans `/var/log/incident/` :
+
+  - `auth.log` - les connexions SSH (réussites et échecs) ;
+  - `access.log` - les requêtes web (format nginx *combined*).
+
+  Ta mission : **reconstituer l'attaque**, identifier l'attaquant et ce qu'il a obtenu, puis proposer
+  une détection et un durcissement. Tout est local et figé : tu enquêtes sur des traces, tu ne lances
+  rien vers l'extérieur. Note tes conclusions sous `/root/reponses/`.
+
+  Outils : `grep`, `awk`, `sort`, `uniq`, `cut`, `wc`. Un clic sur **Réinitialiser** restaure les
+  journaux d'origine.
+cours: |
+  ## Lire les journaux comme un analyste
+
+  Face à un incident, les journaux sont la source de vérité. L'enjeu : passer de milliers de lignes à
+  une **chronologie** claire - qui, quand, comment, et jusqu'où.
+
+  ### auth.log : les connexions SSH
+
+  Deux motifs essentiels :
+
+  ```
+  Failed password for <user> from <IP> port ...      # tentative ratée
+  Accepted password for <user> from <IP> port ...     # connexion réussie
+  ```
+
+  Une rafale de `Failed password` depuis une même IP = **force brute**. Un `Accepted password` depuis
+  cette même IP juste après = **compromission**.
+
+  ```
+  grep 'Failed password' /var/log/incident/auth.log | wc -l          # combien d'échecs
+  grep 'Failed password' auth.log | grep -oE 'from [0-9.]+' | sort | uniq -c | sort -rn   # par IP
+  grep 'Accepted password' auth.log                                   # qui a réussi, d'où
+  ```
+
+  `grep -oE` n'imprime que la partie qui correspond : pratique pour extraire une IP ou un utilisateur.
+
+  ### access.log : les requêtes web
+
+  Format *combined* : `IP - - [date] "METHODE chemin HTTP/x" code taille "referer" "user-agent"`. Le
+  **code de réponse** raconte l'histoire : une série de `404`/`401` suivie d'un `200` sur une page
+  sensible, c'est un scan qui a fini par aboutir.
+
+  ```
+  awk '{print $1}' access.log | sort | uniq -c | sort -rn     # IP les plus actives
+  awk '$9 == 200 {print $1, $7}' access.log                   # requêtes réussies (IP, chemin)
+  ```
+
+  ### De la détection au durcissement
+
+  Détecter, c'est écrire une règle qui fait ressortir le motif (ici, trop d'échecs depuis une IP).
+  C'est le principe d'un **SIEM** ou de `fail2ban`. Durcir, c'est supprimer la cause : interdire la
+  connexion `root` par SSH, désactiver l'authentification par mot de passe (clés uniquement), limiter
+  les essais.
+
+  ```
+  # /etc/ssh/sshd_config.d/durcissement.conf
+  PermitRootLogin no
+  PasswordAuthentication no
+  MaxAuthTries 3
+  ```
+docs:
+  - title: MITRE ATT&CK - Brute Force (T1110)
+    url: https://attack.mitre.org/techniques/T1110/
+exercises:
+  - id: ip-attaquant
+    title: Identifier l'attaquant
+    description: |
+      Dans `auth.log`, une adresse IP cumule les tentatives de connexion échouées. Trouve-la et
+      écris-la seule dans `/root/reponses/ip.txt`.
+    hint: "grep 'Failed password' /var/log/incident/auth.log | grep -oE 'from [0-9.]+' | sort | uniq -c | sort -rn"
+    cours: |
+      Agréger les échecs par IP fait immédiatement ressortir l'attaquant : une IP avec des dizaines
+      d'échecs se détache du bruit normal (quelques fautes de frappe par-ci par-là).
+    checks:
+      - desc: L'IP de l'attaquant est correcte
+        run: grep -qx '185.220.101.42' /root/reponses/ip.txt
+  - id: nombre-echecs
+    title: Quantifier la force brute
+    description: |
+      Combien de tentatives SSH **échouées** l'attaque a-t-elle produites au total ? Écris le nombre
+      seul dans `/root/reponses/echecs.txt`.
+    hint: "grep -c 'Failed password' /var/log/incident/auth.log"
+    cours: |
+      Le volume d'échecs qualifie l'attaque (quelques essais ciblés vs. force brute massive) et sert de
+      seuil pour une alerte : par exemple « plus de 10 échecs en 1 minute depuis une IP ».
+    checks:
+      - desc: Le nombre d'échecs est exact
+        run: grep -qx '47' /root/reponses/echecs.txt
+  - id: compte-compromis
+    title: Trouver le compte compromis
+    description: |
+      L'attaquant a fini par réussir une connexion. Sur **quel compte** ? Écris le nom d'utilisateur
+      seul dans `/root/reponses/compte.txt`.
+    hint: "grep 'Accepted password' /var/log/incident/auth.log"
+    cours: |
+      Un `Accepted password` depuis l'IP de l'attaquant révèle le compte tombé, et donc le point de
+      départ de la post-exploitation. C'est le compte à désactiver et dont il faut auditer l'activité.
+    checks:
+      - desc: Le compte compromis est identifié
+        run: grep -qx 'sauvegarde' /root/reponses/compte.txt
+  - id: chemin-web
+    title: Repérer l'accès web réussi
+    description: |
+      Dans `access.log`, l'attaquant a scanné le site (beaucoup de 404/401) avant d'obtenir un `200`
+      sur une page sensible. Quel **chemin** a renvoyé 200 pour lui ? Écris-le (ex. `/xxx/`) dans
+      `/root/reponses/chemin.txt`.
+    hint: "awk '$1==\"185.220.101.42\" && $9==200 {print $7}' /var/log/incident/access.log"
+    cours: |
+      Corréler l'IP de l'attaquant (vue côté SSH) avec les journaux web relie les deux volets de
+      l'intrusion. Le passage de `401` répétés à un `200` sur `/gestion/` montre que les identifiants
+      volés ont servi aussi côté web.
+    checks:
+      - desc: Le chemin sensible atteint est trouvé
+        run: grep -q '/gestion' /root/reponses/chemin.txt
+  - id: detection
+    title: Écrire une détection
+    description: |
+      Écris un script `/root/reponses/detection.sh` qui analyse `auth.log` et **affiche l'IP** à
+      l'origine du plus grand nombre d'échecs SSH (juste l'IP, sans autre texte). Rends-le exécutable ;
+      la vérification l'exécutera.
+    hint: |
+      Dans le script :
+      grep 'Failed password' /var/log/incident/auth.log | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sort | uniq -c | sort -rn | head -1 | grep -oE '[0-9.]+$'
+    cours: |
+      Automatiser la recherche, c'est le cœur de la détection : la même logique, rejouée en continu,
+      alimente une alerte SIEM ou une action `fail2ban`. Un bon indicateur est reproductible et ne
+      dépend pas d'un regard humain.
+    checks:
+      - desc: Le script existe et est exécutable
+        run: test -x /root/reponses/detection.sh
+      - desc: Le script affiche l'IP de l'attaquant
+        run: test "$(bash /root/reponses/detection.sh | tr -d '[:space:]')" = "185.220.101.42"
+  - id: durcissement
+    title: Durcir le serveur SSH
+    description: |
+      Propose un durcissement SSH : crée `/root/reponses/durcissement.conf` qui **interdit la connexion
+      root**, **désactive l'authentification par mot de passe** et **limite les essais à 3**.
+    hint: "Trois directives : PermitRootLogin no / PasswordAuthentication no / MaxAuthTries 3"
+    cours: |
+      Supprimer la cause vaut mieux que détecter l'effet : sans mot de passe à deviner (clés
+      uniquement) et sans compte root exposé, la force brute de l'incident n'aurait rien donné.
+      `MaxAuthTries` limite en plus les essais par connexion.
+    checks:
+      - desc: La connexion root est interdite
+        run: grep -Eiq '^\s*PermitRootLogin\s+no' /root/reponses/durcissement.conf
+      - desc: L'authentification par mot de passe est désactivée
+        run: grep -Eiq '^\s*PasswordAuthentication\s+no' /root/reponses/durcissement.conf
+      - desc: Les essais sont limités à 3
+        run: grep -Eiq '^\s*MaxAuthTries\s+3' /root/reponses/durcissement.conf

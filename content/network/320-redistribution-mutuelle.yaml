@@ -1,0 +1,133 @@
+title: Redistribution mutuelle OSPF / EIGRP sans boucle
+level: expert
+order: 20
+device: router
+hostname: R-FRONTIERE
+tags: [redistribution, ospf, eigrp, route-map, tags]
+summary: Échanger les routes entre deux domaines de routage en marquant leur origine.
+description: |
+  Après une fusion, le réseau de l'entreprise rachetée tourne en EIGRP `100`, le nôtre en OSPF
+  `1`. `R-FRONTIERE` participe aux deux. Il faut que chaque domaine apprenne les routes de
+  l'autre, et un second routeur frontière sera ajouté plus tard : sans précaution, une route
+  pourrait revenir dans son domaine d'origine et créer une boucle.
+
+  Utilise des **tags** : `90` = route venant d'EIGRP, `110` = route venant d'OSPF.
+
+  1. route-map `EIGRP-VERS-OSPF` :
+     - séquence `10` `deny` : `match tag 110` (route née dans OSPF : ne pas la renvoyer) ;
+     - séquence `20` `permit` : `set tag 90` ;
+  2. route-map `OSPF-VERS-EIGRP` :
+     - séquence `10` `deny` : `match tag 90` ;
+     - séquence `20` `permit` : `set tag 110` ;
+  3. dans OSPF : `redistribute eigrp 100 subnets route-map EIGRP-VERS-OSPF` ;
+  4. dans EIGRP : `redistribute ospf 1 metric 100000 100 255 1 1500 route-map OSPF-VERS-EIGRP`
+     (EIGRP exige une métrique de départ : bande passante, délai, fiabilité, charge, MTU).
+initial: |
+  interface g0/0
+  ip address 10.1.0.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 172.16.0.1 255.255.255.0
+  no shutdown
+  router ospf 1
+  router-id 1.1.1.1
+  network 10.1.0.0 0.0.0.255 area 0
+  exit
+  router eigrp 100
+  network 172.16.0.0 0.0.0.255
+  no auto-summary
+checks:
+  - desc: EIGRP-VERS-OSPF (deny tag 110, puis permit set tag 90)
+    expr: rmap("EIGRP-VERS-OSPF", 10).action == "deny" and rmap("EIGRP-VERS-OSPF", 10).matches == ["tag 110"] and rmap("EIGRP-VERS-OSPF", 20).action == "permit" and rmap("EIGRP-VERS-OSPF", 20).sets == ["tag 90"]
+  - desc: OSPF-VERS-EIGRP (deny tag 90, puis permit set tag 110)
+    expr: rmap("OSPF-VERS-EIGRP", 10).action == "deny" and rmap("OSPF-VERS-EIGRP", 10).matches == ["tag 90"] and rmap("OSPF-VERS-EIGRP", 20).action == "permit" and rmap("OSPF-VERS-EIGRP", 20).sets == ["tag 110"]
+  - desc: EIGRP redistribué dans OSPF avec la route-map
+    expr: d.ospf[1].redist("eigrp") == "eigrp 100 subnets route-map EIGRP-VERS-OSPF"
+  - desc: OSPF redistribué dans EIGRP avec métrique et route-map
+    expr: d.eigrp[100].redist("ospf") == "ospf 1 metric 100000 100 255 1 1500 route-map OSPF-VERS-EIGRP"
+solution: |
+  configure terminal
+  route-map EIGRP-VERS-OSPF deny 10
+  match tag 110
+  route-map EIGRP-VERS-OSPF permit 20
+  set tag 90
+  route-map OSPF-VERS-EIGRP deny 10
+  match tag 90
+  route-map OSPF-VERS-EIGRP permit 20
+  set tag 110
+  exit
+  router ospf 1
+  redistribute eigrp 100 subnets route-map EIGRP-VERS-OSPF
+  exit
+  router eigrp 100
+  redistribute ospf 1 metric 100000 100 255 1 1500 route-map OSPF-VERS-EIGRP
+  end
+cours: |
+  ## Le danger de la redistribution mutuelle
+
+  Avec **un seul** point de redistribution, le risque est faible. Avec **deux** routeurs
+  frontière (cas normal, pour la redondance), une route peut faire le tour :
+
+  1. `R-A` redistribue un réseau EIGRP dans OSPF ;
+  2. `R-B` l'apprend par OSPF et le **redistribue dans EIGRP** ;
+  3. dans EIGRP, la route externe ainsi créée peut être préférée à l'originale selon les
+     distances administratives (EIGRP externe 170, OSPF 110, EIGRP interne 90)...
+
+  Résultats possibles : routage sous-optimal, boucles, routes qui oscillent.
+
+  ### Les tags
+
+  Un **tag** est une étiquette numérique attachée à une route redistribuée, transportée par OSPF
+  (dans les LSA externes) et EIGRP (routes externes). Le principe : marquer à l'entrée, refuser
+  à la sortie.
+
+  ```
+  R1(config)# route-map RIP-VERS-OSPF deny 10
+  R1(config-route-map)# match tag 2000
+  R1(config)# route-map RIP-VERS-OSPF permit 20
+  R1(config-route-map)# set tag 1000
+  R1(config)# route-map OSPF-VERS-RIP deny 10
+  R1(config-route-map)# match tag 1000
+  R1(config)# route-map OSPF-VERS-RIP permit 20
+  R1(config-route-map)# set tag 2000
+  R1(config)# router ospf 7
+  R1(config-router)# redistribute rip subnets route-map RIP-VERS-OSPF
+  R1(config)# router rip
+  R1(config-router)# redistribute ospf 7 metric 3 route-map OSPF-VERS-RIP
+  R1# show ip route 172.16.9.0
+    Route tag 1000
+  R1# show ip ospf database external | include Tag
+  ```
+
+  ### Métriques de départ
+
+  Chaque protocole a sa métrique : une route importée n'en a pas de compréhensible. Il faut donc
+  en fixer une :
+
+  - EIGRP : `metric <bande passante kbit/s> <délai en dizaines de µs> <fiabilité> <charge> <MTU>`
+    (ou `default-metric`) ; sans métrique, les routes ne sont **pas** redistribuées (sauf depuis
+    un autre EIGRP ou des statiques/connectées) ;
+  - OSPF : métrique 20 par défaut (1 pour BGP), type E2.
+
+  ### Autres outils
+
+  - ajuster la **distance administrative** des routes externes (`distance ospf external 175`,
+    `distance eigrp 90 175`) ;
+  - filtrer par **prefix-list** les réseaux connus d'un côté ;
+  - limiter la redistribution à un seul routeur si la redondance n'est pas exigée.
+
+  ### Pièges fréquents
+
+  - Marquer sans jamais filtrer (ou l'inverse).
+  - Oublier la métrique EIGRP : rien n'est redistribué.
+  - Oublier `subnets` côté OSPF.
+
+  ### Pour le CCNP ENCOR
+
+  La redistribution, ses risques et son contrôle par route-maps et tags font partie des sujets
+  de routage avancé d'ENCOR (et approfondis dans ENARSI).
+docs:
+  - title: Cisco — Enhanced Interior Gateway Routing Protocol (EIGRP)
+    url: https://www.cisco.com/c/en/us/support/docs/ip/enhanced-interior-gateway-routing-protocol-eigrp/16406-eigrp-toc.html
+  - title: Cisco — OSPF Design Guide
+    url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/7039-1.html

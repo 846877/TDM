@@ -1,0 +1,241 @@
+title: Vérifier les annotations de type
+level: avance
+order: 28
+tags: [typing, décorateurs, inspect, introspection]
+summary: Un décorateur qui contrôle les types à l'exécution grâce aux annotations.
+description: |
+  Python ignore les annotations à l'exécution… sauf si on les lit ! Écris un décorateur
+  `verifier_types` qui, à chaque appel, contrôle les arguments **et** la valeur de retour de la
+  fonction décorée par rapport à ses annotations, et lève `TypeError` en cas d'écart.
+
+  ```python
+  @verifier_types
+  def moyenne(notes: list[float], arrondi: int | None = None) -> float:
+      ...
+
+  moyenne([12.0, 15.5])        # OK
+  moyenne("12", arrondi=1)     # TypeError: notes: attendu list[float], reçu str
+  ```
+
+  Annotations à gérer (récursivement) :
+
+  | Annotation | Accepte |
+  |------------|---------|
+  | une classe (`int`, `str`, une classe perso…) | `isinstance(valeur, classe)` |
+  | `typing.Any` | tout |
+  | `list[X]`, `set[X]` | une liste / un ensemble dont **chaque** élément est accepté par `X` |
+  | `dict[K, V]` | un dict dont chaque clé est acceptée par `K` et chaque valeur par `V` |
+  | `tuple[X, Y]` / `tuple[X, ...]` | un tuple de cette forme exacte / de longueur quelconque |
+  | `X \| Y`, `Optional[X]`, `Union[X, Y]` | une valeur acceptée par au moins une des options |
+
+  - Le message de `TypeError` commence par le nom du paramètre (`"notes: ..."`), ou par `"retour: ..."`
+    pour la valeur de retour.
+  - Les paramètres non annotés ne sont pas vérifiés ; les valeurs par défaut non plus.
+  - Les arguments peuvent être passés par position ou par nom (`inspect.signature(...).bind`).
+  - Outils utiles : `typing.get_type_hints`, `typing.get_origin`, `typing.get_args`, `functools.wraps`.
+starter: |
+  import functools
+  import inspect
+  import types
+  import typing
+
+
+  def verifier_types(fonction):
+      return fonction
+tests: |
+  from typing import Any, Optional, Union
+
+  def doit_lever(appel, debut):
+      try:
+          appel()
+      except TypeError as exc:
+          assert str(exc).startswith(debut), f"message {str(exc)!r} : il devrait commencer par {debut!r}"
+      else:
+          raise AssertionError(f"TypeError attendue ({debut}...)")
+
+  def test_simples():
+      "Types simples"
+      @solution.verifier_types
+      def f(a: int, b: str, c) -> str:
+          return b * a
+      assert f(2, "ab", object()) == "abab"
+      doit_lever(lambda: f("2", "ab", 1), "a:")
+      doit_lever(lambda: f(2, b=3, c=1), "b:")
+
+  def test_retour():
+      "Valeur de retour contrôlée"
+      @solution.verifier_types
+      def g(x: int) -> str:
+          return x
+      doit_lever(lambda: g(1), "retour:")
+
+  def test_wraps():
+      "functools.wraps"
+      @solution.verifier_types
+      def nommee(x: int) -> int:
+          "doc"
+          return x
+      assert nommee.__name__ == "nommee" and nommee.__doc__ == "doc"
+
+  def test_conteneurs():
+      "list, set et dict paramétrés"
+      @solution.verifier_types
+      def h(l: list[int], d: dict[str, list[float]], s: set[str] = frozenset()) -> int:
+          return len(l)
+      assert h([1, 2], {"a": [1.0]}) == 2
+      assert h([], {}, {"x"}) == 0
+      doit_lever(lambda: h([1, "2"], {}), "l:")
+      doit_lever(lambda: h([1], {"a": [1.0, "x"]}), "d:")
+      doit_lever(lambda: h([1], {3: []}), "d:")
+      doit_lever(lambda: h([1], {}, {1}), "s:")
+      doit_lever(lambda: h((1, 2), {}), "l:")
+
+  def test_tuples():
+      "tuple de forme fixe ou variable"
+      @solution.verifier_types
+      def t(p: tuple[int, str], q: tuple[float, ...] = ()) -> None:
+          return None
+      t((1, "a"))
+      t((1, "a"), (1.0, 2.0, 3.0))
+      doit_lever(lambda: t((1, "a", 2)), "p:")
+      doit_lever(lambda: t(("a", 1)), "p:")
+      doit_lever(lambda: t((1, "a"), (1.0, "x")), "q:")
+
+  def test_unions():
+      "Unions et Optional"
+      @solution.verifier_types
+      def u(a: int | None, b: Optional[str] = None, c: Union[int, list[str]] = 0) -> Any:
+          return a
+      assert u(None) is None and u(3, "x", ["a"]) == 3
+      doit_lever(lambda: u("x"), "a:")
+      doit_lever(lambda: u(1, c=[1]), "c:")
+
+  def test_classes_perso():
+      "Classes personnalisées et héritage"
+      class Animal: pass
+      class Chat(Animal): pass
+      @solution.verifier_types
+      def caresser(a: Animal) -> bool:
+          return True
+      assert caresser(Chat())
+      doit_lever(lambda: caresser("chat"), "a:")
+solution: |
+  import functools
+  import inspect
+  import types
+  import typing
+
+
+  def _accepte(valeur, annotation):
+      if annotation is typing.Any:
+          return True
+      origine = typing.get_origin(annotation)
+      arguments = typing.get_args(annotation)
+      if origine is None:
+          return isinstance(valeur, annotation)
+      if origine is typing.Union or origine is types.UnionType:
+          return any(_accepte(valeur, option) for option in arguments)
+      if not isinstance(valeur, origine):
+          return False
+      if origine in (list, set, frozenset):
+          return all(_accepte(v, arguments[0]) for v in valeur) if arguments else True
+      if origine is dict:
+          if not arguments:
+              return True
+          k, v = arguments
+          return all(_accepte(cle, k) and _accepte(val, v) for cle, val in valeur.items())
+      if origine is tuple:
+          if len(arguments) == 2 and arguments[1] is Ellipsis:
+              return all(_accepte(v, arguments[0]) for v in valeur)
+          return len(valeur) == len(arguments) and all(map(_accepte, valeur, arguments))
+      return True
+
+
+  def _nom(annotation):
+      return getattr(annotation, "__name__", None) if typing.get_origin(annotation) is None else str(annotation)
+
+
+  def verifier_types(fonction):
+      annotations = typing.get_type_hints(fonction)
+      signature = inspect.signature(fonction)
+
+      def controler(nom, valeur, annotation):
+          if not _accepte(valeur, annotation):
+              attendu = _nom(annotation) or str(annotation)
+              raise TypeError(f"{nom}: attendu {attendu}, reçu {type(valeur).__name__}")
+
+      @functools.wraps(fonction)
+      def enveloppe(*args, **kwargs):
+          lies = signature.bind(*args, **kwargs)
+          for nom, valeur in lies.arguments.items():
+              if nom in annotations:
+                  controler(nom, valeur, annotations[nom])
+          resultat = fonction(*args, **kwargs)
+          if "return" in annotations:
+              attendu = annotations["return"]
+              controler("retour", resultat, type(None) if attendu is None else attendu)
+          return resultat
+
+      return enveloppe
+cours: |
+  ## Les annotations sont des objets
+
+  Python stocke les annotations sans les vérifier :
+
+  ```python
+  def f(x: int, y: list[str] = None) -> bool: ...
+  f.__annotations__   # {'x': int, 'y': list[str], 'return': bool}
+  ```
+
+  `typing.get_type_hints(f)` les résout proprement (y compris les annotations écrites en
+  chaînes).
+
+  ## Associer arguments et paramètres
+
+  Un appel peut mélanger positionnels, nommés et valeurs par défaut. `inspect.signature`
+  fait l'association à notre place :
+
+  ```python
+  import inspect
+  sig = inspect.signature(f)
+  lies = sig.bind(1, y=["a"])
+  lies.apply_defaults()
+  lies.arguments        # {'x': 1, 'y': ['a']}
+  ```
+
+  `bind` lève `TypeError` si les arguments ne correspondent pas à la signature.
+
+  ## Décomposer un type générique
+
+  `typing.get_origin` et `typing.get_args` décomposent une annotation :
+
+  ```python
+  from typing import get_origin, get_args
+  get_origin(list[int])          # list
+  get_args(dict[str, int])       # (str, int)
+  get_args(tuple[int, ...])      # (int, Ellipsis)
+  import types
+  get_origin(int | None) is types.UnionType   # True
+  ```
+
+  `Optional[X]` et `Union[...]` (de `typing`) ont pour origine `typing.Union`, tandis que la
+  syntaxe `X | Y` donne `types.UnionType` : il faut gérer les deux. `None` dans une
+  annotation représente `type(None)`.
+
+  ## Une fonction récursive « cette valeur est-elle acceptée par ce type ? »
+
+  Elle examine l'origine de l'annotation : union (au moins une alternative acceptée),
+  conteneur (le bon type de conteneur **et** chaque élément accepté), classe simple
+  (`isinstance`). C'est un interpréteur de types en miniature.
+
+  ## Ce que ça coûte
+
+  Vérifier chaque élément d'une grosse liste à chaque appel est lent : c'est pourquoi Python
+  ne le fait pas, et qu'on préfère les vérificateurs **statiques** (mypy, pyright) en
+  développement. Des bibliothèques comme `typeguard` ou `beartype` font ce travail à
+  l'exécution quand c'est nécessaire (frontières d'API).
+docs:
+  - title: Module typing (get_origin, get_args)
+    url: https://docs.python.org/fr/3/library/typing.html
+  - title: Module inspect (signature, bind)
+    url: https://docs.python.org/fr/3/library/inspect.html

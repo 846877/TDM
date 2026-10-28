@@ -1,0 +1,338 @@
+title: Registre d'images privé
+level: intermediaire
+order: 10
+tags: [docker, registre, registry, tls, authentification, images]
+summary: Héberger son propre registre Docker - publication, API, digests, authentification htpasswd, TLS avec un certificat de confiance et nettoyage des images.
+build: .
+privileged: true
+command: []
+shell: sh
+workdir: /root
+setup: |
+  for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+description: |
+  Un hôte Docker rien qu'à toi (Docker dans Docker), avec `curl`, `htpasswd`, `openssl` et `jq`. Tu vas y
+  faire tourner **ton propre registre d'images** (l'image officielle **`registry:2.8.3`**) et l'utiliser
+  comme le ferait une équipe ou une chaîne de CI : publier des images, les retrouver par leur empreinte,
+  protéger l'accès par mot de passe puis par TLS, et faire le ménage.
+
+  Le dossier **`/root/appli`** contient le Dockerfile d'une petite image à publier ; **`/root/registre`**
+  accueillera la configuration du registre (mots de passe, certificats).
+
+  Le registre parle HTTP : son API se consulte avec `curl`, par exemple
+  `curl -s http://localhost:5000/v2/_catalog`.
+cours: |
+  ## Le registre : l'entrepôt des images
+
+  Un **registre** stocke et distribue les images de conteneurs. Docker Hub, GitHub Container Registry,
+  GitLab, Harbor, Amazon ECR ou Google Artifact Registry en sont des exemples ; l'image **`registry`**
+  (projet *Distribution* de la CNCF) permet d'héberger le sien. Une entreprise s'en sert pour garder ses
+  images privées, maîtriser ce qui est déployé, et ne pas dépendre d'un service externe ou de ses limites
+  de téléchargement.
+
+  ```
+   docker build ──> image locale ──docker tag──> registre.local:5443/appli/bonjour:1.1
+                                                       │ docker push
+                                                       ▼
+                                   ┌───────────────────────────────────┐
+                                   │ registre (API HTTP /v2/...)       │
+                                   │  dépôts : appli/bonjour, outils/… │
+                                   │  manifestes + couches (blobs)     │
+                                   └───────────────────────────────────┘
+                                                       │ docker pull
+                                                       ▼
+                                         serveurs, CI, Kubernetes
+  ```
+
+  ### Le nom d'une image
+
+  `registre.local:5443/appli/bonjour:1.1` se lit : **hôte du registre** (avec son port), **dépôt**
+  (`appli/bonjour`), **étiquette** (`1.1`). Sans hôte, Docker utilise Docker Hub (`docker.io`). Une
+  étiquette est **mobile** : on peut la repousser sur une autre image. L'**empreinte** (*digest*,
+  `@sha256:...`) désigne au contraire un contenu précis et immuable.
+
+  ### Ce que contient un registre
+
+  Une image est un **manifeste** (document JSON) qui référence une **configuration** et des **couches**
+  (des archives, ou *blobs*), toutes identifiées par leur empreinte SHA-256. Les couches communes à
+  plusieurs images ne sont stockées qu'une fois. Pour plusieurs architectures, un **index** regroupe un
+  manifeste par plateforme.
+
+  ### Mémo de l'API (OCI Distribution)
+
+  | Requête | Effet |
+  |---|---|
+  | `GET /v2/` | test de l'API (et de l'authentification) |
+  | `GET /v2/_catalog` | liste des dépôts |
+  | `GET /v2/<dépôt>/tags/list` | étiquettes d'un dépôt |
+  | `GET /v2/<dépôt>/manifests/<tag ou digest>` | manifeste (en-tête `Docker-Content-Digest`) |
+  | `DELETE /v2/<dépôt>/manifests/<digest>` | suppression (si activée) |
+
+  ### Sécuriser
+
+  - **Authentification** : fichier `htpasswd` (mots de passe hachés en bcrypt), ou jetons délivrés par un
+    service d'authentification. Le client s'identifie avec `docker login`.
+  - **TLS** : hors `localhost`, Docker refuse un registre en HTTP clair. Avec un certificat signé par une
+    autorité privée, on la déclare dans `/etc/docker/certs.d/<hôte>:<port>/ca.crt`.
+  - Le certificat doit contenir le nom d'hôte utilisé dans le **SAN** (*Subject Alternative Name*).
+
+  ### Pièges
+
+  - `insecure-registries` dans `daemon.json` désactive la vérification TLS : une solution de dépannage,
+    pas une configuration durable.
+  - Les identifiants de `docker login` sont stockés en base64 (et non chiffrés) dans
+    `~/.docker/config.json` sans gestionnaire d'identifiants.
+  - Supprimer une étiquette ne libère pas l'espace disque : il faut le **ramasse-miettes**.
+  - Déployer `:latest` : on ne sait plus ce qui tourne. On déploie une version, voire un digest.
+
+  ### Bonnes pratiques
+
+  Volume dédié et sauvegardé pour les données, TLS et authentification systématiques, comptes séparés
+  pour la CI (écriture) et les serveurs (lecture), politique de rétention, analyse de vulnérabilités
+  (Harbor la fournit), et images signées pour vérifier leur origine. Un registre devient vite critique :
+  s'il tombe, plus aucun déploiement ni redémarrage de conteneur sur un nouveau serveur n'est possible.
+  On le surveille et on le sauvegarde comme une base de données.
+
+  ### Pour réviser
+
+  1. Comment Docker sait-il à quel registre envoyer `registre.local:5443/appli/bonjour:1.1` ?
+  2. Pourquoi un digest est-il plus sûr qu'une étiquette pour déployer ?
+  3. Où Docker cherche-t-il l'autorité de confiance d'un registre précis ?
+  4. Pourquoi supprimer une étiquette ne libère-t-il pas d'espace disque ?
+docs:
+  - title: Documentation de Distribution (registre)
+    url: https://distribution.github.io/distribution/
+  - title: Déployer un registre
+    url: https://distribution.github.io/distribution/about/deploying/
+  - title: Docker - Vérifier un registre avec un certificat
+    url: https://docs.docker.com/engine/security/certificates/
+  - title: Spécification OCI Distribution
+    url: https://github.com/opencontainers/distribution-spec/blob/main/spec.md
+exercises:
+  - id: rg-lancer
+    title: Démarrer le registre
+    description: |
+      Lance un conteneur nommé **`registre`** à partir de l'image **`registry:2.8.3`** :
+      - port **5000** publié sur le port 5000 ;
+      - données dans un **volume nommé** **`registre-donnees`**, monté sur `/var/lib/registry` ;
+      - redémarrage automatique (`--restart always`).
+
+      Vérifie : `curl -s http://localhost:5000/v2/` doit répondre `{}`.
+    hint: "docker run -d --name registre --restart always -p 5000:5000 -v registre-donnees:/var/lib/registry registry:2.8.3"
+    cours: |
+      Le registre est une application comme une autre : un binaire Go qui écoute sur le port **5000** et
+      expose l'API `/v2/`. Il stocke tout sous `/var/lib/registry` (ou dans un stockage objet S3, Azure,
+      GCS…). Sans volume, supprimer le conteneur ferait disparaître toutes les images publiées : on monte
+      donc un **volume nommé**, que l'on pourra réutiliser en recréant le conteneur avec une autre
+      configuration.
+
+      `--restart always` relance le conteneur s'il s'arrête et au redémarrage du démon Docker : c'est un
+      service d'infrastructure, il doit rester disponible.
+
+      La configuration se fait par un fichier `config.yml` ou par des **variables d'environnement** de la
+      forme `REGISTRY_<SECTION>_<CLE>` : `REGISTRY_HTTP_ADDR`, `REGISTRY_STORAGE_DELETE_ENABLED`… Tu en
+      utiliseras plusieurs dans la suite.
+    checks:
+      - desc: Le conteneur registre tourne avec la bonne image et le volume nommé
+        run: |
+          test "$(docker inspect -f '{{.Config.Image}} {{.State.Running}} {{.HostConfig.RestartPolicy.Name}}' registre 2>/dev/null)" = "registry:2.8.3 true always" && docker inspect -f '{{range .Mounts}}{{.Name}}={{.Destination}} {{end}}' registre | grep -q 'registre-donnees=/var/lib/registry'
+      - desc: L'API répond sur le port 5000
+        run: curl -fsS http://localhost:5000/v2/ >/dev/null
+  - id: rg-pousser
+    title: Publier une première image
+    description: |
+      Publie l'image **`alpine:3.20`** dans ton registre sous le nom **`localhost:5000/outils/alpine:3.20`**,
+      puis vérifie avec l'API que le dépôt `outils/alpine` existe et contient l'étiquette `3.20`.
+    hint: "docker pull alpine:3.20 ; docker tag alpine:3.20 localhost:5000/outils/alpine:3.20 ; docker push localhost:5000/outils/alpine:3.20"
+    cours: |
+      Le **nom** d'une image indique où la pousser : la partie avant le premier `/`, si elle contient un
+      point ou un deux-points (`localhost:5000`, `registre.local`), est l'**hôte du registre**. `docker tag`
+      ne copie rien : il ajoute un nom à une image existante. `docker push` envoie ensuite au registre les
+      couches qu'il n'a pas encore, puis le manifeste.
+
+      Les dépôts peuvent être organisés en espaces de noms (`outils/alpine`, `equipe-web/front`), sur
+      lesquels les registres d'entreprise appliquent des droits.
+
+      Docker accepte un registre en HTTP clair uniquement sur `localhost` : c'est pratique pour débuter,
+      mais un registre partagé doit passer en HTTPS. L'API se consulte directement : `/v2/_catalog` pour
+      les dépôts, `/v2/<dépôt>/tags/list` pour les étiquettes.
+    checks:
+      - desc: Le dépôt outils/alpine contient l'étiquette 3.20
+        run: curl -fsS http://localhost:5000/v2/outils/alpine/tags/list 2>/dev/null | grep -q '"3.20"'
+  - id: rg-construire
+    title: Construire et publier deux versions
+    description: |
+      Avec le Dockerfile de **`/root/appli`** (qui accepte l'argument `VERSION`), construis et publie deux
+      versions de l'image **`localhost:5000/appli/bonjour`** : **`1.0`** et **`1.1`**.
+
+      Teste : `docker run --rm localhost:5000/appli/bonjour:1.1` affiche `Bonjour, version 1.1`.
+    hint: "docker build --build-arg VERSION=1.0 -t localhost:5000/appli/bonjour:1.0 /root/appli puis docker push ; idem pour 1.1"
+    cours: |
+      En CI, on construit **une fois** et on publie l'image avec une étiquette qui identifie sa version :
+      numéro de version (`1.1`), identifiant de commit (`a1b2c3d`), parfois les deux. On évite de ne publier
+      que `latest`, qui ne dit rien de ce qui est déployé.
+
+      Une même image peut porter plusieurs étiquettes (`1.1`, `1`, `latest`) : `docker push` ne renvoie que
+      ce qui manque, donc pousser une seconde étiquette ne coûte presque rien. Les couches communes à `1.0`
+      et `1.1` (ici celles d'Alpine) ne sont stockées qu'une fois dans le registre.
+
+      `docker push --all-tags dépôt` publie toutes les étiquettes locales d'un dépôt. `docker image ls
+      localhost:5000/appli/bonjour` liste les versions présentes sur le poste.
+    checks:
+      - desc: Le registre contient appli/bonjour en 1.0 et 1.1
+        run: |
+          t=$(curl -fsS http://localhost:5000/v2/appli/bonjour/tags/list 2>/dev/null) && echo "$t" | grep -q '"1.0"' && echo "$t" | grep -q '"1.1"'
+      - desc: La version 1.1 affiche le bon message
+        run: docker run --rm localhost:5000/appli/bonjour:1.1 | grep -qx 'Bonjour, version 1.1'
+  - id: rg-digest
+    title: Désigner une image par son empreinte
+    description: |
+      Les étiquettes peuvent être déplacées ; l'**empreinte** (digest) ne change jamais. Récupère le digest
+      de **`localhost:5000/appli/bonjour:1.0`** tel que le registre le connaît (de la forme `sha256:...`) et
+      écris-le, seul, dans **`/root/digest.txt`**.
+
+      Vérifie qu'on peut télécharger l'image par ce digest :
+      `docker pull localhost:5000/appli/bonjour@$(cat /root/digest.txt)`.
+    hint: "docker inspect -f '{{index .RepoDigests 0}}' localhost:5000/appli/bonjour:1.0 (garde la partie après @), ou l'en-tête Docker-Content-Digest de curl -sI"
+    cours: |
+      Chaque objet d'un registre est identifié par l'**empreinte SHA-256** de son contenu. Le digest du
+      manifeste désigne donc une image de façon **immuable** : si un octet change, le digest change. C'est
+      ce qu'affiche `docker push` à la fin (`digest: sha256:...`), et ce que l'on retrouve dans
+      `docker inspect` (`RepoDigests`) ou dans l'en-tête HTTP `Docker-Content-Digest` d'une requête
+      `HEAD /v2/<dépôt>/manifests/<étiquette>`.
+
+      Référencer une image par digest (`image@sha256:...`) garantit que l'on déploie exactement ce qui a été
+      testé, même si quelqu'un repousse l'étiquette. Beaucoup d'équipes épinglent ainsi les images de base
+      dans leurs Dockerfile et les images déployées dans Kubernetes.
+
+      Pour l'API, l'en-tête `Accept` indique les formats de manifeste acceptés (Docker v2, OCI, index
+      multi-plateforme) : le digest renvoyé dépend du format.
+    checks:
+      - desc: digest.txt contient le digest de appli/bonjour:1.0
+        run: |
+          d=$(tr -d ' \n' < /root/digest.txt 2>/dev/null) && echo "$d" | grep -Eq '^sha256:[0-9a-f]{64}$' && docker inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' localhost:5000/appli/bonjour:1.0 | grep -qx "localhost:5000/appli/bonjour@$d"
+      - desc: L'image se télécharge par son digest
+        run: docker pull -q "localhost:5000/appli/bonjour@$(tr -d ' \n' < /root/digest.txt)" >/dev/null 2>&1
+  - id: rg-auth
+    title: Protéger le registre par mot de passe
+    description: |
+      Pour l'instant, n'importe qui peut lire et écrire dans ton registre. Recrée le conteneur **`registre`**
+      (même image, même port, **même volume**, pour garder les images déjà publiées) avec une
+      **authentification htpasswd** :
+      - utilisateur **`ci`**, mot de passe **`ci-secret`**, haché en **bcrypt** dans
+        **`/root/registre/auth/htpasswd`** ;
+      - fichier monté dans le conteneur et déclaré par les variables `REGISTRY_AUTH=htpasswd`,
+        `REGISTRY_AUTH_HTPASSWD_REALM` et `REGISTRY_AUTH_HTPASSWD_PATH`.
+
+      Une requête anonyme sur `/v2/` doit alors recevoir **401**.
+    hint: "htpasswd -Bbn ci ci-secret > /root/registre/auth/htpasswd ; docker rm -f registre ; docker run ... -v /root/registre/auth:/auth -e REGISTRY_AUTH=htpasswd -e REGISTRY_AUTH_HTPASSWD_REALM=Registre -e REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd registry:2.8.3"
+    cours: |
+      Le registre sait vérifier lui-même des identifiants stockés dans un fichier **htpasswd**. Il n'accepte
+      que le hachage **bcrypt** (`htpasswd -B`), lent par conception pour résister aux attaques par force
+      brute. Sans identifiants valides, l'API répond **401 Unauthorized** avec un en-tête
+      `WWW-Authenticate` qui invite le client à s'authentifier.
+
+      La configuration change, mais les données sont dans le volume : on **recrée** le conteneur (`docker
+      rm -f` puis `docker run`) avec les nouvelles options, et rien n'est perdu. C'est le fonctionnement
+      normal d'un conteneur : jetable, configuré au lancement, avec ses données à part.
+
+      En production, l'authentification basique ne doit circuler que sur **TLS**, sinon le mot de passe
+      passe en clair sur le réseau. Les registres d'entreprise délèguent souvent l'authentification à un
+      service de jetons, relié à l'annuaire (LDAP, OIDC).
+    checks:
+      - desc: Une requête anonyme reçoit 401
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5000/v2/)" = 401
+      - desc: ci / ci-secret est accepté et les images publiées sont toujours là
+        run: curl -fsS -u ci:ci-secret http://localhost:5000/v2/appli/bonjour/tags/list 2>/dev/null | grep -q '"1.1"'
+      - desc: Le mot de passe est haché en bcrypt
+        run: grep -Eq '^ci:\$2[aby]\$' /root/registre/auth/htpasswd
+  - id: rg-login
+    title: Se connecter avec docker login
+    description: |
+      Connecte le client Docker au registre avec le compte `ci` (`docker login`), puis construis et publie
+      la version **`1.2`** de `localhost:5000/appli/bonjour`.
+
+      Observe ensuite où Docker a enregistré tes identifiants.
+    hint: "echo ci-secret | docker login localhost:5000 -u ci --password-stdin"
+    cours: |
+      **`docker login hôte`** vérifie les identifiants auprès du registre puis les enregistre pour les
+      `push` et `pull` suivants. Sans gestionnaire d'identifiants (*credential helper*), ils sont écrits dans
+      **`~/.docker/config.json`**, simplement encodés en base64 : quiconque lit ce fichier connaît le mot de
+      passe. Sur un poste, on configure un gestionnaire (trousseau du système, `pass`) ; en CI, on utilise un
+      jeton à durée limitée et on se déconnecte (`docker logout`) à la fin.
+
+      **`--password-stdin`** évite que le mot de passe apparaisse dans l'historique du shell ou dans la liste
+      des processus : `echo "$JETON" | docker login -u ci --password-stdin hôte`.
+
+      Une plateforme de CI fournit ces identifiants par des variables secrètes, masquées dans les journaux.
+    checks:
+      - desc: Les identifiants de localhost:5000 sont enregistrés
+        run: grep -q '"localhost:5000"' /root/.docker/config.json 2>/dev/null
+      - desc: La version 1.2 est publiée
+        run: curl -fsS -u ci:ci-secret http://localhost:5000/v2/appli/bonjour/tags/list 2>/dev/null | grep -q '"1.2"'
+  - id: rg-tls
+    title: Passer en HTTPS avec un certificat
+    description: |
+      Rends le registre accessible en HTTPS sous le nom **`registre.local`**, sur le port **5443** :
+      1. fais pointer `registre.local` vers `127.0.0.1` (`/etc/hosts`) ;
+      2. génère dans **`/root/registre/certs`** une clé et un certificat autosigné dont le **SAN** contient
+         `DNS:registre.local` ;
+      3. recrée `registre` avec TLS (`REGISTRY_HTTP_TLS_CERTIFICATE`, `REGISTRY_HTTP_TLS_KEY`), le port
+         **5443** publié vers le port 5000 du conteneur, en gardant l'authentification et le volume ;
+      4. fais confiance à ce certificat pour Docker :
+         **`/etc/docker/certs.d/registre.local:5443/ca.crt`** ;
+      5. connecte-toi (`docker login registre.local:5443`) et récupère
+         `registre.local:5443/appli/bonjour:1.1`.
+    hint: "openssl req -x509 -newkey rsa:2048 -nodes -days 365 -keyout domaine.key -out domaine.crt -subj /CN=registre.local -addext subjectAltName=DNS:registre.local ; -p 5443:5000 -v /root/registre/certs:/certs -e REGISTRY_HTTP_TLS_CERTIFICATE=/certs/domaine.crt -e REGISTRY_HTTP_TLS_KEY=/certs/domaine.key"
+    cours: |
+      Hors `localhost`, Docker exige **HTTPS** et un certificat valide pour le nom utilisé. Un certificat
+      est valide pour un nom s'il figure dans son extension **SAN** (*Subject Alternative Name*) : le champ
+      `CN` seul n'est plus pris en compte par les clients modernes. `openssl req -x509 -addext
+      subjectAltName=DNS:nom` crée un certificat autosigné avec ce SAN ; en entreprise, il serait signé par
+      l'autorité de certification interne (voir le lab PKI).
+
+      Pour faire confiance à une autorité **pour un seul registre**, Docker lit
+      `/etc/docker/certs.d/<hôte>:<port>/ca.crt`, sans redémarrage. C'est bien plus sûr que
+      `insecure-registries`, qui désactive toute vérification. Les autres outils (`curl`, Kubernetes,
+      containerd) ont leur propre magasin de confiance : `curl --cacert fichier`.
+
+      `openssl s_client -connect hôte:port -servername nom` affiche le certificat présenté par un serveur.
+    checks:
+      - desc: Le certificat présenté sur le port 5443 contient le SAN registre.local
+        run: |
+          echo | openssl s_client -connect 127.0.0.1:5443 -servername registre.local 2>/dev/null | openssl x509 -noout -ext subjectAltName 2>/dev/null | grep -q 'DNS:registre.local'
+      - desc: L'API répond en HTTPS avec authentification, certificat vérifié
+        run: |
+          test "$(curl -s -o /dev/null -w '%{http_code}' --cacert /etc/docker/certs.d/registre.local:5443/ca.crt https://registre.local:5443/v2/)" = 401 && curl -fsS --cacert /etc/docker/certs.d/registre.local:5443/ca.crt -u ci:ci-secret https://registre.local:5443/v2/appli/bonjour/tags/list | grep -q '"1.1"'
+      - desc: Docker récupère une image depuis registre.local:5443
+        run: docker pull -q registre.local:5443/appli/bonjour:1.1 >/dev/null 2>&1
+  - id: rg-nettoyage
+    title: Supprimer une version et récupérer l'espace
+    description: |
+      La version **`1.0`** est obsolète. Recrée `registre` (même configuration TLS, authentification et
+      volume) en **autorisant la suppression** (`REGISTRY_STORAGE_DELETE_ENABLED=true`), puis :
+      1. supprime le manifeste de `appli/bonjour:1.0` **par l'API**, à partir de son digest ;
+      2. lance le **ramasse-miettes** du registre pour libérer les couches qui ne servent plus.
+
+      Les versions `1.1` et `1.2` doivent rester disponibles.
+    hint: "curl --cacert ... -u ci:ci-secret -X DELETE https://registre.local:5443/v2/appli/bonjour/manifests/$(cat /root/digest.txt) ; puis docker exec registre registry garbage-collect /etc/docker/registry/config.yml"
+    cours: |
+      Un registre grossit vite : chaque construction de CI publie une image. Supprimer se fait en deux
+      temps :
+      1. **supprimer le manifeste**, désigné par son **digest** (pas par son étiquette) :
+         `DELETE /v2/<dépôt>/manifests/<digest>`. Cette opération est désactivée par défaut et s'active par
+         `storage.delete.enabled` (ou `REGISTRY_STORAGE_DELETE_ENABLED=true`). Les étiquettes qui pointaient
+         dessus disparaissent ;
+      2. lancer le **ramasse-miettes** (`registry garbage-collect config.yml`), qui supprime les couches que
+         plus aucun manifeste ne référence. Le registre ne doit pas recevoir de push pendant ce temps
+         (mode lecture seule, ou arrêt).
+
+      Les registres d'entreprise automatisent cela avec des **politiques de rétention** : garder les N
+      dernières versions, supprimer les images de branches fusionnées, ne jamais supprimer une image en
+      production.
+    checks:
+      - desc: 1.0 a disparu, 1.1 et 1.2 sont toujours là
+        run: |
+          t=$(curl -fsS --cacert /etc/docker/certs.d/registre.local:5443/ca.crt -u ci:ci-secret https://registre.local:5443/v2/appli/bonjour/tags/list 2>/dev/null) && echo "$t" | grep -q '"1.1"' && echo "$t" | grep -q '"1.2"' && ! echo "$t" | grep -q '"1.0"'
+      - desc: La suppression est activée dans le registre
+        run: docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' registre | grep -qx 'REGISTRY_STORAGE_DELETE_ENABLED=true'

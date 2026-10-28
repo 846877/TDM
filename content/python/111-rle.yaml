@@ -1,0 +1,114 @@
+title: Compression RLE
+level: intermediaire
+order: 11
+tags: [chaînes, algorithmes]
+summary: Compresser et décompresser une chaîne.
+description: |
+  Le *Run-Length Encoding* remplace une suite de caractères identiques par le nombre suivi du caractère.
+
+  Écris :
+
+  - `compresser("aaabccdddd")` → `"3a1b2c4d"`
+  - `decompresser("3a1b2c4d")` → `"aaabccdddd"`
+
+  Les nombres peuvent avoir plusieurs chiffres (`"12a"`). Les textes ne contiennent pas de chiffres.
+starter: |
+  def compresser(texte):
+      pass
+
+
+  def decompresser(code):
+      pass
+tests: |
+  def test_compresser():
+      "Compression"
+      assert solution.compresser("aaabccdddd") == "3a1b2c4d"
+
+  def test_decompresser():
+      "Décompression"
+      assert solution.decompresser("3a1b2c4d") == "aaabccdddd"
+
+  def test_plusieurs_chiffres():
+      "Compteurs à plusieurs chiffres"
+      assert solution.compresser("z" * 12) == "12z"
+      assert solution.decompresser("12z1x") == "z" * 12 + "x"
+
+  def test_vide():
+      "Chaîne vide"
+      assert solution.compresser("") == ""
+      assert solution.decompresser("") == ""
+solution: |
+  def compresser(texte):
+      resultat = []
+      i = 0
+      while i < len(texte):
+          j = i
+          while j < len(texte) and texte[j] == texte[i]:
+              j += 1
+          resultat.append(f"{j - i}{texte[i]}")
+          i = j
+      return "".join(resultat)
+
+
+  def decompresser(code):
+      resultat = []
+      nombre = ""
+      for c in code:
+          if c.isdigit():
+              nombre += c
+          else:
+              resultat.append(c * int(nombre))
+              nombre = ""
+      return "".join(resultat)
+cours: |
+  ## Parcourir par « séries »
+
+  Compresser en RLE demande de repérer les **séries** de caractères identiques consécutifs.
+  Le motif classique : garder le caractère courant et un compteur ; à chaque caractère, soit
+  on prolonge la série, soit on « émet » la série terminée et on en commence une nouvelle.
+
+  ```python
+  def series(sequence):
+      resultat = []
+      for x in sequence:
+          if resultat and resultat[-1][0] == x:
+              resultat[-1][1] += 1
+          else:
+              resultat.append([x, 1])
+      return resultat
+
+  series("aab")   # [['a', 2], ['b', 1]]
+  ```
+
+  **Piège** : avec l'approche « émettre quand ça change », la **dernière** série n'est jamais
+  suivie d'un changement ; il faut l'émettre après la boucle. Teste aussi la chaîne vide.
+
+  `itertools.groupby(texte)` produit directement les groupes consécutifs ; c'est la version
+  idiomatique, à connaître une fois le mécanisme compris.
+
+  ## Décompresser : lire des nombres à plusieurs chiffres
+
+  Dans `"12a3b"`, il faut accumuler les chiffres jusqu'à rencontrer une lettre. On construit le
+  nombre au fil de l'eau : on garde les chiffres dans une chaîne tampon, et quand une lettre
+  arrive, on convertit le tampon avec `int()`, on répète la lettre, puis on vide le tampon.
+  (Une alternative : `nombre = nombre * 10 + int(chiffre)`.)
+
+  Le module `re` permet aussi `re.findall(r"(\d+)(\D)", texte)`.
+
+  ## Construire le résultat efficacement
+
+  Concaténer des chaînes dans une boucle crée une nouvelle chaîne à chaque fois. Pour de
+  gros volumes, on ajoute les morceaux dans une liste puis on fait `"".join(morceaux)` une
+  seule fois.
+
+  ## Quand RLE est-il utile ?
+
+  RLE est efficace sur des données très répétitives (images simples, fax, bitmaps) et
+  contre-productif sinon : `"abc"` devient `"1a1b1c"`, deux fois plus long. Les formats
+  modernes (PNG, ZIP) utilisent des algorithmes plus évolués (DEFLATE), mais l'idée de
+  base — coder les répétitions — reste la même.
+docs:
+  - title: itertools.groupby
+    url: https://docs.python.org/fr/3/library/itertools.html#itertools.groupby
+  - title: Wikipédia — Run-length encoding
+    url: https://fr.wikipedia.org/wiki/Run-length_encoding

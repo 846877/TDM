@@ -1,0 +1,121 @@
+title: Concurrence avec asyncio
+level: expert
+order: 4
+tags: [asyncio, concurrence]
+summary: Lancer des tâches en parallèle avec une limite.
+description: |
+  Écris une coroutine `executer(fonctions, limite)` :
+
+  - `fonctions` est une liste de **fonctions asynchrones sans argument** (`async def f(): ...`) ;
+  - elles doivent être exécutées en parallèle, mais **jamais plus de `limite` à la fois** ;
+  - le résultat est la liste des valeurs renvoyées, **dans l'ordre de la liste d'entrée**.
+
+  Indices : `asyncio.Semaphore`, `asyncio.gather`.
+starter: |
+  import asyncio
+
+
+  async def executer(fonctions, limite):
+      pass
+tests: |
+  import asyncio, time
+
+  def fabriquer(n, duree, suivi):
+      async def tache():
+          suivi["en_cours"] += 1
+          suivi["max"] = max(suivi["max"], suivi["en_cours"])
+          await asyncio.sleep(duree)
+          suivi["en_cours"] -= 1
+          return n
+      return tache
+
+  def test_ordre():
+      "Résultats dans l'ordre"
+      suivi = {"en_cours": 0, "max": 0}
+      taches = [fabriquer(i, 0.05 * (5 - i), suivi) for i in range(5)]
+      assert asyncio.run(solution.executer(taches, 5)) == [0, 1, 2, 3, 4]
+
+  def test_limite():
+      "La limite de concurrence est respectée"
+      suivi = {"en_cours": 0, "max": 0}
+      taches = [fabriquer(i, 0.02, suivi) for i in range(20)]
+      asyncio.run(solution.executer(taches, 3))
+      assert suivi["max"] == 3, f"{suivi['max']} tâches simultanées au maximum (attendu 3)"
+
+  def test_parallele():
+      "Les tâches tournent vraiment en parallèle"
+      suivi = {"en_cours": 0, "max": 0}
+      taches = [fabriquer(i, 0.2, suivi) for i in range(10)]
+      debut = time.perf_counter()
+      asyncio.run(solution.executer(taches, 10))
+      assert time.perf_counter() - debut < 1, "trop lent : les tâches sont exécutées l'une après l'autre"
+solution: |
+  import asyncio
+
+
+  async def executer(fonctions, limite):
+      semaphore = asyncio.Semaphore(limite)
+
+      async def lancer(fonction):
+          async with semaphore:
+              return await fonction()
+
+      return list(await asyncio.gather(*(lancer(f) for f in fonctions)))
+cours: |
+  ## Concurrence coopérative
+
+  `asyncio` exécute de nombreuses tâches dans **un seul thread**. Une coroutine
+  (`async def`) s'exécute jusqu'à un `await` sur une opération lente (réseau, attente) : elle
+  rend alors la main à la **boucle d'événements**, qui fait avancer une autre tâche. Idéal
+  pour les entrées/sorties (scanner 1 000 hôtes, interroger 200 API), inutile pour du calcul
+  pur.
+
+  ```python
+  import asyncio
+
+  async def ping(hote):
+      await asyncio.sleep(1)        # simule une attente réseau
+      return f"{hote} ok"
+
+  async def main():
+      resultats = await asyncio.gather(ping("a"), ping("b"), ping("c"))
+      print(resultats)              # en ~1 s au total, pas 3
+
+  asyncio.run(main())
+  ```
+
+  - Appeler `ping("a")` ne l'exécute pas : cela crée un objet coroutine, qu'il faut `await`
+    ou transformer en tâche.
+  - `asyncio.gather(*coroutines)` les exécute concurremment et renvoie les résultats **dans
+    l'ordre des arguments**, quel que soit l'ordre de fin.
+  - Ne jamais appeler `time.sleep` dans une coroutine : il bloque toute la boucle.
+
+  ## Limiter le parallélisme : le sémaphore
+
+  Lancer 10 000 connexions d'un coup peut saturer le réseau, le serveur ou les descripteurs de
+  fichiers. Un `asyncio.Semaphore(n)` est un compteur de « places » :
+
+  ```python
+  sem = asyncio.Semaphore(3)
+
+  async def limite(coro_fonction):
+      async with sem:               # attend une place libre
+          return await coro_fonction()
+  ```
+
+  Au plus 3 tâches sont simultanément dans le bloc `async with`. On enveloppe chaque
+  fonction dans ce garde, puis on `gather` le tout : l'ordre des résultats est préservé.
+
+  ## Pièges
+
+  - créer le sémaphore **dans** la coroutine principale (il est lié à la boucle en cours) ;
+  - liste vide : `gather()` sans argument renvoie `[]` ;
+  - une exception dans une tâche se propage par `gather` (sauf `return_exceptions=True`).
+
+  Depuis Python 3.11, `asyncio.TaskGroup` offre une gestion plus sûre des groupes de
+  tâches.
+docs:
+  - title: asyncio — coroutines et tâches
+    url: https://docs.python.org/fr/3/library/asyncio-task.html
+  - title: asyncio — primitives de synchronisation (Semaphore)
+    url: https://docs.python.org/fr/3/library/asyncio-sync.html

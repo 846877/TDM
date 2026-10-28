@@ -1,0 +1,107 @@
+title: Itérateur personnalisé
+level: avance
+order: 6
+tags: [itérateurs, classes]
+summary: Implémenter le protocole d'itération.
+description: |
+  Recrée une version simplifiée de `range` pour les décimaux : la classe `Intervalle(debut, fin, pas)`
+  est itérable et produit `debut, debut + pas, ...` tant que la valeur est **strictement inférieure** à `fin`.
+  Les valeurs sont arrondies à 10 décimales pour éviter les surprises du flottant.
+
+  ```python
+  list(Intervalle(0, 1, 0.25))  # [0, 0.25, 0.5, 0.75]
+  ```
+
+  L'objet doit pouvoir être parcouru **plusieurs fois** et supporter `len()`.
+starter: |
+  class Intervalle:
+      def __init__(self, debut, fin, pas=1):
+          pass
+tests: |
+  def test_liste():
+      "Valeurs produites"
+      assert list(solution.Intervalle(0, 1, 0.25)) == [0, 0.25, 0.5, 0.75]
+
+  def test_flottants():
+      "Pas de 0.1"
+      assert list(solution.Intervalle(0, 0.5, 0.1)) == [0, 0.1, 0.2, 0.3, 0.4]
+
+  def test_reutilisable():
+      "Parcourable deux fois"
+      it = solution.Intervalle(0, 3)
+      assert list(it) == list(it) == [0, 1, 2]
+
+  def test_len():
+      "len() fonctionne"
+      assert len(solution.Intervalle(0, 1, 0.25)) == 4
+
+  def test_vide():
+      "Intervalle vide"
+      assert list(solution.Intervalle(5, 1)) == []
+solution: |
+  class Intervalle:
+      def __init__(self, debut, fin, pas=1):
+          self.debut, self.fin, self.pas = debut, fin, pas
+
+      def __iter__(self):
+          i = 0
+          while True:
+              valeur = round(self.debut + i * self.pas, 10)
+              if valeur >= self.fin:
+                  return
+              yield valeur
+              i += 1
+
+      def __len__(self):
+          return sum(1 for _ in self)
+cours: |
+  ## Itérable ou itérateur ?
+
+  - Un **itérable** est un objet qu'on peut parcourir avec `for` : il possède `__iter__`,
+    qui renvoie un itérateur. Listes, chaînes, dict, `range` sont itérables.
+  - Un **itérateur** est l'objet qui fait le parcours : il possède `__next__` (renvoie
+    l'élément suivant ou lève `StopIteration`) et un `__iter__` qui renvoie lui-même.
+
+  ```python
+  nombres = [1, 2]
+  it = iter(nombres)   # appelle nombres.__iter__()
+  next(it)             # 1
+  next(it)             # 2
+  next(it)             # StopIteration
+  ```
+
+  La boucle `for` fait exactement cela en coulisses, et s'arrête sur `StopIteration`.
+
+  ## Le piège de l'itérateur à usage unique
+
+  Un itérateur s'**épuise** : une fois parcouru, il est vide. Si ta classe est son propre
+  itérateur (`__iter__` renvoie `self`), un second `for` ne produira rien :
+
+  ```python
+  g = (x * 2 for x in range(3))
+  list(g)   # [0, 2, 4]
+  list(g)   # []   épuisé
+  ```
+
+  Un `range` en revanche peut être parcouru plusieurs fois, car chaque `iter(range(...))`
+  crée un **nouvel** itérateur. Pour obtenir ce comportement, `__iter__` doit renvoyer un
+  objet neuf à chaque appel — le plus simple étant d'écrire `__iter__` comme un
+  **générateur** (avec `yield`).
+
+  ## `__len__`
+
+  Pour supporter `len()`, il faut calculer le nombre d'éléments sans forcément parcourir.
+  Pour une progression arithmétique strictement bornée, c'est `ceil((fin - debut) / pas)`
+  (et 0 si négatif). Avec les flottants, compter en parcourant garantit la cohérence avec
+  l'itération.
+
+  ## Flottants
+
+  `0.1 * 3` vaut `0.30000000000000004`. Calculer chaque valeur comme `debut + i * pas`
+  (plutôt qu'en ajoutant `pas` à chaque tour) évite l'accumulation d'erreurs, et
+  `round(x, 10)` masque les résidus.
+docs:
+  - title: Tutoriel — itérateurs
+    url: https://docs.python.org/fr/3/tutorial/classes.html#iterators
+  - title: Types itérateurs (protocole)
+    url: https://docs.python.org/fr/3/library/stdtypes.html#iterator-types

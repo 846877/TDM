@@ -1,0 +1,175 @@
+title: Gestion de stock en ligne de commande
+level: intermediaire
+order: 30
+tags: [dictionnaires, exceptions, input, projet]
+summary: Un petit interpréteur de commandes qui ne plante jamais.
+mode: stdio
+description: |
+  Écris un programme qui lit des commandes, une par ligne, jusqu'à la fin de l'entrée :
+
+  | commande | effet |
+  |----------|-------|
+  | `ajouter <article> <quantité>` | ajoute au stock |
+  | `retirer <article> <quantité>` | retire du stock ; un article qui tombe à 0 disparaît |
+  | `stock <article>` | affiche `<article> : <quantité>` (0 si absent) |
+  | `liste` | affiche chaque article `<article> : <quantité>` par **ordre alphabétique**, ou `(vide)` |
+
+  Les commandes `ajouter` et `retirer` n'affichent rien quand tout va bien. En cas de problème,
+  affiche une ligne d'erreur et **continue** :
+
+  - `Erreur : commande inconnue` (commande non reconnue ou mauvais nombre d'arguments) ;
+  - `Erreur : quantité invalide` (pas un entier strictement positif) ;
+  - `Erreur : stock insuffisant pour <article>`.
+
+  Les noms d'articles sont insensibles à la casse (stockés en minuscules), les lignes vides
+  sont ignorées.
+
+  Astuce : une fonction qui lève des exceptions (`ValueError`…) et une boucle principale qui
+  les attrape avec `try/except` pour afficher le message.
+starter: |
+  import sys
+
+  stock = {}
+  for ligne in sys.stdin:
+      morceaux = ligne.split()
+cases:
+  - name: "Scénario simple"
+    input: "ajouter pomme 5\najouter Poire 2\nretirer pomme 3\nliste\nstock poire\nstock kiwi\n"
+    output: |
+      poire : 2
+      pomme : 2
+      poire : 2
+      kiwi : 0
+  - name: "Erreurs gérées sans planter"
+    input: "ajouter pomme deux\nretirer pomme 1\nvendre pomme 1\najouter pomme\najouter pomme 0\najouter pomme -3\nliste\n"
+    output: |
+      Erreur : quantité invalide
+      Erreur : stock insuffisant pour pomme
+      Erreur : commande inconnue
+      Erreur : commande inconnue
+      Erreur : quantité invalide
+      Erreur : quantité invalide
+      (vide)
+  - name: "Un article à zéro disparaît"
+    input: "ajouter stylo 3\n\nretirer STYLO 3\nliste\najouter gomme 1\nretirer gomme 2\nliste\n"
+    output: |
+      (vide)
+      Erreur : stock insuffisant pour gomme
+      gomme : 1
+  - name: "Cumul des ajouts"
+    input: "ajouter cahier 2\najouter cahier 3\najouter agrafe 10\nliste\n"
+    output: |
+      agrafe : 10
+      cahier : 5
+solution: |
+  import sys
+
+
+  class ErreurCommande(Exception):
+      pass
+
+
+  def quantite(texte):
+      try:
+          n = int(texte)
+      except ValueError:
+          raise ErreurCommande("quantité invalide") from None
+      if n <= 0:
+          raise ErreurCommande("quantité invalide")
+      return n
+
+
+  def executer(stock, morceaux):
+      commande, args = morceaux[0], morceaux[1:]
+      if commande == "ajouter" and len(args) == 2:
+          article = args[0].lower()
+          stock[article] = stock.get(article, 0) + quantite(args[1])
+      elif commande == "retirer" and len(args) == 2:
+          article = args[0].lower()
+          n = quantite(args[1])
+          if stock.get(article, 0) < n:
+              raise ErreurCommande(f"stock insuffisant pour {article}")
+          stock[article] -= n
+          if stock[article] == 0:
+              del stock[article]
+      elif commande == "stock" and len(args) == 1:
+          article = args[0].lower()
+          print(f"{article} : {stock.get(article, 0)}")
+      elif commande == "liste" and not args:
+          if not stock:
+              print("(vide)")
+          for article in sorted(stock):
+              print(f"{article} : {stock[article]}")
+      else:
+          raise ErreurCommande("commande inconnue")
+
+
+  stock = {}
+  for ligne in sys.stdin:
+      morceaux = ligne.split()
+      if not morceaux:
+          continue
+      try:
+          executer(stock, morceaux)
+      except ErreurCommande as erreur:
+          print(f"Erreur : {erreur}")
+cours: |
+  ## L'interpréteur de commandes
+
+  Un programme qui lit des commandes et les exécute suit toujours la même boucle :
+  **lire → analyser → exécuter → afficher** (*REPL*). On lit l'entrée ligne par ligne :
+
+  ```python
+  import sys
+  for ligne in sys.stdin:
+      morceaux = ligne.split()
+      if not morceaux:
+          continue          # ligne vide
+      commande, *arguments = morceaux
+  ```
+
+  `commande, *arguments = ...` place le premier élément dans `commande` et **tous les autres**
+  dans la liste `arguments` (déballage étendu).
+
+  ## Répartir les commandes : `match`
+
+  Depuis Python 3.10, `match` filtre une valeur selon sa **forme** :
+
+  ```python
+  match morceaux:
+      case ["ping", hote]:
+          print("ping", hote)
+      case ["scan", hote, port]:
+          print("scan", hote, port)
+      case ["quitter"]:
+          ...
+      case _:
+          print("Erreur : commande inconnue")
+  ```
+
+  Un motif de liste vérifie à la fois le nom de la commande **et** le nombre d'arguments.
+  Sans `match`, un dictionnaire `{nom: fonction}` ou une cascade `if/elif` font l'affaire.
+
+  ## Valider sans planter
+
+  Chaque erreur doit afficher un message et laisser la boucle continuer. Pour une quantité :
+  `int()` dans un `try / except ValueError`, puis vérifier qu'elle est strictement positive.
+  Une petite fonction `lire_quantite(texte)` qui lève ou renvoie l'entier rend le code
+  principal lisible.
+
+  ## État et invariants
+
+  Le stock est un dictionnaire `article → quantité`. Invariants à préserver : aucune
+  quantité négative, et un article à 0 disparaît du dictionnaire (`del stock[article]`).
+  Vérifie le stock **avant** de retirer.
+
+  ## Normaliser les clés
+
+  Les noms insensibles à la casse sont stockés en minuscules dès l'entrée : toutes les
+  commandes utilisent alors la même forme. Pour la liste, `sorted(stock.items())` trie par
+  nom.
+docs:
+  - title: Tutoriel — l'instruction match (filtrage par motif)
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html#match-statements
+  - title: Module sys (sys.stdin)
+    url: https://docs.python.org/fr/3/library/sys.html#sys.stdin

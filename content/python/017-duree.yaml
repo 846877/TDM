@@ -1,0 +1,97 @@
+title: Convertir une durée
+level: debutant
+order: 17
+tags: [division entière, f-string]
+summary: Transformer des secondes en heures, minutes et secondes.
+description: |
+  Écris `formater_duree(secondes)` qui transforme un nombre de secondes (entier ≥ 0) en texte
+  au format `HHhMMmSSs`, chaque partie étant écrite sur **deux chiffres** au minimum :
+
+  ```python
+  formater_duree(3725)   # "01h02m05s"
+  formater_duree(59)     # "00h00m59s"
+  formater_duree(90000)  # "25h00m00s"
+  ```
+
+  Astuces :
+  - `divmod(a, b)` renvoie `(a // b, a % b)` ;
+  - dans une f-string, `{n:02d}` écrit `n` sur deux chiffres avec un zéro devant.
+starter: |
+  def formater_duree(secondes):
+      pass
+tests: |
+  def test_exemple():
+      "3725 s -> 01h02m05s"
+      r = solution.formater_duree(3725)
+      assert r == "01h02m05s", f"attendu '01h02m05s', obtenu {r!r}"
+
+  def test_zero():
+      "0 s -> 00h00m00s"
+      r = solution.formater_duree(0)
+      assert r == "00h00m00s", f"obtenu {r!r}"
+
+  def test_secondes():
+      "59 s -> 00h00m59s"
+      r = solution.formater_duree(59)
+      assert r == "00h00m59s", f"obtenu {r!r}"
+
+  def test_minute_pile():
+      "60 s -> 00h01m00s"
+      r = solution.formater_duree(60)
+      assert r == "00h01m00s", f"obtenu {r!r}"
+
+  def test_plus_de_24h():
+      "Les heures peuvent dépasser 24"
+      r = solution.formater_duree(90000)
+      assert r == "25h00m00s", f"attendu '25h00m00s', obtenu {r!r}"
+solution: |
+  def formater_duree(secondes):
+      minutes, s = divmod(secondes, 60)
+      h, m = divmod(minutes, 60)
+      return f"{h:02d}h{m:02d}m{s:02d}s"
+cours: |
+  ## Conversions en cascade
+
+  Pour découper une quantité en unités emboîtées (jours, heures, minutes…), on applique
+  `divmod` plusieurs fois, de la plus petite unité vers la plus grande :
+
+  ```python
+  octets = 5_000_000
+  ko, reste_o = divmod(octets, 1024)
+  mo, reste_ko = divmod(ko, 1024)
+  # 4 Mo, 788 Ko et 320 octets
+  ```
+
+  Le underscore dans `5_000_000` sert juste à rendre le nombre lisible.
+
+  ## Formatage dans les f-strings
+
+  Après `:` dans les accolades, on peut préciser **comment** afficher la valeur :
+
+  ```python
+  n = 7
+  f"{n:03d}"     # "007"   : entier sur 3 chiffres, complété par des zéros
+  f"{n:>5}"      # "    7" : aligné à droite sur 5 caractères
+  f"{3.14159:.2f}"  # "3.14"
+  f"{1234567:,}"    # "1,234,567"
+  ```
+
+  Le format `0Nd` impose une largeur **minimale** : un nombre plus long n'est pas tronqué
+  (`f"{123:02d}"` donne `"123"`).
+
+  ## Construire un format composite
+
+  Tu peux mélanger texte fixe et valeurs formatées dans la même f-string, par exemple
+  `f"{a:02d}:{b:02d}"` pour un affichage type horloge.
+
+  ## Pièges
+
+  - Ne pas plafonner les heures : 90 000 secondes font plus de 24 h, et l'énoncé veut
+    `25h`, pas un nombre de jours.
+  - `str(5).zfill(2)` donne aussi `"05"`, mais le format `02d` est plus concis.
+  - Vérifie le cas `0` seconde : toutes les parties doivent valoir `00`.
+docs:
+  - title: Mini-langage de spécification de format
+    url: https://docs.python.org/fr/3/library/string.html#format-specification-mini-language
+  - title: Documentation Python — divmod()
+    url: https://docs.python.org/fr/3/library/functions.html#divmod

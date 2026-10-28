@@ -1,0 +1,93 @@
+title: Affecter les ports aux VLAN
+level: debutant
+order: 5
+device: switch
+tags: [vlan, access, interface range]
+summary: Configurer des ports d'accès en lot.
+description: |
+  Les VLAN 10 (ADMIN) et 20 (COMPTA) existent déjà. Configure les ports en **mode access** :
+
+  - `Fa0/1` à `Fa0/8` → VLAN 10
+  - `Fa0/9` à `Fa0/16` → VLAN 20
+
+  Gagne du temps avec `interface range fa0/1 - 8`.
+  ```
+  switchport mode access
+  switchport access vlan 10
+  ```
+initial: |
+  vlan 10
+  name ADMIN
+  vlan 20
+  name COMPTA
+checks:
+  - desc: Fa0/1-8 en mode access dans le VLAN 10
+    expr: all(i.mode == "access" and i.access_vlan == 10 for i in ports("fa0/1-8"))
+  - desc: Fa0/9-16 en mode access dans le VLAN 20
+    expr: all(i.mode == "access" and i.access_vlan == 20 for i in ports("fa0/9-16"))
+  - desc: Les autres ports n'ont pas été modifiés
+    expr: all(i.access_vlan == 1 for i in ports("fa0/17-24"))
+solution: |
+  configure terminal
+  interface range fa0/1 - 8
+  switchport mode access
+  switchport access vlan 10
+  interface range fa0/9 - 16
+  switchport mode access
+  switchport access vlan 20
+  end
+cours: |
+  ## Le port d'accès
+
+  Un **port d'accès** appartient à **un seul** VLAN. L'ordinateur qui y est branché ne sait rien
+  des VLAN : il envoie des trames Ethernet normales, et le switch les place dans le VLAN du port.
+  C'est le mode des ports qui raccordent des postes, imprimantes, caméras.
+
+  Par défaut, un port Cisco est en mode **dynamique** (DTP) : il pourrait négocier un trunk avec
+  un équipement en face. On fixe donc explicitement le mode `access`.
+
+  ### Configurer plusieurs ports à la fois (autres valeurs)
+
+  ```
+  SW1(config)# interface range fa0/13 - 20
+  SW1(config-if-range)# switchport mode access
+  SW1(config-if-range)# switchport access vlan 40
+  SW1(config-if-range)# exit
+  SW1(config)# interface range fa0/1 - 4 , fa0/7
+  SW1(config-if-range)# switchport access vlan 50
+  SW1# show vlan brief
+  40   PRODUCTION     active    Fa0/13, Fa0/14, Fa0/15, Fa0/16, Fa0/17, Fa0/18, Fa0/19, Fa0/20
+  SW1# show interfaces fa0/13 switchport
+  Administrative Mode: static access
+  Access Mode VLAN: 40 (PRODUCTION)
+  ```
+
+  `interface range` accepte des plages (`- `) et des listes (`,`). Les commandes saisies
+  s'appliquent à tous les ports sélectionnés.
+
+  ### Ce qui se passe si le VLAN n'existe pas
+
+  Sur la plupart des switchs, `switchport access vlan 60` crée automatiquement le VLAN 60
+  (message `% Access VLAN does not exist. Creating vlan 60`), sans nom. Mieux vaut le créer et le
+  nommer d'abord.
+
+  ### Vérifier
+
+  - `show vlan brief` : liste des ports par VLAN (les trunks n'y apparaissent pas) ;
+  - `show interfaces status` : VLAN, vitesse et état de chaque port ;
+  - `show interfaces <port> switchport` : mode administratif et opérationnel.
+
+  ### Pièges fréquents
+
+  - Se tromper de plage : `fa0/1 - 8` puis `fa0/8 - 16` reconfigure deux fois le port 8.
+  - Oublier `switchport mode access` : le port reste négociable.
+  - Modifier un port qui sert d'uplink : coupure de tout l'étage.
+
+  ### Pour le CCNA
+
+  Affecter des ports aux VLAN et vérifier le résultat est un savoir-faire de base de l'examen.
+docs:
+  - title: "Wikipédia — Réseau local virtuel"
+    url: https://fr.wikipedia.org/wiki/R%C3%A9seau_local_virtuel
+  - title: "Cisco Catalyst 2960-X — guides de configuration"
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html

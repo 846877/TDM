@@ -1,0 +1,377 @@
+title: Routage statique et dynamique OSPF avec FRRouting
+level: avance
+order: 3
+tags: [routage, ospf, frrouting, vtysh, route statique, redistribution, cisco]
+summary: Trois routeurs FRRouting (syntaxe proche de Cisco IOS) - routes statiques, OSPF aire 0, coûts, redistribution filtrée, route par défaut, authentification et sauvegarde.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** *Ateliers Durand* relie trois sites (siège, entrepôt, agence) par des liaisons
+  inter-sites. Les routeurs tournent sous **FRRouting**, dont l'interface `vtysh` reprend la syntaxe de
+  Cisco IOS (`configure terminal`, `router ospf`, `show ip route`...).
+
+  **Topologie.**
+
+  ```
+                     lan2 10.2.2.0/24 (srv2 .10)
+                         R2 (.254)
+          10.0.12.0/24 /          \ 10.0.23.0/24
+            .11     .12            .12     .13
+             R1 ─────────────────────── R3
+         (.254)       10.0.13.0/24      (.254)
+                    .11          .13
+     lan1 10.1.1.0/24 (pc1 .10)      lan3 10.3.3.0/24 (pc3 .10)
+  ```
+
+  | Routeur | Interfaces (nommées d'après leur réseau)                          |
+  |---------|-------------------------------------------------------------------|
+  | `r1`    | `lan` 10.1.1.254, `vers-r2` 10.0.12.11, `vers-r3` 10.0.13.11       |
+  | `r2`    | `lan` 10.2.2.254, `vers-r1` 10.0.12.12, `vers-r3` 10.0.23.12       |
+  | `r3`    | `lan` 10.3.3.254, `vers-r1` 10.0.13.13, `vers-r2` 10.0.23.13       |
+
+  Chaque machine a aussi une interface `mgmt` (10.99.0.0/24) : un **réseau d'administration hors
+  bande**, utilisé seulement pour s'y connecter depuis admin (`ssh r1`, `ssh pc1`...) et qui ne doit
+  **jamais** être annoncé dans le routage. Sur les routeurs, FRR est démarré avec une configuration vide :
+  `ssh r1` puis `vtysh`. Les postes ont pour passerelle le `.254` de leur LAN.
+cours: |
+  ## Routage statique ou dynamique
+
+  Un routeur décide du prochain saut de chaque paquet grâce à sa **table de routage**. Elle se remplit de
+  trois façons :
+
+  | Source              | Distance administrative | Principe                                   |
+  |---------------------|-------------------------|--------------------------------------------|
+  | réseau connecté     | 0                       | adresse configurée sur une interface        |
+  | route **statique**  | 1                       | écrite à la main                            |
+  | **OSPF**            | 110                     | apprise et recalculée automatiquement       |
+  | RIP                 | 120                     | ancien protocole à vecteur de distance      |
+
+  Quand deux sources proposent le même réseau, la **distance administrative** la plus faible gagne ; à
+  distance égale, la **route la plus précise** (le préfixe le plus long) est toujours choisie en premier.
+
+  Les routes statiques sont simples et prévisibles, mais ne réagissent pas aux pannes et deviennent
+  ingérables au-delà de quelques sites. Un protocole dynamique échange les informations entre routeurs et
+  recalcule seul les chemins quand une liaison tombe.
+
+  ## OSPF en bref
+
+  OSPF est un protocole à **état de liens** : chaque routeur connaît la carte complète de son aire et
+  calcule lui-même les meilleurs chemins (algorithme de Dijkstra, SPF).
+
+  ```
+  1. Hello (multicast 224.0.0.5, toutes les 10 s)  → découverte des voisins
+  2. Échange des bases (LSA)                        → voisins à l'état Full
+  3. Calcul SPF                                     → meilleures routes dans la table
+  4. Panne : plus de Hello pendant 40 s (dead)      → nouveau calcul, nouveau chemin
+  ```
+
+  - **Router-ID** : identifiant unique de chaque routeur (souvent écrit comme une adresse IP).
+  - **Aire 0** (backbone) : toutes les autres aires s'y rattachent ; un petit réseau n'a que l'aire 0.
+  - **Coût** : métrique d'une interface (inversement liée au débit) ; le chemin de coût total le plus
+    faible gagne.
+  - **Interface passive** : réseau annoncé, mais aucun Hello envoyé (côté postes utilisateurs).
+  - Pour devenir voisins, deux routeurs doivent partager le même réseau, la même aire, les mêmes
+    temporisations, la même authentification et des MTU compatibles.
+
+  ## FRRouting et vtysh
+
+  FRR est la suite de routage de référence sous Linux (OSPF, BGP, IS-IS...). `vtysh` reprend la syntaxe
+  Cisco :
+
+  ```
+  r1# configure terminal
+  r1(config)# router ospf
+  r1(config-router)# ospf router-id 1.1.1.1
+  r1(config-router)# network 10.0.12.0/24 area 0
+  r1(config-router)# passive-interface lan
+  r1(config-router)# exit
+  r1(config)# interface vers-r3
+  r1(config-if)# ip ospf cost 100
+  r1(config-if)# end
+  r1# write memory
+  ```
+
+  | Besoin                         | Commande                                     |
+  |--------------------------------|----------------------------------------------|
+  | Table de routage               | `show ip route`, `show ip route ospf`         |
+  | Voisins                        | `show ip ospf neighbor`                      |
+  | Interfaces OSPF                | `show ip ospf interface`                     |
+  | Base d'état de liens           | `show ip ospf database`                      |
+  | Configuration courante         | `show running-config`                        |
+  | Enregistrer                    | `write memory`                               |
+  | Commande ponctuelle            | `vtysh -c 'show ip route'`                   |
+
+  ## Redistribution et filtrage
+
+  La **redistribution** injecte dans OSPF des routes venant d'ailleurs (connectées, statiques, autre
+  protocole). Elle doit toujours être **filtrée** par une `route-map`, sinon on annonce des réseaux qui ne
+  devraient pas l'être (administration, réseaux de test) :
+
+  ```
+  ip prefix-list EXTRANET seq 5 permit 172.16.0.0/16
+  route-map EXTRANET permit 10
+   match ip address prefix-list EXTRANET
+  router ospf
+   redistribute connected route-map EXTRANET
+  ```
+
+  ## Pièges courants
+
+  - Oublier la **route retour** : le ping part mais la réponse ne sait pas revenir.
+  - Une route statique oubliée qui masque OSPF (distance 1 contre 110).
+  - Un coût modifié d'un seul côté : le trafic aller et retour prend des chemins différents.
+  - Annoncer le réseau d'administration ou activer OSPF sur une interface côté Internet.
+  - Configuration non enregistrée : perdue au redémarrage.
+
+  ## Bonnes pratiques en entreprise
+
+  - Router-ID fixes et documentés, interfaces utilisateurs passives, authentification des voisins.
+  - Schéma réseau et plan d'adressage à jour, sauvegardes automatiques des configurations (Oxidized,
+    RANCID, ou un simple script).
+  - Réseau d'administration hors bande, jamais routé avec la production.
+docs:
+  - title: Documentation de FRRouting
+    url: https://docs.frrouting.org/
+  - title: Wikipédia - Open Shortest Path First
+    url: https://fr.wikipedia.org/wiki/Open_Shortest_Path_First
+  - title: Wikipédia - Table de routage
+    url: https://fr.wikipedia.org/wiki/Table_de_routage
+exercises:
+  - id: statiques
+    title: Routes statiques
+    cours: |
+      Une route statique indique au routeur : « pour joindre ce réseau, envoie au voisin suivant ». Dans
+      vtysh, en mode configuration : `ip route <réseau>/<préfixe> <adresse du prochain saut>`. Le prochain
+      saut doit être une adresse directement joignable (sur un réseau connecté).
+
+      Le routage est **bidirectionnel** : chaque routeur doit savoir joindre le réseau d'origine pour que
+      les réponses reviennent. `show ip route` affiche les routes avec leur code (`S` statique, `C` connectée,
+      `O` OSPF) ; depuis un poste, `ping` puis `traceroute -n` valident le chemin.
+    description: |
+      En attendant OSPF, relie le siège et l'agence par des **routes statiques** sur la liaison directe
+      R1–R3 :
+      - sur R1 : `10.3.3.0/24` via `10.0.13.13` ;
+      - sur R3 : `10.1.1.0/24` via `10.0.13.11`.
+
+      `pc1` doit pinguer `pc3` (n'oublie pas la route **retour**).
+    hint: "ssh r1 ; vtysh ; configure terminal ; ip route 10.3.3.0/24 10.0.13.13 ; end ; show ip route"
+    checks:
+      - desc: R1 et R3 ont leur route statique
+        run: |
+          ssh r1 "vtysh -c 'show ip route static'" | grep -q '10.3.3.0/24' && ssh r3 "vtysh -c 'show ip route static'" | grep -q '10.1.1.0/24'
+      - desc: pc1 joint pc3
+        run: ssh pc1 'ping -c2 -W1 10.3.3.10' >/dev/null
+
+  - id: ospf
+    title: OSPF dans l'aire 0
+    cours: |
+      Dans le bloc `router ospf` :
+
+      - `ospf router-id <a.b.c.d>` fixe l'identifiant (sinon choisi automatiquement, ce qui complique le
+        dépannage) ;
+      - `network <réseau>/<préfixe> area <n>` active OSPF sur les interfaces dont l'adresse est dans ce
+        réseau, et annonce ce réseau ;
+      - `passive-interface <interface>` annonce le réseau sans y chercher de voisin.
+
+      `show ip ospf neighbor` affiche les voisins et leur état : `Full` signifie que les bases sont
+      synchronisées. Un réseau non couvert par une commande `network` n'est ni annoncé ni utilisé.
+    description: |
+      Active OSPF sur les trois routeurs :
+      - identifiants de routeur `1.1.1.1`, `2.2.2.2`, `3.3.3.3` ;
+      - annonce des liaisons inter-sites et des LAN dans l'aire `0` (commandes `network ... area 0`) ;
+      - interfaces `lan` **passives** (on annonce le réseau mais on n'y envoie pas de Hello : aucun routeur
+        à découvrir côté postes, et pas de voisin pirate possible) ;
+      - **ne pas** inclure le réseau `mgmt`.
+
+      Chaque routeur doit avoir deux voisins à l'état `Full` (`show ip ospf neighbor`).
+    hint: "router ospf / ospf router-id 1.1.1.1 / network 10.0.12.0/24 area 0 / network 10.0.13.0/24 area 0 / network 10.1.1.0/24 area 0 / passive-interface lan"
+    checks:
+      - desc: Identifiants de routeur
+        run: |
+          for e in r1:1.1.1.1 r2:2.2.2.2 r3:3.3.3.3; do
+            ssh ${e%%:*} "vtysh -c 'show ip ospf'" | grep -q "Router ID: ${e#*:}" || exit 1
+          done
+      - desc: Deux voisins Full sur chaque routeur (attente jusqu'à 60 s)
+        timeout: 120
+        run: |
+          for r in r1 r2 r3; do
+            ok=0
+            for i in $(seq 1 30); do
+              test "$(ssh $r "vtysh -c 'show ip ospf neighbor'" | grep -c 'Full')" = 2 && { ok=1; break; }
+              sleep 2
+            done
+            test $ok = 1 || { echo "$r : voisins incomplets"; exit 1; }
+          done
+      - desc: Interfaces lan passives et mgmt non annoncé
+        run: |
+          for r in r1 r2 r3; do
+            ssh $r "vtysh -c 'show running-config'" > /tmp/$r.conf
+            grep -Eq 'passive-interface lan|ip ospf passive' /tmp/$r.conf || { echo "$r : lan non passive"; exit 1; }
+          done
+          ! ssh r1 "vtysh -c 'show ip route ospf'" | grep -q '10\.99\.0\.0'
+
+  - id: nettoyage
+    title: Supprimer les routes statiques
+    cours: |
+      En configuration, une commande précédée de `no` supprime ce qu'elle avait créé : il faut la répéter
+      exactement (`no ip route <réseau> <prochain saut>`).
+
+      Pourquoi supprimer les statiques ? Une route statique a une **distance administrative** de 1, OSPF de
+      110 : la statique l'emporte toujours, même si la liaison qu'elle utilise est saturée ou si OSPF connaît
+      un meilleur chemin. En cas de panne, elle peut aussi créer un trou noir. Vérifie ensuite dans
+      `show ip route` que les LAN distants portent le code `O`.
+    description: |
+      Maintenant qu'OSPF fonctionne, supprime les routes statiques de R1 et R3 : elles masqueraient les
+      changements de topologie (distance administrative 1 contre 110 pour OSPF). Toutes les routes vers les
+      LAN distants doivent être apprises par OSPF.
+    hint: "configure terminal ; no ip route 10.3.3.0/24 10.0.13.13"
+    checks:
+      - desc: Plus aucune route statique sur R1 et R3
+        run: |
+          ! ssh r1 "vtysh -c 'show running-config'" | grep -q '^ip route' && ! ssh r3 "vtysh -c 'show running-config'" | grep -q '^ip route' &&
+          ssh r1 "vtysh -c 'show ip ospf neighbor'" | grep -q Full
+      - desc: R1 apprend lan2 et lan3 par OSPF
+        run: |
+          ssh r1 "vtysh -c 'show ip route ospf'" > /tmp/r1-ospf.txt
+          grep -q 'O>\* *10.2.2.0/24' /tmp/r1-ospf.txt && grep -q 'O>\* *10.3.3.0/24' /tmp/r1-ospf.txt
+      - desc: pc1 joint srv2 et pc3
+        run: ssh pc1 'ping -c2 -W1 10.2.2.10 && ping -c2 -W1 10.3.3.10' >/dev/null
+
+  - id: couts
+    title: Influencer le chemin avec les coûts
+    cours: |
+      OSPF choisit le chemin dont la **somme des coûts** des interfaces de sortie est la plus faible. Par
+      défaut, le coût dépend du débit de l'interface (référence 100 Mbit/s).
+
+      `ip ospf cost <valeur>`, dans le mode configuration d'une interface (`interface <nom>`), impose un coût.
+      Le coût est **local à chaque extrémité** : pour que l'aller et le retour suivent le même chemin, on le
+      règle des deux côtés.
+
+      `show ip route <réseau>` détaille la route retenue (prochain saut, métrique) ; un `traceroute` depuis un
+      poste montre le chemin réel.
+    description: |
+      La liaison directe R1–R3 est une liaison de secours lente et facturée au volume. Donne-lui un **coût
+      OSPF de 100** (aux **deux extrémités** : interface `vers-r3` de R1 et `vers-r1` de R3) pour que le
+      trafic entre le siège et l'agence passe par R2 tant que tout fonctionne.
+
+      Vérifie avec `show ip route 10.3.3.0/24` sur R1 et `traceroute -n 10.3.3.10` depuis pc1.
+    hint: "interface vers-r3 / ip ospf cost 100"
+    checks:
+      - desc: Coût 100 aux deux extrémités de la liaison R1–R3
+        run: |
+          ssh r1 "vtysh -c 'show ip ospf interface vers-r3'" | grep -q 'Cost: 100' && ssh r3 "vtysh -c 'show ip ospf interface vers-r1'" | grep -q 'Cost: 100'
+      - desc: R1 joint lan3 via R2 (10.0.12.12)
+        run: ssh r1 "vtysh -c 'show ip route 10.3.3.0/24'" | grep -q 'via 10.0.12.12'
+      - desc: Le traceroute de pc1 vers pc3 passe par R2
+        run: ssh pc1 'traceroute -n -w1 -q1 10.3.3.10' | grep -q '10\.0\.12\.12'
+
+  - id: redistribution
+    title: Redistribution filtrée
+    cours: |
+      Une interface **dummy** est une interface virtuelle toujours active : pratique pour simuler un réseau
+      (ou porter une adresse de bouclage).
+
+      La redistribution des routes connectées annonce dans OSPF **toutes** les interfaces du routeur, y
+      compris celles qu'on ne veut pas montrer. On la filtre avec :
+
+      - une `ip prefix-list` qui décrit les réseaux autorisés ;
+      - une `route-map` qui utilise cette liste (`match ip address prefix-list ...`) : ce qui ne correspond à
+        aucune entrée `permit` est refusé.
+
+      Les routes redistribuées apparaissent chez les voisins comme externes (`O E2`).
+    description: |
+      R2 est relié à l'extranet d'un partenaire (`172.16.0.0/16`). Simule ce réseau sur R2 par une interface
+      factice : `ip link add extranet type dummy`, adresse `172.16.0.1/16`.
+
+      Annonce-le dans OSPF par **redistribution des réseaux connectés**, filtrée par une `route-map`
+      `EXTRANET` qui n'autorise **que** `172.16.0.0/16` (via une `ip prefix-list`). Sans filtre, le réseau
+      `mgmt` serait annoncé à tout le monde.
+    hint: "ip prefix-list EXTRANET seq 5 permit 172.16.0.0/16 / route-map EXTRANET permit 10 / match ip address prefix-list EXTRANET / router ospf / redistribute connected route-map EXTRANET"
+    checks:
+      - desc: R1 apprend 172.16.0.0/16 en route OSPF externe
+        run: ssh r1 "vtysh -c 'show ip route 172.16.0.0/16'" | grep -q 'Known via "ospf"'
+      - desc: La redistribution est filtrée par la route-map EXTRANET
+        run: ssh r2 "vtysh -c 'show running-config'" | grep -q 'redistribute connected route-map EXTRANET'
+      - desc: Le réseau mgmt n'est pas annoncé
+        run: |
+          ssh r2 "vtysh -c 'show running-config'" | grep -q 'redistribute connected route-map EXTRANET' &&
+          ! ssh r1 "vtysh -c 'show ip route ospf'" | grep -q '10\.99\.0\.0'
+      - desc: pc1 joint 172.16.0.1
+        run: ssh pc1 'ping -c2 -W1 172.16.0.1' >/dev/null
+
+  - id: route-defaut
+    title: Diffuser une route par défaut
+    cours: |
+      Plutôt que de configurer une route par défaut sur chaque routeur, le routeur de sortie Internet peut
+      l'annoncer dans OSPF avec `default-information originate`.
+
+      Sans le mot-clé `always`, il ne l'annonce que s'il possède lui-même une route par défaut ; avec
+      `always`, il l'annonce dans tous les cas (pratique dans ce lab, risqué en production : si son lien
+      Internet tombe, il continue d'attirer le trafic).
+
+      Les autres routeurs voient alors `O*E2 0.0.0.0/0` dans leur table.
+
+      Vérifie ensuite qu'un hôte interne joint réellement l'extérieur : une route présente dans la table ne garantit pas le chemin retour.
+    description: |
+      R2 héberge aussi l'accès Internet de l'entreprise. Fais-lui annoncer une **route par défaut** à tous
+      les routeurs OSPF (`default-information originate always`). R1 et R3 doivent apprendre
+      `0.0.0.0/0` via OSPF.
+    hint: "router ospf / default-information originate always"
+    checks:
+      - desc: R1 et R3 apprennent la route par défaut via OSPF
+        run: |
+          ssh r1 "vtysh -c 'show ip route 0.0.0.0/0'" | grep -q 'Known via "ospf"' && ssh r3 "vtysh -c 'show ip route 0.0.0.0/0'" | grep -q 'Known via "ospf"'
+
+  - id: authentification
+    title: Authentifier les voisins OSPF
+    cours: |
+      Par défaut, OSPF accepte tout routeur qui parle sur un réseau activé : un équipement pirate pourrait
+      annoncer de fausses routes et détourner le trafic.
+
+      L'authentification **MD5** signe chaque paquet OSPF avec une clé partagée. Elle se configure sur
+      l'interface, aux **deux extrémités** de la liaison : activation du mode `message-digest`, puis clé
+      numérotée (`message-digest-key <n> md5 <secret>`).
+
+      Pendant la configuration, la relation tombe tant que les deux côtés ne sont pas identiques : prévois
+      une fenêtre de maintenance. Les versions récentes recommandent les clés de type HMAC-SHA (key-chain).
+    description: |
+      Un équipement branché sur une liaison pourrait injecter de fausses routes. Active l'**authentification
+      MD5** OSPF sur la liaison R1–R2 (interfaces `vers-r2` de R1 et `vers-r1` de R2) avec la clé n°1
+      `Durand0spf`. La relation de voisinage doit revenir à `Full`.
+    hint: "interface vers-r2 / ip ospf authentication message-digest / ip ospf message-digest-key 1 md5 Durand0spf"
+    checks:
+      - desc: Authentification MD5 configurée des deux côtés
+        run: |
+          ssh r1 "vtysh -c 'show running-config'" | sed -n '/^interface vers-r2/,/^exit/p' | grep -q 'message-digest-key 1 md5' &&
+          ssh r2 "vtysh -c 'show running-config'" | sed -n '/^interface vers-r1/,/^exit/p' | grep -q 'message-digest-key 1 md5'
+      - desc: R1 et R2 sont toujours voisins Full (attente jusqu'à 60 s)
+        timeout: 90
+        run: |
+          for i in $(seq 1 30); do
+            ssh r1 "vtysh -c 'show ip ospf neighbor'" | grep '2\.2\.2\.2' | grep -q Full && exit 0
+            sleep 2
+          done
+          exit 1
+
+  - id: sauvegarde
+    title: Enregistrer les configurations
+    cours: |
+      Un routeur a deux configurations : la **courante** (en mémoire, `show running-config`) et celle de
+      **démarrage** (`/etc/frr/frr.conf` pour FRR). `write memory` copie la première dans la seconde, comme
+      `copy running-config startup-config` chez Cisco.
+
+      Une copie sur le routeur ne protège pas d'une panne matérielle : on rapatrie les configurations sur un
+      serveur (ici avec `scp`), idéalement versionnées dans Git pour voir qui a changé quoi. Une boucle
+      `for r in ...; do ...; done` traite tous les routeurs d'un coup.
+    description: |
+      Une configuration non enregistrée est perdue au redémarrage. Enregistre la configuration des trois
+      routeurs (`write memory`, l'équivalent de `copy running-config startup-config`), puis copie-les sur
+      admin dans `/root/configs/r1.conf`, `r2.conf` et `r3.conf` (sauvegarde hors des équipements).
+    hint: "for r in r1 r2 r3; do ssh $r \"vtysh -c 'write memory'\"; scp $r:/etc/frr/frr.conf /root/configs/$r.conf; done"
+    checks:
+      - desc: frr.conf contient OSPF sur les trois routeurs
+        run: for r in r1 r2 r3; do ssh $r 'grep -q "^router ospf" /etc/frr/frr.conf' || exit 1; done
+      - desc: Copies sur admin
+        run: for r in r1 r2 r3; do grep -q '^router ospf' /root/configs/$r.conf || exit 1; done

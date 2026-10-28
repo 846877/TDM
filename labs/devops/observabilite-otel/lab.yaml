@@ -1,0 +1,428 @@
+title: Observabilité avec OpenTelemetry
+level: expert
+order: 7
+tags: [opentelemetry, otel, traces, jaeger, collecteur, métriques, prometheus, observabilité]
+summary: Tracer une application de bout en bout avec OpenTelemetry - Jaeger, collecteur OTLP, instrumentation Python, erreurs, propagation de contexte entre services, processeurs, échantillonnage par la queue et métriques Prometheus.
+build: .
+ports: ["8616:16686"]
+shell: bash
+workdir: /opt/appli
+description: |
+  Un poste Ubuntu (tu es `root`) prêt pour l'**observabilité** :
+
+  - **`otelcol-contrib`** : le collecteur OpenTelemetry (distribution *contrib*) ;
+  - **`jaeger`** : Jaeger v2, pour stocker et explorer les traces, avec sa configuration dans
+    **`/etc/jaeger/jaeger.yaml`** (OTLP sur **14317/14318**, interface et API sur **16686**, publiée sur
+    ta machine en **http://localhost:8616**) ;
+  - **`python`** : un Python dont l'environnement contient le **SDK OpenTelemetry** et l'exportateur
+    OTLP/HTTP.
+
+  L'application **« boutique »** est dans **`/opt/appli`** : `commande.py` traite une commande
+  (`python commande.py 42`, options `--echec` et `--lent`) et `stock.py` est un petit service HTTP de stock
+  (port 8001). Aucune des deux n'est instrumentée : c'est ton travail.
+
+  Il n'y a pas de systemd : les services se lancent en arrière-plan avec `nohup ... &`. Deux outils
+  t'aident à vérifier : `tdm-envoyer-span` (envoie un span de test au collecteur) et `tdm-trace NUMERO`
+  (affiche la trace Jaeger d'une commande, en JSON).
+cours: |
+  ## Observer un système distribué
+
+  Surveiller, c'est vérifier des indicateurs connus à l'avance (« le disque est-il plein ? »). **Observer**,
+  c'est pouvoir répondre à des questions qu'on n'avait pas prévues (« pourquoi la commande 4812 a-t-elle
+  mis 3 secondes ? ») à partir des données émises par le système. On distingue trois **signaux** :
+
+  - les **journaux** : des événements textuels horodatés ;
+  - les **métriques** : des valeurs numériques agrégées dans le temps (compteurs, jauges, histogrammes),
+    peu coûteuses, idéales pour les tableaux de bord et les alertes ;
+  - les **traces** : le parcours d'une requête à travers les services, découpé en **spans**.
+
+  ### Traces et spans
+
+  Une **trace** est un arbre de spans partageant un même `trace_id`. Chaque **span** représente une
+  opération : un nom, un début, une durée, un `span_id`, l'identifiant de son parent, des **attributs**
+  (clé/valeur), des **événements** horodatés et un **statut** (`UNSET`, `OK`, `ERROR`). Le span racine
+  couvre toute la requête ; ses enfants détaillent les étapes (accès base, appel HTTP…). Une trace
+  montre immédiatement **où** le temps est passé et **où** l'erreur est née.
+
+  ```
+   commandes  traiter_commande ████████████████████████████████  310 ms
+   commandes    verifier_stock ██████                              60 ms
+   stock          GET /stock    ████                               40 ms
+   commandes    payer                  ███████████                120 ms  ERROR
+  ```
+
+  ### OpenTelemetry
+
+  **OpenTelemetry** (OTel, projet de la CNCF) normalise la production de ces signaux :
+
+  - une **API** et des **SDK** par langage pour instrumenter le code (manuellement ou automatiquement) ;
+  - le protocole **OTLP** (gRPC sur le port 4317, HTTP sur 4318) pour les transporter ;
+  - des **conventions sémantiques** pour nommer les attributs (`service.name`, `http.request.method`,
+    `deployment.environment`…) ;
+  - le **collecteur**, un relais configurable entre les applications et les outils d'analyse.
+
+  L'intérêt majeur : on instrumente **une fois**, puis on choisit librement où envoyer les données (Jaeger,
+  Tempo, Prometheus, un service SaaS…) sans toucher au code.
+
+  ### Le collecteur
+
+  Le collecteur est configuré en YAML en trois familles de composants, assemblés en **pipelines** par
+  signal dans la section `service` :
+
+  ```
+   receivers ──▶ processors ──▶ exporters
+   (otlp)        (batch, resource,   (otlp vers Jaeger, prometheus,
+                  attributes,         debug…)
+                  tail_sampling…)
+  ```
+
+  Un composant déclaré mais absent de tout pipeline est ignoré. Le collecteur centralise les
+  traitements transverses : ajout d'attributs d'environnement, suppression de données personnelles,
+  échantillonnage, mise en lots, envoi vers plusieurs destinations.
+
+  ### Propagation du contexte
+
+  Pour qu'une trace traverse plusieurs services, l'appelant transmet le contexte (trace et span
+  courants) dans les en-têtes de la requête, au format standard **W3C Trace Context** :
+  `traceparent: 00-<trace_id>-<span_id>-01`. L'appelé l'**extrait** et crée ses spans comme enfants.
+  Sans cette étape, chaque service produit des traces isolées, impossibles à relier.
+
+  ### Échantillonnage
+
+  Tracer 100 % des requêtes coûte cher en stockage. L'échantillonnage **par la tête** décide au début de
+  la trace (par exemple 10 %), sans savoir si elle sera intéressante. L'échantillonnage **par la queue**
+  (*tail sampling*), dans le collecteur, attend la fin de la trace pour décider : on garde toutes les
+  erreurs et les requêtes lentes, et on jette le trafic normal.
+
+  ### Pour réviser
+
+  - Quelle différence entre un span racine et un span enfant ?
+  - Pourquoi passer par un collecteur plutôt qu'exporter directement vers Jaeger ?
+  - Que se passe-t-il si un service n'extrait pas l'en-tête `traceparent` ?
+docs:
+  - title: Documentation d'OpenTelemetry
+    url: https://opentelemetry.io/docs/
+  - title: OpenTelemetry Python - instrumentation manuelle
+    url: https://opentelemetry.io/docs/languages/python/instrumentation/
+  - title: Configuration du collecteur OpenTelemetry
+    url: https://opentelemetry.io/docs/collector/configuration/
+  - title: Documentation de Jaeger
+    url: https://www.jaegertracing.io/docs/
+exercises:
+  - id: ot-jaeger
+    title: Démarrer Jaeger
+    description: |
+      Lance **Jaeger** en arrière-plan avec la configuration fournie **`/etc/jaeger/jaeger.yaml`**, en
+      envoyant sa sortie dans **`/var/log/jaeger.log`**. Vérifie que l'API répond
+      (`curl localhost:16686/api/services`) et ouvre l'interface sur http://localhost:8616.
+    hint: "nohup jaeger --config /etc/jaeger/jaeger.yaml > /var/log/jaeger.log 2>&1 &"
+    cours: |
+      **Jaeger** est un système de traçage distribué créé chez Uber et donné à la CNCF. Sa version 2 est
+      construite **sur le collecteur OpenTelemetry** : sa configuration a la même forme (`receivers`,
+      `processors`, `exporters`, `extensions`, `service`), avec des extensions propres à Jaeger :
+      `jaeger_storage` (où ranger les traces : mémoire, Badger, Cassandra, Elasticsearch…) et
+      `jaeger_query` (l'interface web et l'API de recherche).
+
+      Lis `/etc/jaeger/jaeger.yaml` : le stockage est en **mémoire**, donc les traces disparaissent au
+      redémarrage, ce qui suffit pour un lab. Jaeger reçoit l'OTLP sur des ports décalés (14317 et 14318),
+      car les ports standard 4317 et 4318 seront ceux du collecteur.
+
+      L'API `/api/services` liste les services ayant envoyé des traces ; `/api/traces?service=...` renvoie
+      les traces en JSON. C'est cette API qu'utilise l'outil `tdm-trace`.
+    checks:
+      - desc: Jaeger tourne avec /etc/jaeger/jaeger.yaml et écrit dans /var/log/jaeger.log
+        run: |
+          test -s /var/log/jaeger.log && ps -o args= -C jaeger | grep -q '/etc/jaeger/jaeger.yaml'
+      - desc: L'API de Jaeger répond sur le port 16686
+        run: |
+          curl -sf http://localhost:16686/api/services | jq -e 'has("data")' >/dev/null
+      - desc: Jaeger accepte l'OTLP/HTTP sur le port 14318
+        run: |
+          tdm-envoyer-span tdm-test http://localhost:14318/v1/traces
+  - id: ot-collecteur
+    title: Configurer le collecteur
+    description: |
+      Écris **`/etc/otelcol/config.yaml`** pour le collecteur :
+
+      - un récepteur **`otlp`** en gRPC (`0.0.0.0:4317`) et en HTTP (`0.0.0.0:4318`) ;
+      - le processeur **`batch`** ;
+      - deux exportateurs : **`otlp/jaeger`** vers `localhost:14317` (sans TLS) et **`debug`** ;
+      - un pipeline **`traces`** qui relie le tout.
+
+      Valide la configuration avec `otelcol-contrib validate --config ...`, puis lance le collecteur en
+      arrière-plan avec sa sortie dans **`/var/log/otelcol.log`**. Teste avec `tdm-envoyer-span` : le service
+      `tdm-test` doit apparaître dans Jaeger.
+    hint: "Exportateur Jaeger : otlp/jaeger: {endpoint: localhost:14317, tls: {insecure: true}} ; lancement : nohup otelcol-contrib --config /etc/otelcol/config.yaml > /var/log/otelcol.log 2>&1 &"
+    cours: |
+      Chaque composant porte un **type** et, au besoin, un nom après une barre oblique : `otlp/jaeger` est
+      un exportateur de type `otlp` nommé « jaeger », ce qui permet d'en déclarer plusieurs du même type.
+      L'exportateur `otlp` parle gRPC ; vers un service local sans certificat, il faut
+      `tls: {insecure: true}`.
+
+      Le processeur **`batch`** regroupe les données en lots avant l'envoi : moins de requêtes, meilleure
+      compression. On le place en général en fin de chaîne. L'exportateur **`debug`** écrit un résumé de
+      ce qui passe dans le journal du collecteur (`verbosity: detailed` pour tout voir) : précieux pour
+      savoir si les données arrivent jusque-là.
+
+      `otelcol-contrib validate` vérifie la syntaxe et la cohérence (composant inconnu, pipeline vide)
+      sans démarrer. La distribution **contrib** embarque des centaines de composants ; en production, on
+      construit souvent sa propre distribution réduite avec l'outil `ocb`.
+    checks:
+      - desc: La configuration est valide
+        run: |
+          test -f /etc/otelcol/config.yaml && otelcol-contrib validate --config /etc/otelcol/config.yaml
+      - desc: Le collecteur tourne avec /etc/otelcol/config.yaml
+        run: |
+          ps -o args= -C otelcol-contrib | grep -q '/etc/otelcol/config.yaml'
+      - desc: Un span envoyé au collecteur (port 4318) arrive dans Jaeger
+        timeout: 40
+        run: |
+          s=verif-$(date +%s%N)
+          tdm-envoyer-span $s >/dev/null || exit 1
+          for i in $(seq 1 15); do curl -s http://localhost:16686/api/services | grep -q "\"$s\"" && exit 0; sleep 1; done
+          exit 1
+      - desc: L'exportateur debug écrit les traces reçues dans /var/log/otelcol.log
+        run: |
+          grep 'Traces' /var/log/otelcol.log | grep -q '"otelcol.component.id": "debug"'
+  - id: ot-instrumenter
+    title: Instrumenter le traitement des commandes
+    description: |
+      Instrumente **`/opt/appli/commande.py`** avec le SDK OpenTelemetry :
+
+      - un `TracerProvider` dont la ressource porte **`service.name=commandes`**, avec un
+        `BatchSpanProcessor` et un `OTLPSpanExporter` vers **`http://localhost:4318/v1/traces`** ;
+      - un span par fonction : **`traiter_commande`** (racine), **`verifier_stock`** et **`payer`** (ses
+        enfants) ;
+      - sur `traiter_commande`, les attributs **`commande.id`** (le numéro) et **`client.email`** ;
+      - avant la fin du programme, `shutdown()` du fournisseur pour vider le tampon.
+
+      Lance `python commande.py 42`, puis retrouve la trace dans Jaeger (`tdm-trace 42`).
+    hint: "with tracer.start_as_current_span(\"payer\"): ... ; les spans ouverts dans le bloc d'un autre deviennent ses enfants. OTLPSpanExporter vient de opentelemetry.exporter.otlp.proto.http.trace_exporter"
+    cours: |
+      L'instrumentation se fait en trois temps. On crée une **ressource** (`Resource.create({...})`) qui
+      décrit l'émetteur : `service.name` est l'attribut le plus important, c'est le nom affiché dans
+      Jaeger. On crée un **TracerProvider** avec cette ressource et un **processeur de spans** : le
+      `BatchSpanProcessor` met les spans en file et les exporte en arrière-plan, sans ralentir
+      l'application. Enfin on obtient un **tracer** (`trace.get_tracer("boutique.commandes")`).
+
+      `with tracer.start_as_current_span("nom") as span:` ouvre un span, le rend **courant** pendant le
+      bloc, puis le ferme. Un span ouvert pendant qu'un autre est courant devient son **enfant** : la
+      hiérarchie suit naturellement les appels de fonctions. `span.set_attribute(clé, valeur)` ajoute le
+      contexte métier qui permettra de retrouver une requête précise.
+
+      Un programme court doit appeler `provider.shutdown()` (ou `force_flush()`) avant de se terminer,
+      sinon les derniers spans restent dans la file et sont perdus.
+    checks:
+      - desc: Une commande produit une trace avec les spans traiter_commande, verifier_stock et payer
+        timeout: 60
+        run: |
+          id=i$(date +%s%N)
+          cd /opt/appli && python commande.py $id >/dev/null || exit 1
+          tdm-trace $id | jq -e '[.spans[].operationName] | (index("traiter_commande") != null) and (index("verifier_stock") != null) and (index("payer") != null)'
+      - desc: verifier_stock et payer sont enfants de traiter_commande, qui porte commande.id et client.email
+        timeout: 60
+        run: |
+          id=j$(date +%s%N)
+          cd /opt/appli && python commande.py $id >/dev/null || exit 1
+          tdm-trace $id | jq -e '(.spans[] | select(.operationName == "traiter_commande")) as $r
+            | ([.spans[] | select(.operationName == "verifier_stock" or .operationName == "payer") | .references[]? | select(.spanID == $r.spanID)] | length == 2)
+              and any($r.tags[]; .key == "client.email")'
+  - id: ot-erreurs
+    title: Signaler les erreurs
+    description: |
+      Avec `--echec`, la banque refuse le paiement : `payer` renvoie `"refusee"` **sans lever
+      d'exception**, et la trace paraît donc normale. Corrige cela : dans ce cas, le span **`payer`** doit
+      passer au statut **`ERROR`** (avec la description `carte refusée`) et porter un **événement**
+      nommé **`paiement_refuse`**. Vérifie avec `python commande.py 43 --echec` : la trace apparaît en rouge
+      dans Jaeger.
+    hint: "from opentelemetry.trace import Status, StatusCode ; span.set_status(Status(StatusCode.ERROR, \"carte refusée\")) ; span.add_event(\"paiement_refuse\")"
+    cours: |
+      Le statut d'un span vaut `UNSET` par défaut. Quand une **exception** traverse un bloc
+      `start_as_current_span`, le SDK l'enregistre (événement `exception` avec le type, le message et la
+      pile) et passe le span en `ERROR` automatiquement. Mais beaucoup d'échecs métier ne sont pas des
+      exceptions : un code de retour, un refus de paiement, une réponse HTTP 503 traitée par le code. Il
+      faut alors le signaler soi-même avec `span.set_status(Status(StatusCode.ERROR, "description"))`.
+
+      Les **événements** (`span.add_event(nom, attributs)`) marquent un instant précis dans la vie du span :
+      tentative de reconnexion, entrée en cache, refus. Jaeger les affiche comme des « logs » du span.
+
+      Un statut correct est essentiel : c'est lui qu'utilisent les tableaux de bord de taux d'erreur, les
+      alertes, et l'échantillonnage qui garde les traces en erreur.
+    checks:
+      - desc: Un paiement refusé met le span payer au statut ERROR
+        timeout: 60
+        run: |
+          id=e$(date +%s%N)
+          cd /opt/appli && python commande.py $id --echec >/dev/null || exit 1
+          tdm-trace $id | jq -e 'any(.spans[] | select(.operationName == "payer") | .tags[]; .key == "otel.status_code" and .value == "ERROR")'
+      - desc: Le span payer porte l'événement paiement_refuse
+        timeout: 60
+        run: |
+          id=f$(date +%s%N)
+          cd /opt/appli && python commande.py $id --echec >/dev/null || exit 1
+          tdm-trace $id | jq -e 'any(.spans[] | select(.operationName == "payer") | .logs[].fields[]; .value == "paiement_refuse")'
+  - id: ot-propagation
+    title: Propager le contexte vers le service de stock
+    description: |
+      `verifier_stock` doit désormais interroger le service de stock :
+      **`GET http://localhost:8001/stock/<numéro>`** (avec `urllib.request`), en **injectant** le contexte de
+      trace dans les en-têtes.
+
+      Instrumente aussi **`/opt/appli/stock.py`** : ressource **`service.name=stock`**, et dans `do_GET` un
+      span serveur **`GET /stock`** créé à partir du contexte **extrait** des en-têtes. Lance le service en
+      arrière-plan (`nohup python /opt/appli/stock.py > /var/log/stock.log 2>&1 &`). Une commande doit
+      produire **une seule trace** couvrant les deux services.
+    hint: "Appelant : entetes = {} ; propagate.inject(entetes) ; urllib.request.Request(url, headers=entetes). Appelé : ctx = propagate.extract(self.headers) ; tracer.start_as_current_span(\"GET /stock\", context=ctx, kind=SpanKind.SERVER)"
+    cours: |
+      Le **propagateur** par défaut d'OpenTelemetry suit le standard **W3C Trace Context** :
+      `propagate.inject(dico)` ajoute au dictionnaire l'en-tête `traceparent` (version, trace_id,
+      span_id du span courant, options) et éventuellement `tracestate` ; `propagate.extract(entetes)`
+      reconstruit le contexte côté serveur. Le span créé avec ce contexte a pour parent le span distant :
+      la trace continue d'un processus à l'autre.
+
+      Le `kind` d'un span précise son rôle : `CLIENT` pour un appel sortant, `SERVER` pour une requête
+      reçue, `INTERNAL` par défaut. Jaeger s'en sert pour dessiner la carte des dépendances entre services.
+
+      En pratique, les bibliothèques d'**instrumentation automatique** (`opentelemetry-instrumentation-requests`,
+      `-flask`, `-django`…) font ce travail pour chaque requête. Le comprendre à la main permet de
+      diagnostiquer les traces « coupées », souvent dues à un proxy ou une file de messages qui ne
+      transmet pas l'en-tête.
+
+      Un service qui tourne longtemps exporte ses spans par lots, toutes les 5 secondes par défaut : ceux
+      du service de stock arrivent donc un peu après les autres.
+    checks:
+      - desc: Le service de stock répond sur le port 8001
+        run: |
+          curl -sf http://localhost:8001/stock/1 | grep -q disponible
+      - desc: Une commande produit une seule trace avec des spans des services commandes et stock
+        timeout: 60
+        run: |
+          id=p$(date +%s%N)
+          cd /opt/appli && python commande.py $id >/dev/null || exit 1
+          sleep 7
+          tdm-trace $id | jq -e '.processes as $p | ([.spans[] | $p[.processID].serviceName] | unique) as $s
+            | ($s | index("stock") != null) and ($s | index("commandes") != null)'
+      - desc: Le span GET /stock est l'enfant d'un span du service commandes
+        timeout: 60
+        run: |
+          id=q$(date +%s%N)
+          cd /opt/appli && python commande.py $id >/dev/null || exit 1
+          sleep 7
+          tdm-trace $id | jq -e '[.spans[].spanID] as $ids | any(.spans[] | select(.operationName == "GET /stock") | .references[]?; .spanID as $r | $ids | index($r) != null)'
+  - id: ot-processeur
+    title: Enrichir et nettoyer les données dans le collecteur
+    description: |
+      Sans toucher au code, modifie le pipeline `traces` du collecteur :
+
+      - un processeur **`resource`** qui ajoute l'attribut de ressource **`deployment.environment=lab`** ;
+      - un processeur **`attributes`** (nomme-le `attributes/rgpd`) qui **supprime** l'attribut
+        **`client.email`** des spans : une adresse électronique n'a rien à faire dans les traces.
+
+      Redémarre le collecteur (`pkill -x otelcol-contrib`, puis relance-le comme avant) et vérifie dans
+      Jaeger.
+    hint: "resource: {attributes: [{key: deployment.environment, value: lab, action: upsert}]} ; attributes/rgpd: {actions: [{key: client.email, action: delete}]} ; à ajouter devant batch dans processors du pipeline"
+    cours: |
+      Les **processeurs** modifient les données en transit, dans l'ordre où ils sont listés dans le
+      pipeline. Le processeur **`resource`** agit sur les attributs de **ressource** (ceux du service :
+      environnement, région, version), le processeur **`attributes`** sur les attributs de **span**.
+      Chaque action précise `insert` (si absent), `update` (si présent), `upsert` (dans tous les cas),
+      `delete`, ou `hash` (remplacer par une empreinte, pour corréler sans exposer la valeur).
+
+      Centraliser ces règles dans le collecteur a deux avantages : on les applique d'un coup à tous les
+      services, même ceux qu'on ne peut pas modifier, et on garantit qu'une donnée personnelle ne sort
+      jamais du réseau interne, ce qui compte pour le **RGPD**. Pour des transformations plus riches,
+      le processeur `transform` accepte un langage dédié, l'OTTL.
+
+      Dans Jaeger, les attributs de ressource apparaissent dans la section **Process** du span.
+    checks:
+      - desc: La configuration du collecteur est valide
+        run: |
+          otelcol-contrib validate --config /etc/otelcol/config.yaml
+      - desc: Les spans du service commandes portent deployment.environment=lab
+        timeout: 60
+        run: |
+          id=r$(date +%s%N)
+          cd /opt/appli && python commande.py $id --echec >/dev/null || exit 1
+          tdm-trace $id | jq -e 'any(.processes[] | select(.serviceName == "commandes") | .tags[]; .key == "deployment.environment" and .value == "lab")'
+      - desc: Aucun span ne contient plus client.email
+        timeout: 60
+        run: |
+          id=s$(date +%s%N)
+          cd /opt/appli && python commande.py $id --echec >/dev/null || exit 1
+          tdm-trace $id | jq -e '[.spans[].tags[] | select(.key == "client.email")] | length == 0'
+  - id: ot-echantillonnage
+    title: Échantillonner par la queue
+    description: |
+      Le trafic normal n'intéresse personne : ajoute au pipeline `traces` un processeur **`tail_sampling`**
+      qui ne garde que :
+
+      - les traces contenant une **erreur** (statut `ERROR`) ;
+      - les traces **lentes**, au-delà de **500 ms**.
+
+      Choisis un `decision_wait` de 10 secondes au plus. Redémarre le collecteur, puis vérifie :
+      `python commande.py 50` n'apparaît plus dans Jaeger, alors que `--echec` et `--lent` y sont.
+    hint: "tail_sampling: {decision_wait: 5s, policies: [{name: erreurs, type: status_code, status_code: {status_codes: [ERROR]}}, {name: lentes, type: latency, latency: {threshold_ms: 500}}]} ; place-le avant batch"
+    cours: |
+      Le processeur **`tail_sampling`** garde en mémoire les spans de chaque trace pendant
+      `decision_wait`, puis évalue ses **politiques** : la trace est conservée si **au moins une** politique
+      l'accepte. Types utiles : `status_code`, `latency`, `probabilistic` (un pourcentage),
+      `string_attribute` (un client précis), `rate_limiting`, et `and`/`composite` pour combiner.
+
+      Le choix de `decision_wait` est un compromis : trop court, des spans tardifs (ici ceux du service de
+      stock, exportés par lots) arrivent après la décision ; trop long, la mémoire du collecteur
+      gonfle. `num_traces` limite le nombre de traces en attente.
+
+      Contrainte importante : tous les spans d'une trace doivent arriver au **même** collecteur. Avec
+      plusieurs instances, on place devant elles un premier étage qui répartit par `trace_id`
+      (exportateur `loadbalancing`). Combiner avec un petit pourcentage aléatoire garde une vue du trafic
+      normal pour comparer.
+    checks:
+      - desc: La configuration du collecteur est valide
+        run: |
+          otelcol-contrib validate --config /etc/otelcol/config.yaml
+      - desc: Les commandes en erreur et les commandes lentes sont conservées, les commandes normales écartées
+        timeout: 120
+        run: |
+          n=$(date +%s%N); cd /opt/appli || exit 1
+          python commande.py n$n >/dev/null && python commande.py e$n --echec >/dev/null && python commande.py l$n --lent >/dev/null || exit 1
+          tdm-trace e$n 30 >/dev/null && tdm-trace l$n 30 >/dev/null && ! tdm-trace n$n 3 >/dev/null
+  - id: ot-metriques
+    title: Exposer des métriques pour Prometheus
+    description: |
+      Les traces ne disent pas combien de commandes passent par minute. Ajoute à `commande.py` un
+      **compteur** **`commandes_total`** (via un `MeterProvider` et un `OTLPMetricExporter` vers
+      `http://localhost:4318/v1/metrics`), incrémenté une fois par commande avec l'attribut **`statut`**
+      (`ok` si le paiement est accepté, `refusee` sinon). Pense au `shutdown()` du `MeterProvider`.
+
+      Dans le collecteur, ajoute un pipeline **`metrics`** : récepteur `otlp`, processeur `batch`,
+      exportateur **`prometheus`** sur **`0.0.0.0:8889`**. Vérifie avec `curl localhost:8889/metrics`.
+    hint: "PeriodicExportingMetricReader(OTLPMetricExporter(endpoint=...)) dans MeterProvider(resource=..., metric_readers=[...]) ; compteur = metrics.get_meter(\"boutique\").create_counter(\"commandes_total\") ; compteur.add(1, {\"statut\": \"ok\"})"
+    cours: |
+      Côté SDK, un **MeterProvider** associe une ressource et des **lecteurs** : le
+      `PeriodicExportingMetricReader` exporte les mesures à intervalle régulier (60 s par défaut) et à
+      l'arrêt. Un **compteur** (`create_counter`) ne fait que croître ; on l'incrémente avec des
+      **attributs** qui deviennent des dimensions (`statut="ok"`). Autres instruments : `UpDownCounter`,
+      `Histogram` (durées, tailles), et les instruments asynchrones lus par rappel.
+
+      L'exportateur **`prometheus`** du collecteur expose ces métriques au format texte, prêtes à être
+      **scrapées** par Prometheus : `commandes_total{job="commandes",statut="ok"} 1`. Le service devient
+      le label `job`, les autres attributs de ressource partent dans la série `target_info`.
+
+      Attention au nombre de **séries** : chaque combinaison de valeurs d'attributs en crée une. Un
+      attribut `commande.id` sur une métrique ferait exploser la base : les identifiants vont dans les
+      traces, les métriques gardent des dimensions à faible cardinalité. Note aussi qu'un programme court
+      repart de zéro à chaque exécution : en production, on compte dans des services qui durent.
+    checks:
+      - desc: L'exportateur Prometheus répond sur le port 8889
+        run: |
+          curl -sf http://localhost:8889/metrics >/dev/null
+      - desc: commandes_total est exposé avec statut="ok" et statut="refusee"
+        timeout: 60
+        run: |
+          cd /opt/appli && python commande.py m$(date +%s%N) >/dev/null && python commande.py m$(date +%s%N) --echec >/dev/null || exit 1
+          for i in $(seq 1 15); do
+            m=$(curl -s http://localhost:8889/metrics)
+            echo "$m" | grep -q '^commandes_total{.*statut="ok"' && echo "$m" | grep -q '^commandes_total{.*statut="refusee"' && exit 0
+            sleep 1
+          done
+          exit 1

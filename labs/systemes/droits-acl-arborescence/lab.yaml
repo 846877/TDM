@@ -1,0 +1,531 @@
+title: Arborescence, permissions et ACL d'un serveur de fichiers
+level: debutant
+order: 2
+tags: [linux, permissions, acl, setgid, sticky bit, serveur de fichiers]
+summary: Construire les dossiers partagés des services avec les bons droits, le setgid, le sticky bit et les ACL.
+build: .
+shell: bash
+workdir: /srv/partages
+description: |
+  **Contexte.** Chez *Ateliers Durand*, chaque service doit disposer d'un dossier partagé sur le
+  serveur de fichiers, accessible **uniquement** par ses membres. La direction doit pouvoir consulter
+  la comptabilité sans la modifier, et un dossier commun sert d'espace d'échange pour tout le personnel.
+  Les archives récupérées de l'ancien serveur ont des droits à assainir.
+
+  **Machine.** Serveur Ubuntu, terminal `root` dans `/srv/partages`.
+
+  **Comptes déjà créés** (groupes secondaires) :
+
+  | Utilisateur | Groupes                 |
+  |-------------|-------------------------|
+  | `alice`     | `compta`, `personnel`   |
+  | `bruno`     | `compta`, `personnel`   |
+  | `chloe`     | `rh`, `personnel`       |
+  | `dimitri`   | `direction`, `personnel`|
+
+  Pour tester comme un utilisateur : `runuser -u alice -- touch /srv/partages/compta/essai`.
+  Outils : `chmod`, `chown`, `chgrp`, `find`, `stat`, `getfacl`, `setfacl`.
+cours: |
+  ## Le modèle de droits Unix
+
+  Chaque fichier a **un propriétaire**, **un groupe** et trois jeux de droits : pour le propriétaire
+  (*u*), pour les membres du groupe (*g*) et pour tous les autres (*o*).
+
+  ```
+  drwxrws--T  root compta  /srv/partages/compta
+  │└┬┘└┬┘└┬┘
+  │ u  g  o        r = 4   w = 2   x = 1
+  └ type (d = dossier, - = fichier, l = lien)
+  ```
+
+  Le noyau applique **une seule** catégorie, la première qui correspond : si tu es le propriétaire, seuls
+  les droits *u* comptent, même si *g* est plus large.
+
+  | Droit | Sur un fichier            | Sur un dossier                                         |
+  |-------|---------------------------|--------------------------------------------------------|
+  | `r`   | lire le contenu           | lister les noms (`ls`)                                 |
+  | `w`   | modifier le contenu       | créer, renommer, **supprimer** des fichiers dedans     |
+  | `x`   | exécuter                  | **traverser** (entrer, accéder aux fichiers par nom)    |
+
+  Conséquence importante : supprimer un fichier dépend des droits sur le **dossier**, pas sur le fichier.
+
+  ## Notation octale et bits spéciaux
+
+  `chmod 2770 dossier` se lit chiffre par chiffre : `2` (bits spéciaux), `7` (u = rwx), `7` (g = rwx),
+  `0` (o = rien).
+
+  | Bit        | Valeur | Sur un dossier                                                   | Affichage |
+  |------------|--------|------------------------------------------------------------------|-----------|
+  | SUID       | 4000   | (sur un exécutable : s'exécute avec l'identité du propriétaire)   | `rws` u   |
+  | **setgid** | 2000   | les fichiers créés **héritent du groupe du dossier**              | `rws` g   |
+  | **sticky** | 1000   | seul le propriétaire d'un fichier peut le supprimer (`/tmp`)      | `rwt` o   |
+
+  Un `S` ou `T` **majuscule** signifie que le bit spécial est posé sans le `x` correspondant.
+
+  ## Le umask
+
+  Les nouveaux fichiers sont créés avec `666` (dossiers `777`) **moins** le umask. Avec le umask par défaut
+  `022`, un fichier naît en `644` : le groupe ne peut pas écrire. C'est la cause n°1 des « je n'arrive pas
+  à modifier le fichier de mon collègue » sur un partage.
+
+  ## Les ACL POSIX
+
+  Les droits classiques ne permettent qu'**un** groupe par fichier. Les ACL ajoutent des entrées pour
+  d'autres utilisateurs ou groupes :
+
+  ```
+  # getfacl -p /srv/partages/compta
+  # file: /srv/partages/compta
+  # owner: root
+  # group: compta
+  # flags: -s-
+  user::rwx
+  group::rwx
+  group:direction:r-x          ← entrée nommée
+  mask::rwx                    ← plafond des droits des entrées nommées et du groupe
+  other::---
+  default:user::rwx            ← ACL par défaut : héritée par ce qui sera créé dedans
+  default:group::rwx
+  default:group:direction:r-x
+  default:mask::rwx
+  default:other::---
+  ```
+
+  - L'**ACL d'accès** s'applique au dossier lui-même ; l'**ACL par défaut** (`-d`) n'a aucun effet sur le
+    dossier mais est copiée sur chaque nouveau fichier ou sous-dossier.
+  - Une ACL par défaut **remplace le umask** pour les fichiers créés dans le dossier.
+  - Le **masque** limite tout sauf le propriétaire et *other* : un `chmod g-w` sur un fichier à ACL
+    modifie en réalité le masque. Si un droit « ne marche pas », regarde la colonne `#effective:` de
+    `getfacl`.
+  - `ls -l` affiche un `+` après les droits quand une ACL est présente.
+
+  ## Mémo des commandes
+
+  | Besoin                                | Commande                                                   |
+  |---------------------------------------|------------------------------------------------------------|
+  | Changer propriétaire et groupe         | `chown root:compta dossier` (`-R` récursif)               |
+  | Droits en octal / symbolique           | `chmod 2770 d` / `chmod g+w,o-rwx d`                      |
+  | Droits différents dossiers / fichiers  | `find d -type d -exec chmod 2750 {} +`                     |
+  | Lire les droits                        | `stat -c '%a %U:%G' f`, `ls -ld d`                         |
+  | ACL d'accès / par défaut               | `setfacl -m g:direction:rx d` / `setfacl -d -m ...`       |
+  | Supprimer les ACL                      | `setfacl -b d`                                             |
+  | Sauvegarder / restaurer                | `getfacl -R -p d > acl.txt` / `setfacl --restore=acl.txt` |
+  | Tester comme un utilisateur            | `runuser -u alice -- commande`, `sudo -u alice commande`   |
+
+  ## Audit : les recherches à connaître
+
+  ```bash
+  find /srv -perm -o+w                     # modifiable par tout le monde
+  find /srv -type f -perm /6000            # SUID ou SGID
+  find /srv -nouser -o -nogroup            # propriétaire supprimé (orphelins)
+  ```
+
+  ## Pièges courants
+
+  - `chmod -R 770` sur une arborescence rend **tous les fichiers exécutables** ; traite dossiers et
+    fichiers séparément avec `find -type d` / `-type f`.
+  - `chmod 777` « pour que ça marche » : jamais. Cherche quel droit manque vraiment.
+  - Copier avec `cp` sans `-a` ou sauvegarder avec un outil qui ignore les ACL : les droits sont perdus.
+  - Oublier le `x` sur les dossiers parents : sans droit de traverser `/srv/partages`, aucun sous-dossier
+    n'est accessible.
+
+  ## Bonnes pratiques en entreprise
+
+  - Un dossier par service, propriétaire `root`, groupe du service, `2770`, ACL par défaut pour le
+    travail collaboratif.
+  - Les droits sont donnés à des **groupes**, jamais à des utilisateurs nommés (sinon chaque départ oblige
+    à repasser sur toutes les ACL).
+  - Documenter la matrice des droits (qui lit, qui écrit quoi) et la faire valider par les responsables.
+  - Sauvegarder les ACL avec les données et tester la restauration.
+docs:
+  - title: chmod(1) - modes et bits spéciaux
+    url: https://man7.org/linux/man-pages/man1/chmod.1.html
+  - title: acl(5) - fonctionnement des ACL POSIX
+    url: https://man7.org/linux/man-pages/man5/acl.5.html
+  - title: setfacl(1) - poser des ACL
+    url: https://man7.org/linux/man-pages/man1/setfacl.1.html
+  - title: Debian Wiki - Permissions
+    url: https://wiki.debian.org/Permissions
+exercises:
+  - id: arborescence-partages
+    title: Créer l'arborescence
+    cours: |
+      Un dossier partagé est d'abord une question de **propriété** : qui en est le propriétaire, et quel
+      groupe y a accès.
+
+      - `mkdir -p` crée un dossier (et ses parents) sans erreur s'il existe déjà.
+      - `chown utilisateur:groupe chemin` change propriétaire et groupe en une fois ; `chgrp` ne change que
+        le groupe.
+      - `stat -c '%U:%G' chemin` affiche propriétaire et groupe, pratique pour vérifier.
+
+      Pourquoi `root` comme propriétaire et pas un salarié ? Parce que le propriétaire peut toujours changer
+      les droits du dossier. En laissant `root` propriétaire, seul l'administrateur décide qui a accès, et le
+      départ d'un salarié ne laisse pas de dossier « orphelin ».
+    description: |
+      Crée les dossiers `/srv/partages/compta`, `/srv/partages/rh`, `/srv/partages/direction` et
+      `/srv/partages/commun`.
+
+      Chaque dossier appartient à `root` ; le groupe propriétaire est le groupe du service
+      (`compta`, `rh`, `direction`) et `personnel` pour `commun`.
+    hint: "mkdir /srv/partages/compta && chown root:compta /srv/partages/compta"
+    checks:
+      - desc: Les dossiers des services appartiennent à root et au groupe du service
+        run: |
+          for g in compta rh direction; do
+            test -d /srv/partages/$g && test "$(stat -c %U:%G /srv/partages/$g)" = "root:$g" || exit 1
+          done
+      - desc: commun appartient à root:personnel
+        run: test "$(stat -c %U:%G /srv/partages/commun)" = root:personnel
+
+  - id: setgid
+    title: Droits des services et bit setgid
+    cours: |
+      En notation octale, le premier des quatre chiffres porte les bits spéciaux : `4` SUID, `2` setgid,
+      `1` sticky. Les trois suivants sont u, g, o (`r=4`, `w=2`, `x=1`).
+
+      Sur un **dossier**, le setgid change la règle de création : un nouveau fichier prend le **groupe du
+      dossier** au lieu du groupe principal de son créateur. Les sous-dossiers créés héritent aussi du bit.
+
+      `ls -ld` montre un `s` à la place du `x` du groupe. Pour tester l'effet, crée un fichier en tant que
+      membre du service avec `runuser -u <login> -- touch <fichier>` puis regarde son groupe avec `stat`.
+    description: |
+      Donne aux dossiers `compta`, `rh` et `direction` les droits **2770** :
+      - `rwx` pour le propriétaire et le groupe, **rien** pour les autres ;
+      - le bit **setgid** (le `2`) : tout fichier créé dans le dossier hérite du groupe du dossier, et non
+        du groupe principal de son créateur. Sans lui, un fichier créé par `alice` appartiendrait au groupe
+        `alice` et `bruno` ne pourrait pas y accéder.
+
+      Vérifie : `chloe` (RH) ne doit pas pouvoir lister le dossier de la comptabilité.
+    hint: chmod 2770 /srv/partages/compta (idem pour rh et direction)
+    checks:
+      - desc: Droits 2770 sur les trois dossiers
+        run: for g in compta rh direction; do test "$(stat -c %a /srv/partages/$g)" = 2770 || exit 1; done
+      - desc: Un fichier créé par alice dans compta appartient au groupe compta
+        run: |
+          f=/srv/partages/compta/.verif-$$
+          runuser -u alice -- touch $f || exit 1
+          g=$(stat -c %G $f); rm -f $f; test "$g" = compta
+      - desc: Chaque service est isolé des autres
+        run: "! runuser -u chloe -- ls /srv/partages/compta >/dev/null 2>&1 && ! runuser -u alice -- ls /srv/partages/rh >/dev/null 2>&1"
+
+  - id: sticky
+    title: Dossier commun et sticky bit
+    cours: |
+      Le droit `w` sur un dossier permet de supprimer **n'importe quel** fichier qu'il contient, même ceux
+      des autres. Le **sticky bit** (valeur `1000`, affiché `t` en dernière position) restreint la
+      suppression et le renommage au propriétaire du fichier, au propriétaire du dossier et à root.
+
+      C'est le mécanisme de `/tmp` (`ls -ld /tmp` affiche `drwxrwxrwt`). Les bits spéciaux s'additionnent :
+      setgid (2) + sticky (1) donnent 3 dans le premier chiffre.
+
+      Pour tester, fais créer un fichier par un utilisateur puis tente de le supprimer avec un autre, via
+      `runuser`.
+    description: |
+      Tout le personnel doit pouvoir créer des fichiers dans `commun`, mais **personne ne doit pouvoir
+      supprimer les fichiers des autres** (comme dans `/tmp`). Donne à `commun` les droits **3770**
+      (setgid + sticky bit + `rwx` pour le groupe `personnel`).
+    hint: chmod 3770 /srv/partages/commun
+    checks:
+      - desc: Droits 3770 sur commun
+        run: test "$(stat -c %a /srv/partages/commun)" = 3770
+      - desc: chloe peut déposer un fichier dans commun
+        run: |
+          f=/srv/partages/commun/.verif-chloe-$$
+          runuser -u chloe -- touch $f && rm -f $f
+      - desc: bruno ne peut pas supprimer un fichier d'alice
+        run: |
+          f=/srv/partages/commun/.verif-$$
+          runuser -u alice -- sh -c "echo x > $f" || exit 1
+          runuser -u bruno -- rm -f $f 2>/dev/null
+          r=1; test -e $f && r=0; rm -f $f; exit $r
+
+  - id: acl-direction
+    title: Lecture seule pour la direction (ACL)
+    cours: |
+      Une ACL POSIX ajoute des entrées à la liste « propriétaire / groupe / autres ».
+
+      - `setfacl -m g:<groupe>:<droits> <chemin>` ajoute ou modifie une entrée de **groupe nommé** dans
+        l'ACL d'accès ;
+      - avec `-d`, la modification porte sur l'ACL **par défaut**, celle qui sera copiée sur tout ce qui
+        sera créé dans le dossier ;
+      - `getfacl -p <chemin>` affiche les deux (les lignes de l'ACL par défaut commencent par `default:`).
+
+      Sur un dossier, la lecture seule correspond à `r-x` : `r` pour lister et `x` pour traverser et ouvrir
+      les fichiers. Attention : l'ACL d'accès seule ne concernerait pas les fichiers créés plus tard.
+    description: |
+      La direction doit pouvoir **lire** la comptabilité, sans rien modifier, y compris les fichiers créés
+      **plus tard**. Les droits Unix classiques ne permettent qu'un seul groupe : utilise les **ACL**.
+
+      1. ACL d'accès : groupe `direction` en `r-x` sur `/srv/partages/compta`.
+      2. ACL **par défaut** (héritée par les nouveaux fichiers et sous-dossiers) : groupe `direction` en `r-x`.
+
+      Contrôle avec `getfacl /srv/partages/compta`.
+    hint: "setfacl -m g:direction:rx /srv/partages/compta ; setfacl -d -m g:direction:rx /srv/partages/compta"
+    checks:
+      - desc: ACL d'accès et ACL par défaut pour direction
+        run: |
+          getfacl -p /srv/partages/compta 2>/dev/null | grep -q '^group:direction:r-x' &&
+          getfacl -p /srv/partages/compta 2>/dev/null | grep -q '^default:group:direction:r-x'
+      - desc: dimitri lit un nouveau fichier d'alice mais ne peut pas le modifier
+        run: |
+          f=/srv/partages/compta/.verif-$$
+          runuser -u alice -- sh -c "umask 022; echo bilan > $f" || exit 1
+          ok=0
+          runuser -u dimitri -- cat $f 2>/dev/null | grep -q bilan && ok=1
+          runuser -u dimitri -- sh -c "echo x >> $f" 2>/dev/null && ok=0
+          rm -f $f; test $ok = 1
+
+  - id: acl-collaboration
+    title: Travailler à plusieurs sur les mêmes fichiers
+    cours: |
+      Le **umask** retire des droits à la création : avec `022`, un fichier naît en `644` (pas d'écriture pour
+      le groupe). Changer le umask de chaque utilisateur est fragile (applications, connexions SMB, scripts).
+
+      Une **ACL par défaut** sur le dossier prend le pas sur le umask pour tout ce qui y est créé. Dans
+      `setfacl`, les entrées sans nom désignent les droits de base : `g::` le groupe propriétaire, `o::` les
+      autres, `u::` le propriétaire. Plusieurs entrées se séparent par des virgules.
+
+      Pour vérifier, crée un fichier avec un umask 022 en tant qu'un membre du service et regarde
+      `getfacl` sur ce fichier : la ligne `#effective` indique les droits réellement accordés.
+    description: |
+      Problème remonté par la compta : `bruno` ne peut pas modifier les fichiers créés par `alice`. Le
+      `umask` par défaut (022) crée les fichiers en `644`, donc sans écriture pour le groupe.
+
+      Plutôt que de modifier le umask de chacun, pose sur `compta`, `rh` et `direction` une **ACL par défaut**
+      donnant `rwx` au groupe propriétaire (`default:group::rwx`) et rien aux autres
+      (`default:other::---`). Les nouveaux fichiers seront alors modifiables par tout le service.
+    hint: "setfacl -d -m g::rwx,o::--- /srv/partages/compta (idem rh, direction)"
+    checks:
+      - desc: ACL par défaut group::rwx sur les trois dossiers
+        run: for g in compta rh direction; do getfacl -p /srv/partages/$g 2>/dev/null | grep -q '^default:group::rwx' || exit 1; done
+      - desc: bruno modifie un fichier créé par alice avec un umask 022
+        run: |
+          f=/srv/partages/compta/.verif-$$
+          runuser -u alice -- sh -c "umask 022; echo v1 > $f" || exit 1
+          ok=0; runuser -u bruno -- sh -c "echo v2 >> $f" 2>/dev/null && ok=1
+          rm -f $f; test $ok = 1
+
+  - id: assainir-archives
+    title: Assainir les archives de l'ancien serveur
+    cours: |
+      Trois recherches `find` sont la base d'un audit de droits :
+
+      - `-perm -0002` : le bit « écriture pour les autres » est présent (le `-` veut dire « au moins ces
+        bits ») ;
+      - `-perm /6000` : SUID **ou** SGID (le `/` veut dire « au moins un de ces bits ») ;
+      - `-nouser` / `-nogroup` : l'UID ou le GID ne correspond à aucun compte.
+
+      Pour corriger en masse : `chown -R` pour la propriété, puis `find <dossier> -type d -exec chmod ... {} +`
+      et `-type f` pour donner des droits différents aux dossiers et aux fichiers. Un `chmod -R` unique
+      rendrait les fichiers exécutables. Le bit SUID se retire avec `chmod u-s` (ou en imposant un mode
+      octal sans 4 en tête). Relance les trois recherches à la fin pour prouver que tout est propre.
+    description: |
+      `/srv/partages/archives` vient de l'ancien serveur. Un audit de sécurité y relève :
+      - des fichiers et dossiers **modifiables par tout le monde** (`o+w`) ;
+      - un exécutable **SUID root** (`outils/diag`) : un risque d'élévation de privilèges ;
+      - des fichiers appartenant à un UID qui n'existe plus (**orphelins**).
+
+      Corrige : les archives (et tout leur contenu) doivent appartenir à `root:direction`, en `2750` pour les
+      dossiers et `640` pour les fichiers ; supprime le bit SUID (ou le fichier). Plus aucun fichier de
+      `/srv/partages` ne doit être modifiable par les autres, SUID/SGID ou orphelin.
+
+      Commandes d'audit : `find /srv/partages -perm -o+w`, `find /srv/partages -type f -perm /6000`,
+      `find /srv/partages -nouser -o -nogroup`.
+    hint: "chown -R root:direction archives ; find archives -type d -exec chmod 2750 {} + ; find archives -type f -exec chmod 640 {} +"
+    checks:
+      - desc: Aucun fichier ni dossier modifiable par les autres
+        run: test -z "$(find /srv/partages \( -type f -o -type d \) -perm -0002)"
+      - desc: Aucun fichier SUID ou SGID
+        run: test -z "$(find /srv/partages -type f -perm /6000)"
+      - desc: Aucun fichier orphelin
+        run: test -z "$(find /srv/partages \( -nouser -o -nogroup \))"
+      - desc: dimitri lit les archives, chloe non
+        run: |
+          runuser -u dimitri -- cat /srv/partages/archives/2019/budget.txt >/dev/null 2>&1 &&
+          ! runuser -u chloe -- cat /srv/partages/archives/2019/budget.txt >/dev/null 2>&1
+
+  - id: script-service
+    title: Industrialiser la création d'un service
+    cours: |
+      Un script d'administration commence par le **shebang** `#!/bin/bash` et doit être rendu exécutable
+      (`chmod +x`). Les arguments passés au script sont disponibles dans `$1`, `$2`... et leur nombre dans
+      `$#`.
+
+      Bonnes habitudes :
+      - `set -e` arrête le script à la première erreur (on évite de poser des droits sur un dossier qui n'a
+        pas pu être créé) ;
+      - toujours mettre les variables entre guillemets (`"$1"`) ;
+      - vérifier les arguments au début et afficher un usage si le compte n'y est pas.
+
+      Le script enchaîne simplement les commandes des exercices précédents, avec les variables à la place des
+      valeurs.
+    description: |
+      De nouveaux services vont arriver. Écris le script `/root/nouveau-service.sh` (exécutable) qui prend
+      deux arguments, le **nom** du service et son **GID**, et qui :
+      1. crée le groupe avec ce GID ;
+      2. crée `/srv/partages/<nom>` (propriétaire `root:<nom>`, droits `2770`) ;
+      3. pose l'ACL par défaut `group::rwx` et `other::---`.
+
+      La vérification lance `/root/nouveau-service.sh juridique 2005`.
+    hint: "#!/bin/bash puis set -e ; groupadd -g \"$2\" \"$1\" ; mkdir -p ... ; chown root:\"$1\" ... ; chmod 2770 ... ; setfacl -d -m g::rwx,o::--- ..."
+    checks:
+      - desc: Le script existe et est exécutable
+        run: test -x /root/nouveau-service.sh
+      - desc: Le script crée le service juridique (GID 2005, 2770, ACL par défaut)
+        run: |
+          /root/nouveau-service.sh juridique 2005 >/dev/null 2>&1
+          test "$(getent group juridique | cut -d: -f3)" = 2005 &&
+          test "$(stat -c %a:%U:%G /srv/partages/juridique)" = 2770:root:juridique &&
+          getfacl -p /srv/partages/juridique 2>/dev/null | grep -q '^default:group::rwx'
+
+  - id: sauvegarde-acl
+    title: Sauvegarder les droits
+    cours: |
+      Beaucoup d'outils de copie ou de sauvegarde ignorent les ACL. `getfacl` produit un export texte qui
+      décrit, pour chaque fichier, son propriétaire, son groupe, ses droits et ses ACL ; `setfacl --restore`
+      sait le réappliquer.
+
+      - `-R` parcourt l'arborescence ;
+      - `-p` (`--absolute-names`) conserve le `/` initial des chemins (sinon `getfacl` les retire et la
+        restauration doit se faire depuis `/`).
+
+      Chaque bloc de l'export commence par une ligne `# file: <chemin>`. Ce fichier mérite d'être sauvegardé
+      avec les données (et `rsync -aAX` ou `tar --acls` conservent les ACL lors des copies).
+    description: |
+      Une restauration de fichiers depuis une sauvegarde qui ne conserve pas les ACL ferait perdre tout ce
+      travail. Exporte les droits et ACL de toute l'arborescence dans `/root/acl-partages.txt`
+      (format de `getfacl`, avec des chemins **absolus**), pour pouvoir les réappliquer avec
+      `setfacl --restore=/root/acl-partages.txt`.
+    hint: getfacl -R -p /srv/partages > /root/acl-partages.txt
+    checks:
+      - desc: L'export contient les dossiers des services avec leurs ACL
+        run: |
+          grep -q '^# file: /srv/partages/compta$' /root/acl-partages.txt &&
+          grep -q '^default:group:direction:r-x' /root/acl-partages.txt &&
+          grep -q '^# file: /srv/partages/archives/2019/budget.txt$' /root/acl-partages.txt
+
+  - id: dr-copie-droits
+    title: Publier des documents en lecture seule
+    cours: |
+      `chmod` accepte une notation **symbolique** : `qui` (`u`, `g`, `o`, `a`), `opération` (`+` ajoute, `-`
+      retire, `=` fixe exactement) et `droits`. Plusieurs clauses se séparent par des virgules :
+      `chmod u=rw,g=r,o= fichier` donne `640`.
+
+      Le `X` majuscule est précieux en récursif : il accorde `x` aux **dossiers** (et aux fichiers déjà
+      exécutables), mais pas aux fichiers ordinaires. Une seule commande `chmod -R` règle ainsi dossiers et
+      fichiers correctement.
+
+      `cp -r` crée des copies qui appartiennent à celui qui copie : pense à fixer le propriétaire ensuite. Un
+      dossier créé dans un dossier setgid hérite lui aussi du bit setgid.
+    description: |
+      Le service informatique publie ses procédures (`/srv/procedures/2026/`) pour tout le personnel.
+      Copie le dossier dans `/srv/partages/commun/procedures` puis règle-le pour que :
+      - tout appartienne à `dimitri:personnel` ;
+      - les membres de `personnel` puissent **lire** (dossier en `750`, fichiers en `640`) mais **pas
+        modifier** ;
+      - personne d'autre n'y ait accès.
+
+      Utilise des modes **symboliques** pour t'entraîner, par exemple `chmod u=rwX,g=rX,o= -R` : le `X`
+      majuscule ne donne `x` qu'aux dossiers (et aux fichiers déjà exécutables).
+    hint: "cp -r /srv/procedures/2026 /srv/partages/commun/procedures ; chown -R dimitri:personnel ... ; chmod -R u=rwX,g=rX,o= ..."
+    checks:
+      - desc: Les procédures sont copiées et appartiennent à dimitri:personnel
+        run: |
+          d=/srv/partages/commun/procedures
+          test -f $d/sauvegarde.txt && test -f $d/arrivee.txt &&
+          test -z "$(find $d ! -user dimitri -o ! -group personnel)"
+      - desc: Dossier en 750 (ou 2750) et fichiers en 640
+        run: |
+          d=/srv/partages/commun/procedures
+          stat -c %a $d | grep -Eq '^2?750$' && test -z "$(find $d -type f ! -perm 640)"
+      - desc: chloe lit une procédure mais ne peut pas la modifier
+        run: |
+          f=/srv/partages/commun/procedures/sauvegarde.txt
+          runuser -u chloe -- cat $f >/dev/null 2>&1 && ! runuser -u chloe -- sh -c "echo x >> $f" 2>/dev/null
+
+  - id: dr-umask
+    title: Régler le umask d'un utilisateur
+    cours: |
+      Le **umask** est un masque de droits **retirés** à la création : avec `007`, un fichier (créé en `666`
+      au départ) devient `660` et un dossier (`777`) devient `770`.
+
+      - `umask` affiche la valeur courante, `umask 027` la change pour le shell en cours ;
+      - pour la rendre permanente pour un utilisateur, on l'écrit dans un fichier lu à la connexion :
+        `~/.profile` (shell de connexion) ou `~/.bashrc` (shells interactifs) ;
+      - pour tous : `UMASK` dans `/etc/login.defs` (via PAM).
+
+      `runuser -l <login> -c '<commande>'` simule une connexion complète (les fichiers de profil sont lus).
+    description: |
+      `bruno` travaille souvent en ligne de commande sur le serveur. Pour que ses nouveaux fichiers ne soient
+      jamais lisibles par les « autres », règle son **umask à 007** dans son fichier `~/.profile` (lu à
+      chaque connexion).
+
+      Vérifie avec `runuser -l bruno -c 'umask; touch /tmp/essai-bruno; ls -l /tmp/essai-bruno'`.
+    hint: echo 'umask 007' >> /home/bruno/.profile
+    checks:
+      - desc: Le umask de bruno à la connexion est 0007
+        run: test "$(runuser -l bruno -c umask 2>/dev/null | tail -1)" = 0007
+      - desc: Un fichier créé par bruno n'a aucun droit pour les autres
+        run: |
+          f=/tmp/.verif-umask-$$
+          runuser -l bruno -c "touch $f" 2>/dev/null || exit 1
+          m=$(stat -c %a $f); rm -f $f; test "$m" = 660
+
+  - id: dr-liens
+    title: Liens symboliques et liens physiques
+    cours: |
+      Un fichier, pour le noyau, c'est un **inode** (droits, propriétaire, emplacement des données). Un nom de
+      fichier n'est qu'une entrée de dossier qui pointe vers un inode.
+
+      | Lien        | Commande         | Principe                                    | Limites                      |
+      |-------------|------------------|---------------------------------------------|------------------------------|
+      | physique    | `ln cible nom`   | second nom pour le **même** inode            | même système de fichiers, pas de dossier |
+      | symbolique  | `ln -s cible nom`| petit fichier contenant un **chemin**        | cassé si la cible disparaît  |
+
+      `ls -li` affiche le numéro d'inode et le compteur de liens ; `readlink` affiche la cible d'un lien
+      symbolique. Supprimer l'original d'un lien physique ne supprime pas les données tant qu'un nom reste.
+    description: |
+      1. Les comptables accèdent souvent au dossier commun : crée dans `/srv/partages/compta` un **lien
+         symbolique** nommé `vers-commun` qui pointe vers `/srv/partages/commun`.
+      2. Crée `/root/budget-lien` comme **lien physique** (hard link) vers
+         `/srv/partages/archives/2019/budget.txt`.
+
+      Observe avec `ls -li` : le lien physique a le même numéro d'**inode** que l'original (c'est le même
+      fichier sous deux noms), le lien symbolique est un petit fichier qui contient un chemin.
+    hint: "ln -s /srv/partages/commun /srv/partages/compta/vers-commun ; ln /srv/partages/archives/2019/budget.txt /root/budget-lien"
+    checks:
+      - desc: vers-commun est un lien symbolique vers /srv/partages/commun
+        run: test -L /srv/partages/compta/vers-commun && test "$(readlink /srv/partages/compta/vers-commun)" = /srv/partages/commun
+      - desc: budget-lien est un lien physique vers budget.txt
+        run: test ! -L /root/budget-lien && test "$(stat -c %i /root/budget-lien)" = "$(stat -c %i /srv/partages/archives/2019/budget.txt)"
+
+  - id: dr-acl-utilisateur
+    title: Accès ponctuel pour un utilisateur
+    cours: |
+      Une ACL peut viser un **utilisateur** précis : `u:<login>:<droits>`. Elle est pratique pour un besoin
+      ponctuel (audit, intérim), mais à éviter comme règle générale : préfère toujours un groupe.
+
+      Pour accéder à `a/b/c`, il faut le droit `x` sur **chaque** dossier du chemin. Le droit `x` seul sur un
+      dossier permet de le **traverser** (ouvrir un sous-dossier dont on connaît le nom) sans pouvoir en lister
+      le contenu (`r`).
+
+      Avec `setfacl`, le préfixe `d:` dans une entrée vise l'ACL par défaut ; on peut combiner accès et défaut
+      dans une même commande en séparant les entrées par des virgules.
+    description: |
+      `chloe` (RH) doit déposer les justificatifs de paie dans un nouveau dossier
+      `/srv/partages/compta/paie` pendant l'audit, **sans** pouvoir lister ni lire le reste de la compta.
+
+      1. Crée `/srv/partages/compta/paie` (groupe `compta`).
+      2. Donne à `chloe` les droits `rwx` sur `paie` par une ACL **utilisateur** (accès et par défaut).
+      3. Pour qu'elle puisse **atteindre** `paie`, elle doit pouvoir traverser `compta` : donne-lui
+         seulement `--x` sur `/srv/partages/compta` (traverser sans lister).
+    hint: "mkdir /srv/partages/compta/paie ; setfacl -m u:chloe:rwx,d:u:chloe:rwx /srv/partages/compta/paie ; setfacl -m u:chloe:x /srv/partages/compta"
+    checks:
+      - desc: chloe crée un fichier dans paie
+        run: |
+          f=/srv/partages/compta/paie/.verif-$$
+          runuser -u chloe -- touch $f && rm -f $f
+      - desc: chloe ne peut pas lister le dossier compta
+        run: "! runuser -u chloe -- ls /srv/partages/compta >/dev/null 2>&1"
+      - desc: L'ACL de compta ne donne que --x à chloe
+        run: getfacl -p /srv/partages/compta 2>/dev/null | grep -q '^user:chloe:--x'

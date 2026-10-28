@@ -1,0 +1,132 @@
+title: Plan de gestion sur Loopback0 et TACACS+
+level: expert
+order: 21
+device: router
+hostname: R-CORE1
+tags: [aaa, tacacs+, loopback, gestion, durcissement]
+summary: Centraliser l'administration par TACACS+ et sourcer tous les flux de gestion depuis Loopback0.
+description: |
+  Le pare-feu du réseau d'administration n'autorise que l'adresse `10.255.0.1` (`Loopback0`) de
+  chaque routeur. Les flux de gestion de `R-CORE1` partent pourtant de l'adresse de l'interface
+  de sortie, qui change selon le routage. Par ailleurs, on veut tracer **chaque commande** des
+  administrateurs.
+
+  1. serveur TACACS+ `TAC-1` : adresse `10.0.0.30`, clé `T4cacs-K3y` ; groupe `ADMINS` (type
+     `tacacs+`) qui le contient ;
+  2. AAA actif ; authentification `login` et autorisation `exec` par défaut : `group ADMINS`
+     puis `local` (le compte local `secours` existe déjà) ;
+  3. comptabilité des commandes de niveau 15 : `aaa accounting commands 15 default start-stop
+     group ADMINS` ;
+  4. depuis `Loopback0` : TACACS+, SSH sortant, syslog, NTP et traps SNMP
+     (`ip tacacs source-interface`, `ip ssh source-interface`, `logging source-interface`,
+     `ntp source`, `snmp-server trap-source`).
+initial: |
+  username secours privilege 15 secret Secours#2026
+  interface loopback 0
+  ip address 10.255.0.1 255.255.255.255
+  interface g0/0
+  ip address 10.0.0.1 255.255.255.0
+  no shutdown
+  logging host 10.0.0.40
+  ntp server 10.0.0.10
+  snmp-server host 10.0.0.50 version 2c SUPERV
+checks:
+  - desc: Serveur TAC-1 (10.0.0.30, clé T4cacs-K3y) dans le groupe ADMINS
+    expr: 'd.tacacs_servers.get("TAC-1") == {"address": "10.0.0.30", "key": "T4cacs-K3y"} and d.aaa_groups.get("ADMINS") == {"type": "tacacs+", "servers": ["TAC-1"]}'
+  - desc: AAA actif, login et exec par ADMINS puis local
+    expr: d.aaa_new_model and d.aaa_authentication.get("login default") == "group ADMINS local" and d.aaa_authorization.get("exec default") == "group ADMINS local"
+  - desc: Comptabilité des commandes de niveau 15
+    expr: d.aaa_accounting.get("commands 15 default") == "start-stop group ADMINS"
+  - desc: TACACS+ et SSH sourcés depuis Loopback0
+    expr: d.tacacs_source == "Loopback0" and d.ssh_source == "Loopback0"
+  - desc: Syslog, NTP et traps SNMP sourcés depuis Loopback0
+    expr: d.logging_source == "Loopback0" and d.ntp_source == "Loopback0" and d.snmp_trap_source == "Loopback0"
+solution: |
+  configure terminal
+  tacacs server TAC-1
+  address ipv4 10.0.0.30
+  key T4cacs-K3y
+  exit
+  aaa new-model
+  aaa group server tacacs+ ADMINS
+  server name TAC-1
+  exit
+  aaa authentication login default group ADMINS local
+  aaa authorization exec default group ADMINS local
+  aaa accounting commands 15 default start-stop group ADMINS
+  ip tacacs source-interface loopback 0
+  ip ssh source-interface loopback 0
+  logging source-interface loopback 0
+  ntp source loopback0
+  snmp-server trap-source loopback 0
+  end
+cours: |
+  ## Le plan de gestion
+
+  On distingue trois « plans » dans un routeur : le plan de **données** (les paquets des
+  utilisateurs), le plan de **contrôle** (protocoles de routage, ARP...) et le plan de
+  **gestion** (SSH, SNMP, syslog, NTP, AAA). Sécuriser le plan de gestion, c'est contrôler
+  **qui** administre, **d'où**, et **garder la trace** de ce qui est fait.
+
+  ### Pourquoi une loopback comme source ?
+
+  Un flux émis par le routeur prend par défaut comme adresse source celle de l'interface de
+  sortie. Si le routage change (panne d'un lien), l'adresse change : le serveur TACACS+ ne
+  reconnaît plus son client, le pare-feu bloque le syslog, la supervision voit un « nouvel »
+  équipement. Une **loopback** est toujours active et toujours joignable si elle est annoncée dans
+  le routage : c'est l'identité stable du routeur.
+
+  ```
+  R1(config)# interface loopback 0
+  R1(config-if)# ip address 172.31.255.7 255.255.255.255
+  R1(config)# ip tacacs source-interface loopback 0
+  R1(config)# ip ssh source-interface loopback 0
+  R1(config)# logging source-interface loopback 0
+  R1(config)# ntp source loopback 0
+  R1(config)# snmp-server trap-source loopback 0
+  ```
+
+  ### TACACS+ pour l'administration
+
+  TACACS+ (TCP 49) chiffre tout le paquet et sépare authentification, autorisation et
+  comptabilité, ce qui permet d'**autoriser ou tracer chaque commande** :
+
+  ```
+  R1(config)# tacacs server ACS-PRIMAIRE
+  R1(config-server-tacacs)# address ipv4 172.16.9.30
+  R1(config-server-tacacs)# key Cl3-T4c
+  R1(config)# aaa group server tacacs+ EXPLOITATION
+  R1(config-sg-tacacs+)# server name ACS-PRIMAIRE
+  R1(config)# aaa authentication login default group EXPLOITATION local
+  R1(config)# aaa authorization exec default group EXPLOITATION local
+  R1(config)# aaa authorization commands 15 default group EXPLOITATION local
+  R1(config)# aaa accounting commands 15 default start-stop group EXPLOITATION
+  R1# show tacacs
+  ```
+
+  `accounting commands 15` envoie au serveur chaque commande de niveau 15 tapée, avec l'auteur
+  et l'heure : on sait exactement qui a fait quoi lors d'un incident.
+
+  ### Compléter le durcissement
+
+  - restreindre les VTY par une ACL (`access-class`) au réseau d'administration ;
+  - SSH v2 seulement, délais et tentatives limités ;
+  - désactiver les services inutiles (HTTP, CDP vers l'extérieur...) ;
+  - protéger le plan de contrôle (CoPP, voir l'exercice suivant).
+
+  ### Pièges fréquents
+
+  - Loopback non annoncée dans le routage : plus aucun flux de gestion ne revient.
+  - Autorisation des commandes sans méthode `local` de secours : si le serveur tombe, plus
+    personne ne peut configurer.
+  - Oublier de déclarer l'adresse de la loopback comme client sur le serveur TACACS+.
+
+  ### Pour le CCNP ENCOR
+
+  ENCOR couvre la sécurisation de l'accès aux équipements : AAA, TACACS+/RADIUS, ACL de VTY et
+  CoPP.
+docs:
+  - title: RFC 8907 — The TACACS+ Protocol
+    url: https://www.rfc-editor.org/rfc/rfc8907
+  - title: Wikipédia (EN) — TACACS
+    url: https://en.wikipedia.org/wiki/TACACS

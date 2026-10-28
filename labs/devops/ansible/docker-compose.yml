@@ -1,0 +1,18 @@
+# Un nœud de contrôle Ansible et deux clients joignables en SSH (vagrant / vagrant),
+# comme dans le lab Vagrant `ansible` de la formation.
+services:
+  ansible:
+    build: ./control
+    hostname: ansible
+  client1:
+    image: linuxserver/openssh-server:10.3_p1-r1-ls238
+    hostname: client1
+    environment: &client
+      USER_NAME: vagrant
+      USER_PASSWORD: vagrant
+      PASSWORD_ACCESS: "true"
+      SUDO_ACCESS: "true"
+  client2:
+    image: linuxserver/openssh-server:10.3_p1-r1-ls238
+    hostname: client2
+    environment: *client

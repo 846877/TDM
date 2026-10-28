@@ -1,0 +1,449 @@
+title: Serveur DNS Windows
+level: intermediaire
+order: 6
+tags: [windows server, dns, zones, enregistrements, cname, mx, ptr, redirecteurs, transfert de zone, vieillissement]
+summary: Administrer un serveur DNS Windows - zones directe et inversée, enregistrements A, CNAME, MX et PTR, redirecteurs et redirecteur conditionnel, transferts, nettoyage et dépannage.
+vagrant: bundled
+machine: dns01
+description: |
+  **Contexte.** *Ateliers Durand* crée la zone interne `atelier.lan` pour ses serveurs et équipements. Le
+  serveur `SRV-DNS01` (Windows Server 2022, **hors domaine** : ses zones sont stockées dans des **fichiers**)
+  a déjà le rôle DNS. Il héberge encore une zone de l'ancien site, `ancien-site.lan`, et une zone
+  `outils.lan` qui fait l'objet d'un ticket (`C:\Admin\ticket-erp.txt`).
+
+  **Plan d'adressage** : `192.168.10.0/24`.
+
+  | Nom | Adresse | Rôle |
+  |-----|---------|------|
+  | `srv-dns01` | 192.168.10.11 | ce serveur |
+  | `srv-dns02` | 192.168.10.12 | futur serveur secondaire |
+  | `srv-fic` | 192.168.10.13 | serveur de fichiers |
+  | `srv-web` | 192.168.10.20 | intranet |
+  | `mail` | 192.168.10.25 | messagerie |
+  | `imp-compta` | 192.168.10.101 | imprimante de la compta |
+
+  **Machine.** `SRV-DNS01`, terminal PowerShell administrateur, module `DnsServer` disponible
+  (console : `dnsmgmt.msc`).
+cours: |
+  ## Rappels : comment se fait une résolution
+
+  1. Le **client** (résolveur DNS de Windows) regarde son cache et le fichier `hosts`, puis interroge le
+     serveur DNS configuré sur sa carte, en demandant une **résolution complète** (requête récursive).
+  2. Le **serveur** répond directement s'il fait **autorité** sur la zone (il en possède une copie), ou s'il a
+     la réponse en cache.
+  3. Sinon, il transmet à ses **redirecteurs** ou parcourt lui-même l'arborescence depuis les serveurs
+     racine (requêtes itératives), met en cache la réponse pour la durée de son **TTL** et la renvoie.
+
+  ## Zones et types de stockage
+
+  | Type de zone | Contenu | Usage |
+  |--------------|---------|-------|
+  | **Principale** | copie modifiable | la source de vérité |
+  | **Secondaire** | copie en lecture seule, obtenue par **transfert de zone** | redondance, sites distants |
+  | **Stub** | uniquement les serveurs de noms d'une zone | suivre les DNS d'un partenaire |
+  | **Redirecteur conditionnel** | « pour tel domaine, demande à tel serveur » | domaines partenaires, autre forêt |
+
+  Une zone **intégrée à Active Directory** n'existe que sur un contrôleur de domaine : elle est répliquée avec
+  l'annuaire et accepte les mises à jour dynamiques sécurisées. Sur un serveur membre ou autonome, comme ici,
+  une zone est un **fichier** texte dans `C:\Windows\System32\dns`, et la redondance passe par des zones
+  secondaires et des transferts.
+
+  Une zone de **recherche directe** traduit des noms en adresses ; une zone de **recherche inversée**
+  (`10.168.192.in-addr.arpa`) traduit des adresses en noms.
+
+  ## Les enregistrements essentiels
+
+  | Type | Rôle | Exemple |
+  |------|------|---------|
+  | **SOA** | autorité de la zone : serveur principal, numéro de série, délais | créé avec la zone |
+  | **NS** | serveurs de noms de la zone | `srv-dns01.atelier.lan` |
+  | **A** / **AAAA** | nom → adresse IPv4 / IPv6 | `srv-web` → 192.168.10.20 |
+  | **CNAME** | alias → nom canonique | `intranet` → `srv-web.atelier.lan` |
+  | **MX** | serveur de messagerie du domaine, avec une préférence | 10 `mail.atelier.lan` |
+  | **PTR** | adresse → nom (zone inversée) | 20 → `srv-web.atelier.lan` |
+  | **SRV** | service → serveur et port | `_ldap._tcp...` en Active Directory |
+  | **TXT** | texte libre (SPF, vérifications de domaine) | `v=spf1 mx -all` |
+
+  Un CNAME pointe vers un **nom**, jamais vers une adresse, et ne peut pas coexister avec un autre
+  enregistrement du même nom. Un MX pointe vers un nom qui a un enregistrement A.
+
+  ## Redirecteurs
+
+  Les **redirecteurs** reçoivent toutes les requêtes que le serveur ne sait pas résoudre lui-même (DNS du
+  fournisseur, résolveur filtrant). Un **redirecteur conditionnel** ne concerne qu'un domaine :
+  `partenaire.lan` → DNS du partenaire, à travers le VPN.
+
+  ## Sécurité et hygiène
+
+  - **Transferts de zone** : par défaut, Windows ne transfère qu'aux serveurs listés dans l'onglet *Serveurs
+    de noms*. Un transfert ouvert à tous livre la cartographie complète du réseau.
+  - **Vieillissement et nettoyage** (*aging/scavenging*) : supprime les enregistrements dynamiques que
+    personne n'a rafraîchis depuis longtemps (postes disparus).
+  - **Cache** : après une correction, les clients et les serveurs gardent l'ancienne réponse jusqu'à
+    expiration du TTL : `Clear-DnsServerCache` côté serveur, `Clear-DnsClientCache` (`ipconfig /flushdns`)
+    côté client.
+
+  ## Outils
+
+  `Resolve-DnsName nom -Server 127.0.0.1` (ou `nslookup`) pour interroger un serveur précis,
+  `Get-DnsServerZone`, `Get-DnsServerResourceRecord`, `Add-DnsServerResourceRecord*`, `Export-DnsServerZone`,
+  le journal *DNS Server* de l'Observateur d'événements et le journal de débogage du serveur.
+docs:
+  - title: Vue d'ensemble du serveur DNS (Windows Server)
+    url: https://learn.microsoft.com/fr-fr/windows-server/networking/dns/dns-overview
+  - title: Gérer les zones et enregistrements DNS
+    url: https://learn.microsoft.com/fr-fr/windows-server/networking/dns/manage-resource-records
+  - title: Module DnsServer (PowerShell)
+    url: https://learn.microsoft.com/fr-fr/powershell/module/dnsserver/
+exercises:
+  - id: win-dns-zone
+    title: Créer la zone atelier.lan
+    description: |
+      Crée la zone de recherche directe **principale** `atelier.lan`, stockée dans le fichier
+      `atelier.lan.dns`, **sans** mises à jour dynamiques (serveur hors domaine : les enregistrements seront
+      gérés à la main).
+    hint: Add-DnsServerPrimaryZone -Name atelier.lan -ZoneFile atelier.lan.dns -DynamicUpdate None
+    cours: |
+      ```powershell
+      Add-DnsServerPrimaryZone -Name atelier.lan -ZoneFile atelier.lan.dns -DynamicUpdate None
+      Get-DnsServerZone atelier.lan
+      Get-DnsServerResourceRecord -ZoneName atelier.lan     # SOA et NS créés automatiquement
+      Get-Content C:\Windows\System32\dns\atelier.lan.dns
+      ```
+
+      La zone naît avec deux enregistrements : le **SOA** (serveur principal, adresse du responsable, numéro de
+      série incrémenté à chaque modification, délais de rafraîchissement des secondaires) et le **NS** de ce
+      serveur. Sans domaine Active Directory, impossible de sécuriser les mises à jour dynamiques :
+      les accepter en mode « non sécurisé » permettrait à n'importe quel appareil d'écraser un enregistrement
+      (y compris celui d'un serveur). D'où `-DynamicUpdate None`.
+    ci: true
+    checks:
+      - desc: atelier.lan est une zone principale stockée dans atelier.lan.dns
+        run: |
+          $z = Get-DnsServerZone -Name atelier.lan
+          $z.ZoneType -eq 'Primary' -and -not $z.IsDsIntegrated -and $z.ZoneFile -eq 'atelier.lan.dns'
+      - desc: Les mises à jour dynamiques sont désactivées
+        run: |
+          (Get-DnsServerZone -Name atelier.lan).DynamicUpdate -eq 'None'
+    solution: |
+      Add-DnsServerPrimaryZone -Name atelier.lan -ZoneFile atelier.lan.dns -DynamicUpdate None
+
+  - id: win-dns-a
+    title: Les enregistrements A
+    description: |
+      Crée dans `atelier.lan` les enregistrements **A** de `srv-dns01`, `srv-dns02`, `srv-fic`, `srv-web`,
+      `mail` et `imp-compta`, avec les adresses du plan d'adressage.
+    hint: Add-DnsServerResourceRecordA -ZoneName atelier.lan -Name srv-web -IPv4Address 192.168.10.20 (une ligne par nom, ou une boucle sur une table de hachage)
+    cours: |
+      ```powershell
+      $plan = [ordered]@{ 'srv-dns01' = '192.168.10.11'; 'srv-dns02' = '192.168.10.12'; 'srv-fic' = '192.168.10.13'
+                         'srv-web' = '192.168.10.20'; 'mail' = '192.168.10.25'; 'imp-compta' = '192.168.10.101' }
+      foreach ($nom in $plan.Keys) {
+          Add-DnsServerResourceRecordA -ZoneName atelier.lan -Name $nom -IPv4Address $plan[$nom]
+      }
+      Get-DnsServerResourceRecord -ZoneName atelier.lan -RRType A
+      ```
+
+      Le nom est **relatif** à la zone : `srv-web` dans `atelier.lan` donne `srv-web.atelier.lan`. Le TTL par
+      défaut (1 heure) convient ; on le réduit quelques jours avant une migration pour que le changement
+      d'adresse se propage vite. Avec une table de hachage et une boucle, le plan d'adressage devient la
+      source de la configuration : moins de fautes de frappe qu'avec six commandes tapées à la main.
+    ci: true
+    checks:
+      - desc: Les six enregistrements A existent avec la bonne adresse
+        run: |
+          $plan = @{ 'srv-dns01' = '192.168.10.11'; 'srv-dns02' = '192.168.10.12'; 'srv-fic' = '192.168.10.13'; 'srv-web' = '192.168.10.20'; 'mail' = '192.168.10.25'; 'imp-compta' = '192.168.10.101' }
+          $ok = foreach ($n in $plan.Keys) { [bool](Get-DnsServerResourceRecord -ZoneName atelier.lan -Name $n -RRType A -ErrorAction SilentlyContinue | Where-Object { $_.RecordData.IPv4Address.IPAddressToString -eq $plan[$n] }) }
+          @($ok | Where-Object { $_ }).Count -eq 6
+      - desc: Le serveur répond pour srv-web.atelier.lan
+        run: |
+          (Resolve-DnsName srv-web.atelier.lan -Server 127.0.0.1 -Type A -DnsOnly).IPAddress -contains '192.168.10.20'
+    solution: |
+      $plan = [ordered]@{ 'srv-dns01' = '192.168.10.11'; 'srv-dns02' = '192.168.10.12'; 'srv-fic' = '192.168.10.13'; 'srv-web' = '192.168.10.20'; 'mail' = '192.168.10.25'; 'imp-compta' = '192.168.10.101' }
+      foreach ($nom in $plan.Keys) { Add-DnsServerResourceRecordA -ZoneName atelier.lan -Name $nom -IPv4Address $plan[$nom] }
+
+  - id: win-dns-cname
+    title: Des alias pour les services
+    description: |
+      Les utilisateurs doivent taper `intranet.atelier.lan` et `fichiers.atelier.lan`, pas des noms de
+      serveurs. Crée les alias (**CNAME**) `intranet` → `srv-web.atelier.lan` et `fichiers` →
+      `srv-fic.atelier.lan`.
+    hint: Add-DnsServerResourceRecordCName -ZoneName atelier.lan -Name intranet -HostNameAlias srv-web.atelier.lan
+    cours: |
+      ```powershell
+      Add-DnsServerResourceRecordCName -ZoneName atelier.lan -Name intranet -HostNameAlias srv-web.atelier.lan
+      Add-DnsServerResourceRecordCName -ZoneName atelier.lan -Name fichiers -HostNameAlias srv-fic.atelier.lan
+      Resolve-DnsName intranet.atelier.lan -Server 127.0.0.1
+      ```
+
+      Un alias découple le **service** de la **machine** : le jour où l'intranet déménage sur `srv-web2`, on
+      modifie un seul CNAME et aucun favori, raccourci ou lien n'est cassé. La réponse DNS contient alors
+      deux enregistrements : le CNAME, puis le A du nom canonique. Attention au partage SMB par alias : un
+      serveur Windows refuse par défaut les connexions sous un autre nom que le sien, et Kerberos réclame un
+      SPN pour l'alias (`setspn`). Pour les fichiers, DFS est souvent un meilleur choix.
+    ci: true
+    checks:
+      - desc: intranet est un alias de srv-web.atelier.lan
+        run: |
+          [bool](Get-DnsServerResourceRecord -ZoneName atelier.lan -Name intranet -RRType CName | Where-Object { $_.RecordData.HostNameAlias -like 'srv-web.atelier.lan*' })
+      - desc: fichiers est un alias de srv-fic.atelier.lan
+        run: |
+          [bool](Get-DnsServerResourceRecord -ZoneName atelier.lan -Name fichiers -RRType CName | Where-Object { $_.RecordData.HostNameAlias -like 'srv-fic.atelier.lan*' })
+    solution: |
+      Add-DnsServerResourceRecordCName -ZoneName atelier.lan -Name intranet -HostNameAlias srv-web.atelier.lan
+      Add-DnsServerResourceRecordCName -ZoneName atelier.lan -Name fichiers -HostNameAlias srv-fic.atelier.lan
+
+  - id: win-dns-mx
+    title: La messagerie du domaine
+    description: |
+      Déclare `mail.atelier.lan` comme serveur de messagerie de la zone (**MX**, préférence `10`) et ajoute
+      un enregistrement **TXT** SPF à la racine de la zone : `v=spf1 mx -all`.
+    hint: Add-DnsServerResourceRecordMX -ZoneName atelier.lan -Name . -MailExchange mail.atelier.lan -Preference 10 ; Add-DnsServerResourceRecord -ZoneName atelier.lan -Name . -Txt -DescriptiveText 'v=spf1 mx -all'
+    cours: |
+      ```powershell
+      Add-DnsServerResourceRecordMX -ZoneName atelier.lan -Name '.' -MailExchange mail.atelier.lan -Preference 10
+      Add-DnsServerResourceRecord -ZoneName atelier.lan -Name '.' -Txt -DescriptiveText 'v=spf1 mx -all'
+      Resolve-DnsName atelier.lan -Type MX -Server 127.0.0.1
+      ```
+
+      Le nom `.` (ou `@` dans un fichier de zone) désigne la **racine** de la zone : on écrit à
+      `nom@atelier.lan`, donc le MX est porté par `atelier.lan` lui-même. Avec plusieurs MX, les serveurs
+      expéditeurs essaient d'abord la **plus petite** préférence. Le TXT **SPF** liste les serveurs autorisés à
+      envoyer des courriels pour le domaine (`mx` : ceux des enregistrements MX ; `-all` : rejeter les
+      autres). Pour un domaine public, on ajoute aussi DKIM et DMARC.
+    ci: true
+    checks:
+      - desc: MX de préférence 10 vers mail.atelier.lan
+        run: |
+          [bool](Get-DnsServerResourceRecord -ZoneName atelier.lan -RRType MX | Where-Object { $_.HostName -eq '@' -and $_.RecordData.MailExchange -like 'mail.atelier.lan*' -and $_.RecordData.Preference -eq 10 })
+      - desc: TXT SPF « v=spf1 mx -all » à la racine
+        run: |
+          [bool](Get-DnsServerResourceRecord -ZoneName atelier.lan -RRType Txt | Where-Object { $_.HostName -eq '@' -and $_.RecordData.DescriptiveText -eq 'v=spf1 mx -all' })
+    solution: |
+      Add-DnsServerResourceRecordMX -ZoneName atelier.lan -Name '.' -MailExchange mail.atelier.lan -Preference 10
+      Add-DnsServerResourceRecord -ZoneName atelier.lan -Name '.' -Txt -DescriptiveText 'v=spf1 mx -all'
+
+  - id: win-dns-inverse
+    title: Zone inversée et PTR
+    description: |
+      Crée la zone de recherche inversée principale de `192.168.10.0/24` (fichier
+      `10.168.192.in-addr.arpa.dns`), puis les enregistrements **PTR** des quatre serveurs `srv-dns01`,
+      `srv-dns02`, `srv-fic` et `srv-web`.
+    hint: Add-DnsServerPrimaryZone -NetworkId 192.168.10.0/24 -ZoneFile 10.168.192.in-addr.arpa.dns ; Add-DnsServerResourceRecordPtr -ZoneName 10.168.192.in-addr.arpa -Name 20 -PtrDomainName srv-web.atelier.lan
+    cours: |
+      ```powershell
+      Add-DnsServerPrimaryZone -NetworkId 192.168.10.0/24 -ZoneFile 10.168.192.in-addr.arpa.dns
+      $ptr = @{ 11 = 'srv-dns01'; 12 = 'srv-dns02'; 13 = 'srv-fic'; 20 = 'srv-web' }
+      foreach ($n in $ptr.Keys) {
+          Add-DnsServerResourceRecordPtr -ZoneName 10.168.192.in-addr.arpa -Name $n -PtrDomainName "$($ptr[$n]).atelier.lan"
+      }
+      Resolve-DnsName 192.168.10.20 -Server 127.0.0.1
+      ```
+
+      Dans la zone inversée, le nom de l'enregistrement est le **dernier octet** de l'adresse. Autre méthode :
+      `Add-DnsServerResourceRecordA -CreatePtr` crée le A et le PTR en même temps, pratique dès que la zone
+      inversée existe. Les PTR servent aux journaux (noms au lieu d'adresses), aux outils de supervision et
+      aux serveurs de messagerie, qui rejettent souvent un expéditeur dont l'adresse n'a pas de nom.
+    ci: true
+    checks:
+      - desc: La zone inversée 10.168.192.in-addr.arpa existe
+        run: |
+          (Get-DnsServerZone -Name 10.168.192.in-addr.arpa).IsReverseLookupZone
+      - desc: Les PTR .11, .12, .13 et .20 pointent vers les bons serveurs
+        run: |
+          $ptr = @{ '11' = 'srv-dns01'; '12' = 'srv-dns02'; '13' = 'srv-fic'; '20' = 'srv-web' }
+          $ok = foreach ($n in $ptr.Keys) { [bool](Get-DnsServerResourceRecord -ZoneName 10.168.192.in-addr.arpa -Name $n -RRType Ptr -ErrorAction SilentlyContinue | Where-Object { $_.RecordData.PtrDomainName -like "$($ptr[$n]).atelier.lan*" }) }
+          @($ok | Where-Object { $_ }).Count -eq 4
+    solution: |
+      Add-DnsServerPrimaryZone -NetworkId 192.168.10.0/24 -ZoneFile 10.168.192.in-addr.arpa.dns
+      $ptr = @{ 11 = 'srv-dns01'; 12 = 'srv-dns02'; 13 = 'srv-fic'; 20 = 'srv-web' }
+      foreach ($n in $ptr.Keys) { Add-DnsServerResourceRecordPtr -ZoneName 10.168.192.in-addr.arpa -Name $n -PtrDomainName "$($ptr[$n]).atelier.lan" }
+
+  - id: win-dns-redirecteurs
+    title: Résoudre Internet par des redirecteurs
+    description: |
+      Configure deux **redirecteurs**, dans cet ordre : `10.0.2.3` (DNS de la carte NAT du lab) puis
+      `9.9.9.9`. Règle le délai d'attente des redirecteurs à **3 secondes**.
+    hint: Set-DnsServerForwarder -IPAddress 10.0.2.3, 9.9.9.9 -Timeout 3
+    cours: |
+      ```powershell
+      Set-DnsServerForwarder -IPAddress 10.0.2.3, 9.9.9.9 -Timeout 3
+      Get-DnsServerForwarder
+      Resolve-DnsName learn.microsoft.com -Server 127.0.0.1
+      ```
+
+      Les redirecteurs sont interrogés **dans l'ordre** : le second ne sert que si le premier ne répond pas
+      dans le délai. `UseRootHint` (activé par défaut) autorise le serveur à passer par les serveurs racine si
+      aucun redirecteur ne répond. Choisir un résolveur filtrant (comme Quad9, `9.9.9.9`, qui bloque des
+      domaines malveillants connus) ajoute une protection simple pour tout le réseau. Les redirecteurs sont
+      une configuration du **serveur** : ils valent pour toutes les zones qu'il ne connaît pas.
+    ci: true
+    checks:
+      - desc: Les redirecteurs sont 10.0.2.3 puis 9.9.9.9
+        run: |
+          $ips = @((Get-DnsServerForwarder).IPAddress | ForEach-Object { $_.IPAddressToString })
+          $ips.Count -eq 2 -and $ips[0] -eq '10.0.2.3' -and $ips[1] -eq '9.9.9.9'
+      - desc: Délai d'attente de 3 secondes
+        run: |
+          (Get-DnsServerForwarder).Timeout -eq 3
+    solution: |
+      Set-DnsServerForwarder -IPAddress 10.0.2.3, 9.9.9.9 -Timeout 3
+
+  - id: win-dns-conditionnel
+    title: Redirecteur conditionnel vers un partenaire
+    description: |
+      Le bureau d'études partenaire résout ses noms `partenaire.lan` sur son DNS `192.168.20.53`, joignable
+      par le VPN. Crée un **redirecteur conditionnel** pour `partenaire.lan` vers cette adresse.
+    hint: Add-DnsServerConditionalForwarderZone -Name partenaire.lan -MasterServers 192.168.20.53
+    cours: |
+      ```powershell
+      Add-DnsServerConditionalForwarderZone -Name partenaire.lan -MasterServers 192.168.20.53
+      Get-DnsServerZone partenaire.lan
+      ```
+
+      Le redirecteur conditionnel est prioritaire sur les redirecteurs généraux : toute question sur
+      `*.partenaire.lan` part vers `192.168.20.53`, le reste suit le chemin habituel. C'est la solution
+      classique entre deux organisations reliées par VPN, ou entre deux forêts Active Directory avant de créer
+      une approbation. Sur un DC, l'option `-ReplicationScope` stocke ce redirecteur dans l'annuaire pour
+      tous les DC. Ici, le serveur `192.168.20.53` n'existe pas : la résolution échouera, mais la configuration
+      est correcte.
+    ci: true
+    checks:
+      - desc: partenaire.lan est un redirecteur conditionnel vers 192.168.20.53
+        run: |
+          $z = Get-DnsServerZone -Name partenaire.lan
+          $z.ZoneType -eq 'Forwarder' -and ($z.MasterServers.IPAddressToString -contains '192.168.20.53')
+    solution: |
+      Add-DnsServerConditionalForwarderZone -Name partenaire.lan -MasterServers 192.168.20.53
+
+  - id: win-dns-transfert
+    title: Préparer le serveur secondaire
+    description: |
+      `srv-dns02` (`192.168.10.12`) hébergera une copie secondaire de `atelier.lan`. Sur la zone
+      `atelier.lan`, n'autorise les **transferts de zone** que vers `192.168.10.12`, et **notifie** ce serveur
+      à chaque modification.
+    hint: Set-DnsServerPrimaryZone -Name atelier.lan -SecureSecondaries TransferToSecureServers -SecondaryServers 192.168.10.12 -Notify NotifyServers -NotifyServers 192.168.10.12
+    cours: |
+      ```powershell
+      Set-DnsServerPrimaryZone -Name atelier.lan -SecureSecondaries TransferToSecureServers `
+          -SecondaryServers 192.168.10.12 -Notify NotifyServers -NotifyServers 192.168.10.12
+      Get-DnsServerZone atelier.lan | Select-Object SecureSecondaries, SecondaryServers, Notify, NotifyServers
+      # sur srv-dns02 :
+      # Add-DnsServerSecondaryZone -Name atelier.lan -ZoneFile atelier.lan.dns -MasterServers 192.168.10.11
+      ```
+
+      Un **transfert de zone** (AXFR complet, IXFR incrémental, sur TCP 53) copie la zone vers les serveurs
+      secondaires. Ouvert à tous (`TransferAnyServer`), il permet à n'importe qui d'obtenir la liste de tous
+      les noms et adresses du réseau : une reconnaissance gratuite pour un attaquant. La **notification**
+      prévient le secondaire dès que le numéro de série du SOA augmente, sans attendre son intervalle de
+      rafraîchissement. Vérification : `nslookup`, puis `ls -d atelier.lan` depuis un serveur non autorisé
+      doit être refusé.
+    ci: true
+    checks:
+      - desc: Transferts limités à 192.168.10.12
+        run: |
+          $z = Get-DnsServerZone -Name atelier.lan
+          $z.SecureSecondaries -eq 'TransferToSecureServers' -and ($z.SecondaryServers.IPAddressToString -contains '192.168.10.12')
+      - desc: Notification envoyée à 192.168.10.12
+        run: |
+          $z = Get-DnsServerZone -Name atelier.lan
+          $z.Notify -eq 'NotifyServers' -and ($z.NotifyServers.IPAddressToString -contains '192.168.10.12')
+    solution: |
+      Set-DnsServerPrimaryZone -Name atelier.lan -SecureSecondaries TransferToSecureServers -SecondaryServers 192.168.10.12 -Notify NotifyServers -NotifyServers 192.168.10.12
+
+  - id: win-dns-nettoyage
+    title: Vieillissement et nettoyage
+    description: |
+      Active le **nettoyage** automatique des enregistrements obsolètes sur le serveur, tous les **7 jours**,
+      et le **vieillissement** sur la zone `atelier.lan`.
+    hint: Set-DnsServerScavenging -ScavengingState $true -ScavengingInterval 7.00:00:00 -ApplyOnAllZones ; Set-DnsServerZoneAging atelier.lan -Aging $true
+    cours: |
+      ```powershell
+      Set-DnsServerScavenging -ScavengingState $true -ScavengingInterval 7.00:00:00
+      Set-DnsServerZoneAging -Name atelier.lan -Aging $true -NoRefreshInterval 7.00:00:00 -RefreshInterval 7.00:00:00
+      Get-DnsServerScavenging
+      Get-DnsServerZoneAging atelier.lan
+      ```
+
+      Chaque enregistrement **dynamique** porte un horodatage, rafraîchi par le client qui le réinscrit. Passé
+      l'intervalle de **non-actualisation** (le client ne peut pas rafraîchir), puis l'intervalle
+      d'**actualisation**, un enregistrement non rafraîchi devient **périmé** et le nettoyage le supprime. Les
+      enregistrements **statiques** créés à la main n'ont pas d'horodatage et ne sont jamais supprimés : ici,
+      aucun risque pour les serveurs. Il faut **les deux** réglages : le vieillissement par zone, le nettoyage
+      sur le serveur.
+    ci: true
+    checks:
+      - desc: Le nettoyage du serveur est actif, tous les 7 jours
+        run: |
+          $s = Get-DnsServerScavenging
+          $s.ScavengingState -and $s.ScavengingInterval -eq [timespan]'7.00:00:00'
+      - desc: Le vieillissement est activé sur atelier.lan
+        run: |
+          (Get-DnsServerZoneAging -Name atelier.lan).AgingEnabled
+    solution: |
+      Set-DnsServerScavenging -ScavengingState $true -ScavengingInterval 7.00:00:00
+      Set-DnsServerZoneAging -Name atelier.lan -Aging $true -NoRefreshInterval 7.00:00:00 -RefreshInterval 7.00:00:00
+
+  - id: win-dns-erp
+    title: Ticket 3307 - l'ERP ne répond plus
+    description: |
+      Lis `C:\Admin\ticket-erp.txt`. Corrige l'enregistrement `erp.outils.lan` pour qu'il ne pointe **plus
+      que** vers la bonne adresse, puis vide le **cache** du serveur DNS.
+    hint: Get-DnsServerResourceRecord -ZoneName outils.lan -Name erp ; Remove-DnsServerResourceRecord -ZoneName outils.lan -Name erp -RRType A -RecordData 192.168.10.99 -Force ; Add-DnsServerResourceRecordA ... ; Clear-DnsServerCache -Force
+    cours: |
+      ```powershell
+      Resolve-DnsName erp.outils.lan -Server 127.0.0.1
+      Get-DnsServerResourceRecord -ZoneName outils.lan -Name erp
+      Remove-DnsServerResourceRecord -ZoneName outils.lan -Name erp -RRType A -RecordData 192.168.10.99 -Force
+      Add-DnsServerResourceRecordA -ZoneName outils.lan -Name erp -IPv4Address 192.168.10.30
+      Clear-DnsServerCache -Force
+      ```
+
+      Après une migration de serveur, l'oubli du DNS est un grand classique. On **retire** l'ancienne valeur
+      plutôt que d'ajouter la nouvelle à côté : avec deux enregistrements A, les clients choisissent à tour
+      de rôle (*round robin*) et la moitié des connexions échouent, une panne intermittente difficile à
+      comprendre. `Set-DnsServerResourceRecord` modifie aussi un enregistrement en place, à partir d'une copie
+      modifiée de l'objet. Sur les postes, `ipconfig /flushdns` évite d'attendre l'expiration du TTL.
+    ci: true
+    checks:
+      - desc: erp.outils.lan pointe uniquement vers 192.168.10.30
+        run: |
+          $ips = @(Get-DnsServerResourceRecord -ZoneName outils.lan -Name erp -RRType A | ForEach-Object { $_.RecordData.IPv4Address.IPAddressToString })
+          $ips.Count -eq 1 -and $ips[0] -eq '192.168.10.30'
+      - desc: ged.outils.lan n'a pas été touché
+        run: |
+          (Get-DnsServerResourceRecord -ZoneName outils.lan -Name ged -RRType A).RecordData.IPv4Address.IPAddressToString -eq '192.168.10.31'
+    solution: |
+      Remove-DnsServerResourceRecord -ZoneName outils.lan -Name erp -RRType A -RecordData 192.168.10.99 -Force
+      Add-DnsServerResourceRecordA -ZoneName outils.lan -Name erp -IPv4Address 192.168.10.30
+      Clear-DnsServerCache -Force
+
+  - id: win-dns-ancienne-zone
+    title: Archiver puis supprimer une zone obsolète
+    description: |
+      Le site de l'ancien local a fermé. **Exporte** d'abord la zone `ancien-site.lan` dans le fichier
+      `ancien-site.lan.archive.dns` (dossier `C:\Windows\System32\dns`), puis **supprime** la zone du serveur.
+    hint: Export-DnsServerZone -Name ancien-site.lan -FileName ancien-site.lan.archive.dns ; Remove-DnsServerZone ancien-site.lan -Force
+    cours: |
+      ```powershell
+      Export-DnsServerZone -Name ancien-site.lan -FileName ancien-site.lan.archive.dns
+      Get-Content C:\Windows\System32\dns\ancien-site.lan.archive.dns
+      Remove-DnsServerZone -Name ancien-site.lan -Force
+      ```
+
+      `Export-DnsServerZone` écrit la zone au format standard des fichiers de zone (celui de BIND), dans le
+      dossier du service DNS : c'est l'archive à conserver avant toute suppression, et un moyen de migrer une
+      zone vers un autre serveur ou d'en garder une trace dans un outil de gestion de versions. Pour une
+      zone intégrée à AD, c'est même la seule façon simple d'obtenir un fichier. On copie ensuite l'archive
+      ailleurs que sur le serveur.
+    ci: true
+    checks:
+      - desc: L'archive ancien-site.lan.archive.dns existe et contient srv-old
+        run: |
+          [bool](Select-String -Path C:\Windows\System32\dns\ancien-site.lan.archive.dns -Pattern 'srv-old' -Quiet)
+      - desc: La zone ancien-site.lan n'existe plus sur le serveur
+        run: |
+          -not (Get-DnsServerZone -Name ancien-site.lan -ErrorAction SilentlyContinue) -and [bool](Get-DnsServerZone -Name outils.lan)
+    solution: |
+      Export-DnsServerZone -Name ancien-site.lan -FileName ancien-site.lan.archive.dns
+      Remove-DnsServerZone -Name ancien-site.lan -Force

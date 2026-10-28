@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TDM · Entraînement</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23000'/><text x='16' y='22' font-size='15' font-family='monospace' text-anchor='middle' fill='%2300ff66'>&gt;_</text></svg>">
+  <link rel="stylesheet" href="/static/vendor/codemirror.css">
+  <link rel="stylesheet" href="/static/vendor/xterm.css">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/"><span class="logo">&gt;_</span> <span class="glitch" data-text="TDM">TDM</span></a>
+    <nav>
+      <a href="#/python" data-nav="python">Python</a>
+      <a href="#/reseaux" data-nav="reseaux">Réseaux</a>
+      <a href="#/systemes" data-nav="systemes">Systèmes</a>
+      <a href="#/devops" data-nav="devops">DevOps</a>
+      <a href="#/cyber" data-nav="cyber">Cybersécurité</a>
+      <a href="#/classement" data-nav="classement">🏆 Classement</a>
+    </nav>
+    <a id="profile-chip" class="profile-chip" href="#/profils"></a>
+    <span id="sandbox-badge" class="badge muted" title="Mode d'exécution du code">…</span>
+  </header>
+  <main id="app"></main>
+
+  <script src="/static/vendor/marked.min.js"></script>
+  <script src="/static/vendor/purify.min.js"></script>
+  <script src="/static/vendor/codemirror.js"></script>
+  <script src="/static/vendor/codemirror-python.js"></script>
+  <script src="/static/vendor/codemirror-matchbrackets.js"></script>
+  <script src="/static/vendor/codemirror-closebrackets.js"></script>
+  <script src="/static/vendor/xterm.js"></script>
+  <script src="/static/vendor/xterm-addon-fit.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

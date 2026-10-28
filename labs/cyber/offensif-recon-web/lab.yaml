@@ -1,0 +1,172 @@
+title: Reconnaissance et énumération d'un service web
+track: offensif
+level: debutant
+order: 1
+tags: [recon, énumération, nmap, web, osint, dirb, nikto]
+summary: La première phase d'un test d'intrusion web - cartographier, prendre l'empreinte, énumérer les chemins cachés et exploiter une fuite d'identifiants, sur une cible isolée.
+build: .
+command: ["sleep", "infinity"]
+shell: bash
+workdir: /root
+setup: |
+  demarrer-cible
+description: |
+  **Cadre.** Tu es pentester en mission autorisée chez *Ateliers Durand*. Leur intranet vient d'être
+  mis en ligne et on te demande d'évaluer ce qu'un attaquant verrait **avant même d'avoir un compte**.
+  La cible, un petit CMS maison, tourne **dans ce conteneur** sur `http://localhost` : tout est isolé,
+  rien ne sort de ta machine. Un clic sur **Réinitialiser** remet la cible à zéro.
+
+  **Méthode.** La reconnaissance est la première phase d'un test d'intrusion : on cartographie la
+  surface d'attaque *sans rien casser*, pour trouver par où commencer. On va suivre la chaîne classique :
+
+  1. **Découverte des services** - quels ports écoutent (`nmap`) ;
+  2. **Empreinte (fingerprinting)** - quel logiciel, quelle version (`curl -I`) ;
+  3. **Énumération de contenu** - fichiers et répertoires non listés (`robots.txt`, `dirb`, `nikto`) ;
+  4. **Exploitation d'une fuite** - une sauvegarde oubliée divulgue des identifiants, qui ouvrent le
+     panneau d'administration.
+
+  Note tes trouvailles dans les fichiers demandés sous `/root/reponses/` : la vérification les relit.
+
+  Outils déjà installés : `nmap`, `curl`, `dirb` (dictionnaires dans `/usr/share/dirb/wordlists/`),
+  `nikto`. Tout le trafic reste sur `localhost`.
+cours: |
+  ## La reconnaissance, première phase d'un test d'intrusion
+
+  Un test d'intrusion suit des phases : **reconnaissance**, **énumération**, **exploitation**,
+  **post-exploitation**, **rapport**. La reconnaissance consiste à récolter le maximum d'informations
+  sur la cible en faisant le moins de bruit possible et **sans provoquer de dégât**. C'est souvent elle
+  qui décide du succès : une sauvegarde oubliée ou un panneau d'admin exposé rend inutile toute
+  technique sophistiquée.
+
+  ### Cadre légal et éthique
+
+  Ces techniques ne s'emploient **que sur des systèmes dont tu es propriétaire ou pour lesquels tu as
+  une autorisation écrite** (contrat de test d'intrusion, programme de *bug bounty*, lab comme celui-ci).
+  Scanner ou énumérer un service sans autorisation est un délit. Ici, la cible est volontairement
+  vulnérable et confinée à ce conteneur.
+
+  ### 1. Découverte des services avec nmap
+
+  `nmap` envoie des paquets et déduit quels ports sont ouverts et quels services répondent :
+
+  ```
+  nmap -p- localhost          # tous les ports TCP (1-65535)
+  nmap -sV -p 80 localhost    # détection de version sur un port
+  ```
+
+  ### 2. Empreinte d'un service web
+
+  Les en-têtes HTTP trahissent souvent le logiciel et sa version :
+
+  ```
+  curl -I http://localhost/            # en-têtes seuls (Server: ...)
+  ```
+
+  Connaître « DurandCMS/2.3.1 » permet ensuite de chercher des vulnérabilités connues (CVE) propres à
+  cette version.
+
+  ### 3. Énumération de contenu caché
+
+  Un site expose plus que ses liens visibles. `robots.txt` liste parfois les chemins que le site veut
+  cacher des moteurs (donc intéressants pour un attaquant). Les *scanners de répertoires* essaient un
+  dictionnaire de noms courants :
+
+  ```
+  curl http://localhost/robots.txt
+  dirb http://localhost/ /usr/share/dirb/wordlists/common.txt
+  nikto -h http://localhost/
+  ```
+
+  ### 4. Des fuites aux accès
+
+  Une sauvegarde (`config.php.bak`, `.old`, `~`) reste souvent lisible et contient des secrets. Les
+  identifiants trouvés ouvrent alors des zones protégées :
+
+  ```
+  curl http://localhost/backup/config.php.bak
+  curl -u admin:motdepasse http://localhost/gestion/
+  ```
+
+  Leçon défensive : retirer les sauvegardes, masquer les bannières de version, protéger les chemins
+  sensibles et ne jamais stocker de secret en clair.
+docs:
+  - title: OWASP - Web Security Testing Guide (reconnaissance)
+    url: https://owasp.org/www-project-web-security-testing-guide/
+exercises:
+  - id: ports
+    title: Cartographier les services
+    description: |
+      Lance un scan de ports sur `localhost` avec `nmap` et identifie le service web. Enregistre la
+      sortie qui montre le port ouvert dans `/root/reponses/ports.txt`.
+    hint: "nmap -p- localhost | tee /root/reponses/ports.txt"
+    cours: |
+      `nmap -p-` teste les 65535 ports TCP. Un port « open » accompagné du service (`http`) t'indique où
+      concentrer l'effort. `-sV` tente en plus d'identifier le logiciel et sa version.
+    checks:
+      - desc: /root/reponses/ports.txt montre le port 80 ouvert
+        run: grep -Eq '80/tcp\s+open' /root/reponses/ports.txt
+  - id: empreinte
+    title: Prendre l'empreinte du serveur
+    description: |
+      Récupère les en-têtes HTTP de la page d'accueil et déduis la **version exacte** du logiciel qui
+      sert le site. Écris-la (par exemple `Nom/1.2.3`) dans `/root/reponses/version.txt`.
+    hint: "curl -I http://localhost/ ; l'en-tête Server donne le nom et la version"
+    cours: |
+      L'en-tête `Server:` est renvoyé par beaucoup de serveurs et d'applications. Le masquer (ou le
+      falsifier) fait partie du durcissement : il prive l'attaquant d'un raccourci vers les CVE connues.
+    checks:
+      - desc: La version relevée est la bonne
+        run: grep -q 'DurandCMS/2.3.1' /root/reponses/version.txt
+  - id: robots
+    title: Lire robots.txt
+    description: |
+      Beaucoup de sites livrent dans `robots.txt` des chemins qu'ils préféreraient cacher. Trouve le
+      chemin du panneau d'administration et écris-le (ex. `/xxx/`) dans `/root/reponses/chemin.txt`.
+    hint: "curl http://localhost/robots.txt"
+    cours: |
+      `robots.txt` s'adresse aux moteurs de recherche, mais un `Disallow:` revient à pointer du doigt
+      les zones sensibles. Pour un attaquant, c'est une liste de pistes ; pour un défenseur, un rappel
+      que « cacher » n'est pas « protéger ».
+    checks:
+      - desc: Le chemin du panneau de gestion est trouvé
+        run: grep -q '/gestion' /root/reponses/chemin.txt
+  - id: enumeration
+    title: Énumérer les fichiers oubliés
+    description: |
+      Avec `dirb` (ou `nikto`), découvre un fichier de **sauvegarde** laissé par erreur sous `/backup/`.
+      Écris son chemin complet (ex. `/backup/xxx`) dans `/root/reponses/sauvegarde.txt`.
+    hint: "dirb http://localhost/backup/ /usr/share/dirb/wordlists/common.txt -X .php.bak,.bak ; ou teste config.php.bak"
+    cours: |
+      Les scanners de répertoires rejouent un dictionnaire de noms et d'extensions courants
+      (`.bak`, `.old`, `~`, `.save`). Beaucoup de fuites viennent d'une sauvegarde d'un fichier de
+      configuration restée lisible à côté de l'original.
+    checks:
+      - desc: La sauvegarde config.php.bak est localisée
+        run: grep -q 'config.php.bak' /root/reponses/sauvegarde.txt
+  - id: fuite
+    title: Exploiter la fuite d'identifiants
+    description: |
+      Lis la sauvegarde trouvée et récupère le **mot de passe administrateur** qu'elle contient.
+      Écris-le seul dans `/root/reponses/motdepasse.txt`.
+    hint: "curl http://localhost/backup/config.php.bak"
+    cours: |
+      Un fichier de configuration en clair livre souvent l'accès à la base et à l'administration. C'est
+      pourquoi on externalise les secrets (variables d'environnement, coffre-fort) et on exclut ces
+      fichiers de la racine web.
+    checks:
+      - desc: Le mot de passe administrateur est le bon
+        run: grep -qx 'Durand2019!' /root/reponses/motdepasse.txt
+  - id: acces
+    title: Accéder au panneau d'administration
+    description: |
+      Authentifie-toi sur le panneau de gestion avec les identifiants trouvés (`admin` /
+      mot de passe récupéré) et récupère le **jeton d'accès** (drapeau) affiché. Écris-le dans
+      `/root/reponses/flag.txt`.
+    hint: "curl -u admin:Durand2019! http://localhost/gestion/"
+    cours: |
+      L'accès au panneau d'administration marque le passage de la reconnaissance à l'exploitation : on
+      a transformé une information publique (une sauvegarde) en accès authentifié. Dans un vrai rapport,
+      c'est ici qu'on documente l'impact et la remédiation.
+    checks:
+      - desc: Le drapeau du panneau de gestion est récupéré
+        run: grep -q 'TDM{r3co_w3b_1ntranet_expose}' /root/reponses/flag.txt

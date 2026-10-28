@@ -1,0 +1,53 @@
+# Supervision : Prometheus, Alertmanager, Blackbox exporter, Grafana, et trois machines à superviser.
+# La configuration de Prometheus est dans le volume nommé prom-config, monté aussi dans admin (/srv/prometheus).
+# Interfaces web sur ta machine : Grafana http://localhost:9431 , Prometheus http://localhost:9432
+x-serveur: &serveur
+  build: {context: ., dockerfile: serveur/Dockerfile}
+  volumes: [cles:/lab-ssh]
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    volumes: [cles:/lab-ssh, prom-config:/srv/prometheus]
+    depends_on: [prometheus]
+  prometheus:
+    build: {context: ., dockerfile: prometheus/Dockerfile}
+    hostname: prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes: [prom-config:/etc/prometheus, prom-donnees:/prometheus]
+    ports: ["9432:9090"]
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    hostname: alertmanager
+  blackbox:
+    image: prom/blackbox-exporter:v0.25.0
+    hostname: blackbox
+  grafana:
+    image: grafana/grafana:11.2.0
+    hostname: grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: Grafana2024!
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes: [grafana-donnees:/var/lib/grafana]
+    ports: ["9431:3000"]
+  nas:
+    image: prom/node-exporter:v1.8.2
+    hostname: nas
+  srv-web:
+    <<: *serveur
+    hostname: srv-web
+    environment: {ROLE: web}
+  srv-bdd:
+    <<: *serveur
+    hostname: srv-bdd
+    environment: {ROLE: bdd}
+volumes:
+  cles:
+  prom-config:
+  prom-donnees:
+  grafana-donnees:

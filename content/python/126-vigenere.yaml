@@ -1,0 +1,126 @@
+title: Chiffre de Vigenère
+level: intermediaire
+order: 26
+tags: [chaînes, ord/chr, algorithmes]
+summary: Un César dont le décalage change à chaque lettre.
+description: |
+  Le chiffre de Vigenère utilise une **clé** : chaque lettre de la clé donne un décalage
+  (`a` = 0, `b` = 1, …, `z` = 25), et on applique ces décalages tour à tour aux lettres du
+  message.
+
+  Écris `vigenere(texte, cle, dechiffrer=False)` :
+  - seules les lettres ASCII sont chiffrées, la casse est conservée ;
+  - les autres caractères (espaces, ponctuation, chiffres) sont recopiés tels quels et
+    **ne consomment pas** de lettre de la clé ;
+  - la clé peut être en majuscules ou minuscules ; si elle est vide ou contient autre chose
+    que des lettres, lève `ValueError` ;
+  - avec `dechiffrer=True`, on applique les décalages en sens inverse.
+
+  ```python
+  vigenere("attaque a l'aube", "cle")          # "cexcbyg l p'cffg"
+  vigenere("cexcbyg l p'cffg", "cle", True)    # "attaque a l'aube"
+  ```
+starter: |
+  def vigenere(texte, cle, dechiffrer=False):
+      pass
+tests: |
+  def test_chiffrer():
+      "Exemple de l'énoncé"
+      r = solution.vigenere("attaque a l'aube", "cle")
+      assert r == "cexcbyg l p'cffg", f"obtenu {r!r}"
+
+  def test_dechiffrer():
+      "Déchiffrement"
+      r = solution.vigenere("cexcbyg l p'cffg", "cle", dechiffrer=True)
+      assert r == "attaque a l'aube", f"obtenu {r!r}"
+
+  def test_casse():
+      "Casse du texte conservée, casse de la clé ignorée"
+      r = solution.vigenere("Hello World", "KEY")
+      assert r == "Rijvs Uyvjn", f"obtenu {r!r}"
+
+  def test_aller_retour():
+      "Chiffrer puis déchiffrer redonne le texte"
+      texte = "Rendez-vous à 18h, près du Pont-Neuf !"
+      cle = "Python"
+      chiffre = solution.vigenere(texte, cle)
+      assert chiffre != texte, "le texte devrait être modifié"
+      assert solution.vigenere(chiffre, cle, True) == texte
+
+  def test_cle_a():
+      "La clé « a » ne change rien"
+      assert solution.vigenere("Inchangé ?", "a") == "Inchangé ?"
+
+  def test_cle_invalide():
+      "Clé vide ou non alphabétique -> ValueError"
+      for cle in ("", "c1e", "clé secrète"):
+          try:
+              solution.vigenere("abc", cle)
+          except ValueError:
+              continue
+          raise AssertionError(f"la clé {cle!r} aurait dû lever ValueError")
+solution: |
+  def vigenere(texte, cle, dechiffrer=False):
+      if not cle or not (cle.isascii() and cle.isalpha()):
+          raise ValueError("clé invalide")
+      decalages = [ord(c) - ord("a") for c in cle.lower()]
+      signe = -1 if dechiffrer else 1
+      resultat = []
+      i = 0
+      for c in texte:
+          if c.isascii() and c.isalpha():
+              base = ord("A") if c.isupper() else ord("a")
+              d = signe * decalages[i % len(decalages)]
+              resultat.append(chr((ord(c) - base + d) % 26 + base))
+              i += 1
+          else:
+              resultat.append(c)
+      return "".join(resultat)
+cours: |
+  ## De César à Vigenère
+
+  César applique le **même** décalage à toutes les lettres. Vigenère utilise une clé : la
+  première lettre du message est décalée selon la première lettre de la clé, la deuxième
+  selon la deuxième, et ainsi de suite, en recommençant la clé quand elle est épuisée.
+  Une même lettre claire peut donc donner des lettres chiffrées différentes, ce qui résiste
+  à l'analyse de fréquence simple.
+
+  ## Parcourir la clé en boucle
+
+  Avec un compteur `k` des lettres déjà chiffrées, la lettre de clé à utiliser est
+  `cle[k % len(cle)]`. Le point subtil : `k` ne doit avancer **que** lorsqu'on chiffre une
+  lettre, pas sur les espaces ou la ponctuation. C'est pourquoi on ne peut pas simplement
+  utiliser l'indice de `enumerate(texte)`.
+
+  `itertools.cycle(sequence)` répète une séquence à l'infini ; avec `next()`, on peut
+  prendre l'élément suivant uniquement quand on en a besoin :
+
+  ```python
+  from itertools import cycle
+  couleurs = cycle(["rouge", "vert"])
+  next(couleurs), next(couleurs), next(couleurs)   # rouge, vert, rouge
+  ```
+
+  ## Déchiffrer
+
+  Le déchiffrement applique le décalage **opposé**. Plutôt que d'écrire deux fonctions, un
+  signe (`+1` ou `-1`) multiplié au décalage suffit. Grâce au `%` de Python, les décalages
+  négatifs retombent toujours dans 0..25.
+
+  ## Valider la clé en amont
+
+  Vérifie la clé **avant** de commencer : vide, ou contenant autre chose que des lettres
+  ASCII → `ValueError`. `str.isalpha()` accepte les accents ; pour se limiter à l'ASCII,
+  combine-le avec `str.isascii()`. Normalise la clé (minuscules) une fois pour toutes.
+
+  ## Histoire
+
+  Longtemps surnommé « le chiffre indéchiffrable », Vigenère a été cassé au XIXᵉ siècle
+  (Babbage, Kasiski) : la répétition de la clé crée des motifs détectables. Avec une clé
+  aléatoire aussi longue que le message et jamais réutilisée, on obtient le **masque
+  jetable**, théoriquement incassable.
+docs:
+  - title: Wikipédia — Chiffre de Vigenère
+    url: https://fr.wikipedia.org/wiki/Chiffre_de_Vigen%C3%A8re
+  - title: Documentation Python — ord() et chr()
+    url: https://docs.python.org/fr/3/library/functions.html#chr

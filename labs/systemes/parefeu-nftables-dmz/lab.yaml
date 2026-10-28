@@ -1,0 +1,349 @@
+title: Pare-feu nftables - LAN, DMZ et WAN
+level: avance
+order: 4
+tags: [pare-feu, nftables, nat, dnat, dmz, sécurité, journalisation]
+summary: Routeur-pare-feu Linux à trois zones - politique par défaut, filtrage par service, NAT, publication en DMZ, redirection de port, liste noire et journalisation.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** *Ateliers Durand* remplace sa box par un **routeur-pare-feu Linux** à trois pattes : le
+  **LAN** des utilisateurs, une **DMZ** qui héberge le site web public, et le **WAN** (Internet). Tu écris
+  sa politique de filtrage avec **nftables**, en partant du principe « tout ce qui n'est pas explicitement
+  autorisé est interdit ».
+
+  **Topologie.**
+
+  ```
+   LAN 192.168.1.0/24          DMZ 172.16.10.0/24          WAN 203.0.113.0/24
+   admin  .5  ┐                ┌ srv-web .10 (HTTP, SSH)    ┌ externe .50 (client et serveur web « Internet »)
+   poste  .10 ┴── lan ─ fw ─ dmz ┘               fw ─ wan ──┼ pirate  .66
+                    .254      .254                    .2    ┘
+  ```
+
+  Interfaces du pare-feu : `lan`, `dmz`, `wan` et `mgmt`. Toutes les machines sont aussi reliées à
+  admin par un **réseau d'administration hors bande** `mgmt` (10.99.1.0/24) : `ssh fw`, `ssh poste`,
+  `ssh externe`... passent par lui. **Le pare-feu doit toujours tout accepter sur l'interface `mgmt`**,
+  sinon tu perds la main (et les vérifications aussi).
+
+  Le pare-feu route déjà (`ip_forward=1`) mais n'a **aucune règle**. Travaille dans un fichier
+  (`/root/pare-feu.nft` sur fw) que tu charges avec `nft -f`, en commençant par `flush ruleset`.
+  Pour tester sans risque : `nft -c -f fichier` vérifie la syntaxe sans rien appliquer.
+cours: |
+  ## Architecture à trois pattes
+
+  ```
+                 ┌──────────── pare-feu ────────────┐
+   LAN ── lan ──▶│ input   : trafic VERS le pare-feu │◀── wan ── Internet
+  (postes)       │ forward : trafic TRAVERSANT       │
+   DMZ ── dmz ──▶│ output  : trafic émis PAR lui     │
+  (serveurs publics)                                 │
+                 └────────────────────────────────────┘
+  ```
+
+  La **DMZ** héberge ce qui doit être joignable depuis Internet (site web, relais de messagerie). Si un de
+  ces serveurs est compromis, l'attaquant reste enfermé : la DMZ n'a pas le droit d'initier de connexion
+  vers le LAN.
+
+  Principe directeur : **politique par défaut `drop`** et liste blanche des flux autorisés, documentée
+  dans une **matrice des flux** (source, destination, port, justification).
+
+  ## Le chemin d'un paquet (netfilter)
+
+  ```
+  entrée ─▶ prerouting (DNAT) ─▶ décision de routage ─┬─▶ input ─▶ processus local ─▶ output ─┐
+                                                      └─▶ forward ──────────────────────────────┴─▶ postrouting (SNAT, masquerade) ─▶ sortie
+  ```
+
+  - Le **DNAT** (publication d'un service, redirection de port) se fait en `prerouting`, **avant** le
+    routage : la chaîne `forward` voit donc l'adresse **interne** de destination.
+  - Le **SNAT / masquerade** (sortie Internet des adresses privées) se fait en `postrouting`.
+  - Le **suivi de connexion** (conntrack) reconnaît les réponses : une seule règle
+    `ct state established,related accept` autorise tous les retours.
+
+  ## Structure nftables
+
+  ```
+  flush ruleset
+  table inet filtre {
+      set liste_noire { type ipv4_addr; }
+      chain input {
+          type filter hook input priority 0; policy drop;
+          ip saddr @liste_noire drop
+          iif lo accept
+          ct state established,related accept
+          icmp type echo-request accept
+          iifname "lan" ip saddr 192.168.1.5 tcp dport 22 accept
+          log prefix "FW-DROP " group 0
+      }
+      chain forward { type filter hook forward priority 0; policy drop; ... }
+      chain output  { type filter hook output priority 0; policy accept; }
+  }
+  table ip nat {
+      chain prerouting  { type nat hook prerouting priority dstnat; iifname "wan" tcp dport 80 dnat to 172.16.10.10; }
+      chain postrouting { type nat hook postrouting priority srcnat; oifname "wan" masquerade; }
+  }
+  ```
+
+  Les règles d'une chaîne sont évaluées **dans l'ordre** ; la première action terminale (`accept`, `drop`)
+  décide. Les familles : `ip` (IPv4), `ip6`, `inet` (les deux), `bridge`, `arp`.
+
+  ## Mémo des commandes
+
+  | Besoin                           | Commande                                            |
+  |----------------------------------|-----------------------------------------------------|
+  | Tester un fichier sans appliquer | `nft -c -f /root/pare-feu.nft`                      |
+  | Charger un fichier               | `nft -f /root/pare-feu.nft`                         |
+  | Tout afficher (avec numéros)     | `nft -a list ruleset`                               |
+  | Ajouter un élément à un set      | `nft add element inet filtre liste_noire { 1.2.3.4 }` |
+  | Supprimer une règle              | `nft delete rule inet filtre input handle 12`       |
+  | Connexions suivies               | `conntrack -L` (paquet conntrack)                   |
+  | Persistance                      | `/etc/nftables.conf` + service `nftables`           |
+
+  Tester les flux depuis les machines : `nc -zv hôte port`, `curl`, `ping`, et regarder les compteurs
+  (`counter` dans une règle) ou les journaux.
+
+  ## Pièges courants
+
+  - Se couper l'accès en appliquant `policy drop` sans règle pour sa propre session SSH (ici : interface
+    `mgmt`). En production : console de secours, ou commande d'annulation programmée
+    (`sleep 60 && nft flush ruleset &`) pendant le test.
+  - Oublier les réponses (`established,related`) : rien ne marche dans un sens.
+  - Autoriser le DNAT en `prerouting` mais oublier la règle `forward` correspondante (ou l'inverse).
+  - Ouvrir DNS en UDP seulement : les grosses réponses passent en TCP.
+  - Règles chargées à la main mais pas enregistrées : perdues au redémarrage.
+
+  ## Bonnes pratiques en entreprise
+
+  - Matrice des flux validée, chaque règle commentée (`comment "ticket 1234"`), revue régulière.
+  - Journaliser les refus (avec limitation de débit) et centraliser les journaux.
+  - Filtrer aussi en **sortie** : un serveur de DMZ n'a besoin que de ses mises à jour.
+  - Les pare-feu du marché (pfSense/OPNsense, Fortinet, Stormshield) reprennent exactement ces notions :
+    zones, NAT, règles ordonnées, objets et groupes d'adresses.
+docs:
+  - title: Wiki officiel de nftables
+    url: https://wiki.nftables.org/
+  - title: nft(8) - syntaxe complète (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man8/nft.8.html
+  - title: Debian Wiki - nftables
+    url: https://wiki.debian.org/nftables
+  - title: Wikipédia - Zone démilitarisée (informatique)
+    url: https://fr.wikipedia.org/wiki/Zone_d%C3%A9militaris%C3%A9e_(informatique)
+exercises:
+  - id: politique
+    title: Politique par défaut et protection du pare-feu
+    cours: |
+      Une chaîne de base nftables se déclare avec son type, son hook, sa priorité et sa politique :
+      `type filter hook input priority 0; policy drop;`. La politique s'applique aux paquets qui n'ont
+      correspondu à aucune règle.
+
+      Critères utiles : `iif lo` (interface de bouclage), `iifname "<nom>"` (interface d'entrée par son nom),
+      `ct state established,related`, `icmp type echo-request`, `ip saddr <adresse>`, `tcp dport <port>`.
+
+      Écris le jeu de règles dans un fichier qui commence par `flush ruleset`, vérifie-le avec `nft -c -f`
+      puis charge-le avec `nft -f`. Ne retire jamais la règle qui accepte l'interface `mgmt`.
+    description: |
+      Crée la table `inet filtre` avec les chaînes `input`, `forward` et `output` (hooks correspondants,
+      priorité 0). `input` et `forward` ont une **politique `drop`**, `output` reste en `accept`.
+
+      Dans `input`, autorise uniquement :
+      - tout le trafic de l'interface de bouclage (`lo`) et de l'interface `mgmt` ;
+      - les connexions établies ou relatives (`ct state established,related`) ;
+      - le **ping** (ICMP echo-request) ;
+      - **SSH depuis le seul poste admin** (`192.168.1.5`) par le LAN.
+    hint: "table inet filtre { chain input { type filter hook input priority 0; policy drop; iif lo accept; iifname \"mgmt\" accept; ct state established,related accept; icmp type echo-request accept; iifname \"lan\" ip saddr 192.168.1.5 tcp dport 22 accept; } ... }"
+    checks:
+      - desc: input et forward en politique drop
+        run: |
+          ssh fw 'nft list chain inet filtre input' | grep -q 'policy drop' && ssh fw 'nft list chain inet filtre forward' | grep -q 'policy drop'
+      - desc: SSH vers le pare-feu autorisé depuis admin par le LAN
+        run: nc -z -w3 192.168.1.254 22
+      - desc: SSH vers le pare-feu refusé depuis poste et depuis Internet
+        run: "! ssh poste 'nc -z -w3 192.168.1.254 22' && ! ssh externe 'nc -z -w3 203.0.113.2 22'"
+      - desc: Le pare-feu répond au ping depuis le LAN
+        run: |
+          ssh fw 'nft list chain inet filtre input' | grep -q 'echo-request' && ssh poste 'ping -c1 -W2 192.168.1.254' >/dev/null
+
+  - id: nat-sortant
+    title: Accès Internet du LAN (masquerade)
+    cours: |
+      Deux choses distinctes sont nécessaires pour la sortie Internet :
+
+      1. le **filtrage** dans `forward` : interfaces d'entrée et de sortie (`iifname` / `oifname`), protocoles
+         et ports autorisés ; un ensemble anonyme `{ 80, 443 }` évite d'écrire une règle par port ; DNS
+         utilise `udp dport 53` **et** `tcp dport 53` ;
+      2. la **traduction d'adresses** dans une table `ip nat` : une chaîne de type `nat` au hook
+         `postrouting`, priorité `srcnat`, avec l'action `masquerade` sur l'interface de sortie.
+
+      `masquerade` utilise l'adresse de l'interface au moment de la sortie (adaptée aux adresses dynamiques) ;
+      `snat to <adresse>` fixe une adresse.
+    description: |
+      Les postes du LAN doivent naviguer sur Internet : dans `forward`, autorise du LAN vers le WAN
+      **uniquement** HTTP (80), HTTPS (443), DNS (53 en UDP et TCP) et le ping, ainsi que les réponses
+      (connexions établies). Le reste est bloqué (pas de SSH sortant, par exemple).
+
+      Les adresses privées ne sont pas routables sur Internet : crée une table `ip nat` avec une chaîne
+      `postrouting` (hook postrouting, priorité `srcnat`) qui fait du **masquerade** sur l'interface `wan`.
+      Le serveur `externe` doit alors voir les postes avec l'adresse publique du pare-feu (`203.0.113.2`).
+    hint: "ct state established,related accept ; iifname \"lan\" oifname \"wan\" tcp dport { 80, 443, 53 } accept ; ... ; table ip nat { chain postrouting { type nat hook postrouting priority srcnat; oifname \"wan\" masquerade; } }"
+    checks:
+      - desc: poste joint le web d'Internet en sortant avec l'adresse du pare-feu
+        run: ssh poste 'curl -s -m5 http://203.0.113.50/' | grep -qx 'client=203.0.113.2'
+      - desc: SSH sortant bloqué depuis le LAN
+        run: |
+          ssh fw 'nft list chain inet filtre forward' | grep -q 'policy drop' && ! ssh poste 'nc -z -w3 203.0.113.50 22'
+
+  - id: publication-dmz
+    title: Publier le site web de la DMZ
+    cours: |
+      Publier un serveur interne, c'est traduire l'adresse de **destination** : un **DNAT** en `prerouting`
+      (type `nat`, priorité `dstnat`), avant la décision de routage, avec l'action `dnat to <adresse>`.
+
+      Après la traduction, le paquet a pour destination l'adresse interne : la règle d'autorisation dans
+      `forward` doit donc porter sur **172.16.10.10**, pas sur l'adresse publique.
+
+      Pour tester, la requête doit venir du WAN (machine `externe`) ; depuis le LAN, elle ne passerait pas
+      par la même règle (interface d'entrée différente).
+
+      Teste depuis l'extérieur, puis depuis le LAN : les deux chemins passent par des règles différentes et l'un peut marcher sans l'autre.
+    description: |
+      Le site public est hébergé sur `srv-web` (172.16.10.10:80), en DMZ. Publie-le sur l'adresse publique
+      du pare-feu : une requête vers `http://203.0.113.2/` venant du WAN doit être **redirigée (DNAT)** vers
+      srv-web. Crée pour cela une chaîne `prerouting` (hook prerouting, priorité `dstnat`) dans la table
+      `ip nat`, et autorise ce flux (WAN → srv-web, TCP 80 uniquement) dans `forward`.
+    hint: "chain prerouting { type nat hook prerouting priority dstnat; iifname \"wan\" tcp dport 80 dnat to 172.16.10.10; }  et dans forward : iifname \"wan\" oifname \"dmz\" ip daddr 172.16.10.10 tcp dport 80 accept"
+    checks:
+      - desc: externe consulte le site public via 203.0.113.2
+        run: ssh externe 'curl -s -m5 http://203.0.113.2/' | grep -q 'Site public'
+
+  - id: redirection-port
+    title: Redirection de port réservée à un partenaire
+    cours: |
+      Une **redirection de port** est un DNAT qui change aussi le port : `dnat to <adresse>:<port>`. La règle
+      peut être restreinte à une source avec `ip saddr <adresse>`, à mettre **à la fois** dans la règle de
+      `prerouting` et dans celle de `forward`.
+
+      Exposer SSH, même sur un port non standard, attire les scans : le filtrage par adresse source réduit
+      fortement la surface d'attaque. En entreprise, on préfère souvent un VPN pour les prestataires.
+
+      Journalise les connexions acceptées par cette règle : en cas d'incident, on saura qui est entré, et quand.
+    description: |
+      Le prestataire qui maintient le site (adresse `203.0.113.50`, la machine `externe`) doit pouvoir se
+      connecter en SSH à srv-web. Redirige le port **2222** de l'adresse publique vers le port **22** de
+      srv-web, **uniquement pour l'adresse 203.0.113.50**. Le `pirate` (203.0.113.66) ne doit pas y arriver.
+    hint: "prerouting : iifname \"wan\" ip saddr 203.0.113.50 tcp dport 2222 dnat to 172.16.10.10:22 ; forward : iifname \"wan\" ip saddr 203.0.113.50 ip daddr 172.16.10.10 tcp dport 22 accept"
+    checks:
+      - desc: externe atteint le SSH de srv-web par le port 2222
+        run: ssh externe 'timeout 5 nc -w3 203.0.113.2 2222 </dev/null | head -1' | grep -q '^SSH-2.0'
+      - desc: pirate n'y arrive pas
+        run: |
+          ssh fw 'nft list ruleset' | grep -q 'dport 2222' && ! ssh pirate 'timeout 5 nc -w3 203.0.113.2 2222 </dev/null | head -1' | grep -q 'SSH'
+
+  - id: isolation-dmz
+    title: Isoler la DMZ
+    cours: |
+      La règle `ct state established,related accept` laisse passer les **réponses** : si le LAN ouvre une
+      connexion vers la DMZ, le retour est autorisé. Il suffit donc de **ne pas** écrire de règle autorisant la
+      DMZ à initier quoi que ce soit vers le LAN : la politique `drop` s'en charge.
+
+      Écris une règle par flux autorisé (sens, interfaces, adresses, port), dans l'esprit d'une matrice des
+      flux. Teste aussi les flux qui doivent être **bloqués** : c'est la moitié du travail.
+    description: |
+      Si srv-web était piraté, l'attaquant ne doit pas pouvoir rebondir vers le LAN. Règles à respecter :
+      - la DMZ ne peut **jamais** initier de connexion vers le LAN ;
+      - le LAN peut consulter le site de srv-web en HTTP ;
+      - seul **admin** (192.168.1.5) peut administrer srv-web en SSH ;
+      - srv-web peut sortir sur Internet en HTTP/HTTPS (mises à jour), rien d'autre.
+    hint: "iifname \"lan\" oifname \"dmz\" tcp dport 80 accept ; iifname \"lan\" oifname \"dmz\" ip saddr 192.168.1.5 tcp dport 22 accept ; iifname \"dmz\" oifname \"wan\" tcp dport { 80, 443 } accept"
+    checks:
+      - desc: poste consulte le site de srv-web
+        run: ssh poste 'curl -s -m5 http://172.16.10.10/' | grep -q 'Site public'
+      - desc: admin administre srv-web en SSH par le LAN, poste non
+        run: nc -z -w3 172.16.10.10 22 && ! ssh poste 'nc -z -w3 172.16.10.10 22'
+      - desc: srv-web ne peut pas joindre le LAN
+        run: "! ssh srv-web 'nc -z -w3 192.168.1.10 22' && ! ssh srv-web 'ping -c1 -W2 192.168.1.10' >/dev/null 2>&1"
+      - desc: srv-web sort en HTTP vers Internet
+        run: ssh srv-web 'curl -s -m5 http://203.0.113.50/' | grep -q 'client=203.0.113.2'
+
+  - id: journalisation
+    title: Journaliser les paquets refusés
+    cours: |
+      L'instruction `log` écrit une trace pour chaque paquet qui atteint la règle, puis **continue**
+      l'évaluation (ce n'est pas une décision). Placée en **dernière** position, elle ne voit que les paquets
+      qui vont tomber sur la politique `drop`.
+
+      - `prefix "<texte>"` permet de retrouver les lignes dans les journaux ;
+      - `group <n>` envoie les traces au démon **ulogd2** via netlink (dans un conteneur, le noyau ne peut
+        pas écrire dans un syslog local) ;
+      - en production, ajoute une limite (`limit rate 10/minute`) pour ne pas saturer le disque lors d'une
+        attaque.
+    description: |
+      Pour pouvoir enquêter, journalise les paquets refusés **juste avant** qu'ils ne tombent sur la
+      politique `drop` des chaînes `input` et `forward` : `log prefix "FW-DROP " group 0`. Le démon
+      **ulogd2** (déjà démarré sur fw) les écrit dans `/var/log/ulog/syslogemu.log`.
+
+      Provoque un refus (par exemple une connexion de srv-web vers poste) et lis le journal.
+    hint: "Dernière règle de input et de forward : log prefix \"FW-DROP \" group 0"
+    checks:
+      - desc: Un refus DMZ → LAN est journalisé avec le préfixe FW-DROP
+        run: |
+          ssh srv-web 'nc -z -w2 192.168.1.10 22' >/dev/null 2>&1
+          sleep 1
+          ssh fw 'cat /var/log/ulog/syslogemu.log 2>/dev/null' | grep 'FW-DROP' | grep 'SRC=172.16.10.10' | grep 'DST=192.168.1.10' | grep -q 'DPT=22'
+      - desc: Un refus vers le pare-feu lui-même est journalisé
+        run: |
+          ssh pirate 'nc -z -w2 203.0.113.2 3389' >/dev/null 2>&1
+          sleep 1
+          ssh fw 'cat /var/log/ulog/syslogemu.log 2>/dev/null' | grep 'FW-DROP' | grep 'SRC=203.0.113.66' | grep -q 'DPT=3389'
+
+  - id: liste-noire
+    title: Liste noire dynamique
+    cours: |
+      Un **set** nftables est un ensemble nommé d'éléments (adresses, ports, réseaux) déclaré dans une table :
+      `set <nom> { type ipv4_addr; }` (ajoute `flags interval;` pour y mettre des réseaux).
+
+      - `@<nom>` l'utilise dans une règle : `ip saddr @liste_noire drop` ;
+      - `nft add element` / `nft delete element` le modifient **à chaud**, sans recharger les règles ;
+      - avec `timeout`, les éléments expirent tout seuls (bannissement temporaire, comme fail2ban).
+
+      La règle de blocage doit être en **tête** des chaînes, avant les règles qui acceptent.
+    description: |
+      L'adresse `203.0.113.66` scanne nos ports. Crée dans `inet filtre` un **ensemble** (`set`) nommé
+      `liste_noire` de type `ipv4_addr`, ajoute-lui cette adresse, et bloque tout ce qui en provient, aussi
+      bien vers le pare-feu que vers le site publié (en tête des chaînes `input` et `forward`).
+
+      Avec un ensemble, bannir une nouvelle adresse se fait à chaud, sans recharger les règles :
+      `nft add element inet filtre liste_noire { 198.51.100.7 }`.
+    hint: "set liste_noire { type ipv4_addr; } ; nft add element inet filtre liste_noire { 203.0.113.66 } ; ip saddr @liste_noire drop (en premier dans input et forward)"
+    checks:
+      - desc: L'ensemble liste_noire contient 203.0.113.66
+        run: ssh fw 'nft list set inet filtre liste_noire' | grep -q '203.0.113.66'
+      - desc: pirate ne voit plus le site publié, externe oui
+        run: |
+          ! ssh pirate 'curl -s -m4 http://203.0.113.2/' | grep -q 'Site public' && ssh externe 'curl -s -m5 http://203.0.113.2/' | grep -q 'Site public'
+
+  - id: persistance
+    title: Rendre les règles persistantes
+    cours: |
+      `nft list ruleset` affiche la configuration chargée dans une syntaxe directement rechargeable. Sur
+      Debian/Ubuntu, le service `nftables` charge `/etc/nftables.conf` au démarrage.
+
+      Le fichier doit commencer par `flush ruleset` (sinon un rechargement ajouterait les règles aux
+      existantes) ; un regroupement de commandes `{ cmd1; cmd2; } > fichier` écrit plusieurs sorties dans un
+      même fichier. `nft -c -f` valide le fichier sans l'appliquer. Versionne ce fichier : c'est la mémoire de
+      ta politique de sécurité.
+
+      Après le redémarrage, compare `nft list ruleset` avec le fichier sauvegardé : toute différence indique une règle oubliée ou un service qui ajoute les siennes.
+    description: |
+      Les règles chargées en mémoire disparaissent au redémarrage. Enregistre la configuration complète
+      dans `/etc/nftables.conf` (chargée au démarrage par le service nftables) : elle doit commencer par
+      `flush ruleset`, contenir les tables `inet filtre` et `ip nat`, et être valide (`nft -c -f`).
+    hint: "{ echo 'flush ruleset'; nft list ruleset; } > /etc/nftables.conf ; nft -c -f /etc/nftables.conf"
+    checks:
+      - desc: /etc/nftables.conf est valide et commence par flush ruleset
+        run: ssh fw 'nft -c -f /etc/nftables.conf && grep -m1 -v "^\s*#\|^\s*$" /etc/nftables.conf | grep -q "flush ruleset"'
+      - desc: Le fichier contient le filtrage, le masquerade et les DNAT
+        run: |
+          ssh fw cat /etc/nftables.conf > /tmp/nft.conf
+          grep -q 'table inet filtre' /tmp/nft.conf && grep -q 'policy drop' /tmp/nft.conf && grep -q 'masquerade' /tmp/nft.conf && grep -q 'dnat' /tmp/nft.conf && grep -q 'liste_noire' /tmp/nft.conf

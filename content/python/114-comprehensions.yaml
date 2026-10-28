@@ -1,0 +1,143 @@
+title: Compréhensions
+level: intermediaire
+order: 14
+tags: [compréhensions, listes, dictionnaires]
+summary: Remplacer des boucles par des compréhensions de listes et de dictionnaires.
+description: |
+  Écris chaque fonction **en une seule expression** grâce aux compréhensions :
+
+  - `carres_pairs(n)` : la liste des carrés des nombres **pairs** de 0 à `n` inclus ;
+  - `longueurs(mots)` : un dictionnaire `{mot: longueur}` ;
+  - `inverser(d)` : un dictionnaire où clés et valeurs sont échangées (on suppose les valeurs
+    uniques) ;
+  - `matrice_identite(n)` : une liste de `n` listes, avec des `1` sur la diagonale et des `0`
+    ailleurs.
+
+  ```python
+  carres_pairs(6)                # [0, 4, 16, 36]
+  longueurs(["chat", "souris"])  # {"chat": 4, "souris": 6}
+  inverser({"a": 1, "b": 2})     # {1: "a", 2: "b"}
+  matrice_identite(2)            # [[1, 0], [0, 1]]
+  ```
+
+  Rappel : `[expr for x in iterable if condition]` et `{cle: valeur for ...}`.
+starter: |
+  def carres_pairs(n):
+      pass
+
+
+  def longueurs(mots):
+      pass
+
+
+  def inverser(d):
+      pass
+
+
+  def matrice_identite(n):
+      pass
+tests: |
+  def test_carres_pairs():
+      "carres_pairs(6)"
+      r = solution.carres_pairs(6)
+      assert r == [0, 4, 16, 36], f"attendu [0, 4, 16, 36], obtenu {r!r}"
+
+  def test_carres_pairs_impair():
+      "carres_pairs(5) s'arrête à 4"
+      r = solution.carres_pairs(5)
+      assert r == [0, 4, 16], f"attendu [0, 4, 16], obtenu {r!r}"
+
+  def test_longueurs():
+      "longueurs de mots"
+      r = solution.longueurs(["chat", "souris", ""])
+      assert r == {"chat": 4, "souris": 6, "": 0}, f"obtenu {r!r}"
+
+  def test_inverser():
+      "inverser un dictionnaire"
+      r = solution.inverser({"a": 1, "b": 2})
+      assert r == {1: "a", 2: "b"}, f"obtenu {r!r}"
+      assert solution.inverser({}) == {}
+
+  def test_identite():
+      "matrice identité 3x3"
+      r = solution.matrice_identite(3)
+      assert r == [[1, 0, 0], [0, 1, 0], [0, 0, 1]], f"obtenu {r!r}"
+
+  def test_identite_lignes_independantes():
+      "Les lignes sont des listes distinctes"
+      m = solution.matrice_identite(2)
+      m[0][1] = 9
+      assert m[1][1] == 1 and m[1][0] == 0, "modifier une ligne ne doit pas changer les autres"
+solution: |
+  def carres_pairs(n):
+      return [x * x for x in range(0, n + 1, 2)]
+
+
+  def longueurs(mots):
+      return {mot: len(mot) for mot in mots}
+
+
+  def inverser(d):
+      return {v: k for k, v in d.items()}
+
+
+  def matrice_identite(n):
+      return [[1 if i == j else 0 for j in range(n)] for i in range(n)]
+cours: |
+  ## La syntaxe
+
+  Une compréhension construit une collection en une expression :
+
+  ```python
+  [expression for element in iterable]
+  [expression for element in iterable if condition]
+  {cle: valeur for element in iterable}      # dictionnaire
+  {expression for element in iterable}       # ensemble
+  ```
+
+  Exemples :
+
+  ```python
+  ports = [22, 80, 443, 8080]
+  [p for p in ports if p < 1024]            # [22, 80, 443]
+  [f"port {p}" for p in ports]              # ["port 22", ...]
+  {p: p > 1024 for p in ports}              # {22: False, ..., 8080: True}
+  {len(m) for m in ["a", "bb", "cc"]}       # {1, 2}
+  ```
+
+  ## Filtre ou expression conditionnelle ?
+
+  Deux positions possibles pour une condition, avec deux sens différents :
+
+  - `[x for x in l if x > 0]` : **filtre**, certains éléments disparaissent ;
+  - `[x if x > 0 else 0 for x in l]` : **transformation**, tous les éléments sont conservés.
+
+  ## Compréhensions imbriquées
+
+  Une compréhension peut en contenir une autre, ce qui produit une liste de listes :
+
+  ```python
+  [[ligne * col for col in range(3)] for ligne in range(3)]
+  # [[0, 0, 0], [0, 1, 2], [0, 2, 4]]
+  ```
+
+  **Piège classique** : `[[0] * 3] * 3` crée trois références vers **la même** ligne ;
+  modifier une case modifie toute la colonne. La compréhension crée de vraies lignes
+  indépendantes.
+
+  ## Inverser un dictionnaire
+
+  On itère sur `d.items()` et on échange les rôles dans l'expression `cle: valeur`. Si deux
+  clés avaient la même valeur, la dernière gagnerait (les clés sont uniques).
+
+  ## Bon usage
+
+  Les compréhensions sont plus rapides et plus lisibles qu'une boucle avec `append`… tant
+  qu'elles restent courtes. Au-delà de deux `for` ou d'une condition complexe, une boucle
+  classique est plus claire. N'utilise pas une compréhension pour ses effets de bord
+  (`[print(x) for x in l]`).
+docs:
+  - title: Tutoriel — listes en compréhension
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#list-comprehensions
+  - title: Tutoriel — compréhensions imbriquées
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#nested-list-comprehensions

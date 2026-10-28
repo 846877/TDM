@@ -1,0 +1,65 @@
+# Routeur-pare-feu Linux (fw) entre LAN, DMZ et WAN, plus un réseau d'administration hors bande (mgmt)
+# qui relie toutes les machines au poste admin (utilisé par ssh et par les vérifications).
+#   LAN  192.168.1.0/24 : admin .5, poste .10, fw .254
+#   DMZ  172.16.10.0/24 : srv-web .10, fw .254
+#   WAN  203.0.113.0/24 : fw .2, externe .50 (client/serveur Internet), pirate .66
+#   MGMT 10.99.1.0/24   : admin .5, fw .254, poste .10, srv-web .20, externe .50, pirate .66
+x-noeud: &noeud
+  build: {context: ., dockerfile: noeud/Dockerfile}
+  cap_add: [NET_ADMIN]
+  volumes: [cles:/lab-ssh]
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    cap_add: [NET_ADMIN]
+    environment: {IFNAMES: "192.168.1.=lan 10.99.1.=mgmt", PASSERELLE: 192.168.1.254}
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 192.168.1.5}
+      mgmt: {ipv4_address: 10.99.1.5}
+  fw:
+    <<: *noeud
+    hostname: fw
+    sysctls: {net.ipv4.ip_forward: "1"}
+    environment: {ROLE: fw, IFNAMES: "192.168.1.=lan 172.16.10.=dmz 203.0.113.=wan 10.99.1.=mgmt"}
+    networks:
+      lan: {ipv4_address: 192.168.1.254}
+      dmz: {ipv4_address: 172.16.10.254}
+      wan: {ipv4_address: 203.0.113.2}
+      mgmt: {ipv4_address: 10.99.1.254}
+  poste:
+    <<: *noeud
+    hostname: poste
+    environment: {IFNAMES: "192.168.1.=lan 10.99.1.=mgmt", PASSERELLE: 192.168.1.254}
+    networks:
+      lan: {ipv4_address: 192.168.1.10}
+      mgmt: {ipv4_address: 10.99.1.10}
+  srv-web:
+    <<: *noeud
+    hostname: srv-web
+    environment: {ROLE: web, IFNAMES: "172.16.10.=dmz 10.99.1.=mgmt", PASSERELLE: 172.16.10.254}
+    networks:
+      dmz: {ipv4_address: 172.16.10.10}
+      mgmt: {ipv4_address: 10.99.1.20}
+  externe:
+    <<: *noeud
+    hostname: externe
+    environment: {ROLE: externe, IFNAMES: "203.0.113.=wan 10.99.1.=mgmt"}
+    networks:
+      wan: {ipv4_address: 203.0.113.50}
+      mgmt: {ipv4_address: 10.99.1.50}
+  pirate:
+    <<: *noeud
+    hostname: pirate
+    environment: {IFNAMES: "203.0.113.=wan 10.99.1.=mgmt"}
+    networks:
+      wan: {ipv4_address: 203.0.113.66}
+      mgmt: {ipv4_address: 10.99.1.66}
+volumes:
+  cles:
+networks:
+  lan: {internal: true, ipam: {config: [{subnet: 192.168.1.0/24}]}}
+  dmz: {internal: true, ipam: {config: [{subnet: 172.16.10.0/24}]}}
+  wan: {internal: true, ipam: {config: [{subnet: 203.0.113.0/24}]}}
+  mgmt: {internal: true, ipam: {config: [{subnet: 10.99.1.0/24}]}}

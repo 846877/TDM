@@ -1,0 +1,27 @@
+# Machine « Rouille » : deux conteneurs isolés sur un réseau interne.
+#  - attaquant : poste d'où l'on travaille (terminal du lab) ;
+#  - cible     : serveur vulnérable, joignable seulement depuis « attaquant » (hôte « cible »).
+# Seul le bureau Kali (port 6080, 127.0.0.1) est publié ; la cible vulnérable ne l'est jamais.
+services:
+  attaquant:
+    image: tdm-kali-attaquant:latest
+    build: ../_attaquant
+    command: ["sleep", "infinity"]
+    # Kali a besoin des capacités réseau brutes pour nmap, etc. (sinon « Operation not permitted »).
+    cap_add: [NET_ADMIN, NET_RAW]
+    ports: ["6080:6080"]   # bureau Kali (noVNC) ; publie 6080 sur 127.0.0.1 via la VM moteur
+    networks: [rouille, bureau]
+    depends_on: [cible]
+
+  cible:
+    build: ./cible
+    networks: [rouille]
+    # pas de ports: la cible n'est accessible que par le conteneur attaquant
+
+networks:
+  rouille:
+    internal: true   # cible isolée : réseau interne uniquement, rien ne sort
+  # Réseau normal (non interne) pour l'attaquant : il rend le bureau Kali (6080)
+  # joignable depuis l'hôte. Docker refuse de publier un port sur un réseau interne.
+  bureau:
+    driver: bridge

@@ -1,0 +1,483 @@
+title: IIS et certificats - publier un intranet en HTTPS
+level: avance
+order: 6
+tags: [iis, web, https, tls, certificats, hsts, schannel, pool d'applications, authentification windows]
+summary: Installer IIS, créer un site et son pool, le publier en HTTPS avec un certificat, faire approuver ce certificat, activer HSTS, retirer TLS 1.0/1.1, régler journaux, recyclage et authentification Windows.
+vagrant: bundled
+machine: web01
+description: |
+  **Contexte.** Le contenu du futur intranet des *Ateliers Durand* est prêt dans `C:\Sites\Intranet`
+  (page d'accueil et espace `admin`). Il faut le publier sur un serveur IIS, en **HTTPS** et proprement
+  configuré : pas de vieux protocoles, journaux exploitables, espace d'administration réservé aux comptes
+  authentifiés.
+
+  **Machine** : `SRV-WEB01` (terminal), Windows Server 2022 autonome (2 Go), adresse LAN 192.168.10.30.
+  Le rôle Serveur Web n'est pas installé. Un ancien réglage active encore TLS 1.0 et 1.1 côté serveur.
+
+  Toutes les commandes IIS viennent du module `WebAdministration` (`Import-Module WebAdministration`, qui
+  ajoute aussi le lecteur `IIS:\`). La console `inetmgr` est disponible en Bureau à distance.
+cours: |
+  ## IIS en quelques notions
+
+  **Internet Information Services** est le serveur web de Windows. Ses briques :
+
+  - le **site** : un nom, un dossier racine (*physicalPath*) et des **liaisons** (*bindings*) : protocole,
+    adresse IP, port et éventuellement nom d'hôte (`http/*:8080:`, `https/*:8443:`) ;
+  - le **pool d'applications** : le processus `w3wp.exe` qui exécute le site, avec son **identité**
+    (par défaut un compte virtuel `IIS AppPool\<nom du pool>`), sa version de .NET (ou « aucun code
+    managé » pour du contenu statique), ses règles de **recyclage** et de mise en veille ;
+  - la **configuration** : tout est dans `C:\Windows\System32\inetsrv\config\applicationHost.config`
+    (niveau serveur) et dans des `web.config` (niveau site ou dossier). Certaines sections, comme
+    l'authentification, sont **verrouillées** au niveau serveur : on les règle avec une balise `<location>`
+    dans `applicationHost.config` plutôt que dans un `web.config`.
+
+  Une séparation saine : **un pool par site**, chacun avec son identité, pour qu'un site compromis ou
+  instable n'entraîne pas les autres.
+
+  ## HTTPS : certificat, liaison, confiance
+
+  Un site HTTPS a besoin d'un **certificat avec sa clé privée** dans le magasin *Ordinateur › Personnel*,
+  dont le **nom** (dans le SAN) correspond au nom tapé par l'utilisateur, émis par une autorité que le
+  client **approuve**. La liaison HTTPS associe le port à l'empreinte du certificat ; elle est en réalité
+  enregistrée dans **HTTP.sys** (`netsh http show sslcert`). Un certificat auto-signé suffit pour tester,
+  à condition de l'ajouter aux racines de confiance du client ; en production, on utilise un certificat
+  de la PKI interne (lab AD CS) ou public.
+
+  ## Protocoles et en-têtes de sécurité
+
+  Le choix des versions de TLS ne se fait pas dans IIS mais dans **SCHANNEL**, la bibliothèque TLS de
+  Windows, par le registre
+  (`HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols`) : TLS 1.0 et 1.1 sont
+  obsolètes et doivent être désactivés côté serveur (un redémarrage est nécessaire). **HSTS**
+  (`Strict-Transport-Security`) demande au navigateur de n'utiliser que HTTPS pour ce site pendant une
+  durée donnée : IIS 10 sait l'ajouter nativement.
+
+  ## Exploiter
+
+  Les **journaux W3C** (`C:\inetpub\logs\LogFiles\W3SVC<id>` par défaut) sont la première source de
+  diagnostic : statut HTTP et sous-statut (401.2, 404.0...), durée, client. On les déplace sur un volume
+  de données et on y ajoute les champs utiles. Le **recyclage** périodique du pool (toutes les 29 heures
+  par défaut) est hérité d'une époque de fuites mémoire : on préfère un recyclage planifié à heure creuse.
+  Enfin, l'**authentification Windows** (Kerberos/NTLM) réserve un dossier aux comptes du domaine ou de
+  la machine, sans formulaire de connexion.
+docs:
+  - title: Documentation IIS
+    url: https://learn.microsoft.com/fr-fr/iis/
+  - title: Module WebAdministration (PowerShell)
+    url: https://learn.microsoft.com/fr-fr/powershell/module/webadministration/
+  - title: Paramètres de registre TLS (SCHANNEL)
+    url: https://learn.microsoft.com/fr-fr/windows-server/security/tls/tls-registry-settings
+exercises:
+  - id: win-iis-role
+    title: Installer IIS
+    description: |
+      Installe le rôle **Serveur Web (IIS)** avec l'**authentification Windows**, les **scripts et outils de
+      gestion IIS** (module PowerShell) et la console de gestion. Le service `W3SVC` doit être démarré.
+    hint: Install-WindowsFeature Web-Server, Web-Windows-Auth, Web-Scripting-Tools, Web-Mgmt-Console
+    cours: |
+      ```powershell
+      Install-WindowsFeature Web-Server, Web-Windows-Auth, Web-Scripting-Tools, Web-Mgmt-Console
+      Get-Service W3SVC, WAS
+      ```
+
+      IIS est très modulaire : on n'installe que les fonctionnalités nécessaires (chaque module en moins est
+      une surface d'attaque en moins). `Web-Server` installe le socle (contenu statique, document par défaut,
+      journalisation, filtrage des requêtes) ; `Web-Windows-Auth` le module d'authentification Windows ;
+      `Web-Scripting-Tools` le module `WebAdministration` et le lecteur `IIS:\`. Deux services font tourner
+      IIS : **WAS** (activation des processus) et **W3SVC** (le service web). Un site par défaut (*Default Web
+      Site*, port 80) est créé : on le supprime ou on l'arrête en production.
+    docs:
+      - title: Installer IIS
+        url: https://learn.microsoft.com/fr-fr/iis/get-started/whats-new-in-iis-10/installing-iis-10
+    ci: true
+    checks:
+      - desc: Serveur Web, authentification Windows et outils de script sont installés
+        run: |
+          @(Get-WindowsFeature Web-Server, Web-Windows-Auth, Web-Scripting-Tools | Where-Object Installed).Count -eq 3
+      - desc: Le service W3SVC est démarré
+        run: |
+          (Get-Service W3SVC -ErrorAction SilentlyContinue).Status -eq 'Running'
+    solution: |
+      Install-WindowsFeature Web-Server, Web-Windows-Auth, Web-Scripting-Tools, Web-Mgmt-Console | Out-Null
+      Start-Service W3SVC
+
+  - id: win-iis-site
+    title: Le site et son pool
+    description: |
+      Crée le pool d'applications **`IntranetPool`** (« aucun code managé ») et le site **`Intranet`** :
+      dossier `C:\Sites\Intranet`, liaison HTTP sur le port **8080**, exécuté par `IntranetPool`. La page
+      `http://localhost:8080/` doit répondre.
+    hint: New-WebAppPool IntranetPool ; Set-ItemProperty IIS:\AppPools\IntranetPool managedRuntimeVersion '' ; New-Website -Name Intranet -PhysicalPath C:\Sites\Intranet -Port 8080 -ApplicationPool IntranetPool
+    cours: |
+      ```powershell
+      Import-Module WebAdministration
+      New-WebAppPool -Name IntranetPool
+      Set-ItemProperty IIS:\AppPools\IntranetPool -Name managedRuntimeVersion -Value ''
+      New-Website -Name Intranet -PhysicalPath C:\Sites\Intranet -Port 8080 -ApplicationPool IntranetPool
+      icacls C:\Sites\Intranet /grant 'IIS AppPool\IntranetPool:(OI)(CI)RX'
+      (Invoke-WebRequest http://localhost:8080/ -UseBasicParsing).StatusCode
+      ```
+
+      `managedRuntimeVersion` vide signifie « aucun code managé » : le pool ne charge pas le CLR .NET,
+      inutile pour du HTML statique. L'identité du pool, `IIS AppPool\IntranetPool`, est un compte virtuel
+      créé automatiquement : on lui donne la **lecture** sur le dossier du site, rien de plus. Le pare-feu
+      n'est pas ouvert automatiquement pour un port non standard : il faudrait une règle pour TCP 8080 si le
+      site devait être joint depuis le réseau.
+    docs:
+      - title: New-Website
+        url: https://learn.microsoft.com/fr-fr/powershell/module/webadministration/new-website
+      - title: Identités des pools d'applications
+        url: https://learn.microsoft.com/fr-fr/iis/manage/configuring-security/application-pool-identities
+    ci: true
+    checks:
+      - desc: Le pool IntranetPool existe sans code managé
+        run: |
+          [xml]$x = Get-Content C:\Windows\System32\inetsrv\config\applicationHost.config -ErrorAction Stop
+          $p = $x.configuration.'system.applicationHost'.applicationPools.add | Where-Object name -eq 'IntranetPool'
+          [bool]$p -and $p.managedRuntimeVersion -eq ''
+      - desc: Le site Intranet sert C:\Sites\Intranet sur le port 8080 avec IntranetPool
+        run: |
+          Import-Module WebAdministration
+          $s = Get-Website -Name Intranet
+          [bool]$s -and $s.physicalPath -eq 'C:\Sites\Intranet' -and $s.applicationPool -eq 'IntranetPool' -and [bool](Get-WebBinding -Name Intranet -Protocol http -Port 8080)
+      - desc: http://localhost:8080/ répond avec la page de l'intranet
+        run: |
+          (Invoke-WebRequest http://localhost:8080/ -UseBasicParsing -TimeoutSec 20).Content -match 'Intranet des Ateliers Durand'
+    solution: |
+      Import-Module WebAdministration
+      New-WebAppPool -Name IntranetPool | Out-Null
+      Set-ItemProperty IIS:\AppPools\IntranetPool -Name managedRuntimeVersion -Value ''
+      New-Website -Name Intranet -PhysicalPath C:\Sites\Intranet -Port 8080 -ApplicationPool IntranetPool | Out-Null
+      icacls C:\Sites\Intranet /grant 'IIS AppPool\IntranetPool:(OI)(CI)RX' | Out-Null
+      Start-Website -Name Intranet
+
+  - id: win-iis-certificat
+    title: Un certificat pour tester
+    description: |
+      Crée un **certificat auto-signé** dans *Ordinateur › Personnel* : nom DNS `intranet.durand.lan`, nom
+      convivial **`Intranet TDM`**, clé RSA 2048 bits, valable **un an**.
+    hint: New-SelfSignedCertificate -DnsName intranet.durand.lan -FriendlyName 'Intranet TDM' -CertStoreLocation Cert:\LocalMachine\My -KeyLength 2048 -NotAfter (Get-Date).AddYears(1)
+    cours: |
+      ```powershell
+      New-SelfSignedCertificate -DnsName intranet.durand.lan -FriendlyName 'Intranet TDM' `
+          -CertStoreLocation Cert:\LocalMachine\My -KeyAlgorithm RSA -KeyLength 2048 -NotAfter (Get-Date).AddYears(1)
+      Get-ChildItem Cert:\LocalMachine\My | Format-List FriendlyName, Subject, DnsNameList, NotAfter, Thumbprint
+      ```
+
+      `New-SelfSignedCertificate` place le nom dans le **SAN** et ajoute l'usage *Authentification du
+      serveur*. Un certificat auto-signé est sa propre autorité : aucun client ne l'approuve tant qu'on ne
+      l'a pas ajouté à ses racines de confiance. Il convient pour un test ou un service interne
+      ponctuel ; pour un intranet utilisé par tout le parc, on demande un certificat à la PKI de l'entreprise.
+      L'**empreinte** (*thumbprint*) identifie le certificat dans les liaisons.
+    docs:
+      - title: New-SelfSignedCertificate
+        url: https://learn.microsoft.com/fr-fr/powershell/module/pki/new-selfsignedcertificate
+    ci: true
+    checks:
+      - desc: Le certificat « Intranet TDM » existe avec sa clé privée pour intranet.durand.lan
+        run: |
+          [bool](Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.FriendlyName -eq 'Intranet TDM' -and $_.DnsNameList.Unicode -contains 'intranet.durand.lan' -and $_.HasPrivateKey })
+      - desc: Il est valable un an environ, en RSA 2048
+        run: |
+          $c = Get-ChildItem Cert:\LocalMachine\My | Where-Object FriendlyName -eq 'Intranet TDM' | Sort-Object NotBefore -Descending | Select-Object -First 1
+          [bool]$c -and $c.NotAfter -lt (Get-Date).AddMonths(13) -and $c.NotAfter -gt (Get-Date).AddMonths(11) -and [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey($c).KeySize -eq 2048
+    solution: |
+      New-SelfSignedCertificate -DnsName intranet.durand.lan -FriendlyName 'Intranet TDM' -CertStoreLocation Cert:\LocalMachine\My -KeyAlgorithm RSA -KeyLength 2048 -NotAfter (Get-Date).AddYears(1) | Out-Null
+
+  - id: win-iis-https
+    title: La liaison HTTPS
+    description: |
+      Ajoute au site `Intranet` une liaison **HTTPS sur le port 8443** utilisant le certificat
+      `Intranet TDM`.
+    hint: New-WebBinding -Name Intranet -Protocol https -Port 8443 ; (Get-WebBinding -Name Intranet -Protocol https).AddSslCertificate($c.Thumbprint, 'My')
+    cours: |
+      ```powershell
+      Import-Module WebAdministration
+      $c = Get-ChildItem Cert:\LocalMachine\My | Where-Object FriendlyName -eq 'Intranet TDM' | Select-Object -First 1
+      New-WebBinding -Name Intranet -Protocol https -Port 8443
+      (Get-WebBinding -Name Intranet -Protocol https -Port 8443).AddSslCertificate($c.Thumbprint, 'My')
+      netsh http show sslcert ipport=0.0.0.0:8443
+      ```
+
+      La liaison IIS et l'association certificat-port dans HTTP.sys sont deux choses : `AddSslCertificate`
+      crée la seconde. Avec plusieurs sites HTTPS sur le même port, on utilise des noms d'hôte et
+      l'**indication du nom de serveur** (SNI, `-SslFlags 1`), chaque nom ayant son certificat. Lors du
+      renouvellement d'un certificat, il faut refaire l'association avec la nouvelle empreinte : c'est la
+      cause classique des sites « expirés » alors que le nouveau certificat est bien installé.
+    docs:
+      - title: New-WebBinding
+        url: https://learn.microsoft.com/fr-fr/powershell/module/webadministration/new-webbinding
+    ci: true
+    checks:
+      - desc: Le site Intranet a une liaison HTTPS sur 8443 avec le certificat Intranet TDM
+        run: |
+          Import-Module WebAdministration
+          $c = Get-ChildItem Cert:\LocalMachine\My | Where-Object FriendlyName -eq 'Intranet TDM'
+          $b = Get-WebBinding -Name Intranet -Protocol https -Port 8443
+          [bool]$b -and ($c.Thumbprint -contains $b.certificateHash)
+      - desc: HTTP.sys associe le port 8443 à ce certificat
+        run: |
+          $c = Get-ChildItem Cert:\LocalMachine\My | Where-Object FriendlyName -eq 'Intranet TDM'
+          $t = (netsh http show sslcert ipport=0.0.0.0:8443) -join ' '
+          [bool]($c | Where-Object { $t -match $_.Thumbprint })
+    solution: |
+      Import-Module WebAdministration
+      $c = Get-ChildItem Cert:\LocalMachine\My | Where-Object FriendlyName -eq 'Intranet TDM' | Select-Object -First 1
+      New-WebBinding -Name Intranet -Protocol https -Port 8443
+      (Get-WebBinding -Name Intranet -Protocol https -Port 8443).AddSslCertificate($c.Thumbprint, 'My')
+
+  - id: win-iis-confiance
+    title: Faire approuver le certificat
+    description: |
+      Sur SRV-WEB01 (qui joue ici aussi le client) : ajoute le certificat `Intranet TDM` aux **autorités
+      racines de confiance** de l'ordinateur et fais pointer `intranet.durand.lan` vers `127.0.0.1` dans le
+      fichier `hosts`. `https://intranet.durand.lan:8443/` doit alors s'ouvrir **sans erreur de certificat**.
+    hint: Export-Certificate -Cert $c -FilePath C:\Admin\intranet.cer ; Import-Certificate C:\Admin\intranet.cer -CertStoreLocation Cert:\LocalMachine\Root ; Add-Content C:\Windows\System32\drivers\etc\hosts '127.0.0.1 intranet.durand.lan'
+    cours: |
+      ```powershell
+      $c = Get-ChildItem Cert:\LocalMachine\My | Where-Object FriendlyName -eq 'Intranet TDM' | Select-Object -First 1
+      Export-Certificate -Cert $c -FilePath C:\Admin\intranet.cer
+      Import-Certificate -FilePath C:\Admin\intranet.cer -CertStoreLocation Cert:\LocalMachine\Root
+      Add-Content C:\Windows\System32\drivers\etc\hosts "`r`n127.0.0.1 intranet.durand.lan"
+      Invoke-WebRequest https://intranet.durand.lan:8443/ -UseBasicParsing
+      ```
+
+      Deux conditions pour un HTTPS sans avertissement : le **nom** demandé figure dans le certificat (d'où
+      l'entrée `hosts` : `https://localhost:8443` échouerait sur le nom) et la **chaîne** remonte à une
+      racine approuvée. Sur un parc, on ne touche pas aux postes un par un : la racine est diffusée par GPO
+      (*Stratégies de clé publique*) ou automatiquement par une AC d'entreprise, et le nom est publié dans
+      le DNS interne. Le fichier `.cer` exporté ne contient pas la clé privée.
+    docs:
+      - title: Import-Certificate
+        url: https://learn.microsoft.com/fr-fr/powershell/module/pki/import-certificate
+      - title: Invoke-WebRequest
+        url: https://learn.microsoft.com/fr-fr/powershell/module/microsoft.powershell.utility/invoke-webrequest
+    ci: true
+    checks:
+      - desc: Le certificat Intranet TDM est dans les racines de confiance de l'ordinateur
+        run: |
+          $c = Get-ChildItem Cert:\LocalMachine\My | Where-Object FriendlyName -eq 'Intranet TDM'
+          [bool](Get-ChildItem Cert:\LocalMachine\Root | Where-Object { $c.Thumbprint -contains $_.Thumbprint })
+      - desc: https://intranet.durand.lan:8443/ répond sans erreur de certificat
+        run: |
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          (Invoke-WebRequest https://intranet.durand.lan:8443/ -UseBasicParsing -TimeoutSec 20).StatusCode -eq 200
+    solution: |
+      $c = Get-ChildItem Cert:\LocalMachine\My | Where-Object FriendlyName -eq 'Intranet TDM' | Select-Object -First 1
+      Export-Certificate -Cert $c -FilePath C:\Admin\intranet.cer | Out-Null
+      Import-Certificate -FilePath C:\Admin\intranet.cer -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+      Add-Content C:\Windows\System32\drivers\etc\hosts "`r`n127.0.0.1 intranet.durand.lan"
+      Clear-DnsClientCache
+
+  - id: win-iis-hsts
+    title: Activer HSTS
+    description: |
+      Active **HSTS** natif d'IIS sur le site `Intranet`, avec une durée (`max-age`) d'**un an**
+      (31 536 000 secondes). Les réponses HTTPS doivent porter l'en-tête `Strict-Transport-Security`.
+    hint: Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter "system.applicationHost/sites/site[@name='Intranet']/hsts" -Name enabled -Value True ; idem -Name max-age -Value 31536000
+    cours: |
+      ```powershell
+      $f = "system.applicationHost/sites/site[@name='Intranet']/hsts"
+      Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter $f -Name enabled -Value True
+      Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter $f -Name max-age -Value 31536000
+      (Invoke-WebRequest https://intranet.durand.lan:8443/ -UseBasicParsing).Headers['Strict-Transport-Security']
+      ```
+
+      Après une première visite en HTTPS, le navigateur refusera toute connexion HTTP au site pendant
+      `max-age` secondes et n'acceptera plus de contourner une erreur de certificat : cela protège contre
+      les attaques par rétrogradation (*SSL stripping*). On commence par une durée courte, puis on allonge
+      une fois sûr que tout fonctionne en HTTPS. L'option `redirectHttpToHttps` redirige aussi le HTTP ;
+      `includeSubDomains` étend la règle aux sous-domaines, à manier avec prudence.
+    docs:
+      - title: HSTS dans IIS
+        url: https://learn.microsoft.com/fr-fr/iis/get-started/whats-new-in-iis-10-version-1709/iis-10-version-1709-hsts
+    ci: true
+    checks:
+      - desc: HSTS est activé sur le site Intranet avec max-age = 31536000
+        run: |
+          [xml]$x = Get-Content C:\Windows\System32\inetsrv\config\applicationHost.config -ErrorAction Stop
+          $h = ($x.configuration.'system.applicationHost'.sites.site | Where-Object name -eq 'Intranet').hsts
+          [bool]$h -and $h.enabled -eq 'true' -and $h.'max-age' -eq '31536000'
+      - desc: La réponse HTTPS porte l'en-tête Strict-Transport-Security
+        run: |
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          (Invoke-WebRequest https://intranet.durand.lan:8443/ -UseBasicParsing -TimeoutSec 20).Headers['Strict-Transport-Security'] -match 'max-age=31536000'
+    solution: |
+      Import-Module WebAdministration
+      $f = "system.applicationHost/sites/site[@name='Intranet']/hsts"
+      Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter $f -Name enabled -Value True
+      Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter $f -Name max-age -Value 31536000
+
+  - id: win-iis-tls
+    title: Retirer TLS 1.0 et 1.1
+    description: |
+      Désactive **TLS 1.0** et **TLS 1.1** côté **serveur** dans SCHANNEL (`Enabled` = 0 et
+      `DisabledByDefault` = 1). La prise en compte demande un redémarrage, que tu peux faire à la fin du lab.
+    hint: HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.0\Server ; Set-ItemProperty -Name Enabled -Value 0 ; -Name DisabledByDefault -Value 1 ; idem TLS 1.1
+    cours: |
+      ```powershell
+      foreach ($v in 'TLS 1.0', 'TLS 1.1') {
+          $cle = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\$v\Server"
+          if (-not (Test-Path $cle)) { New-Item $cle -Force | Out-Null }
+          Set-ItemProperty $cle -Name Enabled -Value 0 -Type DWord
+          Set-ItemProperty $cle -Name DisabledByDefault -Value 1 -Type DWord
+      }
+      ```
+
+      La sous-clé `Server` concerne les connexions **reçues** (IIS, RDP, LDAPS...) ; la sous-clé `Client`
+      les connexions sortantes du serveur. Avant de couper un protocole, on vérifie qui l'utilise encore :
+      les journaux IIS peuvent enregistrer la version négociée (champs personnalisés
+      `CRYPT_PROTOCOL`), et le journal *System* signale les échecs SCHANNEL. Les suites de chiffrement se
+      règlent à part (`Disable-TlsCipherSuite`, ou la GPO « Ordre des suites de chiffrement SSL »). Attention à
+      `New-Item -Force` sur une clé existante : il la recrée vide.
+    docs:
+      - title: Paramètres de registre TLS (SCHANNEL)
+        url: https://learn.microsoft.com/fr-fr/windows-server/security/tls/tls-registry-settings
+    ci: true
+    checks:
+      - desc: TLS 1.0 serveur est désactivé (Enabled 0, DisabledByDefault 1)
+        run: |
+          $p = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.0\Server' -ErrorAction SilentlyContinue
+          [bool]$p -and $p.Enabled -eq 0 -and $p.DisabledByDefault -eq 1
+      - desc: TLS 1.1 serveur est désactivé (Enabled 0, DisabledByDefault 1)
+        run: |
+          $p = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.1\Server' -ErrorAction SilentlyContinue
+          [bool]$p -and $p.Enabled -eq 0 -and $p.DisabledByDefault -eq 1
+    solution: |
+      foreach ($v in 'TLS 1.0', 'TLS 1.1') {
+          $cle = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\$v\Server"
+          if (-not (Test-Path $cle)) { New-Item $cle -Force | Out-Null }
+          Set-ItemProperty $cle -Name Enabled -Value 0 -Type DWord
+          Set-ItemProperty $cle -Name DisabledByDefault -Value 1 -Type DWord
+      }
+
+  - id: win-iis-journaux
+    title: Des journaux exploitables
+    description: |
+      Range les journaux du site `Intranet` dans **`C:\Logs\IIS`** et ajoute le champ **Hôte** (`cs-host`) aux
+      champs W3C enregistrés (en gardant ceux par défaut). Après une requête, un fichier journal doit
+      apparaître dans ce dossier.
+    hint: Set-ItemProperty IIS:\Sites\Intranet -Name logFile.directory -Value C:\Logs\IIS ; logFile.logExtFileFlags += ',Host' ; netsh http flush logbuffer
+    cours: |
+      ```powershell
+      Import-Module WebAdministration
+      New-Item C:\Logs\IIS -ItemType Directory -Force
+      Set-ItemProperty IIS:\Sites\Intranet -Name logFile.directory -Value C:\Logs\IIS
+      $champs = (Get-ItemProperty IIS:\Sites\Intranet -Name logFile).logExtFileFlags
+      Set-ItemProperty IIS:\Sites\Intranet -Name logFile.logExtFileFlags -Value "$champs,Host"
+      Invoke-WebRequest http://localhost:8080/ -UseBasicParsing | Out-Null
+      netsh http flush logbuffer            # HTTP.sys écrit ses journaux par lots
+      Get-ChildItem C:\Logs\IIS -Recurse
+      ```
+
+      Chaque site écrit dans `W3SVC<id du site>`, un fichier par jour (`u_ex<aammjj>.log`, en UTC par
+      défaut). Le champ `cs-host` distingue les noms d'hôte quand plusieurs noms pointent vers le même site.
+      Les journaux grossissent sans limite : prévoir une purge (tâche planifiée) ou une collecte vers un
+      outil central. Sur un serveur derrière un proxy inverse, on ajoute un champ personnalisé
+      `X-Forwarded-For` pour retrouver l'adresse réelle du client.
+    docs:
+      - title: Configurer la journalisation dans IIS
+        url: https://learn.microsoft.com/fr-fr/iis/manage/provisioning-and-managing-iis/configure-logging-in-iis
+    ci: true
+    checks:
+      - desc: Les journaux du site vont dans C:\Logs\IIS avec le champ Host
+        run: |
+          [xml]$x = Get-Content C:\Windows\System32\inetsrv\config\applicationHost.config -ErrorAction Stop
+          $l = ($x.configuration.'system.applicationHost'.sites.site | Where-Object name -eq 'Intranet').logFile
+          [bool]$l -and $l.directory -eq 'C:\Logs\IIS' -and $l.logExtFileFlags -match '\bHost\b' -and $l.logExtFileFlags -match 'TimeTaken'
+      - desc: Un fichier journal existe dans C:\Logs\IIS
+        run: |
+          [bool](Get-ChildItem C:\Logs\IIS -Recurse -Filter *.log -ErrorAction SilentlyContinue)
+    solution: |
+      Import-Module WebAdministration
+      New-Item C:\Logs\IIS -ItemType Directory -Force | Out-Null
+      Set-ItemProperty IIS:\Sites\Intranet -Name logFile.directory -Value C:\Logs\IIS
+      $champs = (Get-ItemProperty IIS:\Sites\Intranet -Name logFile).logExtFileFlags
+      if ($champs -notmatch '\bHost\b') { Set-ItemProperty IIS:\Sites\Intranet -Name logFile.logExtFileFlags -Value "$champs,Host" }
+      Start-Sleep 2
+      Invoke-WebRequest http://localhost:8080/ -UseBasicParsing | Out-Null
+      netsh http flush logbuffer | Out-Null
+      Start-Sleep 2
+
+  - id: win-iis-recyclage
+    title: Recyclage et mise en veille du pool
+    description: |
+      Pour `IntranetPool` : supprime le recyclage **périodique** (intervalle à `00:00:00`), planifie un
+      recyclage **à 03:00** chaque nuit et désactive l'**arrêt sur inactivité** (délai à `00:00:00`).
+    hint: Set-ItemProperty IIS:\AppPools\IntranetPool -Name recycling.periodicRestart.time -Value 00:00:00 ; New-ItemProperty ... -Name recycling.periodicRestart.schedule -Value @{value='03:00:00'} ; processModel.idleTimeout
+    cours: |
+      ```powershell
+      Import-Module WebAdministration
+      $pool = 'IIS:\AppPools\IntranetPool'
+      Set-ItemProperty $pool -Name recycling.periodicRestart.time -Value '00:00:00'
+      New-ItemProperty $pool -Name recycling.periodicRestart.schedule -Value @{ value = '03:00:00' }
+      Set-ItemProperty $pool -Name processModel.idleTimeout -Value '00:00:00'
+      ```
+
+      Par défaut, un pool est recyclé toutes les **1 740 minutes** (29 heures, pour que l'heure tourne
+      chaque jour) et arrêté après **20 minutes** sans requête : le premier visiteur du matin attend alors
+      le démarrage du processus. Pour un intranet, un recyclage à heure fixe la nuit et un pool toujours
+      actif donnent un comportement prévisible. Le recyclage est **progressif** : un nouveau `w3wp.exe`
+      démarre avant l'arrêt de l'ancien, sans coupure pour les utilisateurs.
+    docs:
+      - title: Recyclage des pools d'applications
+        url: https://learn.microsoft.com/fr-fr/iis/configuration/system.applicationhost/applicationpools/add/recycling/periodicrestart/
+    ci: true
+    checks:
+      - desc: Recyclage périodique désactivé et recyclage planifié à 03:00
+        run: |
+          [xml]$x = Get-Content C:\Windows\System32\inetsrv\config\applicationHost.config -ErrorAction Stop
+          $r = ($x.configuration.'system.applicationHost'.applicationPools.add | Where-Object name -eq 'IntranetPool').recycling.periodicRestart
+          [bool]$r -and $r.time -eq '00:00:00' -and @($r.schedule.add.value) -contains '03:00:00'
+      - desc: Arrêt sur inactivité désactivé
+        run: |
+          [xml]$x = Get-Content C:\Windows\System32\inetsrv\config\applicationHost.config -ErrorAction Stop
+          ($x.configuration.'system.applicationHost'.applicationPools.add | Where-Object name -eq 'IntranetPool').processModel.idleTimeout -eq '00:00:00'
+    solution: |
+      Import-Module WebAdministration
+      $pool = 'IIS:\AppPools\IntranetPool'
+      Set-ItemProperty $pool -Name recycling.periodicRestart.time -Value '00:00:00'
+      New-ItemProperty $pool -Name recycling.periodicRestart.schedule -Value @{ value = '03:00:00' } | Out-Null
+      Set-ItemProperty $pool -Name processModel.idleTimeout -Value '00:00:00'
+
+  - id: win-iis-auth
+    title: Réserver l'espace admin
+    description: |
+      Sur le dossier `/admin` du site `Intranet` : **désactive l'authentification anonyme** et **active
+      l'authentification Windows**. Une requête anonyme sur `http://localhost:8080/admin/` doit recevoir un
+      **401**.
+    hint: Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Location 'Intranet/admin' -Filter system.webServer/security/authentication/anonymousAuthentication -Name enabled -Value False ; idem windowsAuthentication True
+    cours: |
+      ```powershell
+      $p = @{ PSPath = 'MACHINE/WEBROOT/APPHOST'; Location = 'Intranet/admin' }
+      Set-WebConfigurationProperty @p -Filter system.webServer/security/authentication/anonymousAuthentication -Name enabled -Value False
+      Set-WebConfigurationProperty @p -Filter system.webServer/security/authentication/windowsAuthentication -Name enabled -Value True
+      Invoke-WebRequest http://localhost:8080/admin/ -UseBasicParsing        # 401 attendu
+      Invoke-WebRequest http://localhost:8080/admin/ -UseBasicParsing -UseDefaultCredentials
+      ```
+
+      Les sections d'authentification sont **verrouillées** au niveau serveur : les écrire dans le
+      `web.config` du dossier provoquerait une erreur 500.19. `-Location 'Intranet/admin'` crée une balise
+      `<location path="Intranet/admin">` dans `applicationHost.config`. L'authentification Windows négocie
+      Kerberos (si le nom est enregistré en SPN pour le compte du pool) ou NTLM. L'**autorisation**
+      (qui a le droit, une fois authentifié) se règle ensuite avec les règles d'autorisation d'URL ou les
+      permissions NTFS du dossier.
+    docs:
+      - title: Authentification Windows dans IIS
+        url: https://learn.microsoft.com/fr-fr/iis/configuration/system.webserver/security/authentication/windowsauthentication/
+    ci: true
+    checks:
+      - desc: Pour Intranet/admin, anonyme désactivé et Windows activé
+        run: |
+          [xml]$x = Get-Content C:\Windows\System32\inetsrv\config\applicationHost.config -ErrorAction Stop
+          $a = ($x.configuration.location | Where-Object path -eq 'Intranet/admin').'system.webServer'.security.authentication
+          [bool]$a -and $a.anonymousAuthentication.enabled -eq 'false' -and $a.windowsAuthentication.enabled -eq 'true'
+      - desc: Une requête anonyme sur /admin/ reçoit 401
+        run: |
+          try { Invoke-WebRequest http://localhost:8080/admin/ -UseBasicParsing -TimeoutSec 20 | Out-Null; $false }
+          catch { [int]$_.Exception.Response.StatusCode -eq 401 }
+    solution: |
+      Import-Module WebAdministration
+      $p = @{ PSPath = 'MACHINE/WEBROOT/APPHOST'; Location = 'Intranet/admin' }
+      Set-WebConfigurationProperty @p -Filter system.webServer/security/authentication/anonymousAuthentication -Name enabled -Value False
+      Set-WebConfigurationProperty @p -Filter system.webServer/security/authentication/windowsAuthentication -Name enabled -Value True

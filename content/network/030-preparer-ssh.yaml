@@ -1,0 +1,88 @@
+title: "Préparer SSH : domaine et clés RSA"
+level: debutant
+order: 30
+device: switch
+hostname: SW-RH
+tags: [ssh, rsa, sécurité]
+summary: Les prérequis cryptographiques de SSH, étape par étape.
+description: |
+  Avant d'ouvrir l'accès SSH (exercice suivant du niveau intermédiaire), le switch doit posséder
+  une paire de clés RSA. Leur nom est construit à partir du **nom d'hôte** et du **domaine**.
+
+  1. le nom d'hôte est déjà `SW-RH` ; configure le domaine `rh.tdm.local` ;
+  2. génère des clés RSA de **2048 bits** :
+     `crypto key generate rsa general-keys modulus 2048` ;
+  3. impose la version 2 du protocole : `ip ssh version 2`.
+
+  Vérifie avec `show ip ssh`.
+checks:
+  - desc: Domaine rh.tdm.local
+    expr: d.domain_name == "rh.tdm.local"
+  - desc: Clés RSA d'au moins 2048 bits
+    expr: (d.rsa_modulus or 0) >= 2048
+    hint: "crypto key generate rsa general-keys modulus 2048 (après ip domain-name)"
+  - desc: SSH version 2
+    expr: d.ssh_version == 2
+solution: |
+  configure terminal
+  ip domain-name rh.tdm.local
+  crypto key generate rsa general-keys modulus 2048
+  ip ssh version 2
+  end
+cours: |
+  ## Pourquoi SSH a besoin de clés
+
+  **SSH** (*Secure Shell*, TCP 22) chiffre toute la session d'administration, mots de passe
+  compris, contrairement à Telnet. À l'ouverture d'une connexion :
+
+  1. le client et le serveur négocient les algorithmes ;
+  2. le serveur prouve son identité avec sa **clé publique** (empreinte affichée au client lors de
+     la première connexion) ;
+  3. un échange **Diffie-Hellman** produit une clé de session symétrique (AES) qui chiffre la suite ;
+  4. l'utilisateur s'authentifie (mot de passe ou clé).
+
+  Sur IOS, la clé d'hôte est une paire **RSA** qu'il faut générer soi-même. Sans elle, le serveur
+  SSH ne démarre pas.
+
+  ### Les étapes
+
+  ```
+  Switch(config)# hostname SW-COMPTA
+  SW-COMPTA(config)# ip domain-name exemple.lan
+  SW-COMPTA(config)# crypto key generate rsa general-keys modulus 2048
+  The name for the keys will be: SW-COMPTA.exemple.lan
+  % Generating 2048 bit RSA keys, keys will be non-exportable...[OK]
+  %SSH-5-ENABLED: SSH 1.99 has been enabled
+  SW-COMPTA(config)# ip ssh version 2
+  SW-COMPTA# show ip ssh
+  SSH Enabled - version 2.0
+  ```
+
+  - le nom d'hôte ne doit pas être celui d'usine (`Switch`, `Router`) ;
+  - le **domaine** est obligatoire : la clé s'appelle `nom.domaine` ;
+  - « 1.99 » signifie que les versions 1 et 2 sont acceptées : `ip ssh version 2` interdit la
+    version 1, cassée depuis longtemps ;
+  - une taille de **768 bits minimum** est exigée pour SSHv2 ; 2048 bits est la valeur recommandée
+    aujourd'hui.
+
+  ### La suite (niveau intermédiaire)
+
+  Les clés ne suffisent pas : il faut encore un **compte local** (`username ... secret`), et sur
+  les lignes VTY `login local` et `transport input ssh`.
+
+  ### Pièges fréquents
+
+  - Changer le nom d'hôte ou le domaine **après** la génération : les clés gardent l'ancien nom ;
+    on les régénère (`crypto key generate rsa` avec la réponse `yes` pour remplacer).
+  - Générer une clé de 512 bits : SSHv2 refuse de démarrer.
+  - Supprimer les clés (`crypto key zeroize rsa`) désactive SSH immédiatement.
+
+  ### Pour le CCNA
+
+  L'ordre « hostname → domaine → clés → version 2 → utilisateur → VTY » est un grand classique
+  des TP et des questions de l'examen.
+docs:
+  - title: Wikipédia — Secure Shell
+    url: https://fr.wikipedia.org/wiki/Secure_Shell
+  - title: RFC 4253 — The Secure Shell (SSH) Transport Layer Protocol
+    url: https://www.rfc-editor.org/rfc/rfc4253

@@ -1,0 +1,176 @@
+title: Numéros de version comparables
+level: avance
+order: 15
+tags: [méthodes spéciales, functools, classes]
+summary: __eq__, __hash__ et total_ordering sur des versions sémantiques.
+description: |
+  Crée une classe `Version` construite à partir d'une chaîne `"MAJEUR.MINEUR.CORRECTIF"` avec
+  éventuellement un suffixe de pré-version : `"2.1.0-rc1"`.
+
+  - 1 à 3 composantes numériques ; celles qui manquent valent 0 (`"1.2"` est la même version que `"1.2.0"`) ;
+  - une chaîne invalide (`""`, `"1.x"`, `"1.2.3.4"`, `"1..2"`, `"1.0-"`) lève `ValueError` ;
+  - comparaison **numérique** composante par composante (`1.10.0 > 1.9.0`) ;
+  - à numéros égaux, une pré-version est **plus petite** que la version finale
+    (`1.0.0-rc1 < 1.0.0`), et deux pré-versions se comparent par ordre alphabétique de leur suffixe ;
+  - `==`, `!=`, `<`, `<=`, `>`, `>=` fonctionnent : définis `__eq__` et `__lt__`, puis laisse
+    `functools.total_ordering` générer le reste ;
+  - comparer avec autre chose qu'une `Version` renvoie `NotImplemented` (donc `==` donne `False`
+    et `<` lève `TypeError`) ;
+  - `hash` est cohérent avec `==` (utilisable dans un `set` ou comme clé de `dict`) ;
+  - `str(v)` donne la forme normalisée (`"1.2.0"`, `"1.0.0-rc1"`) et `repr(v)` donne `Version('1.2.0')`.
+
+  ```python
+  sorted(map(Version, ["1.10", "1.9.3", "1.0.0-beta", "1.0"]))
+  # [Version('1.0.0-beta'), Version('1.0.0'), Version('1.9.3'), Version('1.10.0')]
+  ```
+starter: |
+  import functools
+
+
+  class Version:
+      def __init__(self, texte):
+          pass
+tests: |
+  V = lambda t: solution.Version(t)
+
+  def test_numerique():
+      "Comparaison numérique et non textuelle"
+      assert V("1.10.0") > V("1.9.0"), "1.10.0 doit être > 1.9.0"
+      assert V("2.0") > V("1.99.99")
+      assert V("0.0.1") < V("0.1")
+
+  def test_egalite():
+      "Composantes manquantes = 0"
+      assert V("1.2") == V("1.2.0") and V("3") == V("3.0.0")
+      assert V("1.2") != V("1.2.1")
+
+  def test_prerelease():
+      "Les pré-versions passent avant la version finale"
+      assert V("1.0.0-rc1") < V("1.0.0")
+      assert V("1.0.0-alpha") < V("1.0.0-beta") < V("1.0.0-rc1")
+      assert V("1.0.0-rc1") > V("0.9.9")
+
+  def test_tous_operateurs():
+      "Les six opérateurs fonctionnent"
+      a, b = V("1.0"), V("1.1")
+      assert a < b and a <= b and b > a and b >= a and a != b and a <= V("1.0.0") and a >= V("1")
+
+  def test_tri():
+      "Tri d'une liste de versions"
+      r = [str(v) for v in sorted(map(solution.Version, ["1.10", "1.9.3", "1.0.0-beta", "1.0"]))]
+      assert r == ["1.0.0-beta", "1.0.0", "1.9.3", "1.10.0"], f"obtenu {r}"
+
+  def test_hash():
+      "hash cohérent avec =="
+      assert hash(V("1.2")) == hash(V("1.2.0"))
+      assert len({V("1.2"), V("1.2.0"), V("1.2.0-rc1")}) == 2
+
+  def test_repr_str():
+      "str et repr normalisés"
+      assert str(V("1.2")) == "1.2.0" and str(V("4.0.1-rc2")) == "4.0.1-rc2"
+      assert repr(V("1")) == "Version('1.0.0')"
+
+  def test_invalide():
+      "Chaînes invalides refusées"
+      for texte in ["", "1.x", "1.2.3.4", "1..2", "abc", "1.0-", "-1.0"]:
+          try:
+              solution.Version(texte)
+          except ValueError:
+              continue
+          raise AssertionError(f"Version({texte!r}) aurait dû lever ValueError")
+
+  def test_autre_type():
+      "Comparaison avec un autre type"
+      assert (V("1.0") == "1.0") is False, "une Version n'est pas égale à une chaîne"
+      try:
+          V("1.0") < "2.0"
+      except TypeError:
+          pass
+      else:
+          raise AssertionError("< avec une chaîne doit lever TypeError")
+solution: |
+  import functools
+  import re
+
+  MOTIF = re.compile(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-(\w+))?")
+
+
+  @functools.total_ordering
+  class Version:
+      def __init__(self, texte):
+          m = MOTIF.fullmatch(texte)
+          if not m:
+              raise ValueError(f"version invalide : {texte!r}")
+          self.numeros = tuple(int(n or 0) for n in m.groups()[:3])
+          self.pre = m.group(4)
+
+      def _cle(self):
+          # (numéros, 0, suffixe) pour une pré-version, (numéros, 1, "") pour une version finale
+          return (self.numeros, 0, self.pre) if self.pre else (self.numeros, 1, "")
+
+      def __eq__(self, autre):
+          if not isinstance(autre, Version):
+              return NotImplemented
+          return self._cle() == autre._cle()
+
+      def __lt__(self, autre):
+          if not isinstance(autre, Version):
+              return NotImplemented
+          return self._cle() < autre._cle()
+
+      def __hash__(self):
+          return hash(self._cle())
+
+      def __str__(self):
+          base = ".".join(map(str, self.numeros))
+          return f"{base}-{self.pre}" if self.pre else base
+
+      def __repr__(self):
+          return f"Version('{self}')"
+cours: |
+  ## Comparer des versions : pas des chaînes !
+
+  `"1.10.0" < "1.9.0"` est **vrai** en comparaison de chaînes (caractère `1` < `9`).
+  Il faut comparer numériquement, composante par composante. Les **tuples** se comparent
+  justement ainsi (ordre lexicographique) :
+
+  ```python
+  (1, 10, 0) > (1, 9, 0)    # True
+  (2, 0) < (2, 0, 1)        # True : le plus court est plus petit à préfixe égal
+  ```
+
+  D'où l'idée : construire une **clé de comparaison** sous forme de tuple, et comparer les
+  clés. Pour qu'une pré-version passe avant la version finale à numéros égaux, on ajoute à
+  la clé un élément qui ordonne ces deux cas (par exemple un booléen ou un 0/1, puis le
+  suffixe).
+
+  ## `total_ordering`
+
+  Écrire les six méthodes de comparaison est fastidieux et source d'incohérences.
+  `@functools.total_ordering` génère `__le__`, `__gt__` et `__ge__` à partir de `__eq__` et
+  d'**une** méthode d'ordre (`__lt__`).
+
+  ## `NotImplemented`
+
+  Face à un type inconnu, une méthode de comparaison doit **renvoyer** `NotImplemented`.
+  Python essaie alors l'opération réfléchie sur l'autre objet ; si personne ne sait faire,
+  `==` retombe sur la comparaison d'identité (donc `False`) et `<` lève `TypeError`.
+
+  ## `__hash__` et `__eq__`
+
+  Règle : deux objets égaux doivent avoir le même hash. Définir `__eq__` met
+  automatiquement `__hash__` à `None` (objet non hachable). Pour pouvoir utiliser des
+  versions dans un `set` ou comme clés, définis `__hash__` en hachant **la même clé**
+  que celle qui sert à `__eq__` (ainsi `"1.2"` et `"1.2.0"` ont le même hash).
+
+  ## Valider le format
+
+  Une regex avec `fullmatch` décrit précisément le format accepté (1 à 3 nombres séparés
+  par des points, suffixe optionnel non vide après un tiret) et refuse tout le reste.
+
+  En production : `packaging.version.Version` implémente la norme PEP 440.
+docs:
+  - title: functools.total_ordering
+    url: https://docs.python.org/fr/3/library/functools.html#functools.total_ordering
+  - title: Gestion sémantique de version (semver.org)
+    url: https://semver.org/lang/fr/

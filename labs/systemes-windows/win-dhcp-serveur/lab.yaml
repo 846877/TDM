@@ -1,0 +1,402 @@
+title: Serveur DHCP Windows
+level: intermediaire
+order: 5
+tags: [windows server, dhcp, étendue, exclusion, réservation, options, dns dynamique, filtrage mac]
+summary: Distribuer automatiquement les adresses du siège - rôle DHCP autorisé dans AD, étendue, exclusions, options, bail et réservation d'un poste, DNS dynamique, filtrage, sauvegarde.
+vagrant: bundled
+machine: dc01
+description: |
+  **Contexte.** Jusqu'ici, chaque poste d'*Ateliers Durand* était configuré à la main : doublons d'adresses,
+  mauvais DNS, postes qui ne trouvent pas le domaine. Le plan d'adressage est dans
+  `C:\Admin\plan-adressage.txt` : le contrôleur de domaine `SRV-DC01` va devenir **serveur DHCP**.
+
+  **Machines** (prévoir **8 Go de RAM libres**) :
+
+  | VM | Système | Adresse LAN | Rôle |
+  |----|---------|-------------|------|
+  | `SRV-DC01` (terminal) | Windows Server 2022 (2 Go) | 192.168.10.10 (fixe) | contrôleur de domaine, futur DHCP |
+  | `PC01` | Windows 11 (3 Go) | **en DHCP**, pour l'instant `169.254.x.x` | poste client |
+
+  Le réseau du lab est un réseau interne VirtualBox sans autre serveur DHCP : celui que tu vas installer
+  sera le seul. Un poste en APIPA (`169.254.x.x`) retente une demande DHCP toutes les **5 minutes**.
+cours: |
+  ## Le dialogue DHCP (DORA)
+
+  | Étape | Message | Émetteur → destinataire |
+  |-------|---------|-------------------------|
+  | **D**iscover | « Y a-t-il un serveur DHCP ? » | client → diffusion (port UDP 67) |
+  | **O**ffer | « Je te propose 192.168.10.110 » | serveur → client (port 68) |
+  | **R**equest | « J'accepte l'offre de ce serveur » | client → diffusion |
+  | **A**ck | « Bail confirmé pour 8 jours » | serveur → client |
+
+  Le client tente de **renouveler** à 50 % de la durée du bail (T1) auprès du même serveur, puis à 87,5 %
+  (T2) auprès de n'importe quel serveur. Sans réponse à expiration, il abandonne l'adresse. Sans aucun
+  serveur, Windows s'attribue une adresse **APIPA** `169.254.x.x` : le symptôme typique d'un DHCP
+  injoignable. Les messages étant des **diffusions**, ils ne traversent pas les routeurs : pour servir
+  d'autres réseaux, on configure un **agent de relais** (*IP helper*) sur le routeur.
+
+  ## Les objets du serveur DHCP Windows
+
+  | Objet | Rôle |
+  |-------|------|
+  | **Étendue** (*scope*) | plage d'adresses distribuées sur un réseau, avec masque et durée du bail |
+  | **Plage d'exclusion** | adresses de l'étendue jamais distribuées (équipements à adresse fixe) |
+  | **Réservation** | adresse toujours donnée au même client, identifié par son adresse **MAC** |
+  | **Options** | paramètres envoyés avec l'adresse : 003 routeur, 006 serveurs DNS, 015 suffixe DNS... |
+  | **Bail** | attribution en cours : adresse, client, expiration |
+  | **Filtres** | listes d'adresses MAC autorisées ou refusées |
+
+  Les options se définissent au niveau du **serveur** (valables pour toutes les étendues), de l'**étendue**,
+  ou de la **réservation** : le niveau le plus précis gagne.
+
+  ## Particularités en domaine
+
+  - Un serveur DHCP Windows membre d'un domaine doit être **autorisé** dans Active Directory
+    (`Add-DhcpServerInDC`) : sinon le service refuse de distribuer des adresses. C'est une protection
+    contre les serveurs DHCP « sauvages ».
+  - Le DHCP peut **inscrire les clients dans le DNS** (enregistrements A et PTR) à leur place, et les
+    supprimer à l'expiration du bail : utile pour les clients qui ne savent pas le faire.
+  - Le Gestionnaire de serveur affiche une notification « Configuration post-déploiement » tant que les
+    groupes de sécurité locaux (*Administrateurs DHCP*, *Utilisateurs DHCP*) ne sont pas créés.
+
+  ## Disponibilité
+
+  Le DHCP est un service critique : sans lui, un poste qui redémarre n'a plus de réseau. Windows Server
+  propose le **basculement DHCP** (deux serveurs partagent une étendue en équilibrage de charge ou en
+  secours), et on **sauvegarde** la base (`Backup-DhcpServer`, automatique toutes les heures dans
+  `%SystemRoot%\System32\dhcp\backup`) ou on l'exporte en XML (`Export-DhcpServer`) pour migrer.
+
+  ## Les commandes
+
+  `Install-WindowsFeature DHCP`, `Add-DhcpServerInDC`, `Add-DhcpServerv4Scope`,
+  `Add-DhcpServerv4ExclusionRange`, `Set-DhcpServerv4OptionValue`, `Get-DhcpServerv4Lease`,
+  `Add-DhcpServerv4Reservation`, `Set-DhcpServerv4DnsSetting`, `Add-DhcpServerv4Filter`, et côté client
+  `ipconfig /release`, `ipconfig /renew`, `ipconfig /all`. La console graphique est `dhcpmgmt.msc`.
+docs:
+  - title: Protocole DHCP (Dynamic Host Configuration Protocol) pour Windows Server
+    url: https://learn.microsoft.com/fr-fr/windows-server/networking/technologies/dhcp/dhcp-top
+  - title: Déployer DHCP à l'aide de Windows PowerShell
+    url: https://learn.microsoft.com/fr-fr/windows-server/networking/technologies/dhcp/dhcp-deploy-wps
+  - title: Module DhcpServer (PowerShell)
+    url: https://learn.microsoft.com/fr-fr/powershell/module/dhcpserver/
+exercises:
+  - id: win-dhcp-role
+    title: Installer le rôle DHCP
+    description: |
+      Installe le rôle **Serveur DHCP** avec ses outils d'administration (console et module PowerShell), et
+      vérifie que le service `DHCPServer` tourne et démarre automatiquement.
+    hint: Install-WindowsFeature DHCP -IncludeManagementTools ; Get-Service DHCPServer
+    cours: |
+      ```powershell
+      Install-WindowsFeature DHCP -IncludeManagementTools
+      Get-Service DHCPServer | Select-Object Status, StartType
+      ```
+
+      Le rôle installe le service `DHCPServer`, la console `dhcpmgmt.msc` et le module PowerShell
+      `DhcpServer` (avec `-IncludeManagementTools`). Il ne distribue encore rien : aucune étendue n'existe, et
+      en domaine le serveur n'est pas autorisé. Un serveur DHCP doit avoir une **adresse IP fixe** sur le
+      réseau qu'il sert : c'est le cas ici (`192.168.10.10`), sinon l'installation l'aurait signalé. Le
+      pare-feu Windows ouvre automatiquement les règles « Serveur DHCP » (UDP 67).
+    ci: true
+    checks:
+      - desc: Le rôle DHCP et ses outils sont installés
+        run: |
+          (Get-WindowsFeature DHCP).Installed -and (Get-WindowsFeature RSAT-DHCP).Installed
+      - desc: Le service DHCPServer tourne en démarrage automatique
+        run: |
+          $s = Get-Service DHCPServer
+          $s.Status -eq 'Running' -and $s.StartType -eq 'Automatic'
+    solution: |
+      Install-WindowsFeature DHCP -IncludeManagementTools | Out-Null
+      Set-Service DHCPServer -StartupType Automatic
+      Start-Service DHCPServer
+
+  - id: win-dhcp-autoriser
+    title: Autoriser le serveur dans Active Directory
+    description: |
+      Termine la configuration post-déploiement : crée les **groupes de sécurité DHCP**, **autorise** le
+      serveur `srv-dc01.durand.lan` (`192.168.10.10`) dans Active Directory, puis signale au Gestionnaire de
+      serveur que la configuration est terminée et redémarre le service.
+    hint: netsh dhcp add securitygroups ; Add-DhcpServerInDC -DnsName srv-dc01.durand.lan -IPAddress 192.168.10.10 ; Set-ItemProperty HKLM:\SOFTWARE\Microsoft\ServerManager\Roles\12 -Name ConfigurationState -Value 2 ; Restart-Service DHCPServer
+    cours: |
+      ```powershell
+      netsh dhcp add securitygroups
+      Add-DhcpServerInDC -DnsName srv-dc01.durand.lan -IPAddress 192.168.10.10
+      Get-DhcpServerInDC
+      Set-ItemProperty HKLM:\SOFTWARE\Microsoft\ServerManager\Roles\12 -Name ConfigurationState -Value 2
+      Restart-Service DHCPServer
+      ```
+
+      L'autorisation inscrit le serveur dans la partition de configuration de la forêt
+      (`CN=NetServices,CN=Services,CN=Configuration,...`). Au démarrage, un serveur DHCP Windows membre du
+      domaine vérifie qu'il y figure ; sinon il ne répond à aucun client (événement 1046). Seuls les
+      administrateurs de l'entreprise peuvent autoriser un serveur. Les groupes locaux *Administrateurs DHCP*
+      et *Utilisateurs DHCP* permettent de déléguer la gestion ou la consultation du DHCP sans donner
+      d'autres droits. La clé `ConfigurationState` fait disparaître le drapeau jaune du Gestionnaire de serveur.
+    checks:
+      - desc: SRV-DC01 est autorisé dans Active Directory
+        run: |
+          [bool](Get-DhcpServerInDC | Where-Object IPAddress -eq '192.168.10.10')
+      - desc: Les groupes locaux DHCP Administrators et DHCP Users existent
+        run: |
+          [bool](Get-ADGroup -Filter "Name -eq 'DHCP Administrators'") -and [bool](Get-ADGroup -Filter "Name -eq 'DHCP Users'")
+      - desc: Le Gestionnaire de serveur considère la configuration comme terminée
+        run: |
+          (Get-ItemProperty HKLM:\SOFTWARE\Microsoft\ServerManager\Roles\12).ConfigurationState -eq 2
+    solution: |
+      netsh dhcp add securitygroups | Out-Null
+      Add-DhcpServerInDC -DnsName srv-dc01.durand.lan -IPAddress 192.168.10.10
+      Set-ItemProperty HKLM:\SOFTWARE\Microsoft\ServerManager\Roles\12 -Name ConfigurationState -Value 2
+      Restart-Service DHCPServer
+
+  - id: win-dhcp-etendue
+    title: Créer l'étendue du siège
+    description: |
+      Crée l'étendue `LAN Siège` : plage `192.168.10.100` à `192.168.10.199`, masque `255.255.255.0`, bail de
+      **8 jours**, description `Postes du siège`, **active**.
+    hint: Add-DhcpServerv4Scope -Name 'LAN Siège' -StartRange 192.168.10.100 -EndRange 192.168.10.199 -SubnetMask 255.255.255.0 -LeaseDuration 8.00:00:00 -Description 'Postes du siège' -State Active
+    cours: |
+      ```powershell
+      Add-DhcpServerv4Scope -Name 'LAN Siège' -StartRange 192.168.10.100 -EndRange 192.168.10.199 `
+          -SubnetMask 255.255.255.0 -LeaseDuration 8.00:00:00 -Description 'Postes du siège' -State Active
+      Get-DhcpServerv4Scope
+      ```
+
+      L'**identifiant** de l'étendue est l'adresse du réseau (`192.168.10.0`) : c'est lui qu'attendent les
+      autres cmdlets (`-ScopeId`). La durée du bail est un compromis : courte (quelques heures) pour un
+      réseau invité où les appareils défilent, longue (8 jours, la valeur par défaut) pour des postes fixes,
+      ce qui limite le trafic et laisse le temps de réparer un serveur en panne. Le serveur ne distribue que
+      sur un réseau où il possède une adresse, ou via un agent de relais.
+    ci: true
+    checks:
+      - desc: L'étendue 192.168.10.0 couvre .100 à .199 en /24
+        run: |
+          $s = Get-DhcpServerv4Scope -ScopeId 192.168.10.0
+          $s.StartRange -eq '192.168.10.100' -and $s.EndRange -eq '192.168.10.199' -and $s.SubnetMask -eq '255.255.255.0'
+      - desc: Nom LAN Siège, bail de 8 jours, étendue active
+        run: |
+          $s = Get-DhcpServerv4Scope -ScopeId 192.168.10.0
+          $s.Name -eq 'LAN Siège' -and $s.LeaseDuration -eq [timespan]'8.00:00:00' -and $s.State -eq 'Active'
+    solution: |
+      Add-DhcpServerv4Scope -Name 'LAN Siège' -StartRange 192.168.10.100 -EndRange 192.168.10.199 -SubnetMask 255.255.255.0 -LeaseDuration 8.00:00:00 -Description 'Postes du siège' -State Active
+
+  - id: win-dhcp-exclusion
+    title: Protéger les adresses des imprimantes
+    description: |
+      Les imprimantes ont des adresses fixes de `192.168.10.100` à `192.168.10.109` (voir le plan
+      d'adressage). Exclus cette plage de l'étendue pour éviter tout conflit.
+    hint: Add-DhcpServerv4ExclusionRange -ScopeId 192.168.10.0 -StartRange 192.168.10.100 -EndRange 192.168.10.109
+    cours: |
+      ```powershell
+      Add-DhcpServerv4ExclusionRange -ScopeId 192.168.10.0 -StartRange 192.168.10.100 -EndRange 192.168.10.109
+      Get-DhcpServerv4ExclusionRange -ScopeId 192.168.10.0
+      ```
+
+      Une adresse fixe configurée sur un équipement **dans** la plage d'une étendue finira tôt ou tard en
+      conflit avec un poste qui reçoit la même adresse du DHCP. Deux solutions : exclure la plage (les
+      équipements gardent leur configuration manuelle), ou créer des **réservations** (l'adresse est
+      distribuée par le DHCP, toujours la même). Le serveur DHCP Windows peut aussi tester l'adresse par
+      ping avant de la proposer (*détection de conflits*, `Set-DhcpServerSetting -ConflictDetectionAttempts`),
+      au prix d'un délai.
+    ci: true
+    checks:
+      - desc: La plage .100 à .109 est exclue
+        run: |
+          [bool](Get-DhcpServerv4ExclusionRange -ScopeId 192.168.10.0 | Where-Object { $_.StartRange -eq '192.168.10.100' -and $_.EndRange -eq '192.168.10.109' })
+    solution: |
+      Add-DhcpServerv4ExclusionRange -ScopeId 192.168.10.0 -StartRange 192.168.10.100 -EndRange 192.168.10.109
+
+  - id: win-dhcp-options
+    title: Les options de l'étendue
+    description: |
+      Configure les options de l'étendue `192.168.10.0` : routeur (003) `192.168.10.254`, serveur DNS (006)
+      `192.168.10.10`, nom de domaine DNS (015) `durand.lan`.
+    hint: Set-DhcpServerv4OptionValue -ScopeId 192.168.10.0 -Router 192.168.10.254 -DnsServer 192.168.10.10 -DnsDomain durand.lan -Force
+    cours: |
+      ```powershell
+      Set-DhcpServerv4OptionValue -ScopeId 192.168.10.0 -Router 192.168.10.254 `
+          -DnsServer 192.168.10.10 -DnsDomain durand.lan -Force
+      Get-DhcpServerv4OptionValue -ScopeId 192.168.10.0
+      ```
+
+      Une adresse sans options ne sert pas à grand-chose : sans **routeur**, pas d'Internet ; sans le bon
+      **DNS**, pas de domaine. L'option 006 doit pointer vers les contrôleurs de domaine, jamais vers un DNS
+      public. `Set-DhcpServerv4OptionValue` vérifie par défaut que le serveur DNS indiqué répond ; `-Force`
+      saute ce test (utile pour une passerelle `.254` qui n'existe pas dans ce lab). Sans `-ScopeId`, les
+      options s'appliquent au niveau **serveur**, pour toutes les étendues.
+    ci: true
+    checks:
+      - desc: Option 003 routeur = 192.168.10.254
+        run: |
+          (Get-DhcpServerv4OptionValue -ScopeId 192.168.10.0 -OptionId 3).Value -contains '192.168.10.254'
+      - desc: Option 006 DNS = 192.168.10.10 et option 015 = durand.lan
+        run: |
+          ((Get-DhcpServerv4OptionValue -ScopeId 192.168.10.0 -OptionId 6).Value -contains '192.168.10.10') -and ((Get-DhcpServerv4OptionValue -ScopeId 192.168.10.0 -OptionId 15).Value -contains 'durand.lan')
+    solution: |
+      Set-DhcpServerv4OptionValue -ScopeId 192.168.10.0 -Router 192.168.10.254 -DnsServer 192.168.10.10 -DnsDomain durand.lan -Force
+
+  - id: win-dhcp-bail
+    title: Le premier bail
+    description: |
+      PC01 doit maintenant obtenir une adresse (patiente jusqu'à 5 minutes, il retente tout seul). Trouve son
+      bail sur le serveur et écris **seulement son adresse IP** dans `C:\Admin\bail-pc01.txt`.
+    hint: Get-DhcpServerv4Lease -ScopeId 192.168.10.0 | Where-Object HostName -like 'PC01*' ; ($l.IPAddress.IPAddressToString) | Set-Content C:\Admin\bail-pc01.txt
+    cours: |
+      ```powershell
+      Get-DhcpServerv4Lease -ScopeId 192.168.10.0 | Format-Table IPAddress, ClientId, HostName, AddressState, LeaseExpiryTime
+      $bail = Get-DhcpServerv4Lease -ScopeId 192.168.10.0 | Where-Object HostName -like 'PC01*'
+      $bail.IPAddress.IPAddressToString | Set-Content C:\Admin\bail-pc01.txt
+      ```
+
+      La colonne `ClientId` contient l'**adresse MAC** du client : c'est l'identifiant qui servira pour une
+      réservation ou un filtre. `HostName` est le nom envoyé par le client (option 12). Si rien n'apparaît :
+      le service tourne-t-il ? le serveur est-il autorisé ? l'étendue est-elle active ? les journaux
+      `C:\Windows\System32\dhcp\DhcpSrvLog-*.log` montrent chaque DISCOVER/OFFER/REQUEST/ACK. Sur le poste,
+      `ipconfig /renew` déclenche une demande immédiate.
+    checks:
+      - desc: PC01 a reçu une adresse en DHCP dans l'étendue
+        machine: pc01
+        run: |
+          $ip = Get-NetIPAddress -InterfaceAlias LAN -AddressFamily IPv4
+          $ip.PrefixOrigin -eq 'Dhcp' -and $ip.IPAddress -like '192.168.10.*'
+      - desc: C:\Admin\bail-pc01.txt contient l'adresse du bail de PC01
+        run: |
+          $bail = Get-DhcpServerv4Lease -ScopeId 192.168.10.0 | Where-Object HostName -like 'PC01*' | Select-Object -First 1
+          [bool]$bail -and (Get-Content C:\Admin\bail-pc01.txt -TotalCount 1).Trim() -eq $bail.IPAddress.IPAddressToString
+    solution: |
+      $bail = Get-DhcpServerv4Lease -ScopeId 192.168.10.0 | Where-Object HostName -like 'PC01*' | Select-Object -First 1
+      $bail.IPAddress.IPAddressToString | Set-Content C:\Admin\bail-pc01.txt
+
+  - id: win-dhcp-reservation
+    title: Une adresse fixe par réservation
+    description: |
+      Le poste de Marie doit toujours avoir l'adresse `192.168.10.150`. Crée une **réservation** nommée
+      `PC01` pour l'adresse MAC de PC01, puis fais renouveler l'adresse du poste pour qu'il la prenne.
+    hint: Add-DhcpServerv4Reservation -ScopeId 192.168.10.0 -IPAddress 192.168.10.150 -ClientId <MAC du bail> -Name PC01 ; Remove-DhcpServerv4Lease puis, sur PC01, ipconfig /renew
+    cours: |
+      ```powershell
+      $bail = Get-DhcpServerv4Lease -ScopeId 192.168.10.0 | Where-Object HostName -like 'PC01*'
+      Add-DhcpServerv4Reservation -ScopeId 192.168.10.0 -IPAddress 192.168.10.150 -ClientId $bail.ClientId `
+          -Name PC01 -Description 'Poste de Marie Dupont'
+      # renouvellement depuis le serveur (PC01 est hors domaine : identifiants locaux)
+      Set-Item WSMan:\localhost\Client\TrustedHosts -Value '192.168.10.*' -Force
+      Invoke-Command -ComputerName $bail.IPAddress.IPAddressToString -Credential PC01\vagrant {
+          ipconfig /release LAN; ipconfig /renew LAN } -ErrorAction SilentlyContinue
+      ```
+
+      Une réservation garde les avantages du DHCP (options centralisées, inventaire) avec une adresse
+      prévisible : idéale pour les imprimantes, les bornes, les postes à qui un pare-feu accorde un accès.
+      Le client ne change d'adresse qu'à sa **prochaine demande** : redémarrage, `ipconfig /renew`, ou
+      expiration du bail. La connexion `Invoke-Command` est coupée par le changement d'adresse : c'est normal.
+    checks:
+      - desc: La réservation 192.168.10.150 correspond à la MAC de PC01
+        run: |
+          $r = Get-DhcpServerv4Reservation -ScopeId 192.168.10.0 | Where-Object IPAddress -eq '192.168.10.150'
+          [bool]$r -and $r.Name -eq 'PC01' -and $r.ClientId -like '08-00-27-aa-*'
+      - desc: PC01 utilise désormais 192.168.10.150
+        machine: pc01
+        run: |
+          [bool](Get-NetIPAddress -InterfaceAlias LAN -AddressFamily IPv4 -IPAddress 192.168.10.150 -ErrorAction SilentlyContinue)
+    solution: |
+      $bail = Get-DhcpServerv4Lease -ScopeId 192.168.10.0 | Where-Object HostName -like 'PC01*' | Select-Object -First 1
+      Add-DhcpServerv4Reservation -ScopeId 192.168.10.0 -IPAddress 192.168.10.150 -ClientId $bail.ClientId -Name PC01 -Description 'Poste de Marie Dupont'
+      Set-Item WSMan:\localhost\Client\TrustedHosts -Value '192.168.10.*' -Force
+      $cred = New-Object PSCredential('PC01\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force))
+      Invoke-Command -ComputerName $bail.IPAddress.IPAddressToString -Credential $cred { ipconfig /release LAN; ipconfig /renew LAN } -ErrorAction SilentlyContinue
+
+  - id: win-dhcp-dns
+    title: Le DHCP inscrit les clients dans le DNS
+    description: |
+      Configure le serveur pour qu'il mette **toujours** à jour les enregistrements A et PTR de ses clients
+      dans le DNS, qu'il les **supprime** à l'expiration du bail, et qu'il le fasse aussi pour les clients qui
+      ne le demandent pas (anciens systèmes, imprimantes).
+    hint: Set-DhcpServerv4DnsSetting -DynamicUpdates Always -DeleteDnsRROnLeaseExpiry $true -UpdateDnsRRForOlderClients $true
+    cours: |
+      ```powershell
+      Set-DhcpServerv4DnsSetting -DynamicUpdates Always -DeleteDnsRROnLeaseExpiry $true -UpdateDnsRRForOlderClients $true
+      Get-DhcpServerv4DnsSetting
+      ```
+
+      Par défaut, un poste Windows inscrit lui-même son enregistrement A, et le DHCP inscrit le PTR. Avec
+      `Always`, c'est le serveur DHCP qui gère les deux : le DNS reste propre quand des appareils partent sans
+      prévenir, grâce à la suppression à l'expiration du bail. En zone à mises à jour **sécurisées**, les
+      enregistrements créés par le DHCP lui appartiennent : si plusieurs serveurs DHCP se partagent le
+      travail, on leur donne un compte dédié (`Set-DhcpServerDnsCredential`) pour qu'ils puissent modifier les
+      enregistrements les uns des autres.
+    ci: true
+    checks:
+      - desc: Mises à jour DNS toujours effectuées, y compris pour les anciens clients
+        run: |
+          $d = Get-DhcpServerv4DnsSetting
+          $d.DynamicUpdates -eq 'Always' -and $d.UpdateDnsRRForOlderClients
+      - desc: Les enregistrements sont supprimés à l'expiration du bail
+        run: |
+          (Get-DhcpServerv4DnsSetting).DeleteDnsRROnLeaseExpiry
+    solution: |
+      Set-DhcpServerv4DnsSetting -DynamicUpdates Always -DeleteDnsRROnLeaseExpiry $true -UpdateDnsRRForOlderClients $true
+
+  - id: win-dhcp-filtre
+    title: Refuser un appareil indésirable
+    description: |
+      Un ordinateur personnel (MAC `08-00-27-00-BA-D0`) se branche régulièrement sur le réseau de l'atelier.
+      Ajoute-le à la **liste de refus** du serveur DHCP avec la description `PC personnel non autorisé`, et
+      **active** la liste de refus.
+    hint: Add-DhcpServerv4Filter -List Deny -MacAddress 08-00-27-00-BA-D0 -Description 'PC personnel non autorisé' ; Set-DhcpServerv4FilterList -Deny $true
+    cours: |
+      ```powershell
+      Add-DhcpServerv4Filter -List Deny -MacAddress 08-00-27-00-BA-D0 -Description 'PC personnel non autorisé'
+      Set-DhcpServerv4FilterList -Deny $true
+      Get-DhcpServerv4Filter
+      Get-DhcpServerv4FilterList
+      ```
+
+      Le filtrage MAC du DHCP n'est **pas** une mesure de sécurité forte : une adresse MAC se change en deux
+      clics, et un appareil peut toujours se configurer une adresse IP fixe. Il dissuade les branchements
+      désinvoltes et évite qu'un appareil inconnu consomme des baux. La vraie protection d'un réseau filaire
+      est l'authentification **802.1X** sur les commutateurs (avec un serveur NPS). La liste d'**autorisation**
+      inverse la logique : seuls les appareils inscrits reçoivent une adresse, ce qui demande de tenir
+      l'inventaire à jour.
+    ci: true
+    checks:
+      - desc: La MAC 08-00-27-00-BA-D0 est dans la liste de refus
+        run: |
+          [bool](Get-DhcpServerv4Filter -List Deny | Where-Object MacAddress -eq '08-00-27-00-ba-d0')
+      - desc: La liste de refus est activée
+        run: |
+          (Get-DhcpServerv4FilterList).Deny
+    solution: |
+      Add-DhcpServerv4Filter -List Deny -MacAddress 08-00-27-00-BA-D0 -Description 'PC personnel non autorisé'
+      Set-DhcpServerv4FilterList -Deny $true | Out-Null
+
+  - id: win-dhcp-sauvegarde
+    title: Sauvegarder et exporter la configuration
+    description: |
+      Sauvegarde la base DHCP dans `C:\Admin\DHCP-Sauvegarde`, puis exporte toute la configuration du serveur
+      **avec les baux** dans `C:\Admin\dhcp-export.xml` (pour une future migration).
+    hint: Backup-DhcpServer -Path C:\Admin\DHCP-Sauvegarde ; Export-DhcpServer -File C:\Admin\dhcp-export.xml -Leases
+    cours: |
+      ```powershell
+      Backup-DhcpServer -Path C:\Admin\DHCP-Sauvegarde
+      Export-DhcpServer -File C:\Admin\dhcp-export.xml -Leases -Force
+      # restauration / migration :
+      # Restore-DhcpServer -Path C:\Admin\DHCP-Sauvegarde
+      # Import-DhcpServer -File dhcp-export.xml -BackupPath C:\Temp\dhcp -Leases
+      ```
+
+      `Backup-DhcpServer` copie la base JET du service (`dhcp.mdb`) et sa configuration : on la restaure sur le
+      **même** serveur après une corruption. `Export-DhcpServer` produit un XML lisible avec étendues,
+      exclusions, réservations, options, filtres et, avec `-Leases`, les baux en cours : c'est l'outil de
+      **migration** vers un nouveau serveur, sans que les postes changent d'adresse. Le service sauvegarde
+      aussi la base toutes les 60 minutes dans `C:\Windows\System32\dhcp\backup`, mais sur le même disque.
+    ci: true
+    checks:
+      - desc: La sauvegarde contient la base DHCP
+        run: |
+          [bool](Get-ChildItem C:\Admin\DHCP-Sauvegarde -Recurse -Filter dhcp.mdb -ErrorAction SilentlyContinue)
+      - desc: L'export XML contient l'étendue 192.168.10.0
+        run: |
+          [xml]$x = Get-Content C:\Admin\dhcp-export.xml -Raw
+          [bool]($x.DHCPServer.IPv4.Scopes.Scope | Where-Object ScopeId -eq '192.168.10.0')
+    solution: |
+      Backup-DhcpServer -Path C:\Admin\DHCP-Sauvegarde
+      Export-DhcpServer -File C:\Admin\dhcp-export.xml -Leases -Force

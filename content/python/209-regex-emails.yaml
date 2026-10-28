@@ -1,0 +1,101 @@
+title: Expressions régulières
+level: avance
+order: 9
+tags: [regex, re]
+summary: Extraire des informations d'un texte.
+description: |
+  Avec le module `re`, écris :
+
+  - `extraire_emails(texte)` : la liste des adresses e-mail du texte, dans l'ordre, en minuscules ;
+    une adresse est `partie@domaine.ext` (lettres, chiffres, `.`, `_`, `-`, `+` avant le `@`,
+    domaine avec au moins un point et une extension de 2 lettres ou plus).
+  - `extraire_ipv4(texte)` : la liste des adresses IPv4 **valides** (chaque octet entre 0 et 255).
+starter: |
+  import re
+
+
+  def extraire_emails(texte):
+      pass
+
+
+  def extraire_ipv4(texte):
+      pass
+tests: |
+  def test_emails():
+      "Plusieurs adresses"
+      texte = "Contact : Alice.Martin@Exemple.fr, bob+test@mail.co.uk ou admin@local (invalide)."
+      assert solution.extraire_emails(texte) == ["alice.martin@exemple.fr", "bob+test@mail.co.uk"]
+
+  def test_sans_email():
+      "Aucune adresse"
+      assert solution.extraire_emails("rien ici @ toto") == []
+
+  def test_ipv4():
+      "Seules les IPv4 valides sont gardées"
+      texte = "serveurs 192.168.1.10 et 10.0.0.256, passerelle 8.8.8.8, version 1.2.3"
+      assert solution.extraire_ipv4(texte) == ["192.168.1.10", "8.8.8.8"]
+solution: |
+  import re
+
+
+  def extraire_emails(texte):
+      motif = r"[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}"
+      return [m.lower() for m in re.findall(motif, texte)]
+
+
+  def extraire_ipv4(texte):
+      candidats = re.findall(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])", texte)
+      return [ip for ip in candidats if all(int(o) <= 255 for o in ip.split("."))]
+cours: |
+  ## Les briques d'une regex
+
+  | Motif | Signification |
+  |-------|---------------|
+  | `.` | n'importe quel caractère (sauf `\n`) |
+  | `\d`, `\w`, `\s` | chiffre, caractère de mot, espace |
+  | `[abc]`, `[a-z0-9]`, `[^@]` | classe de caractères, plage, négation |
+  | `*`, `+`, `?`, `{2,}`, `{1,3}` | répétitions |
+  | `^`, `$`, `\b` | début, fin, frontière de mot |
+  | `( )`, `(?: )` | groupe capturant, non capturant |
+  | `a\|b` | alternative |
+
+  Écris toujours les motifs en **chaînes brutes** `r"..."` : sinon `\b` serait interprété
+  par Python comme un caractère « retour arrière ».
+
+  ## Les fonctions du module `re`
+
+  ```python
+  import re
+  re.search(r"\d+", "port 8080 ouvert")         # premier match (objet Match) ou None
+  re.findall(r"\d+", "a1 b22 c333")             # ['1', '22', '333']
+  re.fullmatch(r"[a-z]+", "abc")                # toute la chaîne doit correspondre
+  re.sub(r"\s+", " ", "a   b")                  # 'a b'
+  ```
+
+  **Attention** : si le motif contient des groupes capturants, `findall` renvoie les
+  **groupes** et non la correspondance entière. Utilise `(?:...)` pour grouper sans
+  capturer, ou `finditer` et `m.group(0)`.
+
+  ## Regex + Python : la bonne répartition
+
+  Une regex vérifie très bien une **forme**, mal une **valeur**. Pour une IPv4, écrire un
+  motif qui garantit 0–255 est possible mais illisible. Mieux : une regex simple qui
+  capture quatre groupes de 1 à 3 chiffres, puis une vérification en Python
+  (`0 <= int(octet) <= 255`). Les frontières `\b` (ou des assertions `(?<!\d)`) évitent
+  d'extraire un morceau d'un nombre plus long.
+
+  ## Gourmandise
+
+  `+` et `*` sont **gourmands** : ils prennent le plus possible. `.*?` (paresseux) prend le
+  moins possible. Sur `"<a><b>"`, `<.*>` capture tout, `<.*?>` capture `<a>`.
+
+  ## Mise en garde
+
+  Valider parfaitement une adresse e-mail par regex est quasi impossible (la RFC 5322 est
+  très permissive). En production, on vérifie une forme raisonnable puis on envoie un
+  e-mail de confirmation.
+docs:
+  - title: HOWTO — expressions régulières
+    url: https://docs.python.org/fr/3/howto/regex.html
+  - title: Module re
+    url: https://docs.python.org/fr/3/library/re.html

@@ -1,0 +1,208 @@
+title: Une classe Matrice pythonique
+level: avance
+order: 16
+tags: [méthodes spéciales, classes, __getitem__]
+summary: Indexation m[i, j], itération, égalité et produit matriciel avec @.
+description: |
+  Crée une classe `Matrice` construite à partir d'une liste de lignes (listes de nombres).
+
+  | Fonctionnalité | Comportement attendu |
+  |----------------|----------------------|
+  | `Matrice([[1, 2], [3, 4]])` | copie les données ; lignes de longueurs différentes ou matrice vide → `ValueError` |
+  | `m.dimensions` | propriété : `(nb_lignes, nb_colonnes)` |
+  | `m[i, j]` / `m[i, j] = v` | lecture / écriture d'un élément (indices négatifs acceptés) |
+  | `m[i]` | la ligne `i` sous forme de **tuple** |
+  | `len(m)` et `for ligne in m` | nombre de lignes / itère sur les lignes (tuples) |
+  | `m1 == m2` | mêmes dimensions et mêmes valeurs ; `False` face à un autre type |
+  | `m1 + m2` | somme terme à terme (dimensions différentes → `ValueError`) |
+  | `m1 @ m2` | produit matriciel (`nb_colonnes(m1) != nb_lignes(m2)` → `ValueError`) |
+  | `m.transposee()` | nouvelle matrice transposée |
+  | `repr(m)` | `"Matrice([[1, 2], [3, 4]])"` |
+
+  Une matrice est **modifiable** : elle ne doit donc pas être hachable (`hash(m)` lève `TypeError`).
+starter: |
+  class Matrice:
+      def __init__(self, lignes):
+          pass
+tests: |
+  M = lambda l: solution.Matrice(l)
+
+  def test_indexation():
+      "Lecture m[i, j] et m[i]"
+      m = M([[1, 2, 3], [4, 5, 6]])
+      assert m[0, 1] == 2 and m[1, 2] == 6 and m[-1, -1] == 6
+      assert m[1] == (4, 5, 6), "m[i] doit renvoyer un tuple"
+      assert m.dimensions == (2, 3)
+
+  def test_ecriture_et_copie():
+      "Écriture m[i, j] = v sans modifier la liste d'origine"
+      source = [[1, 2], [3, 4]]
+      m = M(source)
+      m[0, 0] = 9
+      assert m[0, 0] == 9
+      assert source[0][0] == 1, "le constructeur doit copier les données"
+
+  def test_iteration():
+      "len et itération sur les lignes"
+      m = M([[1, 2], [3, 4], [5, 6]])
+      assert len(m) == 3
+      assert list(m) == [(1, 2), (3, 4), (5, 6)]
+
+  def test_egalite():
+      "Égalité"
+      assert M([[1, 2]]) == M([[1, 2]])
+      assert M([[1, 2]]) != M([[1], [2]])
+      assert (M([[1]]) == [[1]]) is False
+
+  def test_addition():
+      "Somme terme à terme"
+      assert M([[1, 2], [3, 4]]) + M([[10, 20], [30, 40]]) == M([[11, 22], [33, 44]])
+      try:
+          M([[1, 2]]) + M([[1], [2]])
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("ValueError attendue pour des dimensions différentes")
+
+  def test_produit():
+      "Produit matriciel avec @"
+      a = M([[1, 2, 3], [4, 5, 6]])
+      b = M([[7, 8], [9, 10], [11, 12]])
+      assert a @ b == M([[58, 64], [139, 154]])
+      assert (b @ a).dimensions == (3, 3)
+      try:
+          a @ a
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("ValueError attendue : dimensions incompatibles")
+
+  def test_transposee():
+      "Transposée"
+      assert M([[1, 2, 3], [4, 5, 6]]).transposee() == M([[1, 4], [2, 5], [3, 6]])
+
+  def test_repr():
+      "repr lisible"
+      assert repr(M([[1, 2], [3, 4]])) == "Matrice([[1, 2], [3, 4]])"
+
+  def test_invalide():
+      "Matrices invalides"
+      for lignes in ([], [[1, 2], [3]], [[]]):
+          try:
+              M(lignes)
+          except ValueError:
+              continue
+          raise AssertionError(f"Matrice({lignes}) aurait dû lever ValueError")
+
+  def test_non_hachable():
+      "Une matrice n'est pas hachable"
+      try:
+          hash(M([[1]]))
+      except TypeError:
+          pass
+      else:
+          raise AssertionError("hash(m) doit lever TypeError")
+solution: |
+  class Matrice:
+      def __init__(self, lignes):
+          lignes = [list(ligne) for ligne in lignes]
+          if not lignes or not lignes[0] or any(len(l) != len(lignes[0]) for l in lignes):
+              raise ValueError("matrice vide ou lignes de longueurs différentes")
+          self._lignes = lignes
+
+      @property
+      def dimensions(self):
+          return len(self._lignes), len(self._lignes[0])
+
+      def __getitem__(self, cle):
+          if isinstance(cle, tuple):
+              i, j = cle
+              return self._lignes[i][j]
+          return tuple(self._lignes[cle])
+
+      def __setitem__(self, cle, valeur):
+          i, j = cle
+          self._lignes[i][j] = valeur
+
+      def __len__(self):
+          return len(self._lignes)
+
+      def __iter__(self):
+          return (tuple(ligne) for ligne in self._lignes)
+
+      def __eq__(self, autre):
+          if not isinstance(autre, Matrice):
+              return NotImplemented
+          return self._lignes == autre._lignes
+
+      def __add__(self, autre):
+          if self.dimensions != autre.dimensions:
+              raise ValueError("dimensions différentes")
+          return Matrice([[a + b for a, b in zip(l1, l2)] for l1, l2 in zip(self, autre)])
+
+      def __matmul__(self, autre):
+          if self.dimensions[1] != autre.dimensions[0]:
+              raise ValueError("dimensions incompatibles")
+          colonnes = list(autre.transposee())
+          return Matrice([[sum(a * b for a, b in zip(ligne, col)) for col in colonnes] for ligne in self])
+
+      def transposee(self):
+          return Matrice([list(col) for col in zip(*self._lignes)])
+
+      def __repr__(self):
+          return f"Matrice({self._lignes})"
+cours: |
+  ## `__getitem__` et les tuples d'indices
+
+  `m[i, j]` appelle `m.__getitem__((i, j))` : la virgule crée un **tuple**. La méthode
+  peut donc distinguer `m[i]` (un entier) de `m[i, j]` (un tuple) :
+
+  ```python
+  class Grille:
+      def __getitem__(self, cle):
+          if isinstance(cle, tuple):
+              ligne, col = cle
+              return self._cases[ligne][col]
+          return tuple(self._cases[cle])
+
+      def __setitem__(self, cle, valeur):
+          ligne, col = cle
+          self._cases[ligne][col] = valeur
+  ```
+
+  Les indices négatifs fonctionnent gratuitement si on délègue à une liste.
+
+  ## Rendre l'objet itérable et mesurable
+
+  `__len__` permet `len(m)`, `__iter__` permet `for`. Si `__iter__` n'est pas défini mais
+  que `__getitem__` accepte des entiers, Python sait déjà itérer (protocole historique),
+  mais un `__iter__` explicite est plus clair.
+
+  ## L'opérateur `@`
+
+  Depuis Python 3.5, `a @ b` appelle `a.__matmul__(b)` : il a été ajouté précisément pour
+  le produit matriciel (NumPy l'utilise).
+
+  ## Encapsulation et copies défensives
+
+  Le constructeur doit **copier** les lignes reçues : sinon, modifier la liste d'origine
+  modifierait la matrice. De même, renvoyer des tuples (immuables) pour les lignes empêche
+  l'appelant de modifier l'état interne par accident. Valider les données à la construction
+  (lignes de même longueur, matrice non vide) garantit l'invariant pour toutes les autres
+  méthodes.
+
+  ## Égalité
+
+  `__eq__` renvoie `NotImplemented` face à un autre type, ce qui donne `False` pour `==`.
+  Une classe mutable qui définit `__eq__` n'est plus hachable, ce qui est voulu : sa valeur
+  peut changer.
+
+  ## `__repr__`
+
+  Un `repr` qui recrée l'objet facilite énormément le débogage et les messages d'erreur des
+  tests.
+docs:
+  - title: Référence — émuler les conteneurs (__getitem__…)
+    url: https://docs.python.org/fr/3/reference/datamodel.html#emulating-container-types
+  - title: Référence — émulation des types numériques (__matmul__)
+    url: https://docs.python.org/fr/3/reference/datamodel.html#emulating-numeric-types

@@ -1,0 +1,122 @@
+title: Mémoïsation
+level: avance
+order: 4
+tags: [décorateurs, cache, récursivité]
+summary: Accélérer une fonction récursive avec un cache.
+description: |
+  Écris un décorateur `memoiser` qui garde en cache les résultats d'une fonction selon ses
+  arguments positionnels, puis utilise-le sur `fib(n)` (Fibonacci **récursif** : `fib(0)=0`, `fib(1)=1`).
+
+  Sans cache, `fib(80)` prendrait des années. Avec, c'est instantané.
+
+  Interdit d'utiliser `functools.lru_cache` / `functools.cache`.
+starter: |
+  def memoiser(fonction):
+      pass
+
+
+  @memoiser
+  def fib(n):
+      if n < 2:
+          return n
+      return fib(n - 1) + fib(n - 2)
+tests: |
+  import inspect
+
+  def test_fib():
+      "fib(80) est calculé rapidement"
+      assert solution.fib(80) == 23416728348467685
+
+  def test_cache():
+      "La fonction n'est appelée qu'une fois par argument"
+      appels = []
+      @solution.memoiser
+      def carre(x):
+          appels.append(x)
+          return x * x
+      carre(4); carre(4); carre(5)
+      assert appels == [4, 5]
+
+  def test_interdit():
+      "Pas de functools.lru_cache"
+      source = inspect.getsource(solution)
+      assert "lru_cache" not in source and "functools.cache" not in source
+solution: |
+  import functools
+
+
+  def memoiser(fonction):
+      cache = {}
+
+      @functools.wraps(fonction)
+      def enveloppe(*args):
+          if args not in cache:
+              cache[args] = fonction(*args)
+          return cache[args]
+      return enveloppe
+
+
+  @memoiser
+  def fib(n):
+      if n < 2:
+          return n
+      return fib(n - 1) + fib(n - 2)
+cours: |
+  ## Le principe
+
+  Une fonction **pure** (même entrée → même sortie, sans effet de bord) peut mémoriser ses
+  résultats : au deuxième appel avec les mêmes arguments, on renvoie la valeur stockée au
+  lieu de recalculer. C'est la **mémoïsation**.
+
+  ## Pourquoi Fibonacci explose
+
+  `fib(n)` appelle `fib(n-1)` et `fib(n-2)`, qui rappellent chacun les mêmes valeurs…
+  L'arbre des appels a environ 1,6ⁿ nœuds : `fib(80)` en demanderait plus de 10¹⁶. Or il
+  n'y a que 81 valeurs **distinctes** à calculer. Avec un cache, chaque valeur est calculée
+  une fois : O(n).
+
+  ## Le cache
+
+  Un dictionnaire dont la clé est le **tuple des arguments** :
+
+  ```python
+  cache = {}
+  cle = (3, "a")
+  if cle in cache:
+      ...
+  cache[cle] = resultat
+  ```
+
+  Les clés doivent être hachables : des arguments de type liste ne peuvent pas servir de
+  clé (les vrais `lru_cache` ont la même limite).
+
+  ## Où vit le cache ?
+
+  Dans la **fermeture** du décorateur : chaque fonction décorée a son propre dictionnaire,
+  créé une fois au moment de la décoration.
+
+  ## Point crucial : la récursion passe par le cache
+
+  Quand on écrit
+
+  ```python
+  @memoiser
+  def fib(n): ...
+  ```
+
+  le nom `fib` désigne l'**enveloppe**. Les appels récursifs `fib(n - 1)` à l'intérieur
+  passent donc aussi par le cache. C'est ce qui rend la mémoïsation efficace ici ; décorer
+  après coup sous un autre nom (`fib_rapide = memoiser(fib)`) ne mettrait en cache que
+  l'appel extérieur.
+
+  ## Limites
+
+  Un cache sans limite peut grossir indéfiniment (fuite de mémoire). `functools.lru_cache`
+  propose une taille maximale avec éviction des moins récemment utilisés, et
+  `cache_info()` pour les statistiques. La récursion profonde (fib(5000)) reste limitée par
+  la pile : on peut « chauffer » le cache progressivement ou passer en itératif.
+docs:
+  - title: functools.cache et lru_cache
+    url: https://docs.python.org/fr/3/library/functools.html#functools.lru_cache
+  - title: Wikipédia — Mémoïsation
+    url: https://fr.wikipedia.org/wiki/M%C3%A9mo%C3%AFsation

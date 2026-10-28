@@ -1,0 +1,340 @@
+title: Interpréteur d'un mini-langage
+level: expert
+order: 23
+tags: [parsing, récursivité, interpréteur, algorithmes]
+summary: Analyseur lexical, parser récursif, variables, fonctions et comparaisons.
+description: |
+  Va plus loin que la calculatrice : écris une classe `Interpreteur` dont la méthode
+  `executer(source)` exécute un petit programme et renvoie la valeur de la **dernière instruction**.
+
+  - Les instructions sont séparées par des retours à la ligne ou des `;` (les instructions vides
+    sont ignorées ; programme vide → `None`).
+  - Une instruction est une **affectation** `nom = expression` (elle renvoie la valeur affectée)
+    ou une **expression**.
+  - Les variables sont conservées **d'un appel à l'autre** de `executer`.
+
+  Grammaire, de la priorité la plus faible à la plus forte :
+
+  ```
+  comparaison := somme [ ("==" | "!=" | "<" | "<=" | ">" | ">=") somme ]   → True / False
+  somme       := terme { ("+" | "-") terme }
+  terme       := unaire { ("*" | "/" | "%") unaire }
+  unaire      := ("-" | "+") unaire | puissance
+  puissance   := atome [ "^" unaire ]          → associatif à droite : 2^3^2 = 512, -2^2 = -4
+  atome       := nombre | nom | nom "(" [ comparaison { "," comparaison } ] ")" | "(" comparaison ")"
+  ```
+
+  - Nombres : entiers (`42` → `int`) ou décimaux (`3.5` → `float`). `/` est la division réelle.
+  - Noms : lettres, chiffres et `_`, sans commencer par un chiffre.
+  - Fonctions disponibles : `abs`, `min`, `max` (au moins un argument), `racine` (racine carrée).
+  - Erreurs : variable inconnue → `NameError` ; fonction inconnue, mauvais nombre d'arguments ou
+    syntaxe invalide (caractère inconnu, parenthèse manquante, jeton en trop…) → `SyntaxError`.
+    Une division par zéro lève naturellement `ZeroDivisionError`.
+
+  `eval`, `exec` et `compile` sont **interdits**.
+
+  ```python
+  i = Interpreteur()
+  i.executer("x = 3; y = x ^ 2 + 1")    # 10
+  i.executer("max(x, y / 4, -1) * 2")   # 6
+  i.executer("y >= 10")                 # True
+  ```
+starter: |
+  import math
+  import re
+
+
+  class Interpreteur:
+      def executer(self, source):
+          pass
+tests: |
+  import builtins
+
+  def nouvel():
+      return solution.Interpreteur()
+
+  def leve(exception, source, interp=None):
+      try:
+          (interp or nouvel()).executer(source)
+      except exception:
+          pass
+      except Exception as exc:
+          raise AssertionError(f"{source!r} : {exception.__name__} attendue, obtenu {type(exc).__name__}: {exc}")
+      else:
+          raise AssertionError(f"{source!r} : {exception.__name__} attendue")
+
+  def test_arithmetique():
+      "Priorités et parenthèses"
+      i = nouvel()
+      assert i.executer("2 + 3 * 4") == 14
+      assert i.executer("(2 + 3) * 4") == 20
+      assert i.executer("10 / 4") == 2.5
+      assert i.executer("17 % 5 - 1") == 1
+      assert i.executer("8 - 3 - 2") == 3, "la soustraction est associative à gauche"
+
+  def test_types_nombres():
+      "Entiers et décimaux"
+      r = nouvel().executer("2 * 21")
+      assert r == 42 and isinstance(r, int)
+      assert nouvel().executer("1.5 + 1") == 2.5
+
+  def test_puissance():
+      "Puissance associative à droite et moins unaire"
+      i = nouvel()
+      assert i.executer("2 ^ 3 ^ 2") == 512
+      assert i.executer("-2 ^ 2") == -4
+      assert i.executer("2 ^ -1") == 0.5
+      assert i.executer("--3") == 3
+
+  def test_variables():
+      "Affectations et persistance"
+      i = nouvel()
+      assert i.executer("x = 3; y = x ^ 2 + 1") == 10
+      assert i.executer("y * 2") == 20
+      assert i.executer("x = x + 1\n\nx") == 4
+      assert i.executer("") is None
+
+  def test_fonctions():
+      "Fonctions"
+      i = nouvel()
+      assert i.executer("max(3, 10 / 4, -1) * 2") == 6
+      assert i.executer("abs(-7) + min(4, 2)") == 9
+      assert i.executer("racine(16)") == 4
+      assert i.executer("max(min(5, 9), abs(-6))") == 6
+
+  def test_comparaisons():
+      "Comparaisons"
+      i = nouvel()
+      i.executer("a = 5")
+      assert i.executer("a >= 5") is True
+      assert i.executer("a * 2 == 11") is False
+      assert i.executer("a != 4") is True and i.executer("1 + 1 < 1") is False
+
+  def test_erreurs_noms():
+      "Variable inconnue : NameError"
+      leve(NameError, "z + 1")
+      leve(NameError, "__import__")
+
+  def test_erreurs_syntaxe():
+      "Erreurs de syntaxe"
+      for source in ["2 +", "(1 + 2", "1 + 2)", "3 4", "x = ", "= 3", "2 $ 3", "foo(1)", "abs(1, 2)", "max()", "1 < 2 < 3"]:
+          leve(SyntaxError, source)
+
+  def test_division_zero():
+      "Division par zéro"
+      leve(ZeroDivisionError, "1 / (2 - 2)")
+
+  def test_sans_eval():
+      "eval, exec et compile ne sont pas utilisés"
+      originaux = builtins.eval, builtins.exec, builtins.compile
+      def interdit(*a, **k):
+          raise AssertionError("eval/exec/compile interdits")
+      builtins.eval = builtins.exec = builtins.compile = interdit
+      try:
+          assert nouvel().executer("v = 2 * (3 + 4); v - 4") == 10
+      finally:
+          builtins.eval, builtins.exec, builtins.compile = originaux
+solution: |
+  import math
+  import re
+
+  JETON = re.compile(r"(?:(\d+\.\d*|\d+)|([A-Za-z_]\w*)|(==|!=|<=|>=|[-+*/%^()<>=,;\n]))")
+  FONCTIONS = {
+      "abs": (abs, 1, 1),
+      "min": (min, 1, None),
+      "max": (max, 1, None),
+      "racine": (math.sqrt, 1, 1),
+  }
+  COMPARAISONS = {
+      "==": lambda a, b: a == b, "!=": lambda a, b: a != b,
+      "<": lambda a, b: a < b, "<=": lambda a, b: a <= b,
+      ">": lambda a, b: a > b, ">=": lambda a, b: a >= b,
+  }
+
+
+  def decouper(source):
+      jetons, position = [], 0
+      while position < len(source):
+          if source[position] in " \t\r":
+              position += 1
+              continue
+          m = JETON.match(source, position)
+          if not m:
+              raise SyntaxError(f"caractère inattendu : {source[position]!r}")
+          nombre, nom, symbole = m.groups()
+          if nombre:
+              jetons.append(("nombre", float(nombre) if "." in nombre else int(nombre)))
+          elif nom:
+              jetons.append(("nom", nom))
+          else:
+              jetons.append(("fin", None) if symbole in ";\n" else (symbole, None))
+          position = m.end()
+      jetons.append(("fin", None))
+      return jetons
+
+
+  class Interpreteur:
+      def __init__(self):
+          self.variables = {}
+
+      def executer(self, source):
+          self.jetons = decouper(source)
+          self.i = 0
+          resultat = None
+          while self.i < len(self.jetons):
+              if self.voir() == "fin":
+                  self.i += 1
+                  continue
+              resultat = self.instruction()
+              if self.voir() != "fin":
+                  raise SyntaxError(f"jeton inattendu : {self.voir()}")
+          return resultat
+
+      # --- outils ---
+      def voir(self, decalage=0):
+          k = self.i + decalage
+          return self.jetons[k][0] if k < len(self.jetons) else "fin"
+
+      def prendre(self, attendu=None):
+          genre, valeur = self.jetons[self.i]
+          if attendu is not None and genre != attendu:
+              raise SyntaxError(f"{attendu!r} attendu, trouvé {genre!r}")
+          self.i += 1
+          return genre, valeur
+
+      # --- grammaire ---
+      def instruction(self):
+          if self.voir() == "nom" and self.voir(1) == "=":
+              _, nom = self.prendre()
+              self.prendre("=")
+              valeur = self.comparaison()
+              self.variables[nom] = valeur
+              return valeur
+          return self.comparaison()
+
+      def comparaison(self):
+          gauche = self.somme()
+          if self.voir() in COMPARAISONS:
+              operateur, _ = self.prendre()
+              gauche = COMPARAISONS[operateur](gauche, self.somme())
+              if self.voir() in COMPARAISONS:
+                  raise SyntaxError("comparaisons enchaînées non supportées")
+          return gauche
+
+      def somme(self):
+          valeur = self.terme()
+          while self.voir() in ("+", "-"):
+              operateur, _ = self.prendre()
+              droite = self.terme()
+              valeur = valeur + droite if operateur == "+" else valeur - droite
+          return valeur
+
+      def terme(self):
+          valeur = self.unaire()
+          while self.voir() in ("*", "/", "%"):
+              operateur, _ = self.prendre()
+              droite = self.unaire()
+              if operateur == "*":
+                  valeur *= droite
+              elif operateur == "/":
+                  valeur /= droite
+              else:
+                  valeur %= droite
+          return valeur
+
+      def unaire(self):
+          if self.voir() in ("-", "+"):
+              operateur, _ = self.prendre()
+              valeur = self.unaire()
+              return -valeur if operateur == "-" else valeur
+          return self.puissance()
+
+      def puissance(self):
+          base = self.atome()
+          if self.voir() == "^":
+              self.prendre()
+              return base ** self.unaire()
+          return base
+
+      def atome(self):
+          genre, valeur = self.jetons[self.i]
+          if genre == "nombre":
+              self.i += 1
+              return valeur
+          if genre == "(":
+              self.i += 1
+              resultat = self.comparaison()
+              self.prendre(")")
+              return resultat
+          if genre == "nom":
+              self.i += 1
+              if self.voir() == "(":
+                  return self.appel(valeur)
+              if valeur not in self.variables:
+                  raise NameError(f"variable inconnue : {valeur}")
+              return self.variables[valeur]
+          raise SyntaxError(f"expression attendue, trouvé {genre!r}")
+
+      def appel(self, nom):
+          if nom not in FONCTIONS:
+              raise SyntaxError(f"fonction inconnue : {nom}")
+          fonction, minimum, maximum = FONCTIONS[nom]
+          self.prendre("(")
+          arguments = []
+          if self.voir() != ")":
+              arguments.append(self.comparaison())
+              while self.voir() == ",":
+                  self.prendre()
+                  arguments.append(self.comparaison())
+          self.prendre(")")
+          if len(arguments) < minimum or (maximum is not None and len(arguments) > maximum):
+              raise SyntaxError(f"mauvais nombre d'arguments pour {nom}")
+          return fonction(*arguments)
+cours: |
+  ## Architecture d'un interpréteur
+
+  1. **Lexer** : texte → jetons (nombres, identifiants, opérateurs, mots-clés, fins
+     d'instruction). Les opérateurs à deux caractères (`==`, `<=`) doivent être reconnus
+     **avant** ceux d'un caractère (`=`, `<`).
+  2. **Parser** : jetons → structure (ou évaluation directe), selon une grammaire où chaque
+     niveau de priorité est une fonction.
+  3. **Évaluation** dans un **environnement** : un dictionnaire `nom → valeur` qui persiste
+     entre les exécutions.
+
+  ## Priorité et associativité
+
+  Chaque règle de la grammaire appelle la règle de priorité supérieure. Pour un opérateur
+  associatif **à gauche** (`-`, `/`), une boucle `while` accumule. Pour un opérateur
+  associatif **à droite** comme la puissance (`2^3^2 = 2^(3^2)`), la règle s'appelle
+  **récursivement** pour son opérande droit. Le placement de l'unaire dans la grammaire
+  décide si `-2^2` vaut −4 (comme en mathématiques et en Python) ou 4.
+
+  ## Affectation : regarder un jeton plus loin
+
+  `x = 3` et `x == 3` commencent par le même jeton. On décide en regardant le **jeton
+  suivant** (*lookahead*) : identifiant suivi de `=` → affectation, sinon expression.
+
+  ## Erreurs
+
+  Un bon interpréteur distingue les erreurs **de syntaxe** (jeton inattendu, parenthèse
+  manquante) des erreurs **d'exécution** (variable inconnue, division par zéro) et lève des
+  exceptions précises. Vérifie qu'à la fin d'une instruction, tous ses jetons ont été
+  consommés.
+
+  ## Évaluer directement ou construire un arbre ?
+
+  Ce mini-langage peut s'évaluer pendant l'analyse. Les vrais langages construisent un
+  **AST** (arbre syntaxique abstrait), puis le parcourent : cela permet les fonctions, les
+  boucles (réévaluer un corps plusieurs fois), l'optimisation. Python fait cela :
+  `ast.parse("x = 2 + 3")` montre son arbre.
+
+  ## Pourquoi c'est formateur
+
+  Écrire un interpréteur démystifie les langages : priorité des opérateurs, portée des
+  variables, messages d'erreur. Les mêmes techniques servent à analyser des fichiers de
+  configuration, des requêtes de recherche, ou des règles de pare-feu.
+docs:
+  - title: Module ast (l'arbre syntaxique de Python)
+    url: https://docs.python.org/fr/3/library/ast.html
+  - title: Crafting Interpreters (livre en ligne, anglais)
+    url: https://craftinginterpreters.com/

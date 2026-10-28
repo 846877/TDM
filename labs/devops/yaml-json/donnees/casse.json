@@ -1,0 +1,11 @@
+{
+  "application": "boutique",
+  "version": "2.3.1"
+  "debug": false,
+  'port': 8080,
+  "base": {
+    "hote": "db.interne",
+    "port": 5432,
+  },
+  "fonctions": ["panier", "paiement", "suivi",]
+}

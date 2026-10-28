@@ -1,0 +1,182 @@
+title: Premiers générateurs
+level: intermediaire
+order: 38
+tags: [générateurs, yield, itérateurs]
+summary: Produire des valeurs à la demande avec yield.
+description: |
+  Écris ces **fonctions génératrices** (avec `yield`) :
+
+  1. `compte_a_rebours(n)` produit `n, n-1, …, 1`.
+  2. `pairs()` produit les entiers pairs **à l'infini** : 0, 2, 4…
+  3. `lignes_utiles(lignes)` reçoit un itérable de chaînes et produit chaque ligne sans
+     espaces autour, en sautant les lignes vides et les commentaires (commençant par `#`
+     après retrait des espaces).
+  4. `adresses(prefixe, debut, fin)` produit les adresses `f"{prefixe}.{i}"` pour `i` de
+     `debut` à `fin` **inclus**.
+
+  Et une fonction normale :
+
+  5. `premiers_elements(iterable, n)` renvoie la **liste** des `n` premiers éléments d'un
+     itérable (même infini), sans utiliser `itertools`. Utilise `iter()` et `next()`, ou une
+     boucle avec un compteur.
+
+  ```python
+  list(compte_a_rebours(3))                  # [3, 2, 1]
+  premiers_elements(pairs(), 4)              # [0, 2, 4, 6]
+  list(lignes_utiles(["a", "", " # x", " b "]))   # ["a", "b"]
+  list(adresses("192.168.1", 1, 3))          # ["192.168.1.1", "192.168.1.2", "192.168.1.3"]
+  ```
+starter: |
+  def compte_a_rebours(n):
+      pass
+
+
+  def pairs():
+      pass
+
+
+  def lignes_utiles(lignes):
+      pass
+
+
+  def adresses(prefixe, debut, fin):
+      pass
+
+
+  def premiers_elements(iterable, n):
+      pass
+tests: |
+  import types
+
+  def test_rebours():
+      "compte_a_rebours est un générateur"
+      g = solution.compte_a_rebours(3)
+      assert isinstance(g, types.GeneratorType), "utilise yield"
+      assert list(g) == [3, 2, 1]
+      assert list(solution.compte_a_rebours(0)) == []
+
+  def test_pairs_infini():
+      "pairs est infini"
+      g = solution.pairs()
+      assert isinstance(g, types.GeneratorType), "utilise yield"
+      assert [next(g) for _ in range(5)] == [0, 2, 4, 6, 8]
+
+  def test_lignes():
+      "lignes_utiles"
+      r = list(solution.lignes_utiles(["a", "", " # x", " b ", "#", "c # pas un commentaire"]))
+      assert r == ["a", "b", "c # pas un commentaire"], f"obtenu {r!r}"
+
+  def test_lignes_paresseux():
+      "lignes_utiles fonctionne sur un flux (paresseux)"
+      def flux():
+          yield "un"
+          yield "deux"
+          raise AssertionError("lignes_utiles a lu trop loin : il doit être paresseux")
+      g = solution.lignes_utiles(flux())
+      assert next(g) == "un"
+
+  def test_adresses():
+      "adresses"
+      g = solution.adresses("192.168.1", 1, 3)
+      assert isinstance(g, types.GeneratorType), "utilise yield"
+      assert list(g) == ["192.168.1.1", "192.168.1.2", "192.168.1.3"]
+
+  def test_premiers():
+      "premiers_elements"
+      assert solution.premiers_elements(solution.pairs(), 4) == [0, 2, 4, 6]
+      assert solution.premiers_elements([1, 2], 5) == [1, 2]
+      assert solution.premiers_elements("abc", 0) == []
+solution: |
+  def compte_a_rebours(n):
+      while n > 0:
+          yield n
+          n -= 1
+
+
+  def pairs():
+      n = 0
+      while True:
+          yield n
+          n += 2
+
+
+  def lignes_utiles(lignes):
+      for ligne in lignes:
+          ligne = ligne.strip()
+          if ligne and not ligne.startswith("#"):
+              yield ligne
+
+
+  def adresses(prefixe, debut, fin):
+      for i in range(debut, fin + 1):
+          yield f"{prefixe}.{i}"
+
+
+  def premiers_elements(iterable, n):
+      resultat = []
+      iterateur = iter(iterable)
+      while len(resultat) < n:
+          try:
+              resultat.append(next(iterateur))
+          except StopIteration:
+              break
+      return resultat
+cours: |
+  ## `return` donne une valeur, `yield` en donne une suite
+
+  Une fonction qui contient `yield` devient une **fonction génératrice**. L'appeler n'exécute
+  rien : elle renvoie un **générateur**, un objet qu'on peut parcourir. À chaque valeur
+  demandée, le code s'exécute jusqu'au prochain `yield`, renvoie la valeur, puis se met **en
+  pause** en gardant ses variables.
+
+  ```python
+  def trois_etapes():
+      print("début")
+      yield 1
+      print("milieu")
+      yield 2
+
+  g = trois_etapes()   # rien ne s'affiche encore
+  next(g)              # affiche "début", renvoie 1
+  next(g)              # affiche "milieu", renvoie 2
+  next(g)              # StopIteration : le générateur est épuisé
+  ```
+
+  On le parcourt généralement avec `for`, `list()`, `sum()`, etc.
+
+  ## Pourquoi c'est utile
+
+  - **Mémoire** : les valeurs sont produites une à une, jamais stockées toutes ensemble.
+    Parcourir un journal de 10 Go ligne par ligne via un générateur utilise quelques Ko.
+  - **Infini** : un générateur peut ne jamais s'arrêter (`while True: yield ...`) ; c'est le
+    consommateur qui décide combien de valeurs prendre.
+  - **Composition** : un générateur peut consommer un autre générateur, comme des commandes
+    reliées par des `|` sous Unix.
+
+  ## La paresse
+
+  Un générateur ne lit son entrée qu'au moment où on lui demande une valeur : il est
+  **paresseux**. C'est ce qui permet de traiter un flux réseau ou l'entrée standard au fil de
+  l'eau. Construire une liste complète à l'intérieur (pour la parcourir ensuite) ferait
+  perdre cet avantage.
+
+  ## `iter` et `next`
+
+  `iter(x)` renvoie un itérateur sur n'importe quel itérable (liste, chaîne, générateur) ;
+  `next(it)` donne l'élément suivant, ou lève `StopIteration` quand il n'y en a plus.
+  `next(it, defaut)` renvoie `defaut` au lieu de lever l'exception.
+
+  ## Usage unique
+
+  Un générateur s'épuise : une fois parcouru, il est vide. Pour le parcourir à nouveau, il
+  faut rappeler la fonction génératrice.
+
+  ## Expressions génératrices
+
+  `(x * 2 for x in range(10))` est un générateur écrit comme une compréhension, avec des
+  parenthèses. `sum(x * x for x in range(1000))` ne crée aucune liste intermédiaire.
+docs:
+  - title: Tutoriel — générateurs
+    url: https://docs.python.org/fr/3/tutorial/classes.html#generators
+  - title: Glossaire — générateur
+    url: https://docs.python.org/fr/3/glossary.html#term-generator

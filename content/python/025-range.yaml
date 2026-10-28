@@ -1,0 +1,128 @@
+title: Jouer avec range
+level: debutant
+order: 25
+tags: [range, listes, boucles]
+summary: Maîtriser début, fin et pas de range().
+description: |
+  `range(debut, fin, pas)` produit les entiers de `debut` (inclus) à `fin` (**exclu**), en
+  avançant de `pas` (qui peut être négatif). `list(range(...))` le transforme en liste.
+
+  1. `multiples(n, limite)` : les multiples de `n` strictement positifs et **inférieurs ou égaux**
+     à `limite`.
+  2. `compte_a_rebours(n)` : la liste de `n` jusqu'à `0` inclus.
+  3. `somme_impairs(n)` : la somme des nombres impairs de 1 à `n` inclus.
+
+  ```python
+  multiples(3, 10)        # [3, 6, 9]
+  compte_a_rebours(3)     # [3, 2, 1, 0]
+  somme_impairs(7)        # 1 + 3 + 5 + 7 = 16
+  ```
+starter: |
+  def multiples(n, limite):
+      pass
+
+
+  def compte_a_rebours(n):
+      pass
+
+
+  def somme_impairs(n):
+      pass
+tests: |
+  def test_multiples():
+      "multiples(3, 10)"
+      r = solution.multiples(3, 10)
+      assert r == [3, 6, 9], f"attendu [3, 6, 9], obtenu {r!r}"
+
+  def test_multiples_limite_incluse():
+      "La limite est incluse"
+      r = solution.multiples(5, 20)
+      assert r == [5, 10, 15, 20], f"attendu [5, 10, 15, 20], obtenu {r!r}"
+
+  def test_multiples_vide():
+      "Limite plus petite que n"
+      assert solution.multiples(7, 3) == []
+
+  def test_rebours():
+      "compte_a_rebours(3)"
+      r = solution.compte_a_rebours(3)
+      assert r == [3, 2, 1, 0], f"attendu [3, 2, 1, 0], obtenu {r!r}"
+
+  def test_rebours_zero():
+      "compte_a_rebours(0)"
+      assert solution.compte_a_rebours(0) == [0]
+
+  def test_impairs():
+      "somme_impairs(7) vaut 16"
+      r = solution.somme_impairs(7)
+      assert r == 16, f"attendu 16, obtenu {r!r}"
+
+  def test_impairs_pair():
+      "somme_impairs(10) vaut 25"
+      r = solution.somme_impairs(10)
+      assert r == 25, f"attendu 25, obtenu {r!r}"
+
+  def test_impairs_zero():
+      "somme_impairs(0) vaut 0"
+      assert solution.somme_impairs(0) == 0
+solution: |
+  def multiples(n, limite):
+      return list(range(n, limite + 1, n))
+
+
+  def compte_a_rebours(n):
+      return list(range(n, -1, -1))
+
+
+  def somme_impairs(n):
+      return sum(range(1, n + 1, 2))
+cours: |
+  ## `range` en détail
+
+  `range` existe sous trois formes :
+
+  ```python
+  range(fin)                 # 0, 1, ..., fin - 1
+  range(debut, fin)          # debut, ..., fin - 1
+  range(debut, fin, pas)     # debut, debut + pas, ... (sans atteindre fin)
+  ```
+
+  La borne `fin` est **toujours exclue**. Avec un pas négatif, on descend, et la borne de fin
+  doit être **plus petite** que le début :
+
+  ```python
+  list(range(10, 0, -3))   # [10, 7, 4, 1]
+  list(range(0, 10, -1))   # []  (on ne peut pas descendre de 0 vers 10)
+  ```
+
+  Un pas de 0 lève une `ValueError`.
+
+  ## `range` est paresseux
+
+  `range(1_000_000)` n'occupe presque pas de mémoire : les nombres sont calculés à la
+  demande. Pour voir les valeurs ou obtenir une vraie liste, on utilise `list(range(...))`.
+  Un `range` supporte pourtant `len()`, l'indexation et `in` en temps constant :
+
+  ```python
+  r = range(0, 100, 5)
+  len(r)       # 20
+  r[3]         # 15
+  35 in r      # True
+  ```
+
+  ## Raisonner sur les bornes
+
+  Les erreurs « à un près » (*off-by-one*) sont les bugs les plus fréquents. Méthode :
+
+  - écris le premier et le dernier élément que tu veux obtenir ;
+  - le premier argument est le premier élément, la borne de fin est le dernier **plus un
+    pas** (plus 1 si on monte, moins 1 si on descend) ;
+  - teste avec une petite valeur et compare à la liste écrite à la main.
+
+  Pour une suite de multiples ou de nombres impairs, choisir le bon **pas** évite un test
+  `if` dans la boucle. Et `sum(range(...))` additionne directement les valeurs.
+docs:
+  - title: Type range
+    url: https://docs.python.org/fr/3/library/stdtypes.html#ranges
+  - title: Tutoriel — la fonction range()
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html#the-range-function

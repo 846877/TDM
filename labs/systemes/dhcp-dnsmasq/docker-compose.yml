@@ -1,0 +1,47 @@
+# LAN 10.20.0.0/24 d'« Ateliers Durand » : un serveur DHCP/DNS (dnsmasq) à configurer et des postes
+# qui demandent une adresse en DHCP en boucle (client udhcpc). Chaque client publie son bail sur
+# http://<client>/bail.txt.
+x-client: &client
+  build: {context: ., dockerfile: client/Dockerfile}
+  cap_add: [NET_ADMIN]
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.20.0.5}
+  srv-dhcp:
+    build: {context: ., dockerfile: srv-dhcp/Dockerfile}
+    hostname: srv-dhcp
+    cap_add: [NET_ADMIN]
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.20.0.2}
+  poste1:
+    <<: *client
+    hostname: poste1
+    networks:
+      lan: {ipv4_address: 10.20.0.11, mac_address: "02:00:00:00:01:01"}
+  poste2:
+    <<: *client
+    hostname: poste2
+    networks:
+      lan: {ipv4_address: 10.20.0.12, mac_address: "02:00:00:00:01:02"}
+  imprimante:
+    <<: *client
+    hostname: imprimante
+    networks:
+      lan: {ipv4_address: 10.20.0.13, mac_address: "02:00:00:00:01:50"}
+  intrus:
+    <<: *client
+    hostname: intrus
+    networks:
+      lan: {ipv4_address: 10.20.0.14, mac_address: "02:00:00:00:09:99"}
+volumes:
+  cles:
+networks:
+  lan:
+    internal: true
+    ipam:
+      config: [{subnet: 10.20.0.0/24, ip_range: 10.20.0.0/28}]

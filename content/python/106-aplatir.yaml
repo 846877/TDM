@@ -1,0 +1,89 @@
+title: Aplatir une liste
+level: intermediaire
+order: 6
+tags: [récursivité, listes]
+summary: Première fonction récursive.
+description: |
+  Écris `aplatir(liste)` qui transforme une liste imbriquée (sur n'importe quelle profondeur)
+  en une liste simple.
+
+  ```python
+  aplatir([1, [2, [3, 4]], 5])  # [1, 2, 3, 4, 5]
+  ```
+
+  Indice : `isinstance(x, list)` et la **récursivité**.
+starter: |
+  def aplatir(liste):
+      pass
+tests: |
+  def test_simple():
+      "Exemple de l'énoncé"
+      assert solution.aplatir([1, [2, [3, 4]], 5]) == [1, 2, 3, 4, 5]
+
+  def test_profond():
+      "Imbrication profonde"
+      assert solution.aplatir([[[[["a"]]]], "b"]) == ["a", "b"]
+
+  def test_vide():
+      "Listes vides"
+      assert solution.aplatir([[], [[]]]) == []
+solution: |
+  def aplatir(liste):
+      resultat = []
+      for element in liste:
+          if isinstance(element, list):
+              resultat.extend(aplatir(element))
+          else:
+              resultat.append(element)
+      return resultat
+cours: |
+  ## La récursivité
+
+  Une fonction **récursive** s'appelle elle-même sur un sous-problème plus petit. Elle
+  comporte toujours :
+
+  1. un **cas de base**, qui se résout sans appel récursif ;
+  2. un **cas récursif**, qui ramène le problème à des versions plus petites.
+
+  ```python
+  def compter_elements(structure):
+      if not isinstance(structure, list):
+          return 1                       # cas de base : une feuille
+      total = 0
+      for element in structure:
+          total += compter_elements(element)   # cas récursif
+      return total
+
+  compter_elements([1, [2, 3], [[4]]])   # 4
+  ```
+
+  Les données **imbriquées** (arborescences de dossiers, JSON, HTML…) sont naturellement
+  récursives : une liste contient des éléments qui peuvent eux-mêmes être des listes. Une
+  boucle simple ne suffit pas, car on ne connaît pas la profondeur à l'avance.
+
+  ## Tester le type
+
+  `isinstance(x, list)` renvoie `True` si `x` est une liste (ou une sous-classe).
+  On peut passer un tuple de types : `isinstance(x, (list, tuple))`.
+  Attention : une chaîne est itérable mais n'est généralement pas à aplatir caractère par
+  caractère.
+
+  ## Combiner les résultats
+
+  - `liste.append(x)` ajoute **un** élément (si `x` est une liste, elle est ajoutée telle
+    quelle, imbriquée) ;
+  - `liste.extend(autre)` ajoute **chacun** des éléments de `autre`.
+
+  Confondre les deux est l'erreur la plus fréquente sur cet exercice.
+
+  ## Limites
+
+  Python limite la profondeur de récursion (environ 1000 appels, voir
+  `sys.getrecursionlimit()`). Pour des structures très profondes, on remplace la récursion
+  par une **pile explicite** (une liste où l'on empile les éléments restant à traiter).
+  Pour des structures raisonnables, la version récursive est la plus claire.
+docs:
+  - title: Documentation Python — isinstance()
+    url: https://docs.python.org/fr/3/library/functions.html#isinstance
+  - title: Méthode list.extend (compléments sur les listes)
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#more-on-lists

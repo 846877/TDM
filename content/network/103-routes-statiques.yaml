@@ -1,0 +1,100 @@
+title: Routage statique
+level: intermediaire
+order: 3
+device: router
+hostname: R1
+tags: [routage, static]
+summary: Ajouter des routes statiques et une route par défaut.
+description: |
+  `R1` est relié à `R2` (10.0.0.2) par le lien WAN et à Internet via le FAI (203.0.113.1).
+
+  1. Ajoute une route vers le réseau `192.168.2.0/24` via `10.0.0.2` ;
+  2. Ajoute une route vers `172.16.0.0/16` via `10.0.0.2` ;
+  3. Ajoute une **route par défaut** vers `203.0.113.1`.
+
+  `ip route <réseau> <masque> <prochain saut>` — puis `show ip route`.
+initial: |
+  interface g0/0
+  ip address 192.168.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.0.0.1 255.255.255.252
+  no shutdown
+  interface g0/2
+  ip address 203.0.113.2 255.255.255.252
+  no shutdown
+checks:
+  - desc: Route vers 192.168.2.0/24 via 10.0.0.2
+    expr: route("192.168.2.0", "255.255.255.0", "10.0.0.2")
+  - desc: Route vers 172.16.0.0/16 via 10.0.0.2
+    expr: route("172.16.0.0", "255.255.0.0", "10.0.0.2")
+  - desc: Route par défaut vers 203.0.113.1
+    expr: route("0.0.0.0", "0.0.0.0", "203.0.113.1")
+solution: |
+  configure terminal
+  ip route 192.168.2.0 255.255.255.0 10.0.0.2
+  ip route 172.16.0.0 255.255.0.0 10.0.0.2
+  ip route 0.0.0.0 0.0.0.0 203.0.113.1
+  end
+cours: |
+  ## Ce que sait un routeur sans configuration
+
+  Un routeur connaît d'office ses réseaux **directement connectés**. Pour atteindre un réseau
+  situé derrière un autre routeur, il lui faut une **route** : apprise par un protocole de
+  routage (OSPF, EIGRP...) ou saisie à la main, la **route statique**.
+
+  ### Syntaxe
+
+  ```
+  ip route <réseau> <masque> <saut-suivant | interface-de-sortie> [distance]
+  ```
+
+  Exemple (autres valeurs) :
+
+  ```
+  R1(config)# ip route 172.20.0.0 255.255.0.0 10.0.0.6
+  R1(config)# ip route 192.168.77.0 255.255.255.0 10.0.0.6
+  R1(config)# ip route 0.0.0.0 0.0.0.0 198.51.100.1
+  R1# show ip route static
+  Gateway of last resort is 198.51.100.1 to network 0.0.0.0
+  S*    0.0.0.0/0 [1/0] via 198.51.100.1
+  S     172.20.0.0/16 [1/0] via 10.0.0.6
+  S     192.168.77.0/24 [1/0] via 10.0.0.6
+  ```
+
+  `[1/0]` = distance administrative 1 / métrique 0.
+
+  ### La route par défaut
+
+  `0.0.0.0 0.0.0.0` correspond à **toutes** les destinations : elle sert quand aucune route plus
+  précise n'existe, typiquement vers Internet (*gateway of last resort*). Grâce à la règle de la
+  **correspondance la plus longue**, une route /24 l'emporte toujours sur la route par défaut
+  /0.
+
+  ### Saut suivant ou interface ?
+
+  - saut suivant (adresse du voisin) : la forme normale sur Ethernet ;
+  - interface de sortie seule : réservée aux liens point à point (série) ;
+  - les deux (`ip route ... gi0/1 10.0.0.6`) : route « entièrement spécifiée ».
+
+  ### Penser au retour
+
+  Une communication fonctionne dans les **deux sens** : le routeur d'en face doit aussi avoir une
+  route vers nos réseaux. Un ping qui échoue alors que l'aller est correct vient souvent d'un
+  retour manquant.
+
+  ### Pièges fréquents
+
+  - Mauvais masque (`255.255.0.0` au lieu de `255.255.255.0`).
+  - Saut suivant qui n'est pas dans un réseau connecté : la route n'est pas installée.
+  - Oublier la route retour sur l'autre routeur.
+
+  ### Pour le CCNA
+
+  Configurer et vérifier des routes statiques IPv4 (réseau, hôte, par défaut, flottante) est au
+  programme.
+docs:
+  - title: "Wikipédia — Table de routage"
+    url: https://fr.wikipedia.org/wiki/Table_de_routage
+  - title: "Wikipédia (EN) — Static routing"
+    url: https://en.wikipedia.org/wiki/Static_routing

@@ -1,0 +1,113 @@
+title: "Ticket : l'agence n'atteint plus rien"
+level: intermediaire
+order: 23
+device: router
+hostname: R-AGENCE
+tags: [dépannage, routage, static]
+summary: Diagnostiquer et corriger un routage statique cassé.
+description: |
+  **Ticket n° 4127** — « Depuis l'intervention d'hier soir, l'agence n'accède plus ni au site B ni
+  à Internet. »
+
+  Le schéma : `R-AGENCE` est relié à `R2` (`10.0.0.2`) par `G0/1` (`10.0.0.1/30`). `R2` mène au
+  site B (`192.168.2.0/24`) et à Internet.
+
+  Mène l'enquête avec `show ip interface brief`, `show ip route` et
+  `show running-config | include ip route`, puis corrige **toutes** les erreurs :
+
+  - le lien `G0/1` doit être actif ;
+  - une seule route vers le site B, avec le **bon masque** ;
+  - une route par défaut via un saut suivant **joignable**.
+initial: |
+  interface g0/0
+  ip address 192.168.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.0.0.1 255.255.255.252
+  shutdown
+  ip route 192.168.2.0 255.255.0.0 10.0.0.2
+  ip route 0.0.0.0 0.0.0.0 10.0.0.5
+checks:
+  - desc: Le lien G0/1 est actif
+    expr: not intf("g0/1").shutdown
+    hint: "show ip interface brief : G0/1 est administratively down"
+  - desc: Route vers 192.168.2.0/24 via 10.0.0.2, et plus de route au mauvais masque
+    expr: route("192.168.2.0", "255.255.255.0", "10.0.0.2") and not route("192.168.2.0", "255.255.0.0")
+    hint: "no ip route 192.168.2.0 255.255.0.0 10.0.0.2"
+  - desc: Route par défaut via 10.0.0.2, et plus de route vers 10.0.0.5
+    expr: route("0.0.0.0", "0.0.0.0", "10.0.0.2") and not route("0.0.0.0", "0.0.0.0", "10.0.0.5")
+    hint: "10.0.0.5 n'est pas dans le réseau 10.0.0.0/30 de G0/1"
+solution: |
+  configure terminal
+  interface g0/1
+  no shutdown
+  exit
+  no ip route 192.168.2.0 255.255.0.0 10.0.0.2
+  ip route 192.168.2.0 255.255.255.0 10.0.0.2
+  no ip route 0.0.0.0 0.0.0.0 10.0.0.5
+  ip route 0.0.0.0 0.0.0.0 10.0.0.2
+  end
+cours: |
+  ## Une méthode de dépannage
+
+  Face à un problème de connectivité, procède **couche par couche**, du bas vers le haut :
+
+  1. **physique / liaison** : l'interface est-elle `up/up` ? (`show ip interface brief`)
+     - `administratively down` → quelqu'un a tapé `shutdown` ;
+     - `down/down` → câble, port en face éteint ;
+     - `up/down` → encapsulation, horloge (série), keepalives ;
+  2. **adressage** : bonne adresse, bon masque, même réseau que le voisin ?
+  3. **routage** : `show ip route` contient-il une route vers la destination ? **et** le routeur
+     d'en face connaît-il le retour ?
+  4. **filtrage** : une ACL bloque-t-elle le trafic ?
+
+  ### Lire la table de routage
+
+  ```
+  R1# show ip route
+  Gateway of last resort is not set
+  C     10.0.0.0/30 is directly connected, GigabitEthernet0/1
+  S     172.16.0.0/16 [1/0] via 10.0.0.2
+  ```
+
+  Une route statique n'est installée que si son saut suivant est **résolu** par une autre route
+  (généralement un réseau connecté). Conséquences :
+
+  - interface éteinte → le réseau connecté disparaît → toutes les routes qui passent par ce saut
+    suivant disparaissent aussi ;
+  - saut suivant hors des réseaux connectés (`10.0.0.5` avec un /30 `10.0.0.0`–`10.0.0.3`) →
+    la route reste dans la configuration mais **jamais** dans la table.
+
+  ### Le piège du masque
+
+  `ip route 192.168.2.0 255.255.0.0 ...` désigne `192.168.0.0/16`. IOS accepte la commande mais la
+  route ne correspond plus au besoin (et attire aussi d'autres réseaux 192.168.x.x). Compare
+  toujours la ligne de configuration avec ce qu'affiche `show ip route`.
+
+  ### Corriger proprement
+
+  Une route statique se supprime en retapant **exactement** la même commande précédée de `no` :
+
+  ```
+  R1(config)# no ip route 172.16.0.0 255.255.0.0 10.0.0.2
+  R1(config)# do show running-config | include ip route
+  ```
+
+  Puis teste : `ping`, `traceroute` vers la destination, et `show ip route <adresse>` pour voir
+  quelle route est choisie.
+
+  ### Pièges fréquents
+
+  - Corriger un seul défaut et fermer le ticket : il y en a souvent plusieurs.
+  - Oublier le chemin **retour** : le ping part mais la réponse n'a pas de route.
+  - Ne pas documenter : note dans le ticket la cause, la correction et le test effectué.
+
+  ### Pour le CCNA
+
+  Les questions de dépannage demandent de repérer, dans une configuration ou une table de
+  routage, la ligne fautive : masque, saut suivant, interface éteinte ou distance administrative.
+docs:
+  - title: Wikipédia — Table de routage
+    url: https://fr.wikipedia.org/wiki/Table_de_routage
+  - title: Wikipédia (EN) — Static routing
+    url: https://en.wikipedia.org/wiki/Static_routing

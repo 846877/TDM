@@ -1,0 +1,38 @@
+# Serveur web interne d'« Ateliers Durand » : srv-web (nginx installé, non configuré), appli (application
+# de planning sur un réseau séparé) et admin (poste du LAN). Le port 443 de srv-web est publié sur 9461.
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    volumes: [cles:/lab-ssh]
+    extra_hosts:
+      - "intranet.durand.lan:10.172.0.10"
+      - "rh.durand.lan:10.172.0.10"
+    networks:
+      lan: {ipv4_address: 10.172.0.5}
+  srv-web:
+    build: {context: ., dockerfile: srv-web/Dockerfile}
+    hostname: srv-web
+    volumes: [cles:/lab-ssh]
+    ports: ["9461:443"]
+    networks:
+      lan: {ipv4_address: 10.172.0.10}
+      applis: {ipv4_address: 10.172.1.10}
+      publication: {}
+  appli:
+    build: {context: ., dockerfile: appli/Dockerfile}
+    hostname: appli
+    networks:
+      applis: {ipv4_address: 10.172.1.20}
+volumes:
+  cles:
+networks:
+  lan:
+    internal: true
+    ipam:
+      config: [{subnet: 10.172.0.0/24, ip_range: 10.172.0.128/28}]
+  applis:
+    internal: true
+    ipam:
+      config: [{subnet: 10.172.1.0/24, ip_range: 10.172.1.128/28}]
+  publication:

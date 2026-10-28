@@ -1,0 +1,128 @@
+title: Trier ses notes
+level: debutant
+order: 24
+tags: [listes, tuples, boucles]
+summary: Parcourir une liste, en construire une nouvelle et renvoyer un tuple.
+description: |
+  1. Écris `filtrer_notes(notes, seuil)` qui renvoie une **nouvelle liste** contenant les notes
+     supérieures ou égales à `seuil`, dans le même ordre. La liste d'origine ne doit pas être
+     modifiée.
+  2. Écris `extremes(notes)` qui renvoie le tuple `(plus_basse, plus_haute)` **sans utiliser
+     `min()` ni `max()`**. Si la liste est vide, renvoie `None`.
+
+  ```python
+  filtrer_notes([12, 8, 15, 10], 10)   # [12, 15, 10]
+  extremes([12, 8, 15, 10])            # (8, 15)
+  extremes([])                         # None
+  ```
+
+  Astuce : `liste.append(x)` ajoute un élément à la fin d'une liste.
+starter: |
+  def filtrer_notes(notes, seuil):
+      pass
+
+
+  def extremes(notes):
+      pass
+tests: |
+  def test_filtrer():
+      "Notes >= 10"
+      r = solution.filtrer_notes([12, 8, 15, 10], 10)
+      assert r == [12, 15, 10], f"attendu [12, 15, 10], obtenu {r!r}"
+
+  def test_filtrer_rien():
+      "Aucune note au-dessus du seuil"
+      r = solution.filtrer_notes([3, 5], 18)
+      assert r == [], f"attendu [], obtenu {r!r}"
+
+  def test_filtrer_ne_modifie_pas():
+      "La liste d'origine n'est pas modifiée"
+      notes = [4, 14, 9]
+      solution.filtrer_notes(notes, 10)
+      assert notes == [4, 14, 9], f"la liste d'origine a été modifiée : {notes!r}"
+
+  def test_extremes():
+      "Plus basse et plus haute"
+      r = solution.extremes([12, 8, 15, 10])
+      assert r == (8, 15), f"attendu (8, 15), obtenu {r!r}"
+
+  def test_extremes_negatifs():
+      "Fonctionne avec des nombres négatifs"
+      r = solution.extremes([-3, -10, -1])
+      assert r == (-10, -1), f"attendu (-10, -1), obtenu {r!r}"
+
+  def test_extremes_un():
+      "Un seul élément"
+      assert solution.extremes([7]) == (7, 7)
+
+  def test_extremes_vide():
+      "Liste vide -> None"
+      r = solution.extremes([])
+      assert r is None, f"attendu None, obtenu {r!r}"
+solution: |
+  def filtrer_notes(notes, seuil):
+      resultat = []
+      for note in notes:
+          if note >= seuil:
+              resultat.append(note)
+      return resultat
+
+
+  def extremes(notes):
+      if not notes:
+          return None
+      bas = haut = notes[0]
+      for note in notes[1:]:
+          if note < bas:
+              bas = note
+          if note > haut:
+              haut = note
+      return (bas, haut)
+cours: |
+  ## Nouvelle liste ou modification sur place ?
+
+  Deux familles d'opérations existent sur les listes :
+
+  - celles qui **modifient** la liste existante : `append`, `remove`, `sort`, `del l[i]`… ;
+  - celles qui **créent** une nouvelle liste : `sorted(l)`, `l + autre`, une tranche
+    `l[:]`, une compréhension.
+
+  ```python
+  a = [3, 1, 2]
+  b = a          # b et a désignent LA MÊME liste
+  b.append(4)
+  print(a)       # [3, 1, 2, 4]  surprise !
+  c = a[:]       # copie
+  ```
+
+  Une affectation ne copie jamais : elle donne un deuxième nom au même objet. Quand une
+  fonction reçoit une liste et la modifie, l'appelant voit la modification. Si l'énoncé
+  demande de ne pas toucher l'original, construis une **nouvelle** liste.
+
+  ## Filtrer
+
+  Le motif est : liste vide, boucle, condition, `append`.
+
+  ```python
+  mots = ["ok", "erreur", "ok", "timeout"]
+  problemes = []
+  for m in mots:
+      if m != "ok":
+          problemes.append(m)
+  ```
+
+  ## Trouver le minimum et le maximum en un seul passage
+
+  Initialise les deux « champions » avec le **premier élément** (et non avec 0 ou 100 : si
+  toutes les valeurs sont négatives, ou toutes supérieures à 100, le résultat serait faux),
+  puis parcours le reste en mettant à jour chacun. On fait ainsi un seul parcours : la
+  complexité est **O(n)**, comme `min` et `max` réunis.
+
+  ## Renvoyer `None`
+
+  `None` représente l'absence de valeur. Une fonction sans `return` renvoie `None`, mais il
+  vaut mieux l'écrire explicitement (`return None`) quand c'est un résultat prévu. Pour le
+  tester : `if resultat is None:` (on compare `None` avec `is`, pas `==`).
+docs:
+  - title: Tutoriel — compléments sur les listes
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#more-on-lists

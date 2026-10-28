@@ -1,0 +1,127 @@
+title: "Ticket : R3 ne forme aucun voisinage OSPF"
+level: avance
+order: 25
+device: router
+hostname: R3
+tags: [dépannage, ospf, router-id, passive-interface, timers]
+summary: Trouver et corriger quatre erreurs de configuration OSPF.
+description: |
+  **Ticket n° 4521** — « Depuis le remplacement de R3, le LAN `192.168.3.0/24` est injoignable
+  et R2 journalise *OSPF detected duplicate router-id 1.1.1.1*. »
+
+  Le plan d'adressage : `R3` est relié à `R2` par `G0/1` (`10.0.23.2/30`, zone `0`) ; son LAN est
+  sur `G0/0`. Les routeurs utilisent les timers par défaut et le router-id `N.N.N.N` (`R3` →
+  `3.3.3.3`).
+
+  Examine `show ip protocols`, `show ip ospf interface brief` et
+  `show running-config | section ospf`, puis corrige :
+
+  - le router-id (puis `clear ip ospf process` en mode privilégié) ;
+  - la déclaration du lien `10.0.23.0/30`, qui doit être dans la zone `0` ;
+  - le lien vers R2 ne doit pas être passif ; le LAN doit être annoncé **et** passif ;
+  - le timer hello de `G0/1`, différent de celui de R2.
+initial: |
+  interface g0/0
+  ip address 192.168.3.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.0.23.2 255.255.255.252
+  ip ospf hello-interval 30
+  no shutdown
+  router ospf 1
+  router-id 1.1.1.1
+  network 10.0.23.0 0.0.0.3 area 1
+  passive-interface g0/1
+checks:
+  - desc: Router-id 3.3.3.3
+    expr: d.ospf[1].router_id == "3.3.3.3"
+  - desc: 10.0.23.0/30 en zone 0 (et plus en zone 1)
+    expr: ospf_net("10.0.23.0", "0.0.0.3", 0) and not ospf_net("10.0.23.0", "0.0.0.3", 1)
+  - desc: G0/1 active, LAN 192.168.3.0/24 annoncé et passif
+    expr: not d.ospf[1].is_passive("g0/1") and d.ospf[1].is_passive("g0/0") and ospf_net("192.168.3.0", "0.0.0.255", 0)
+  - desc: Hello par défaut (10 s) sur G0/1
+    expr: intf("g0/1").ospf_hello in (None, 10)
+solution: |
+  configure terminal
+  router ospf 1
+  router-id 3.3.3.3
+  no network 10.0.23.0 0.0.0.3 area 1
+  network 10.0.23.0 0.0.0.3 area 0
+  network 192.168.3.0 0.0.0.255 area 0
+  no passive-interface g0/1
+  passive-interface g0/0
+  exit
+  interface g0/1
+  no ip ospf hello-interval
+  end
+  clear ip ospf process
+cours: |
+  ## Les conditions d'une adjacence OSPF
+
+  Deux routeurs ne deviennent voisins que si leurs **hellos** concordent. Doivent être
+  **identiques** :
+
+  - le **réseau et le masque** de l'interface (sauf en point à point) ;
+  - la **zone** ;
+  - les timers **hello** et **dead** ;
+  - le type de zone (stub, NSSA) et l'authentification ;
+  - le MTU (sinon blocage en `EXSTART/EXCHANGE`).
+
+  Doivent être **différents** : les **router-id**. Un router-id dupliqué empêche l'adjacence ou
+  corrompt la base de données (deux routeurs signent les mêmes LSA).
+
+  Enfin, une interface **passive** n'envoie ni ne reçoit de hellos : aucun voisin possible.
+
+  ### Méthode de diagnostic
+
+  ```
+  R1# show ip protocols
+    Router ID 4.4.4.4
+    Routing for Networks:
+      10.4.0.0 0.0.0.255 area 0
+    Passive Interface(s):
+      GigabitEthernet0/2
+  R1# show ip ospf interface brief
+  Interface  PID  Area  IP Address/Mask   Cost  State Nbrs F/C
+  Gi0/1      1    0     10.4.0.1/24       1     DR    0/0
+  R1# show ip ospf interface gi0/1 | include Timer
+    Timer intervals configured, Hello 10, Dead 40, Wait 40, Retransmit 5
+  R1# show ip ospf neighbor
+  ```
+
+  `Nbrs 0/0` sur un lien où un voisin est attendu : comparer timers, zone, masque et passivité
+  avec ceux du voisin.
+
+  ### Corriger le router-id
+
+  Le router-id est choisi **au démarrage du processus** : `router-id` explicite, sinon la plus
+  haute adresse de loopback, sinon la plus haute adresse d'interface active. Un changement ne
+  prend effet qu'après `clear ip ospf process` (qui coupe brièvement les adjacences) ou un
+  redémarrage.
+
+  ### Corriger une déclaration network
+
+  Une commande `network` erronée se supprime avec `no network ... area ...` **identique**, puis on
+  saisit la bonne. Variante plus lisible et moins sujette aux erreurs : `ip ospf 1 area 0`
+  directement sur l'interface.
+
+  ### Timers
+
+  `no ip ospf hello-interval` rétablit la valeur par défaut (10 s sur Ethernet), et le dead
+  interval par défaut redevient 4 × hello.
+
+  ### Pièges fréquents
+
+  - Corriger le router-id sans réinitialiser le processus.
+  - `passive-interface default` mal maîtrisé : penser au `no passive-interface` sur les liens.
+  - Wildcard trop large qui met une interface dans la mauvaise zone.
+
+  ### Pour le CCNA / CCNP ENCOR
+
+  Le dépannage des adjacences OSPF (router-id, zones, timers, passivité) est un grand classique
+  des deux examens.
+docs:
+  - title: RFC 2328 — OSPF Version 2
+    url: https://www.rfc-editor.org/rfc/rfc2328
+  - title: Cisco — OSPF Design Guide
+    url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/7039-1.html

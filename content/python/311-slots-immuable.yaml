@@ -1,0 +1,223 @@
+title: Objets légers et immuables avec __slots__
+level: expert
+order: 11
+tags: [__slots__, méthodes spéciales, pickle, mémoire]
+summary: Un vecteur sans __dict__, immuable, hachable et sérialisable.
+description: |
+  Quand on crée des millions de petits objets, le `__dict__` de chaque instance coûte cher.
+  `__slots__` le supprime. Crée une classe `Vecteur3(x, y, z)` :
+
+  - déclare `__slots__ = ("x", "y", "z")` : les instances n'ont **pas** de `__dict__`, et ajouter un
+    autre attribut lève `AttributeError` ;
+  - **immuable** : après la construction, modifier ou supprimer `x`, `y` ou `z` lève `AttributeError`
+    (redéfinis `__setattr__` et `__delattr__` ; dans `__init__`, passe par `object.__setattr__`) ;
+  - `==` compare les coordonnées, et `hash` est cohérent (utilisable dans un `set`) ;
+  - `repr(v)` donne `"Vecteur3(1, 2, 3)"`, et `x, y, z = v` fonctionne (`__iter__`) ;
+  - `v + w`, `v * 2` et `2 * v`, `v @ w` (produit scalaire), `abs(v)` (norme) ;
+  - **sérialisable** : `pickle` et `copy.deepcopy` doivent fonctionner.
+
+  Ce dernier point est piégeux : par défaut, `pickle` recrée un objet vide puis **réaffecte** les
+  slots un par un… ce que ton `__setattr__` interdit ! Définis `__reduce__` pour indiquer comment
+  reconstruire l'objet : `(Vecteur3, (x, y, z))`.
+
+  Enfin, une sous-classe `VecteurNomme(Vecteur3)` ajoute un attribut `nom` (4e argument) en déclarant
+  seulement `__slots__ = ("nom",)` ; elle reste sans `__dict__`, immuable et sérialisable, et son
+  `repr` est `"VecteurNomme(1, 2, 3, 'A')"`.
+starter: |
+  import math
+
+
+  class Vecteur3:
+      def __init__(self, x, y, z):
+          self.x, self.y, self.z = x, y, z
+
+
+  class VecteurNomme(Vecteur3):
+      pass
+tests: |
+  import copy, math, pickle
+
+  V = lambda *a: solution.Vecteur3(*a)
+
+  def leve(exception, appel, quoi):
+      try:
+          appel()
+      except exception:
+          pass
+      else:
+          raise AssertionError(f"{exception.__name__} attendue : {quoi}")
+
+  def test_slots():
+      "Pas de __dict__"
+      v = V(1, 2, 3)
+      assert solution.Vecteur3.__slots__ == ("x", "y", "z")
+      assert not hasattr(v, "__dict__"), "les instances ne doivent pas avoir de __dict__"
+      leve(AttributeError, lambda: setattr(v, "w", 4), "ajout d'un attribut")
+
+  def test_immuable():
+      "Coordonnées non modifiables"
+      v = V(1, 2, 3)
+      leve(AttributeError, lambda: setattr(v, "x", 10), "modification de x")
+      leve(AttributeError, lambda: delattr(v, "y"), "suppression de y")
+      assert (v.x, v.y, v.z) == (1, 2, 3)
+
+  def test_egalite_hash():
+      "Égalité et hash"
+      assert V(1, 2, 3) == V(1, 2, 3) and V(1, 2, 3) != V(3, 2, 1)
+      assert len({V(1, 2, 3), V(1, 2, 3), V(0, 0, 0)}) == 2
+      assert (V(1, 2, 3) == (1, 2, 3)) is False
+
+  def test_repr_iter():
+      "repr et décomposition"
+      v = V(1, 2, 3)
+      assert repr(v) == "Vecteur3(1, 2, 3)"
+      x, y, z = v
+      assert (x, y, z) == (1, 2, 3)
+
+  def test_operations():
+      "Opérations"
+      assert V(1, 2, 3) + V(1, 1, 1) == V(2, 3, 4)
+      assert V(1, 2, 3) * 2 == V(2, 4, 6) and 2 * V(1, 2, 3) == V(2, 4, 6)
+      assert V(1, 2, 3) @ V(4, 5, 6) == 32
+      assert math.isclose(abs(V(2, 3, 6)), 7)
+
+  def test_pickle():
+      "pickle et deepcopy"
+      v = V(1, 2, 3)
+      assert pickle.loads(pickle.dumps(v)) == v
+      assert copy.deepcopy(v) == v and copy.copy(v) == v
+
+  def test_sous_classe():
+      "VecteurNomme"
+      n = solution.VecteurNomme(1, 2, 3, "A")
+      assert solution.VecteurNomme.__slots__ == ("nom",), "la sous-classe ne déclare que le nouveau slot"
+      assert not hasattr(n, "__dict__"), "la sous-classe ne doit pas avoir de __dict__"
+      assert n.nom == "A" and isinstance(n, solution.Vecteur3)
+      assert repr(n) == "VecteurNomme(1, 2, 3, 'A')"
+      leve(AttributeError, lambda: setattr(n, "nom", "B"), "modification de nom")
+      r = pickle.loads(pickle.dumps(n))
+      assert type(r) is solution.VecteurNomme and r.nom == "A" and (r.x, r.y, r.z) == (1, 2, 3)
+solution: |
+  import math
+
+
+  class Vecteur3:
+      __slots__ = ("x", "y", "z")
+
+      def __init__(self, x, y, z):
+          object.__setattr__(self, "x", x)
+          object.__setattr__(self, "y", y)
+          object.__setattr__(self, "z", z)
+
+      def __setattr__(self, nom, valeur):
+          raise AttributeError(f"{type(self).__name__} est immuable")
+
+      def __delattr__(self, nom):
+          raise AttributeError(f"{type(self).__name__} est immuable")
+
+      def _args(self):
+          return (self.x, self.y, self.z)
+
+      def __iter__(self):
+          return iter((self.x, self.y, self.z))
+
+      def __eq__(self, autre):
+          if not isinstance(autre, Vecteur3):
+              return NotImplemented
+          return self._args() == autre._args()
+
+      def __hash__(self):
+          return hash(self._args())
+
+      def __repr__(self):
+          return f"{type(self).__name__}({', '.join(map(repr, self._args()))})"
+
+      def __add__(self, autre):
+          return Vecteur3(self.x + autre.x, self.y + autre.y, self.z + autre.z)
+
+      def __mul__(self, k):
+          return Vecteur3(self.x * k, self.y * k, self.z * k)
+
+      __rmul__ = __mul__
+
+      def __matmul__(self, autre):
+          return self.x * autre.x + self.y * autre.y + self.z * autre.z
+
+      def __abs__(self):
+          return math.sqrt(self @ self)
+
+      def __reduce__(self):
+          return (type(self), self._args())
+
+
+  class VecteurNomme(Vecteur3):
+      __slots__ = ("nom",)
+
+      def __init__(self, x, y, z, nom):
+          super().__init__(x, y, z)
+          object.__setattr__(self, "nom", nom)
+
+      def _args(self):
+          return (self.x, self.y, self.z, self.nom)
+cours: |
+  ## Le coût du `__dict__`
+
+  Par défaut, chaque instance stocke ses attributs dans un dictionnaire `__dict__`. C'est
+  souple (on peut ajouter des attributs à la volée) mais coûteux : un dictionnaire pèse
+  plusieurs centaines d'octets. Pour des millions de petits objets (points, paquets
+  réseau, cellules), cela compte.
+
+  ## `__slots__`
+
+  ```python
+  class Point:
+      __slots__ = ("x", "y")
+      def __init__(self, x, y):
+          self.x = x
+          self.y = y
+
+  p = Point(1, 2)
+  p.z = 3          # AttributeError : pas de slot 'z'
+  hasattr(p, "__dict__")   # False
+  ```
+
+  Chaque nom de `__slots__` devient un descripteur au niveau de la classe, et la valeur est
+  stockée dans un emplacement fixe de l'objet. Gain mémoire typique : 40 à 60 %, et accès un
+  peu plus rapide.
+
+  ## Immuabilité
+
+  Pour interdire toute modification, on redéfinit `__setattr__` et `__delattr__` pour lever
+  `AttributeError`. Mais alors `__init__` ne peut plus affecter normalement : il contourne la
+  redéfinition en appelant l'implémentation de base, `object.__setattr__(self, "x", x)`.
+  C'est exactement ce que fait `@dataclass(frozen=True)`.
+
+  ## Hash et égalité
+
+  Un objet immuable peut être hachable : définis `__hash__` à partir des **mêmes** valeurs
+  que `__eq__` (le plus simple : `hash((self.x, self.y, self.z))`).
+
+  ## Sérialisation : le piège
+
+  Par défaut, `pickle` (et `copy`) recrée un objet vide sans appeler `__init__`, puis
+  **restaure son état** en affectant les attributs… ce que notre `__setattr__` interdit.
+  La solution la plus propre : `__reduce__`, qui indique à pickle **comment reconstruire**
+  l'objet :
+
+  ```python
+  def __reduce__(self):
+      return (Point, (self.x, self.y))   # « rappelle Point(x, y) »
+  ```
+
+  `copy.copy` et `copy.deepcopy` utilisent aussi ce protocole. Alternative : `__getnewargs__`
+  ou `__getstate__` / `__setstate__`.
+
+  ## Mise en garde sur `pickle`
+
+  Ne jamais charger (`pickle.loads`) des données venant d'une source non fiable : un pickle
+  malveillant peut exécuter du code arbitraire. Pour échanger des données, préfère JSON.
+docs:
+  - title: Référence — __slots__
+    url: https://docs.python.org/fr/3/reference/datamodel.html#slots
+  - title: Module pickle (__reduce__, __getstate__)
+    url: https://docs.python.org/fr/3/library/pickle.html

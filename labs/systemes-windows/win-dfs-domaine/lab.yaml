@@ -1,0 +1,398 @@
+title: DFS de domaine - espace de noms et réplication DFS-R
+level: avance
+order: 2
+tags: [dfs, dfs-n, dfs-r, réplication, espace de noms, serveur de fichiers, haute disponibilité]
+summary: Construire un espace de noms DFS intégré au domaine sur deux serveurs, publier des dossiers, répliquer un partage avec DFS-R et surveiller la réplication.
+vagrant: bundled
+machine: dc01
+description: |
+  **Contexte.** Les *Ateliers Durand* ont désormais deux serveurs : le contrôleur de domaine, qui héberge
+  encore le partage `Commun`, et un vrai serveur de fichiers, `SRV-FIC01`, qui porte `Compta`. Les postes
+  utilisent des chemins `\\SRV-...` codés en dur : chaque migration casse les raccourcis. Objectif : un
+  chemin unique `\\durand.lan\Ressources`, disponible même si un serveur tombe, et un partage `Commun`
+  présent et synchronisé sur les deux machines.
+
+  **Machines** (prévoir **6 Go de RAM libres**) :
+
+  | VM | Système | Adresse LAN | Rôle |
+  |----|---------|-------------|------|
+  | `SRV-DC01` (terminal) | Windows Server 2022 (2 Go) | 192.168.10.10 | contrôleur de `durand.lan`, partage `Commun` (5 notes) |
+  | `SRV-FIC01` | Windows Server 2022 (2 Go) | 192.168.10.20 | serveur de fichiers joint, partages `Compta` et `Commun` (vide) |
+
+  Tu travailles depuis SRV-DC01 (compte `DURAND\vagrant`). Pour agir sur le serveur de fichiers :
+  `Invoke-Command -ComputerName SRV-FIC01 { ... }`, ou les paramètres `-ComputerName` des cmdlets.
+cours: |
+  ## Deux technologies sous un même nom
+
+  **DFS** regroupe deux services indépendants, que l'on combine souvent :
+
+  - **DFS-N** (*Namespaces*, espaces de noms) : une arborescence virtuelle de **liens** vers des partages
+    réels. Le client demande `\\durand.lan\Ressources\Compta`, le serveur d'espace de noms lui renvoie une
+    **référence** (*referral*) vers `\\SRV-FIC01\Compta`. Le chemin vu par les utilisateurs ne change plus
+    quand on déplace les données : on modifie la cible du lien, pas les raccourcis ni les GPO.
+  - **DFS-R** (*Replication*) : la synchronisation multi-maître d'un dossier entre plusieurs serveurs, par
+    blocs modifiés (compression différentielle à distance, RDC), avec un journal USN pour détecter les
+    changements. C'est aussi le moteur qui réplique le SYSVOL des contrôleurs de domaine.
+
+  ## Espace de noms autonome ou de domaine
+
+  Un espace **autonome** (`\\SRV-FIC01\Ressources`) est stocké dans le registre d'un seul serveur. Un espace
+  **de domaine** (`\\durand.lan\Ressources`) est stocké dans l'annuaire : son nom ne dépend d'aucun serveur
+  et il peut avoir **plusieurs serveurs d'espace de noms** (cibles de la racine). Le mode « Windows Server
+  2008 » (*Domain V2*) autorise plus de 5 000 dossiers et l'énumération basée sur l'accès.
+
+  ## Plusieurs cibles pour un dossier
+
+  Un dossier DFS peut pointer vers plusieurs partages identiques. Le client reçoit la liste triée (cibles du
+  **même site AD** d'abord, puis par coût, ou selon une priorité fixée) et bascule sur la suivante si la
+  première ne répond plus. Encore faut-il que les cibles contiennent **les mêmes données** : c'est le rôle de
+  DFS-R. Sans réplication, deux cibles d'un même dossier donnent des contenus différents selon le serveur.
+
+  ## La réplication DFS-R
+
+  On crée un **groupe de réplication** (les membres et leurs connexions), puis un ou plusieurs **dossiers
+  répliqués** avec le chemin local de chaque membre. À la première synchronisation, un membre est déclaré
+  **principal** : son contenu fait autorité, les fichiers des autres membres qui diffèrent sont déplacés dans
+  `DfsrPrivate\PreExisting`. Le **dossier intermédiaire** (*staging*) stocke les fichiers en cours
+  d'envoi : son **quota** (4 Go par défaut) doit dépasser la taille des 32 plus gros fichiers, sinon la
+  réplication rame. Les conflits (même fichier modifié des deux côtés) sont réglés au « dernier écrivain
+  gagne », le perdant étant rangé dans `DfsrPrivate\ConflictAndDeleted`.
+
+  ## Exploiter
+
+  DFS-R n'est **pas une sauvegarde** : une suppression est répliquée partout. On surveille le **backlog**
+  (fichiers en attente entre deux membres), les événements du journal *DFS Replication* et le rapport de
+  santé. Les membres lisent leur configuration dans l'annuaire toutes les 60 minutes environ :
+  `Update-DfsrConfigurationFromAD` (ou `dfsrdiag pollad`) accélère la prise en compte d'un changement.
+docs:
+  - title: Vue d'ensemble des espaces de noms DFS
+    url: https://learn.microsoft.com/fr-fr/windows-server/storage/dfs-namespaces/dfs-overview
+  - title: Vue d'ensemble de la réplication DFS
+    url: https://learn.microsoft.com/fr-fr/windows-server/storage/dfs-replication/dfsr-overview
+  - title: Module DFSN (PowerShell)
+    url: https://learn.microsoft.com/fr-fr/powershell/module/dfsn/
+  - title: Module DFSR (PowerShell)
+    url: https://learn.microsoft.com/fr-fr/powershell/module/dfsr/
+exercises:
+  - id: win-dfs-roles
+    title: Installer les services DFS sur les deux serveurs
+    description: |
+      Installe les services de rôle **Espaces de noms DFS** et **Réplication DFS** sur SRV-DC01 et sur
+      SRV-FIC01, ainsi que les **outils de gestion DFS** sur SRV-DC01.
+    hint: Install-WindowsFeature FS-DFS-Namespace, FS-DFS-Replication, RSAT-DFS-Mgmt-Con ; Invoke-Command -ComputerName SRV-FIC01 { Install-WindowsFeature FS-DFS-Namespace, FS-DFS-Replication }
+    cours: |
+      ```powershell
+      Install-WindowsFeature FS-DFS-Namespace, FS-DFS-Replication, RSAT-DFS-Mgmt-Con
+      Invoke-Command -ComputerName SRV-FIC01 { Install-WindowsFeature FS-DFS-Namespace, FS-DFS-Replication }
+      ```
+
+      Les deux services de rôle font partie de *Services de fichiers et de stockage*. Chaque serveur
+      d'espace de noms doit avoir le service **DFS Namespace** (`Dfs`), chaque membre d'un groupe de
+      réplication le service **DFS Replication** (`DFSR`). Les outils (`dfsmgmt.msc` et les modules
+      PowerShell `DFSN` et `DFSR`) peuvent être installés sur un seul serveur d'administration, ou sur un poste
+      avec les RSAT. Aucun redémarrage n'est nécessaire. Un contrôleur de domaine a déjà le service DFSR pour
+      son SYSVOL, mais pas le service de rôle de réplication des données.
+    docs:
+      - title: Installer les espaces de noms DFS
+        url: https://learn.microsoft.com/fr-fr/windows-server/storage/dfs-namespaces/deploying-dfs-namespaces
+    checks:
+      - desc: Espaces de noms, réplication et outils DFS sont installés sur SRV-DC01
+        run: |
+          @(Get-WindowsFeature FS-DFS-Namespace, FS-DFS-Replication, RSAT-DFS-Mgmt-Con | Where-Object Installed).Count -eq 3
+      - desc: Espaces de noms et réplication DFS sont installés sur SRV-FIC01
+        machine: fic01
+        run: |
+          @(Get-WindowsFeature FS-DFS-Namespace, FS-DFS-Replication | Where-Object Installed).Count -eq 2
+    solution: |
+      Install-WindowsFeature FS-DFS-Namespace, FS-DFS-Replication, RSAT-DFS-Mgmt-Con | Out-Null
+      Invoke-Command -ComputerName SRV-FIC01 { Install-WindowsFeature FS-DFS-Namespace, FS-DFS-Replication } | Out-Null
+
+  - id: win-dfs-racine
+    title: L'espace de noms de domaine
+    description: |
+      Crée l'espace de noms **de domaine** `\\durand.lan\Ressources`, en mode Windows Server 2008, dont la
+      première cible de racine est le partage `\\SRV-DC01\Ressources` (dossier `C:\DFSRoots\Ressources`,
+      lecture pour tout le monde).
+    hint: New-SmbShare Ressources -Path C:\DFSRoots\Ressources -ReadAccess '*S-1-1-0' ; New-DfsnRoot -Path \\durand.lan\Ressources -TargetPath \\SRV-DC01\Ressources -Type DomainV2
+    cours: |
+      ```powershell
+      New-Item C:\DFSRoots\Ressources -ItemType Directory
+      New-SmbShare -Name Ressources -Path C:\DFSRoots\Ressources -ReadAccess '*S-1-1-0'
+      New-DfsnRoot -Path \\durand.lan\Ressources -TargetPath \\SRV-DC01\Ressources -Type DomainV2
+      Get-DfsnRoot -Path \\durand.lan\Ressources
+      ```
+
+      Le partage de racine ne contient que des **points d'analyse** (*reparse points*) créés par le service :
+      on n'y stocke pas de fichiers, et la lecture suffit à tous. L'objet de l'espace de noms est écrit dans
+      `CN=Dfs-Configuration,CN=System,DC=durand,DC=lan`. Le chemin `\\durand.lan\...` se résout grâce au
+      service DFS des contrôleurs de domaine, qui fournissent aux clients la liste des serveurs de la racine.
+    docs:
+      - title: New-DfsnRoot
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dfsn/new-dfsnroot
+      - title: Créer un espace de noms DFS
+        url: https://learn.microsoft.com/fr-fr/windows-server/storage/dfs-namespaces/create-a-dfs-namespace
+    checks:
+      - desc: \\durand.lan\Ressources existe en mode Domain V2
+        run: |
+          (Get-DfsnRoot -Path '\\durand.lan\Ressources' -ErrorAction SilentlyContinue).Type -eq 'Domain V2'
+      - desc: \\SRV-DC01\Ressources en est une cible
+        run: |
+          [bool](Get-DfsnRootTarget -Path '\\durand.lan\Ressources' | Where-Object TargetPath -like '\\SRV-DC01*\Ressources')
+    solution: |
+      New-Item C:\DFSRoots\Ressources -ItemType Directory -Force | Out-Null
+      New-SmbShare -Name Ressources -Path C:\DFSRoots\Ressources -ReadAccess '*S-1-1-0' | Out-Null
+      New-DfsnRoot -Path \\durand.lan\Ressources -TargetPath \\SRV-DC01\Ressources -Type DomainV2 | Out-Null
+
+  - id: win-dfs-racine-fic
+    title: Un second serveur d'espace de noms
+    description: |
+      Ajoute **SRV-FIC01** comme seconde cible de la racine `\\durand.lan\Ressources` (partage
+      `\\SRV-FIC01\Ressources` sur `C:\DFSRoots\Ressources`), pour que l'espace de noms survive à l'arrêt de
+      SRV-DC01.
+    hint: Invoke-Command -ComputerName SRV-FIC01 { New-Item C:\DFSRoots\Ressources -ItemType Directory ; New-SmbShare Ressources -Path C:\DFSRoots\Ressources -ReadAccess '*S-1-1-0' } ; New-DfsnRootTarget -Path \\durand.lan\Ressources -TargetPath \\SRV-FIC01\Ressources
+    cours: |
+      ```powershell
+      Invoke-Command -ComputerName SRV-FIC01 {
+          New-Item C:\DFSRoots\Ressources -ItemType Directory -Force
+          New-SmbShare -Name Ressources -Path C:\DFSRoots\Ressources -ReadAccess '*S-1-1-0' }
+      New-DfsnRootTarget -Path \\durand.lan\Ressources -TargetPath \\SRV-FIC01\Ressources
+      Get-DfsnRootTarget -Path \\durand.lan\Ressources
+      ```
+
+      Chaque serveur d'espace de noms garde une copie de la structure (lue dans l'annuaire) et répond aux
+      demandes de références. Avec deux cibles de racine, un client qui ne joint plus SRV-DC01 obtient les
+      références par SRV-FIC01. Les **dossiers** de l'espace de noms ne sont pas répliqués par DFS-R : seule
+      la configuration, stockée dans AD, est partagée. En production, on choisit des serveurs de fichiers ou
+      des DC de chaque site comme serveurs d'espace de noms.
+    docs:
+      - title: New-DfsnRootTarget
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dfsn/new-dfsnroottarget
+      - title: Ajouter des serveurs d'espace de noms
+        url: https://learn.microsoft.com/fr-fr/windows-server/storage/dfs-namespaces/add-namespace-servers-to-increase-availability
+    checks:
+      - desc: La racine a deux cibles, dont \\SRV-FIC01\Ressources
+        run: |
+          $t = Get-DfsnRootTarget -Path '\\durand.lan\Ressources'
+          @($t).Count -ge 2 -and [bool]($t | Where-Object TargetPath -like '\\SRV-FIC01*\Ressources')
+      - desc: Les deux cibles sont en ligne
+        run: |
+          -not (Get-DfsnRootTarget -Path '\\durand.lan\Ressources' | Where-Object State -ne 'Online')
+    solution: |
+      Invoke-Command -ComputerName SRV-FIC01 {
+          New-Item C:\DFSRoots\Ressources -ItemType Directory -Force | Out-Null
+          if (-not (Get-SmbShare -Name Ressources -ErrorAction SilentlyContinue)) { New-SmbShare -Name Ressources -Path C:\DFSRoots\Ressources -ReadAccess '*S-1-1-0' | Out-Null }
+      }
+      New-DfsnRootTarget -Path \\durand.lan\Ressources -TargetPath \\SRV-FIC01\Ressources | Out-Null
+
+  - id: win-dfs-dossiers
+    title: Publier les partages dans l'espace de noms
+    description: |
+      Crée deux dossiers DFS :
+
+      | Dossier | Cible |
+      |---------|-------|
+      | `\\durand.lan\Ressources\Commun` | `\\SRV-DC01\Commun` |
+      | `\\durand.lan\Ressources\Compta` | `\\SRV-FIC01\Compta` |
+
+      Vérifie ensuite que `\\durand.lan\Ressources\Compta\budget-2025.csv` est lisible depuis SRV-DC01.
+    hint: New-DfsnFolder -Path \\durand.lan\Ressources\Commun -TargetPath \\SRV-DC01\Commun ; idem Compta vers \\SRV-FIC01\Compta
+    cours: |
+      ```powershell
+      New-DfsnFolder -Path \\durand.lan\Ressources\Commun -TargetPath \\SRV-DC01\Commun
+      New-DfsnFolder -Path \\durand.lan\Ressources\Compta -TargetPath \\SRV-FIC01\Compta
+      Get-Content \\durand.lan\Ressources\Compta\budget-2025.csv
+      ```
+
+      Un dossier DFS est un **lien** : les droits d'accès restent ceux du partage et du NTFS de la cible, DFS
+      n'ajoute aucune sécurité. Le client met les références en **cache** (300 s pour les dossiers par
+      défaut, `-TimeToLiveSec`) : après un changement de cible, `dfsutil cache referral flush` sur le poste
+      évite d'attendre. Une bonne pratique consiste à publier les lecteurs réseau et les redirections de
+      dossiers sur les chemins DFS, jamais sur les noms de serveurs.
+    docs:
+      - title: New-DfsnFolder
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dfsn/new-dfsnfolder
+    checks:
+      - desc: Le dossier Commun pointe vers \\SRV-DC01\Commun
+        run: |
+          [bool](Get-DfsnFolderTarget -Path '\\durand.lan\Ressources\Commun' -ErrorAction SilentlyContinue | Where-Object TargetPath -like '\\SRV-DC01*\Commun')
+      - desc: Le dossier Compta pointe vers \\SRV-FIC01\Compta et le fichier budget est lisible
+        run: |
+          $t = Get-DfsnFolderTarget -Path '\\durand.lan\Ressources\Compta' -ErrorAction SilentlyContinue | Where-Object TargetPath -like '\\SRV-FIC01*\Compta'
+          [bool]$t -and (Test-Path '\\durand.lan\Ressources\Compta\budget-2025.csv')
+    solution: |
+      New-DfsnFolder -Path \\durand.lan\Ressources\Commun -TargetPath \\SRV-DC01\Commun | Out-Null
+      New-DfsnFolder -Path \\durand.lan\Ressources\Compta -TargetPath \\SRV-FIC01\Compta | Out-Null
+
+  - id: win-dfs-groupe
+    title: Le groupe de réplication Commun-RG
+    description: |
+      Crée le groupe de réplication **`Commun-RG`** avec le dossier répliqué **`Commun`**, entre SRV-DC01
+      (chemin `C:\Partages\Commun`, **membre principal**) et SRV-FIC01 (`C:\Partages\Commun`), reliés par une
+      connexion bidirectionnelle. Force ensuite les deux serveurs à relire leur configuration dans l'annuaire.
+    hint: New-DfsReplicationGroup Commun-RG | New-DfsReplicatedFolder -FolderName Commun ; Add-DfsrMember -GroupName Commun-RG -ComputerName SRV-DC01, SRV-FIC01 ; Add-DfsrConnection ; Set-DfsrMembership -ContentPath ... -PrimaryMember $true ; Update-DfsrConfigurationFromAD
+    cours: |
+      ```powershell
+      New-DfsReplicationGroup -GroupName Commun-RG | New-DfsReplicatedFolder -FolderName Commun
+      Add-DfsrMember -GroupName Commun-RG -ComputerName SRV-DC01, SRV-FIC01
+      Add-DfsrConnection -GroupName Commun-RG -SourceComputerName SRV-DC01 -DestinationComputerName SRV-FIC01
+      Set-DfsrMembership -GroupName Commun-RG -FolderName Commun -ComputerName SRV-DC01 -ContentPath C:\Partages\Commun -PrimaryMember $true -Force
+      Set-DfsrMembership -GroupName Commun-RG -FolderName Commun -ComputerName SRV-FIC01 -ContentPath C:\Partages\Commun -Force
+      Update-DfsrConfigurationFromAD -ComputerName SRV-DC01, SRV-FIC01
+      ```
+
+      `Add-DfsrConnection` crée par défaut les **deux** sens de la connexion. Le membre principal ne compte
+      que pour la synchronisation initiale : ensuite tous les membres sont égaux (multi-maître). L'événement
+      **4104** du journal *DFS Replication* sur SRV-FIC01 signale la fin de la synchronisation initiale.
+    docs:
+      - title: New-DfsReplicationGroup
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dfsr/new-dfsreplicationgroup
+      - title: Set-DfsrMembership
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dfsr/set-dfsrmembership
+    checks:
+      - desc: Commun-RG contient le dossier répliqué Commun et les deux membres
+        run: |
+          $m = Get-DfsrMember -GroupName Commun-RG -ErrorAction SilentlyContinue
+          [bool](Get-DfsReplicatedFolder -GroupName Commun-RG -FolderName Commun -ErrorAction SilentlyContinue) -and @($m).Count -eq 2
+      - desc: Les deux appartenances pointent vers C:\Partages\Commun et une connexion existe
+        run: |
+          $ms = Get-DfsrMembership -GroupName Commun-RG -FolderName Commun
+          @($ms | Where-Object ContentPath -eq 'C:\Partages\Commun').Count -eq 2 -and [bool](Get-DfsrConnection -GroupName Commun-RG)
+    solution: |
+      New-DfsReplicationGroup -GroupName Commun-RG | New-DfsReplicatedFolder -FolderName Commun | Out-Null
+      Add-DfsrMember -GroupName Commun-RG -ComputerName SRV-DC01, SRV-FIC01 | Out-Null
+      Add-DfsrConnection -GroupName Commun-RG -SourceComputerName SRV-DC01 -DestinationComputerName SRV-FIC01 | Out-Null
+      Set-DfsrMembership -GroupName Commun-RG -FolderName Commun -ComputerName SRV-DC01 -ContentPath C:\Partages\Commun -PrimaryMember $true -Force | Out-Null
+      Set-DfsrMembership -GroupName Commun-RG -FolderName Commun -ComputerName SRV-FIC01 -ContentPath C:\Partages\Commun -Force | Out-Null
+      Update-DfsrConfigurationFromAD -ComputerName SRV-DC01, SRV-FIC01
+
+  - id: win-dfs-test
+    title: Prouver que la réplication fonctionne
+    description: |
+      Une fois la synchronisation initiale terminée (les 5 notes de service sont arrivées sur SRV-FIC01),
+      crée sur SRV-DC01 le fichier `C:\Partages\Commun\test-replication.txt` contenant `Réplication OK` et
+      vérifie qu'il apparaît sur SRV-FIC01.
+    hint: Invoke-Command -ComputerName SRV-FIC01 { Get-ChildItem C:\Partages\Commun } ; Get-WinEvent -ComputerName SRV-FIC01 -FilterHashtable @{LogName='DFS Replication'; Id=4104}
+    cours: |
+      ```powershell
+      Get-WinEvent -ComputerName SRV-FIC01 -FilterHashtable @{ LogName = 'DFS Replication'; Id = 4104 } -MaxEvents 1
+      Set-Content C:\Partages\Commun\test-replication.txt 'Réplication OK'
+      Invoke-Command -ComputerName SRV-FIC01 { Get-Content C:\Partages\Commun\test-replication.txt }
+      ```
+
+      Un fichier de test est la preuve la plus simple. La réplication d'un petit fichier prend quelques
+      secondes sur un réseau local ; si rien n'arrive, vérifie dans l'ordre : la synchronisation initiale
+      (événement 4104), le pare-feu (RPC dynamique), la relecture de la configuration (`dfsrdiag pollad`),
+      le backlog. `dfsrdiag propagationtest` automatise ce test sur un groupe entier. Ne modifie pas le
+      fichier sur les deux serveurs en même temps : c'est un conflit, résolu au profit du dernier écrivain.
+    docs:
+      - title: Start-DfsrPropagationTest
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dfsr/start-dfsrpropagationtest
+    checks:
+      - desc: Les 5 notes de service sont arrivées sur SRV-FIC01
+        machine: fic01
+        run: |
+          @(Get-ChildItem C:\Partages\Commun -Filter 'note-de-service-*.txt').Count -eq 5
+      - desc: test-replication.txt est présent sur SRV-FIC01 avec le bon contenu
+        machine: fic01
+        run: |
+          (Get-Content C:\Partages\Commun\test-replication.txt -ErrorAction SilentlyContinue) -match 'OK'
+    solution: |
+      Update-DfsrConfigurationFromAD -ComputerName SRV-DC01, SRV-FIC01
+      $limite = (Get-Date).AddMinutes(15)
+      while ((Get-Date) -lt $limite -and @(Invoke-Command -ComputerName SRV-FIC01 { Get-ChildItem C:\Partages\Commun -Filter 'note-de-service-*.txt' }).Count -lt 5) { Start-Sleep 15 }
+      Set-Content C:\Partages\Commun\test-replication.txt 'Réplication OK'
+      $limite = (Get-Date).AddMinutes(5)
+      while ((Get-Date) -lt $limite -and -not (Invoke-Command -ComputerName SRV-FIC01 { Test-Path C:\Partages\Commun\test-replication.txt })) { Start-Sleep 5 }
+
+  - id: win-dfs-cible-dossier
+    title: Deux cibles pour le dossier Commun
+    description: |
+      Maintenant que `Commun` est identique sur les deux serveurs, ajoute la cible `\\SRV-FIC01\Commun` au
+      dossier `\\durand.lan\Ressources\Commun`, et donne à `\\SRV-FIC01\Commun` la priorité **la plus haute**
+      (`GlobalHigh`) : le contrôleur de domaine ne doit servir les fichiers qu'en secours.
+    hint: New-DfsnFolderTarget -Path \\durand.lan\Ressources\Commun -TargetPath \\SRV-FIC01\Commun -ReferralPriorityClass GlobalHigh
+    cours: |
+      ```powershell
+      New-DfsnFolderTarget -Path \\durand.lan\Ressources\Commun -TargetPath \\SRV-FIC01\Commun -ReferralPriorityClass GlobalHigh
+      Get-DfsnFolderTarget -Path \\durand.lan\Ressources\Commun | Format-Table TargetPath, State, ReferralPriorityClass
+      ```
+
+      Par défaut, les références sont triées par **site** : cibles du site du client d'abord, dans un ordre
+      aléatoire (répartition de charge). Les classes de priorité modifient ce tri : `GlobalHigh` place la
+      cible en tête quel que soit le site, `GlobalLow` en dernier recours. Ici, on soulage le DC tout en le
+      gardant comme secours. Pour une maintenance, `Set-DfsnFolderTarget -State Offline` retire
+      temporairement une cible des références sans la supprimer.
+    docs:
+      - title: New-DfsnFolderTarget
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dfsn/new-dfsnfoldertarget
+      - title: Définir l'ordre des références
+        url: https://learn.microsoft.com/fr-fr/windows-server/storage/dfs-namespaces/set-the-ordering-method-for-targets-in-referrals
+    checks:
+      - desc: Le dossier Commun a deux cibles
+        run: |
+          @(Get-DfsnFolderTarget -Path '\\durand.lan\Ressources\Commun').Count -ge 2
+      - desc: \\SRV-FIC01\Commun a la priorité GlobalHigh
+        run: |
+          [bool](Get-DfsnFolderTarget -Path '\\durand.lan\Ressources\Commun' | Where-Object { $_.TargetPath -like '\\SRV-FIC01*\Commun' -and $_.ReferralPriorityClass -eq 'GlobalHigh' })
+    solution: |
+      New-DfsnFolderTarget -Path \\durand.lan\Ressources\Commun -TargetPath \\SRV-FIC01\Commun -ReferralPriorityClass GlobalHigh | Out-Null
+
+  - id: win-dfs-staging
+    title: Dimensionner le dossier intermédiaire
+    description: |
+      Les dessins techniques de l'atelier pèsent lourd. Porte le **quota du dossier intermédiaire** du
+      dossier répliqué `Commun` à **8192 Mo** sur les deux membres.
+    hint: Set-DfsrMembership -GroupName Commun-RG -FolderName Commun -ComputerName SRV-DC01, SRV-FIC01 -StagingPathQuotaInMB 8192 -Force
+    cours: |
+      ```powershell
+      Set-DfsrMembership -GroupName Commun-RG -FolderName Commun -ComputerName SRV-DC01, SRV-FIC01 -StagingPathQuotaInMB 8192 -Force
+      Get-DfsrMembership -GroupName Commun-RG | Format-Table ComputerName, StagingPathQuotaInMB
+      ```
+
+      Avant d'envoyer un fichier, DFS-R le compresse et le place dans le dossier intermédiaire
+      (`DfsrPrivate\Staging`). Si le quota est trop petit, le service passe son temps à purger puis
+      recréer ces fichiers (événements 4202 et 4204 « quota atteint ») et la réplication ralentit. La règle
+      de Microsoft : au minimum la taille cumulée des **32 plus gros fichiers** du dossier répliqué (16 pour
+      un membre en lecture seule). On la calcule avec
+      `Get-ChildItem -Recurse | Sort-Object Length -Descending | Select-Object -First 32 | Measure-Object Length -Sum`.
+    docs:
+      - title: Dimensionner le dossier intermédiaire DFS-R
+        url: https://learn.microsoft.com/fr-fr/windows-server/storage/dfs-replication/dfsr-faq
+    checks:
+      - desc: Le quota intermédiaire vaut 8192 Mo sur les deux membres
+        run: |
+          @(Get-DfsrMembership -GroupName Commun-RG -FolderName Commun | Where-Object StagingPathQuotaInMB -eq 8192).Count -eq 2
+    solution: |
+      Set-DfsrMembership -GroupName Commun-RG -FolderName Commun -ComputerName SRV-DC01, SRV-FIC01 -StagingPathQuotaInMB 8192 -Force | Out-Null
+
+  - id: win-dfs-sante
+    title: Surveiller la réplication
+    description: |
+      Produis dans `C:\Admin` le **rapport de santé** DFS-R du groupe `Commun-RG` (référence : SRV-DC01) et
+      vérifie que le **backlog** de SRV-DC01 vers SRV-FIC01 est vide.
+    hint: Write-DfsrHealthReport -GroupName Commun-RG -ReferenceComputerName SRV-DC01 -Path C:\Admin ; Get-DfsrBacklog -GroupName Commun-RG -FolderName Commun -SourceComputerName SRV-DC01 -DestinationComputerName SRV-FIC01
+    cours: |
+      ```powershell
+      Write-DfsrHealthReport -GroupName Commun-RG -ReferenceComputerName SRV-DC01 -Path C:\Admin
+      Get-DfsrBacklog -GroupName Commun-RG -FolderName Commun -SourceComputerName SRV-DC01 -DestinationComputerName SRV-FIC01 -Verbose
+      ```
+
+      Le **backlog** est la liste des modifications pas encore reçues par un membre : il doit revenir à zéro
+      régulièrement. Un backlog qui grossit indique un lien saturé, un quota intermédiaire trop petit ou un
+      membre arrêté. Le rapport de santé (HTML) résume l'état de chaque membre, les erreurs récentes et
+      l'espace utilisé. En production, on surveille ces indicateurs (et les événements 2213 « arrêt
+      incorrect », 4012 « déconnecté trop longtemps ») avec l'outil de supervision de l'entreprise.
+    docs:
+      - title: Get-DfsrBacklog
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dfsr/get-dfsrbacklog
+      - title: Write-DfsrHealthReport
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dfsr/write-dfsrhealthreport
+    checks:
+      - desc: Un rapport de santé HTML est présent dans C:\Admin
+        run: |
+          [bool](Get-ChildItem C:\Admin -Filter '*.htm*' -ErrorAction SilentlyContinue | Where-Object { Select-String -Path $_.FullName -Pattern 'Commun-RG' -SimpleMatch -Quiet })
+      - desc: Le backlog SRV-DC01 vers SRV-FIC01 est vide
+        run: |
+          -not (Get-DfsrBacklog -GroupName Commun-RG -FolderName Commun -SourceComputerName SRV-DC01 -DestinationComputerName SRV-FIC01 -ErrorAction Stop)
+    solution: |
+      Write-DfsrHealthReport -GroupName Commun-RG -ReferenceComputerName SRV-DC01 -Path C:\Admin | Out-Null

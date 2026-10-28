@@ -1,0 +1,284 @@
+title: Sérialiseur JSON fidèle aux types
+level: expert
+order: 29
+tags: [json, sérialisation, récursivité, dataclasses]
+summary: Faire l'aller-retour JSON sans perdre les tuples, ensembles, dates, Decimal ni dataclasses.
+description: |
+  `json.dumps` ne connaît que les dictionnaires à clés texte, listes, chaînes, nombres, booléens et `None`.
+  Un tuple redevient une liste, un `set` ou une date provoquent une erreur… Écris un sérialiseur qui
+  produit du **JSON valide** et permet un aller-retour **exact** :
+
+  - `serialiser(objet) -> str`
+  - `deserialiser(texte) -> objet`, avec `deserialiser(serialiser(x)) == x` **et les mêmes types**,
+    récursivement.
+
+  Types à gérer, imbriqués de toutes les façons possibles :
+
+  - `None`, `bool`, `int`, `float`, `str`, `list` ;
+  - `dict` — y compris avec des clés **non textuelles** (`int`, `tuple`…) ;
+  - `tuple`, `set`, `frozenset`, `bytes`, `complex`, `decimal.Decimal` ;
+  - `datetime.datetime` (avec ou sans fuseau horaire), `datetime.date` ;
+  - les classes décorées par `@serialisable` : des **dataclasses** enregistrées par leur nom, recréées
+    à partir de leurs champs.
+
+  Tout autre type lève `TypeError` à la sérialisation.
+
+  Le piège : tu vas sûrement représenter les types spéciaux par des objets JSON marqués, par exemple
+  `{"__type__": "tuple", "valeurs": [...]}`. Un dictionnaire **ordinaire** de l'utilisateur qui contient
+  justement une clé `"__type__"` doit lui aussi survivre à l'aller-retour !
+
+  Autres pièges : `True` est un `int`, `datetime` est une sous-classe de `date`, et un
+  `bytes` n'est pas du texte (pense à `base64` ou `bytes.hex`).
+starter: |
+  import base64
+  import dataclasses
+  import datetime
+  import decimal
+  import json
+
+
+  def serialisable(classe):
+      return classe
+
+
+  def serialiser(objet):
+      pass
+
+
+  def deserialiser(texte):
+      pass
+tests: |
+  import dataclasses, datetime, decimal, json
+
+  def identique(a, b):
+      if type(a) is not type(b):
+          return False
+      if isinstance(a, dict):
+          return a.keys() == b.keys() and all(identique(a[k], b[k]) for k in a) and \
+              all(type(k1) is type(k2) for k1, k2 in zip(sorted(a, key=repr), sorted(b, key=repr)))
+      if isinstance(a, (list, tuple)):
+          return len(a) == len(b) and all(map(identique, a, b))
+      if isinstance(a, (set, frozenset)):
+          return a == b and sorted(map(repr, a)) == sorted(map(repr, b))
+      if dataclasses.is_dataclass(a):
+          return all(identique(getattr(a, f.name), getattr(b, f.name)) for f in dataclasses.fields(a))
+      if isinstance(a, datetime.datetime):
+          return a == b and a.utcoffset() == b.utcoffset()
+      return a == b
+
+  def aller_retour(x):
+      texte = solution.serialiser(x)
+      assert isinstance(texte, str), "serialiser doit renvoyer une chaîne"
+      json.loads(texte)  # doit être du JSON valide
+      y = solution.deserialiser(texte)
+      assert identique(x, y), f"aller-retour raté : {x!r} → {y!r}"
+
+  def test_simples():
+      "Types JSON natifs"
+      for x in [None, True, False, 0, -12, 3.5, "texte", "", [], {}, [1, "a", None], {"a": [1, {"b": 2.0}]}]:
+          aller_retour(x)
+
+  def test_bool_int():
+      "bool et int ne se confondent pas"
+      aller_retour([True, 1, 0, False, 1.0])
+
+  def test_conteneurs():
+      "tuple, set, frozenset"
+      aller_retour((1, 2, (3, "a")))
+      aller_retour({1, 2, 3})
+      aller_retour(frozenset({"a", (1, 2)}))
+      aller_retour([(), set(), frozenset()])
+
+  def test_cles_non_textuelles():
+      "Dictionnaires à clés non textuelles"
+      aller_retour({1: "un", 2: "deux"})
+      aller_retour({(0, 0): "origine", (1, 2): [3]})
+      aller_retour({"1": "texte", 1: "entier"})
+
+  def test_divers():
+      "bytes, complex, Decimal"
+      aller_retour(b"\x00\xffoctets")
+      aller_retour(complex(1.5, -2))
+      aller_retour(decimal.Decimal("0.1000"))
+      aller_retour([decimal.Decimal("-3.14159265358979323846"), b""])
+
+  def test_dates():
+      "date et datetime (avec fuseau)"
+      aller_retour(datetime.date(2026, 10, 18))
+      aller_retour(datetime.datetime(2026, 10, 18, 10, 30, 5, 123456))
+      tz = datetime.timezone(datetime.timedelta(hours=2))
+      aller_retour({"rdv": datetime.datetime(2026, 10, 18, 10, 30, tzinfo=tz)})
+
+  def test_cle_piege():
+      "Un dict utilisateur avec une clé __type__"
+      aller_retour({"__type__": "tuple", "valeurs": [1, 2]})
+      aller_retour([{"__type__": "x"}, {"__type__": {"__type__": "set"}}])
+
+  def test_dataclasses():
+      "Dataclasses enregistrées"
+      @solution.serialisable
+      @dataclasses.dataclass
+      class Point:
+          x: int
+          y: int
+      @solution.serialisable
+      @dataclasses.dataclass
+      class Trace:
+          nom: str
+          points: list
+          tags: frozenset = frozenset()
+      aller_retour(Trace("aller", [Point(0, 0), Point(1, 2)], frozenset({"gps"})))
+      aller_retour({"p": Point(-1, 5), "t": (Point(0, 1),)})
+
+  def test_type_inconnu():
+      "Type non géré : TypeError"
+      class Inconnu:
+          pass
+      try:
+          solution.serialiser([1, Inconnu()])
+      except TypeError:
+          pass
+      else:
+          raise AssertionError("TypeError attendue")
+
+  def test_imbrication():
+      "Imbrication complexe"
+      tz = datetime.timezone.utc
+      x = {"liste": [(1, {2, 3}), {frozenset({1}): b"x"}], ("cle", 1): {"__type__": decimal.Decimal("2.50")},
+           "date": [datetime.date(2000, 1, 1), datetime.datetime(2000, 1, 1, tzinfo=tz)], "n": None}
+      aller_retour(x)
+solution: |
+  import base64
+  import dataclasses
+  import datetime
+  import decimal
+  import json
+
+  _CLASSES = {}
+  T = "__type__"
+
+
+  def serialisable(classe):
+      if not dataclasses.is_dataclass(classe):
+          raise TypeError("seules les dataclasses peuvent être enregistrées")
+      _CLASSES[classe.__qualname__] = classe
+      return classe
+
+
+  def _encoder(o):
+      if o is None or isinstance(o, (bool, int, float, str)):
+          return o                                   # bool est un int : rien à faire de spécial ici
+      if isinstance(o, list):
+          return [_encoder(v) for v in o]
+      if isinstance(o, dict):
+          if all(isinstance(k, str) for k in o) and T not in o:
+              return {k: _encoder(v) for k, v in o.items()}
+          return {T: "dict", "paires": [[_encoder(k), _encoder(v)] for k, v in o.items()]}
+      if isinstance(o, tuple):
+          return {T: "tuple", "valeurs": [_encoder(v) for v in o]}
+      if isinstance(o, frozenset):
+          return {T: "frozenset", "valeurs": [_encoder(v) for v in o]}
+      if isinstance(o, set):
+          return {T: "set", "valeurs": [_encoder(v) for v in o]}
+      if isinstance(o, bytes):
+          return {T: "bytes", "b64": base64.b64encode(o).decode("ascii")}
+      if isinstance(o, complex):
+          return {T: "complex", "re": o.real, "im": o.imag}
+      if isinstance(o, decimal.Decimal):
+          return {T: "decimal", "valeur": str(o)}
+      if isinstance(o, datetime.datetime):               # avant date : datetime hérite de date
+          return {T: "datetime", "iso": o.isoformat()}
+      if isinstance(o, datetime.date):
+          return {T: "date", "iso": o.isoformat()}
+      if dataclasses.is_dataclass(o) and _CLASSES.get(type(o).__qualname__) is type(o):
+          champs = {f.name: _encoder(getattr(o, f.name)) for f in dataclasses.fields(o)}
+          return {T: "dataclass", "classe": type(o).__qualname__, "champs": champs}
+      raise TypeError(f"type non sérialisable : {type(o).__name__}")
+
+
+  def _decoder(o):
+      if isinstance(o, list):
+          return [_decoder(v) for v in o]
+      if not isinstance(o, dict):
+          return o
+      if T not in o:
+          return {k: _decoder(v) for k, v in o.items()}
+      genre = o[T]
+      if genre == "dict":
+          return {_decoder(k): _decoder(v) for k, v in o["paires"]}
+      if genre in ("tuple", "set", "frozenset"):
+          return {"tuple": tuple, "set": set, "frozenset": frozenset}[genre](_decoder(v) for v in o["valeurs"])
+      if genre == "bytes":
+          return base64.b64decode(o["b64"])
+      if genre == "complex":
+          return complex(o["re"], o["im"])
+      if genre == "decimal":
+          return decimal.Decimal(o["valeur"])
+      if genre == "datetime":
+          return datetime.datetime.fromisoformat(o["iso"])
+      if genre == "date":
+          return datetime.date.fromisoformat(o["iso"])
+      if genre == "dataclass":
+          return _CLASSES[o["classe"]](**{k: _decoder(v) for k, v in o["champs"].items()})
+      raise ValueError(f"type inconnu dans le JSON : {genre}")
+
+
+  def serialiser(objet):
+      return json.dumps(_encoder(objet))
+
+
+  def deserialiser(texte):
+      return _decoder(json.loads(texte))
+cours: |
+  ## Ce que JSON ne sait pas représenter
+
+  JSON connaît : objet (clés **texte** uniquement), tableau, chaîne, nombre, booléen, `null`.
+  Un tuple devient une liste, une clé entière devient une chaîne (`{1: "a"}` → `{"1": "a"}`),
+  et `set`, `bytes`, `datetime`, `Decimal` provoquent une `TypeError`. L'aller-retour n'est
+  donc pas fidèle.
+
+  ## Étiqueter les types
+
+  La solution classique : représenter chaque valeur « spéciale » par un objet JSON étiqueté :
+
+  ```json
+  {"__type__": "tuple", "valeur": [1, 2]}
+  {"__type__": "bytes", "valeur": "aGVsbG8="}
+  ```
+
+  Le désérialiseur lit l'étiquette et reconstruit le bon type. Encodages naturels :
+  `bytes` en base64 (`base64.b64encode(b).decode("ascii")`), `datetime` en ISO 8601
+  (`isoformat()` / `fromisoformat()`, qui préservent le fuseau), `Decimal` en chaîne (pour ne
+  pas perdre de précision), `complex` en paire `[réel, imaginaire]`.
+
+  ## Ambiguïté et échappement
+
+  Que se passe-t-il si les données contiennent **déjà** un dictionnaire avec une clé
+  `"__type__"` ? Pour éviter toute confusion, on encode **tous** les dictionnaires de façon
+  uniforme (par exemple comme liste de paires clé/valeur encodées), ce qui règle aussi le
+  problème des clés non textuelles.
+
+  ## Récursion et ordre des tests
+
+  Un encodeur récursif teste le type de chaque valeur et s'appelle sur les éléments.
+  Attention aux pièges d'héritage : `bool` est un `int`, `datetime` est un `date` ; teste le
+  plus **spécifique** en premier ou compare `type(x) is ...`. Les `float` spéciaux (`nan`,
+  `inf`) ne sont pas du JSON standard.
+
+  ## Classes enregistrées
+
+  Un décorateur `@serialisable` ajoute la classe à un **registre** `nom → classe`. À la
+  désérialisation, on ne recrée **que** des classes présentes dans ce registre : c'est une
+  mesure de sécurité. `dataclasses.fields(obj)` liste les champs à encoder.
+
+  ## Pourquoi pas `pickle` ?
+
+  `pickle` fait tout cela (et plus), mais n'est pas lisible, dépend de Python, et surtout
+  **exécute du code** au chargement : désérialiser un pickle non fiable est une faille
+  critique. Un format explicite à base de JSON avec une liste blanche de types est sûr et
+  interopérable.
+docs:
+  - title: Module json (JSONEncoder, object_hook)
+    url: https://docs.python.org/fr/3/library/json.html
+  - title: Module base64
+    url: https://docs.python.org/fr/3/library/base64.html

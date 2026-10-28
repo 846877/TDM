@@ -1,0 +1,20 @@
+# Poste de contrôle Ansible et deux serveurs web gérés par SSH.
+# La clé SSH est partagée par un volume nommé (pas de montage de dossier).
+services:
+  control:
+    build: ./control
+    hostname: control
+    volumes:
+      - cles:/cles
+  web1:
+    build: ./cible
+    hostname: web1
+    volumes:
+      - cles:/cles:ro
+  web2:
+    build: ./cible
+    hostname: web2
+    volumes:
+      - cles:/cles:ro
+volumes:
+  cles: {}

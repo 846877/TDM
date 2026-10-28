@@ -1,0 +1,443 @@
+title: Premier contrôleur de domaine Active Directory
+level: intermediaire
+order: 1
+tags: [windows server, active directory, ad ds, dns, contrôleur de domaine, forêt, sites, ntp]
+summary: Promouvoir un Windows Server 2022 en premier contrôleur du domaine durand.lan, puis rendre le DNS, les sites, l'heure et la corbeille AD propres.
+vagrant: bundled
+machine: dc01
+description: |
+  **Contexte.** *Ateliers Durand* (80 salariés, siège à Lyon) quitte le groupe de travail : chaque poste a ses
+  comptes locaux, plus personne ne sait qui a accès à quoi. La direction valide la création d'un domaine
+  **Active Directory** `durand.lan` (nom NetBIOS `DURAND`).
+
+  **Machine.** `SRV-DC01`, Windows Server 2022, adresse fixe `192.168.10.10/24` sur la carte `LAN`. La carte
+  `NAT` sert uniquement à Vagrant et à l'accès Internet. Le mot de passe DSRM imposé est `Azerty123!`
+  (voir `C:\Admin\LISEZMOI.txt`).
+
+  La promotion **redémarre le serveur** : le terminal se déconnecte, attends deux à cinq minutes puis
+  reconnecte-toi. Les vérifications suivantes n'ont de sens qu'une fois le domaine créé.
+cours: |
+  ## Pourquoi un domaine ?
+
+  En **groupe de travail**, chaque machine a sa propre base de comptes (SAM) : un salarié a un compte par
+  poste, un mot de passe changé ici ne l'est pas là, et donner un accès à un dossier partagé oblige à créer le
+  même compte sur le serveur. Un **domaine Active Directory** centralise : un seul compte par personne, des
+  groupes utilisables sur toutes les machines, des stratégies de groupe (GPO) appliquées à des centaines de
+  postes, une authentification Kerberos unique (*single sign-on*).
+
+  ## Le vocabulaire
+
+  | Terme | Définition |
+  |-------|------------|
+  | **AD DS** | *Active Directory Domain Services*, le rôle qui fait d'un serveur un contrôleur de domaine |
+  | **Contrôleur de domaine (DC)** | serveur qui héberge une copie de l'annuaire et authentifie les utilisateurs |
+  | **Domaine** | frontière d'administration et de réplication (`durand.lan`) |
+  | **Forêt** | ensemble de domaines qui partagent un schéma ; le premier domaine en est la racine |
+  | **Schéma** | la liste des classes d'objets (utilisateur, ordinateur...) et de leurs attributs |
+  | **Unité d'organisation (OU)** | dossier de l'annuaire pour ranger les objets, déléguer et lier des GPO |
+  | **Site** | groupe de sous-réseaux bien reliés ; guide la réplication et le choix du DC le plus proche |
+  | **SYSVOL / NETLOGON** | partages répliqués qui contiennent les GPO et les scripts d'ouverture de session |
+  | **DSRM** | mode de restauration des services d'annuaire, avec son propre mot de passe de secours |
+
+  ## DNS : le système nerveux d'AD
+
+  Un client trouve un contrôleur de domaine **par le DNS**, grâce aux enregistrements **SRV** (`_ldap._tcp.dc._msdcs.durand.lan`,
+  `_kerberos._tcp...`). Conséquences pratiques :
+
+  - le DC est presque toujours aussi **serveur DNS** (l'assistant l'installe), avec des zones **intégrées à
+    AD** (répliquées avec l'annuaire, mises à jour dynamiques sécurisées) ;
+  - **tous les membres du domaine**, DC compris, utilisent comme serveur DNS **les DC**, jamais un DNS
+    public : la résolution Internet passe par des **redirecteurs** configurés sur le DC ;
+  - une machine à plusieurs cartes réseau enregistre **toutes** ses adresses : sur un DC, une carte qui ne
+    doit pas servir (ici `NAT`) doit être exclue, sinon les clients reçoivent une adresse injoignable.
+
+  Neuf pannes AD sur dix sont des pannes DNS.
+
+  ## Préparer, installer, promouvoir
+
+  1. **Prérequis** : nom définitif (renommer un DC est pénible), adresse IP fixe, DNS de la carte pointé sur
+     lui-même (ou sur un DC existant), heure correcte, mises à jour faites.
+  2. **Installer le rôle** : `Install-WindowsFeature AD-Domain-Services -IncludeManagementTools`. Le rôle
+     installé ne fait rien seul : le serveur n'est pas encore DC.
+  3. **Promouvoir** : `Install-ADDSForest` (nouvelle forêt), `Install-ADDSDomainController` (DC
+     supplémentaire), `Install-ADDSDomain` (domaine enfant). Le Gestionnaire de serveur appelle les mêmes
+     commandes et propose d'exporter le script.
+
+  Pendant la promotion, les comptes locaux du serveur deviennent des comptes du domaine : l'administrateur
+  local devient `DURAND\Administrateur`.
+
+  ## Après la promotion
+
+  - **Vérifier** : `dcdiag`, services `NTDS`, `DNS`, `Netlogon`, `KDC`, partages `SYSVOL` et `NETLOGON`,
+    enregistrements SRV ;
+  - **DNS** : redirecteurs, zone de recherche inversée, cartes exclues de l'enregistrement ;
+  - **Sites** : renommer `Default-First-Site-Name` et déclarer les sous-réseaux ;
+  - **Heure** : Kerberos refuse un écart de plus de 5 minutes. Le DC qui détient le rôle **émulateur PDC**
+    est la référence de temps du domaine : c'est lui, et lui seul, qu'on synchronise sur une source externe ;
+  - **Corbeille AD** : désactivée par défaut, elle permet de restaurer un objet supprimé avec tous ses
+    attributs. On l'active dès le premier jour, car elle ne protège que les suppressions postérieures ;
+  - **Structure d'OU** : on ne laisse pas les objets dans les conteneurs par défaut `Users` et `Computers`,
+    sur lesquels on ne peut pas lier de GPO.
+
+  ## Les outils
+
+  `dsa.msc` (Utilisateurs et ordinateurs AD), `dssite.msc` (Sites et services), `dnsmgmt.msc`, le **Centre
+  d'administration AD** (`dsac.exe`, qui affiche l'historique PowerShell de chaque action), les modules
+  PowerShell `ADDSDeployment`, `ActiveDirectory` et `DnsServer`.
+docs:
+  - title: Installer Active Directory Domain Services (niveau 100)
+    url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/deploy/install-active-directory-domain-services--level-100-
+  - title: Install-ADDSForest
+    url: https://learn.microsoft.com/fr-fr/powershell/module/addsdeployment/install-addsforest
+  - title: Vue d'ensemble d'Active Directory Domain Services
+    url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/get-started/virtual-dc/active-directory-domain-services-overview
+exercises:
+  - id: win-dc-dns-client
+    title: Le futur DC doit se demander à lui-même
+    description: |
+      Premier prérequis : la carte `LAN` n'a **aucun serveur DNS**. Configure-la pour qu'elle utilise
+      **le serveur lui-même** (`192.168.10.10`, ou `127.0.0.1` en second). Ne touche pas à la carte `NAT`.
+    hint: Set-DnsClientServerAddress -InterfaceAlias LAN -ServerAddresses 192.168.10.10,127.0.0.1
+    cours: |
+      ```powershell
+      Get-NetIPConfiguration -InterfaceAlias LAN
+      Set-DnsClientServerAddress -InterfaceAlias LAN -ServerAddresses 192.168.10.10,127.0.0.1
+      Get-DnsClientServerAddress -InterfaceAlias LAN -AddressFamily IPv4
+      ```
+
+      Un contrôleur de domaine enregistre ses propres enregistrements SRV dans le DNS qu'il interroge : s'il
+      pointe vers un DNS public (box, 8.8.8.8), ces enregistrements partent dans le vide et aucun client ne le
+      trouvera. Microsoft recommande pour un DC qu'il soit lui-même son DNS, avec son adresse IP (ou un autre
+      DC) en premier et `127.0.0.1` en dernier recours. Pendant la promotion, l'assistant ajuste lui-même ces
+      réglages s'ils manquent, mais un administrateur ne laisse pas une carte de serveur sans DNS.
+    checks:
+      - desc: La carte LAN utilise le serveur lui-même comme DNS
+        run: |
+          $dns = (Get-DnsClientServerAddress -InterfaceAlias LAN -AddressFamily IPv4).ServerAddresses
+          [bool]($dns | Where-Object { $_ -in '192.168.10.10', '127.0.0.1' })
+      - desc: L'adresse fixe 192.168.10.10/24 est toujours en place
+        run: |
+          $ip = Get-NetIPAddress -InterfaceAlias LAN -AddressFamily IPv4 -IPAddress 192.168.10.10 -ErrorAction SilentlyContinue
+          [bool]$ip -and $ip.PrefixLength -eq 24 -and $ip.PrefixOrigin -eq 'Manual'
+    solution: |
+      Set-DnsClientServerAddress -InterfaceAlias LAN -ServerAddresses 192.168.10.10,127.0.0.1
+
+  - id: win-dc-role
+    title: Installer le rôle AD DS
+    description: |
+      Installe le rôle **Services AD DS** avec ses **outils d'administration** (module PowerShell
+      `ActiveDirectory`, consoles). Ne promeus pas encore le serveur.
+    hint: Install-WindowsFeature AD-Domain-Services -IncludeManagementTools
+    cours: |
+      ```powershell
+      Get-WindowsFeature AD-Domain-Services, RSAT-AD*
+      Install-WindowsFeature AD-Domain-Services -IncludeManagementTools
+      ```
+
+      Installer le **rôle** copie les binaires et les outils : le serveur n'est pas encore contrôleur de
+      domaine. Le Gestionnaire de serveur affiche alors un drapeau jaune « Promouvoir ce serveur en
+      contrôleur de domaine ». Le paramètre `-IncludeManagementTools` ajoute les fonctionnalités `RSAT-AD-*`
+      (consoles `dsa.msc`, `dssite.msc`, Centre d'administration AD, module PowerShell). Sans lui, le serveur
+      serait administrable seulement à distance. Aucun redémarrage n'est nécessaire à cette étape.
+    checks:
+      - desc: Le rôle AD-Domain-Services est installé
+        run: |
+          (Get-WindowsFeature AD-Domain-Services).Installed
+      - desc: Les outils d'administration AD (module PowerShell) sont installés
+        run: |
+          (Get-WindowsFeature RSAT-AD-PowerShell).Installed -and (Get-WindowsFeature RSAT-ADDS).Installed
+    solution: |
+      Install-WindowsFeature AD-Domain-Services -IncludeManagementTools | Out-Null
+
+  - id: win-dc-foret
+    title: Créer la forêt durand.lan
+    description: |
+      Promeus `SRV-DC01` en **premier contrôleur de domaine d'une nouvelle forêt** :
+
+      - domaine `durand.lan`, nom NetBIOS `DURAND` ;
+      - avec le **serveur DNS** ;
+      - mot de passe DSRM `Azerty123!`.
+
+      Le serveur redémarre : reconnecte-toi après quelques minutes.
+    hint: Install-ADDSForest -DomainName durand.lan -DomainNetbiosName DURAND -InstallDns -SafeModeAdministratorPassword (ConvertTo-SecureString 'Azerty123!' -AsPlainText -Force) -Force
+    cours: |
+      ```powershell
+      $dsrm = ConvertTo-SecureString 'Azerty123!' -AsPlainText -Force
+      Test-ADDSForestInstallation -DomainName durand.lan -SafeModeAdministratorPassword $dsrm
+      Install-ADDSForest -DomainName durand.lan -DomainNetbiosName DURAND -InstallDns `
+          -SafeModeAdministratorPassword $dsrm -Force
+      ```
+
+      `Test-ADDSForestInstallation` vérifie les prérequis sans rien changer. Les avertissements sur la
+      délégation DNS (« impossible de créer une délégation ») sont normaux pour un domaine en `.lan` qui n'a
+      pas de zone parente. Les niveaux fonctionnels par défaut (`WinThreshold`, soit 2016) conviennent tant
+      qu'aucun DC plus ancien n'existe. Le mot de passe **DSRM** sert à démarrer le DC en mode restauration
+      (restauration de l'annuaire, réparation) : il est propre à chaque DC et doit être consigné dans le
+      coffre des mots de passe. Après le redémarrage, `Get-ADDomain` confirme la création.
+    checks:
+      - desc: Le domaine durand.lan (NetBIOS DURAND) existe
+        run: |
+          $d = Get-ADDomain
+          $d.DNSRoot -eq 'durand.lan' -and $d.NetBIOSName -eq 'DURAND'
+      - desc: SRV-DC01 est contrôleur de domaine (rôle 5 = contrôleur principal)
+        run: |
+          (Get-CimInstance Win32_ComputerSystem).DomainRole -ge 4
+    solution: |
+      Install-ADDSForest -DomainName durand.lan -DomainNetbiosName DURAND -InstallDns -SafeModeAdministratorPassword (ConvertTo-SecureString 'Azerty123!' -AsPlainText -Force) -Force
+
+  - id: win-dc-sante
+    title: Bilan de santé après promotion
+    description: |
+      Vérifie que le contrôleur fonctionne : services `NTDS`, `DNS`, `Netlogon` et `Kdc` démarrés, partages
+      `SYSVOL` et `NETLOGON` publiés, enregistrement SRV `_ldap._tcp.dc._msdcs.durand.lan` présent. Enregistre
+      la sortie complète de **dcdiag** dans `C:\Admin\dcdiag.txt`.
+    hint: dcdiag /v > C:\Admin\dcdiag.txt ; Get-SmbShare SYSVOL,NETLOGON ; Resolve-DnsName _ldap._tcp.dc._msdcs.durand.lan -Type SRV
+    cours: |
+      ```powershell
+      Get-Service NTDS, DNS, Netlogon, Kdc
+      Get-SmbShare SYSVOL, NETLOGON
+      Resolve-DnsName _ldap._tcp.dc._msdcs.durand.lan -Type SRV
+      dcdiag /v > C:\Admin\dcdiag.txt
+      Select-String 'failed|échoué' C:\Admin\dcdiag.txt
+      ```
+
+      `dcdiag` enchaîne une trentaine de tests (connectivité, réplication, publication, services, journaux).
+      Juste après la promotion, quelques erreurs passagères dans le journal *DFS Replication* ou
+      *System* sont fréquentes : on relance le test dix minutes plus tard. Le partage `SYSVOL` n'apparaît
+      qu'une fois la réplication DFSR initialisée : s'il manque, le DC n'annonce pas qu'il est prêt et les
+      GPO ne s'appliquent pas. `dcdiag /test:dns` approfondit la partie DNS.
+    checks:
+      - desc: Les services du contrôleur de domaine tournent
+        run: |
+          @(Get-Service NTDS, DNS, Netlogon, Kdc | Where-Object Status -ne 'Running').Count -eq 0
+      - desc: Les partages SYSVOL et NETLOGON sont publiés
+        run: |
+          @(Get-SmbShare | Where-Object Name -in 'SYSVOL', 'NETLOGON').Count -eq 2
+      - desc: Le rapport C:\Admin\dcdiag.txt existe et concerne SRV-DC01
+        run: |
+          (Test-Path C:\Admin\dcdiag.txt) -and [bool](Select-String -Path C:\Admin\dcdiag.txt -Pattern 'SRV-DC01' -Quiet)
+    solution: |
+      dcdiag /v | Out-File C:\Admin\dcdiag.txt -Encoding UTF8
+
+  - id: win-dc-redirecteur
+    title: Résoudre Internet par des redirecteurs
+    description: |
+      Les postes du domaine n'interrogeront que le DC. Pour qu'ils résolvent quand même les noms Internet,
+      configure sur le serveur DNS un **redirecteur** vers le DNS de la carte NAT, `10.0.2.3`.
+    hint: Set-DnsServerForwarder -IPAddress 10.0.2.3 ; Resolve-DnsName learn.microsoft.com -Server 127.0.0.1
+    cours: |
+      ```powershell
+      Get-DnsServerForwarder
+      Set-DnsServerForwarder -IPAddress 10.0.2.3 -PassThru
+      Resolve-DnsName learn.microsoft.com -Server 127.0.0.1
+      ```
+
+      Quand le serveur DNS ne fait autorité pour aucune zone correspondant au nom demandé, il essaie ses
+      **redirecteurs** (DNS du fournisseur, de la box, d'un résolveur filtrant), puis, à défaut, les
+      **indications de racine** (les 13 serveurs racine d'Internet). Les redirecteurs donnent une résolution
+      plus rapide et passent les pare-feu qui bloquent le DNS sortant direct. `Set-DnsServerForwarder`
+      remplace la liste ; `Add-DnsServerForwarder` ajoute une adresse. Dans une entreprise, on met deux
+      redirecteurs pour la redondance.
+    checks:
+      - desc: Le serveur DNS redirige vers 10.0.2.3
+        run: |
+          [bool]((Get-DnsServerForwarder).IPAddress.IPAddressToString -contains '10.0.2.3')
+    solution: |
+      Set-DnsServerForwarder -IPAddress 10.0.2.3 | Out-Null
+
+  - id: win-dc-dns-nat
+    title: La carte NAT n'a rien à faire dans le DNS
+    description: |
+      Le DC a enregistré **aussi** l'adresse de sa carte `NAT` (`10.0.2.15`), injoignable pour les autres
+      machines. Empêche la carte `NAT` de s'enregistrer dans le DNS, puis **supprime** de la zone
+      `durand.lan` tous les enregistrements A en `10.0.2.x` (pour `SRV-DC01` et pour le domaine lui-même).
+    hint: Set-DnsClient -InterfaceAlias NAT -RegisterThisConnectionsAddress $false ; Get-DnsServerResourceRecord -ZoneName durand.lan -RRType A | Where-Object { $_.RecordData.IPv4Address -like '10.0.2.*' } | Remove-DnsServerResourceRecord -ZoneName durand.lan -Force
+    cours: |
+      ```powershell
+      Get-DnsServerResourceRecord -ZoneName durand.lan -RRType A
+      Set-DnsClient -InterfaceAlias NAT -RegisterThisConnectionsAddress $false
+      Get-DnsServerResourceRecord -ZoneName durand.lan -RRType A |
+          Where-Object { $_.RecordData.IPv4Address -like '10.0.2.*' } |
+          Remove-DnsServerResourceRecord -ZoneName durand.lan -Force
+      ```
+
+      Un client qui reçoit l'adresse `10.0.2.15` pour `durand.lan` (l'enregistrement « identique au dossier
+      parent », utilisé pour trouver les GPO dans `\\durand.lan\SYSVOL`) échouera une fois sur deux : c'est
+      le genre de panne intermittente qui coûte des heures. Une autre protection consiste à n'écouter que sur
+      l'adresse LAN (*Propriétés du serveur DNS* › *Interfaces*, ou `dnscmd /ResetListenAddresses
+      192.168.10.10`). Le service Netlogon réenregistre ses SRV à son redémarrage ; `ipconfig /registerdns`
+      force la mise à jour des enregistrements A.
+    checks:
+      - desc: La carte NAT ne s'enregistre plus dans le DNS
+        run: |
+          -not (Get-DnsClient -InterfaceAlias NAT).RegisterThisConnectionsAddress
+      - desc: Plus aucun enregistrement A en 10.0.2.x dans durand.lan
+        run: |
+          @(Get-DnsServerResourceRecord -ZoneName durand.lan -RRType A | Where-Object { $_.RecordData.IPv4Address.IPAddressToString -like '10.0.2.*' }).Count -eq 0
+      - desc: SRV-DC01 garde son enregistrement en 192.168.10.10
+        run: |
+          [bool](Get-DnsServerResourceRecord -ZoneName durand.lan -Name srv-dc01 -RRType A | Where-Object { $_.RecordData.IPv4Address.IPAddressToString -eq '192.168.10.10' })
+    solution: |
+      Set-DnsClient -InterfaceAlias NAT -RegisterThisConnectionsAddress $false
+      Get-DnsServerResourceRecord -ZoneName durand.lan -RRType A | Where-Object { $_.RecordData.IPv4Address.IPAddressToString -like '10.0.2.*' } | Remove-DnsServerResourceRecord -ZoneName durand.lan -Force
+      if (-not (Get-DnsServerResourceRecord -ZoneName durand.lan -Name srv-dc01 -RRType A -ErrorAction SilentlyContinue)) {
+          Add-DnsServerResourceRecordA -ZoneName durand.lan -Name srv-dc01 -IPv4Address 192.168.10.10
+      }
+
+  - id: win-dc-zone-inverse
+    title: Zone de recherche inversée
+    description: |
+      Crée la zone de recherche inversée du réseau `192.168.10.0/24`, **intégrée à Active Directory**
+      (réplication à tous les DC du domaine), puis ajoute l'enregistrement **PTR** de `192.168.10.10` vers
+      `srv-dc01.durand.lan`.
+    hint: Add-DnsServerPrimaryZone -NetworkId 192.168.10.0/24 -ReplicationScope Domain ; Add-DnsServerResourceRecordPtr -ZoneName 10.168.192.in-addr.arpa -Name 10 -PtrDomainName srv-dc01.durand.lan
+    cours: |
+      ```powershell
+      Add-DnsServerPrimaryZone -NetworkId 192.168.10.0/24 -ReplicationScope Domain -DynamicUpdate Secure
+      Add-DnsServerResourceRecordPtr -ZoneName 10.168.192.in-addr.arpa -Name 10 -PtrDomainName srv-dc01.durand.lan
+      Resolve-DnsName 192.168.10.10
+      ```
+
+      La zone inversée répond à la question « quel nom pour cette adresse ? ». Son nom s'écrit à l'envers
+      suivi de `in-addr.arpa`. Elle n'est pas indispensable à AD, mais `nslookup` affiche « serveur inconnu »
+      sans elle, et des outils de supervision, de journalisation ou de sécurité s'en servent pour afficher
+      des noms à la place des adresses. Avec les mises à jour dynamiques **sécurisées**, les postes du
+      domaine y créeront eux-mêmes leur PTR. `-ReplicationScope Domain` stocke la zone dans l'annuaire :
+      plus de transfert de zone à gérer.
+    checks:
+      - desc: La zone 10.168.192.in-addr.arpa existe et est intégrée à AD
+        run: |
+          $z = Get-DnsServerZone -Name 10.168.192.in-addr.arpa
+          $z.IsDsIntegrated -and $z.IsReverseLookupZone
+      - desc: 192.168.10.10 se résout en srv-dc01.durand.lan
+        run: |
+          [bool](Get-DnsServerResourceRecord -ZoneName 10.168.192.in-addr.arpa -Name 10 -RRType Ptr | Where-Object { $_.RecordData.PtrDomainName -like 'srv-dc01.durand.lan*' })
+    solution: |
+      Add-DnsServerPrimaryZone -NetworkId 192.168.10.0/24 -ReplicationScope Domain -DynamicUpdate Secure
+      Add-DnsServerResourceRecordPtr -ZoneName 10.168.192.in-addr.arpa -Name 10 -PtrDomainName srv-dc01.durand.lan
+
+  - id: win-dc-site
+    title: Un site qui porte le nom du siège
+    description: |
+      Renomme le site `Default-First-Site-Name` en `LYON-SIEGE` et déclare le sous-réseau `192.168.10.0/24`
+      dans ce site (description : `Siège - LAN`).
+    hint: Get-ADReplicationSite Default-First-Site-Name | Rename-ADObject -NewName LYON-SIEGE ; New-ADReplicationSubnet -Name 192.168.10.0/24 -Site LYON-SIEGE -Description 'Siège - LAN'
+    cours: |
+      ```powershell
+      Get-ADReplicationSite -Filter *
+      Get-ADReplicationSite Default-First-Site-Name | Rename-ADObject -NewName LYON-SIEGE
+      New-ADReplicationSubnet -Name 192.168.10.0/24 -Site LYON-SIEGE -Description 'Siège - LAN'
+      ```
+
+      Un **site** représente un lieu bien connecté. Quand un poste s'authentifie, il cherche un DC **de son
+      site**, déterminé par son adresse IP et la liste des **sous-réseaux**. Sans sous-réseau déclaré, le
+      poste prend n'importe quel DC, éventuellement à l'autre bout d'un lien lent, et le journal Netlogon
+      du DC signale des « clients sans site » (événement 5807). Le jour où l'agence de Grenoble aura son DC,
+      il suffira de créer le site `GRENOBLE`, son sous-réseau et un lien de site. Renommer le site par défaut
+      est sans risque, c'est son GUID qui compte.
+    checks:
+      - desc: Le site LYON-SIEGE existe (et plus Default-First-Site-Name)
+        run: |
+          $names = (Get-ADReplicationSite -Filter *).Name
+          ($names -contains 'LYON-SIEGE') -and -not ($names -contains 'Default-First-Site-Name')
+      - desc: Le sous-réseau 192.168.10.0/24 est rattaché à LYON-SIEGE
+        run: |
+          (Get-ADReplicationSubnet -Identity 192.168.10.0/24).Site -like 'CN=LYON-SIEGE,*'
+    solution: |
+      Get-ADReplicationSite Default-First-Site-Name | Rename-ADObject -NewName LYON-SIEGE
+      New-ADReplicationSubnet -Name 192.168.10.0/24 -Site LYON-SIEGE -Description 'Siège - LAN'
+
+  - id: win-dc-heure
+    title: L'horloge de référence du domaine
+    description: |
+      `SRV-DC01` détient le rôle **émulateur PDC** : il doit prendre l'heure sur une source externe fiable.
+      Configure le service de temps pour se synchroniser **manuellement** sur `fr.pool.ntp.org`, comme
+      **source fiable** du domaine, puis applique la configuration.
+    hint: w32tm /config /manualpeerlist:"fr.pool.ntp.org,0x8" /syncfromflags:manual /reliable:yes /update ; Restart-Service w32time
+    cours: |
+      ```powershell
+      Get-ADDomain | Select-Object PDCEmulator
+      w32tm /config /manualpeerlist:"fr.pool.ntp.org,0x8" /syncfromflags:manual /reliable:yes /update
+      Restart-Service w32time
+      w32tm /query /configuration
+      w32tm /query /status
+      ```
+
+      Dans un domaine, la hiérarchie du temps est automatique : les postes prennent l'heure d'un DC, les DC
+      prennent celle de l'**émulateur PDC** (type `NT5DS`). Seul ce dernier doit être réglé sur une source
+      externe (type `NTP`). Kerberos tolère un écart de **5 minutes** : au-delà, plus personne ne s'authentifie.
+      Le drapeau `0x8` demande le mode client. Dans une VM, l'intégration de l'hyperviseur peut aussi régler
+      l'horloge : en production, on désactive alors la synchronisation de l'hôte pour le PDC.
+    checks:
+      - desc: Le service de temps est en mode NTP sur fr.pool.ntp.org
+        run: |
+          $p = Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Parameters
+          $p.Type -eq 'NTP' -and $p.NtpServer -match 'fr\.pool\.ntp\.org'
+      - desc: Le serveur s'annonce comme source de temps fiable
+        run: |
+          (Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Config).AnnounceFlags -eq 5
+    solution: |
+      w32tm /config /manualpeerlist:"fr.pool.ntp.org,0x8" /syncfromflags:manual /reliable:yes /update | Out-Null
+      Restart-Service w32time
+
+  - id: win-dc-corbeille
+    title: Activer la corbeille Active Directory
+    description: |
+      Active la **corbeille Active Directory** de la forêt, pour pouvoir restaurer un compte supprimé par
+      erreur avec ses groupes et ses attributs.
+    hint: Enable-ADOptionalFeature 'Recycle Bin Feature' -Scope ForestOrConfigurationSet -Target durand.lan -Confirm:$false
+    cours: |
+      ```powershell
+      Get-ADOptionalFeature -Filter *
+      Enable-ADOptionalFeature 'Recycle Bin Feature' -Scope ForestOrConfigurationSet -Target durand.lan -Confirm:$false
+      # plus tard, pour restaurer :
+      Get-ADObject -Filter 'isDeleted -eq $true' -IncludeDeletedObjects | Where-Object Name -like 'Marie*' | Restore-ADObject
+      ```
+
+      Sans la corbeille, un objet supprimé devient une « pierre tombale » dépouillée de presque tous ses
+      attributs (groupes, description...) : le restaurer demande une restauration faisant autorité depuis
+      une sauvegarde, en mode DSRM. Avec la corbeille, `Restore-ADObject` le remet en place en quelques
+      secondes, tant que la durée de vie des objets supprimés (180 jours par défaut) n'est pas écoulée.
+      L'activation est **irréversible** et exige le niveau fonctionnel de forêt 2008 R2, largement dépassé
+      ici. Le Centre d'administration AD affiche ensuite un conteneur *Deleted Objects*.
+    checks:
+      - desc: La corbeille AD est activée
+        run: |
+          @((Get-ADOptionalFeature 'Recycle Bin Feature').EnabledScopes).Count -gt 0
+    solution: |
+      Enable-ADOptionalFeature 'Recycle Bin Feature' -Scope ForestOrConfigurationSet -Target durand.lan -Confirm:$false
+
+  - id: win-dc-ou
+    title: Une arborescence d'OU pour l'entreprise
+    description: |
+      Crée à la racine du domaine l'OU `Ateliers Durand`, puis dedans les OU `Utilisateurs`, `Groupes`,
+      `Postes` et `Serveurs`. Toutes doivent être **protégées contre la suppression accidentelle**.
+    hint: New-ADOrganizationalUnit 'Ateliers Durand' -Path 'DC=durand,DC=lan' ; 'Utilisateurs','Groupes','Postes','Serveurs' | ForEach-Object { New-ADOrganizationalUnit $_ -Path 'OU=Ateliers Durand,DC=durand,DC=lan' }
+    cours: |
+      ```powershell
+      New-ADOrganizationalUnit -Name 'Ateliers Durand' -Path 'DC=durand,DC=lan'
+      'Utilisateurs', 'Groupes', 'Postes', 'Serveurs' | ForEach-Object {
+          New-ADOrganizationalUnit -Name $_ -Path 'OU=Ateliers Durand,DC=durand,DC=lan'
+      }
+      Get-ADOrganizationalUnit -Filter * | Format-Table Name, DistinguishedName, ProtectedFromAccidentalDeletion
+      ```
+
+      Les conteneurs par défaut `CN=Users` et `CN=Computers` ne sont **pas** des OU : impossible d'y lier une
+      GPO ou d'y déléguer finement. On crée donc sa propre arborescence, pensée pour l'**administration**
+      (qui gère quoi, quelles GPO s'appliquent) plutôt que pour copier l'organigramme. `New-ADOrganizationalUnit`
+      protège l'OU par défaut (`ProtectedFromAccidentalDeletion`, un refus « Supprimer » pour Tout le monde) :
+      pour la supprimer un jour, il faut d'abord retirer cette protection.
+    checks:
+      - desc: L'OU Ateliers Durand existe à la racine et est protégée
+        run: |
+          $ou = Get-ADOrganizationalUnit -Identity 'OU=Ateliers Durand,DC=durand,DC=lan' -Properties ProtectedFromAccidentalDeletion
+          $ou.ProtectedFromAccidentalDeletion
+      - desc: Les quatre OU enfants existent et sont protégées
+        run: |
+          $ok = foreach ($n in 'Utilisateurs', 'Groupes', 'Postes', 'Serveurs') {
+              (Get-ADOrganizationalUnit -Identity "OU=$n,OU=Ateliers Durand,DC=durand,DC=lan" -Properties ProtectedFromAccidentalDeletion).ProtectedFromAccidentalDeletion
+          }
+          @($ok | Where-Object { $_ }).Count -eq 4
+    solution: |
+      New-ADOrganizationalUnit -Name 'Ateliers Durand' -Path 'DC=durand,DC=lan'
+      'Utilisateurs', 'Groupes', 'Postes', 'Serveurs' | ForEach-Object { New-ADOrganizationalUnit -Name $_ -Path 'OU=Ateliers Durand,DC=durand,DC=lan' }

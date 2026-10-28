@@ -1,0 +1,113 @@
+title: Somme des chiffres
+level: debutant
+order: 26
+tags: [while, division entière]
+summary: Découper un nombre chiffre par chiffre avec while.
+description: |
+  Sans convertir le nombre en chaîne, en utilisant `% 10` (dernier chiffre) et `// 10`
+  (on enlève le dernier chiffre) dans une boucle `while` :
+
+  1. Écris `somme_chiffres(n)` qui renvoie la somme des chiffres d'un entier positif.
+  2. Écris `racine_numerique(n)` qui additionne les chiffres **encore et encore** jusqu'à
+     n'obtenir qu'un seul chiffre.
+
+  ```python
+  somme_chiffres(1234)     # 10
+  racine_numerique(9875)   # 9 + 8 + 7 + 5 = 29 -> 2 + 9 = 11 -> 1 + 1 = 2
+  ```
+starter: |
+  def somme_chiffres(n):
+      pass
+
+
+  def racine_numerique(n):
+      pass
+tests: |
+  def test_somme():
+      "somme_chiffres(1234) vaut 10"
+      r = solution.somme_chiffres(1234)
+      assert r == 10, f"attendu 10, obtenu {r!r}"
+
+  def test_somme_zero():
+      "somme_chiffres(0) vaut 0"
+      assert solution.somme_chiffres(0) == 0
+
+  def test_somme_zeros_internes():
+      "somme_chiffres(10203) vaut 6"
+      r = solution.somme_chiffres(10203)
+      assert r == 6, f"attendu 6, obtenu {r!r}"
+
+  def test_racine():
+      "racine_numerique(9875) vaut 2"
+      r = solution.racine_numerique(9875)
+      assert r == 2, f"attendu 2, obtenu {r!r}"
+
+  def test_racine_un_chiffre():
+      "Un nombre à un chiffre est sa propre racine"
+      assert solution.racine_numerique(7) == 7
+
+  def test_racine_grand():
+      "Grand nombre"
+      r = solution.racine_numerique(999999999999)
+      assert r == 9, f"attendu 9, obtenu {r!r}"
+solution: |
+  def somme_chiffres(n):
+      total = 0
+      while n > 0:
+          total += n % 10
+          n //= 10
+      return total
+
+
+  def racine_numerique(n):
+      while n >= 10:
+          n = somme_chiffres(n)
+      return n
+cours: |
+  ## Extraire les chiffres d'un nombre
+
+  En base 10, deux opérations suffisent à « éplucher » un entier :
+
+  ```python
+  n = 4096
+  n % 10     # 6   : le dernier chiffre
+  n // 10    # 409 : le nombre sans son dernier chiffre
+  ```
+
+  En répétant ces deux opérations jusqu'à ce que le nombre vaille 0, on visite tous ses
+  chiffres, de droite à gauche :
+
+  ```python
+  n = 4096
+  nb_chiffres = 0
+  while n > 0:
+      n //= 10
+      nb_chiffres += 1
+  print(nb_chiffres)   # 4
+  ```
+
+  La même technique avec `% 2` et `// 2` donne les bits d'un nombre (base 2), et avec
+  `% 16` sa représentation hexadécimale : c'est la base de toute conversion de base.
+
+  ## Attention au cas 0
+
+  Avec `while n > 0`, un nombre égal à 0 ne fait **aucun** tour de boucle. Selon ce qu'on
+  calcule, c'est correct (somme des chiffres de 0 = 0) ou non (0 a bien un chiffre). Pense
+  toujours à tester ce cas.
+
+  ## Répéter jusqu'à une condition
+
+  Une boucle peut en contenir une autre, ou appeler une fonction déjà écrite : « tant que le
+  nombre a plus d'un chiffre, remplace-le par la somme de ses chiffres ». Réutiliser ta
+  première fonction dans la seconde évite de dupliquer du code. Un nombre a un seul chiffre
+  quand il est strictement inférieur à 10.
+
+  ## Le saviez-vous ?
+
+  La racine numérique d'un nombre est liée à son reste modulo 9 : c'est le principe de la
+  « preuve par neuf » apprise à l'école. Mais ici, l'objectif est d'écrire la boucle.
+docs:
+  - title: Tutoriel — premiers pas vers la programmation (while)
+    url: https://docs.python.org/fr/3/tutorial/introduction.html#first-steps-towards-programming
+  - title: Wikipédia — Racine numérique
+    url: https://fr.wikipedia.org/wiki/Racine_num%C3%A9rique

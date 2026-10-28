@@ -1,0 +1,333 @@
+"""Tests des labs DevOps : définitions, labs Vagrant et agent Vagrant (avec un faux vagrant)."""
+
+import os
+import json
+import urllib.error
+import socket
+import sys
+import threading
+import time
+import urllib.request
+from http.server import ThreadingHTTPServer
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.devops import labs, vagrant
+from app.main import app
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
+import vagrant_agent  # noqa: E402
+
+client = TestClient(app)
+
+
+def test_definitions_des_labs():
+    loaded = labs.load_labs()
+    assert len(loaded) >= 15
+    for lab in loaded:
+        assert lab["exercises"], lab["id"]
+        for exercise in lab["exercises"]:
+            assert exercise.get("title") and exercise.get("checks"), (lab["id"], exercise["id"])
+            assert all(c.get("desc") and c.get("run") for c in exercise["checks"]), (lab["id"], exercise["id"])
+
+
+def test_identifiants_uniques():
+    ids = [lab["id"] for lab in labs.load_labs()]
+    assert len(ids) == len(set(ids)), sorted(i for i in ids if ids.count(i) > 1)
+
+
+def test_categorie_cyber_offensif_defensif():
+    cyber = labs.load_labs(category="cyber")
+    assert cyber, "aucun lab de cybersécurité"
+    tracks = {lab["track"] for lab in cyber}
+    assert tracks <= set(labs.CYBER_TRACKS)
+    assert {"offensif", "defensif"} <= tracks, "les deux parcours doivent exister"
+    for lab in cyber:
+        assert labs.public(lab)["track"] == lab["track"]
+        assert lab["category"] == "cyber"
+    # Le filtre par catégorie ne mélange pas les parcours avec le reste.
+    assert all(lab["category"] == "cyber" for lab in cyber)
+
+
+def test_machine_offensive_et_drapeaux():
+    machines = [lab for lab in labs.load_labs(category="cyber") if lab.get("is_machine")]
+    assert machines, "aucune machine offensive"
+    for machine in machines:
+        pub = labs.public(machine)
+        assert pub["is_machine"] and pub["machine_os"] in ("linux", "windows")
+        assert set(pub["flags"]) <= set(labs.FLAG_KEYS) and pub["flags"]
+        # Les valeurs des drapeaux ne doivent jamais fuiter côté client.
+        assert "TDM{" not in json.dumps(pub), machine["id"]
+        for which, value in machine["flags"].items():
+            assert labs.submit_flag(machine, value) == {"success": True, "which": which}
+            assert labs.submit_flag(machine, f"  {value.upper()} ")["success"]  # casse/espaces tolérés
+        assert labs.submit_flag(machine, "TDM{mauvais}") == {"success": False, "which": None}
+
+
+def test_plusieurs_machines_sur_les_quatre_niveaux():
+    """Le parcours offensif doit proposer plusieurs machines couvrant les 4 niveaux, chacune
+    isolée (compose, réseau interne) et avec un drapeau utilisateur + un drapeau root."""
+    machines = [lab for lab in labs.load_labs(category="cyber") if lab.get("is_machine")]
+    assert len(machines) >= 4, "il faut plusieurs machines comme Fonderie"
+    niveaux = {m["level"] for m in machines}
+    assert {"debutant", "intermediaire", "avance", "expert"} <= niveaux
+    for machine in machines:
+        assert machine.get("compose"), f"{machine['id']} doit être une machine conteneurisée"
+        assert set(machine["flags"]) == {"user", "root"}, machine["id"]
+        # Les drapeaux de chaque machine sont distincts les uns des autres (failles différentes).
+    toutes = [v for m in machines for v in m["flags"].values()]
+    assert len(toutes) == len(set(toutes)), "des drapeaux sont dupliqués entre machines"
+
+
+def test_labs_compose_sans_montage_de_dossier():
+    # La plateforme pilote le Docker de l'hôte depuis un conteneur : un montage relatif ne marcherait pas.
+    for compose in (ROOT / "labs").glob("*/*/docker-compose.yml"):
+        for line in compose.read_text(encoding="utf-8").splitlines():
+            assert not line.strip().startswith(("- ./", "- ../", "- /")), f"{compose}: {line}"
+
+
+def test_lab_vagrant_sans_agent(monkeypatch):
+    monkeypatch.setenv("TDM_VAGRANT_AGENT", "http://127.0.0.1:9")
+    data = client.get("/api/devops/labs/kubernetes").json()
+    assert data["kind"] == "vagrant" and data["status"] == "unavailable"
+    response = client.post("/api/devops/labs/kubernetes/start")
+    assert response.status_code == 503 and "agent" in response.json()["detail"].lower()
+
+
+FAKE_VAGRANT = """#!/bin/sh
+case "$1" in
+  status) if [ -f up ]; then s=running; else s=poweroff; fi; echo "1,default,state,$s" ;;
+  up) echo "Bringing machine up"; touch up ;;
+  halt) rm -f up ;;
+  destroy) rm -f up ;;
+  ssh-config) printf '  HostName 127.0.0.1\\n  User vagrant\\n  Port %s\\n  IdentityFile "%s/key"\\n' "$SSH_PORT" "$PWD" ;;
+esac
+"""
+
+
+@pytest.fixture
+def agent(tmp_path, monkeypatch):
+    if sys.platform == "win32":
+        pytest.skip("faux vagrant en shell")
+    lab = tmp_path / "k8s" / "ubuntu"
+    lab.mkdir(parents=True)
+    (lab / "Vagrantfile").write_text("")
+    (lab / "key").write_text("CLE-PRIVEE")
+    fake = tmp_path / "vagrant"
+    fake.write_text(FAKE_VAGRANT)
+    fake.chmod(0o755)
+    target = socket.socket()
+    target.bind(("127.0.0.1", 0))
+    target.listen()
+    monkeypatch.setenv("SSH_PORT", str(target.getsockname()[1]))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), vagrant_agent.make_handler(
+        vagrant_agent.Agent(tmp_path, str(fake)), "jeton"))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("TDM_VAGRANT_AGENT", f"http://127.0.0.1:{server.server_address[1]}")
+    monkeypatch.setenv("TDM_VAGRANT_TOKEN", "jeton")
+    monkeypatch.setenv("TDM_VAGRANT_HOST", "127.0.0.1")
+    yield {"id": "k8s", "vagrant": "k8s/ubuntu", "exercises": []}, target
+    server.shutdown()
+    target.close()
+
+
+def test_agent_refuse_sans_jeton(agent):
+    url = vagrant.agent_url() + "/status?lab=k8s/ubuntu"
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(url)
+    assert exc.value.code == 401
+
+
+def test_agent_refuse_hors_dossier(agent):
+    with pytest.raises(vagrant.AgentError):
+        vagrant._request("GET", "/status", {"lab": "../.."})
+
+
+def test_agent_cycle_de_vie(agent):
+    lab, target = agent
+    assert vagrant.status(lab)[0] == "stopped"
+    assert vagrant.start(lab) == "starting"
+    for _ in range(50):
+        status, log = vagrant.status(lab)
+        if status == "running":
+            break
+        time.sleep(0.1)
+    assert status == "running" and "Bringing machine up" in log
+    argv = vagrant.ssh_argv(lab, "echo ok")
+    assert argv[0] == "ssh" and argv[-1] == "sh -c 'echo ok'" and "vagrant@127.0.0.1" in argv
+    assert Path(argv[argv.index("-i") + 1]).read_text() == "CLE-PRIVEE"
+    # Le relais transmet bien vers le port SSH de la VM.
+    port = int(argv[argv.index("-p") + 1])
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as conn:
+        upstream, _ = target.accept()
+        conn.sendall(b"SSH-2.0-test")
+        assert upstream.recv(64) == b"SSH-2.0-test"
+        upstream.close()
+    vagrant.stop(lab)
+    for _ in range(50):
+        if vagrant.status(lab)[0] == "stopped":
+            break
+        time.sleep(0.1)
+    assert vagrant.status(lab)[0] == "stopped"
+
+
+def test_agent_journal_progression_sans_fin_de_ligne():
+    """Sans terminal, Vagrant écrit la progression d'un téléchargement sans retour à la ligne."""
+    import io
+
+    job = vagrant_agent.Job.__new__(vagrant_agent.Job)
+    job.log = vagrant_agent.deque(maxlen=200)
+    flux = io.BufferedReader(io.BytesIO(
+        "Downloading: https://x/box\n    default: Progress: 10% (Rate: 5M/s)    default: Progress: 40% "
+        "(Rate: 6M/s)\n==> default: Successfully added box 'é'\n".encode()))
+    job._read(flux)
+    assert list(job.log) == ["Downloading: https://x/box", "Progress: 40% (Rate: 6M/s)",
+                             "==> default: Successfully added box 'é'"]
+
+
+FAKE_VAGRANT_SNAPSHOT = """#!/bin/sh
+echo "$*" >> calls
+case "$1" in
+  snapshot) [ "$2" = restore ] && [ -f casse ] && exit 1 ; exit 0 ;;
+esac
+exit 0
+"""
+
+
+def test_agent_labs_embarques_pause_et_instantane(tmp_path):
+    """VM Windows : pause au lieu d'arrêt, instantané après la 1re préparation, restauration au reset."""
+    if sys.platform == "win32":
+        pytest.skip("faux vagrant en shell")
+    bundled = tmp_path / "bundled"
+    (bundled / "win-lab").mkdir(parents=True)
+    (bundled / "win-lab" / "Vagrantfile").write_text("v1")
+    fake = tmp_path / "vagrant"
+    fake.write_text(FAKE_VAGRANT_SNAPSHOT)
+    fake.chmod(0o755)
+    ag = vagrant_agent.Agent(None, str(fake), bundled=bundled, work_dir=tmp_path / "work")
+    work = tmp_path / "work" / "win-lab"
+
+    def run(path):
+        action, steps = ag.lab_actions("tdm:win-lab")[path]
+        ag.run_job("tdm:win-lab", action, *steps)
+        ag.jobs["tdm:win-lab"]._thread.join(10)
+        assert ag.jobs["tdm:win-lab"].returncode == 0
+        calls = (work / "calls").read_text().splitlines()
+        (work / "calls").unlink()
+        return calls
+
+    assert run("/up") == ["up", "snapshot save tdm-initial --force"]
+    assert run("/up") == ["up"]  # instantané déjà pris
+    assert run("/halt") == ["suspend"]
+    assert run("/reset") == ["snapshot restore tdm-initial --no-provision", "up --no-provision"]
+    (work / "casse").write_text("")  # instantané perdu (VM supprimées à la main...) : reconstruction
+    assert run("/reset") == ["snapshot restore tdm-initial --no-provision", "destroy -f", "up",
+                             "snapshot save tdm-initial --force"]
+    (bundled / "win-lab" / "Vagrantfile").write_text("v2")  # lab mis à jour : l'instantané est périmé
+    assert run("/reset") == ["destroy -f", "up", "snapshot save tdm-initial --force"]
+    # Les labs de l'utilisateur gardent le comportement d'origine.
+    assert ag.lab_actions("k8s/ubuntu")["/halt"] == ("halt", [[str(fake), "halt"]])
+
+
+def test_agent_verifications_prealables(tmp_path, monkeypatch):
+    vagrantfile = tmp_path / "Vagrantfile"
+    vagrantfile.write_text('lab.server "dc01", hostname: "DC01"\n    lab.client "pc01", hostname: "PC01", memory: 4096\n')
+    assert vagrant_agent.lab_machines(vagrantfile) == [(vagrant_agent.SERVER_BOX, 2048), (vagrant_agent.CLIENT_BOX, 4096)]
+    monkeypatch.setattr(vagrant_agent, "free_memory_mb", lambda: 3000)
+    monkeypatch.setattr(vagrant_agent, "hypervisor_present", lambda: True)
+    monkeypatch.setattr(vagrant_agent, "hypervisor_platform_enabled", lambda: True)
+    monkeypatch.setattr(vagrant_agent, "installed_boxes", lambda v: {vagrant_agent.SERVER_BOX})
+    warnings = vagrant_agent.preflight_warnings(vagrantfile, "vagrant")
+    assert len(warnings) == 3 and "Mémoire" in warnings[0] and "hyperviseur Windows est actif" in warnings[1]
+    assert vagrant_agent.CLIENT_BOX in warnings[2]
+    # Sans « Plateforme de l'hyperviseur Windows », VirtualBox ne démarre pas : on dit quoi activer.
+    monkeypatch.setattr(vagrant_agent, "hypervisor_platform_enabled", lambda: False)
+    assert "Plateforme de l'hyperviseur Windows" in vagrant_agent.preflight_warnings(vagrantfile, "vagrant")[1]
+    monkeypatch.setattr(vagrant_agent, "free_memory_mb", lambda: 16000)
+    monkeypatch.setattr(vagrant_agent, "hypervisor_present", lambda: False)
+    monkeypatch.setattr(vagrant_agent, "installed_boxes", lambda v: {vagrant_agent.SERVER_BOX, vagrant_agent.CLIENT_BOX})
+    assert vagrant_agent.preflight_warnings(vagrantfile, "vagrant") == []
+
+
+def test_agent_un_processeur_avec_hyperviseur(monkeypatch):
+    monkeypatch.setattr(vagrant_agent, "_USER_WIN_CPUS", None)
+    monkeypatch.delenv("TDM_WIN_CPUS", raising=False)
+    vagrant_agent.apply_cpu_limit(True)
+    assert os.environ["TDM_WIN_CPUS"] == "1"
+    vagrant_agent.apply_cpu_limit(False)
+    assert "TDM_WIN_CPUS" not in os.environ
+    # Un choix explicite de l'utilisateur n'est jamais modifié.
+    monkeypatch.setattr(vagrant_agent, "_USER_WIN_CPUS", "4")
+    monkeypatch.setenv("TDM_WIN_CPUS", "4")
+    vagrant_agent.apply_cpu_limit(True)
+    assert os.environ["TDM_WIN_CPUS"] == "4"
+
+
+FAKE_VAGRANT_LENT = """#!/bin/sh
+echo "$*" >> calls
+case "$1" in
+  up) echo "Waiting for machine to boot"; exec sleep 60 ;;
+  status) echo "1,srv01,state,poweroff" ;;
+esac
+exit 0
+"""
+
+
+def test_agent_annule_un_demarrage_bloque(tmp_path):
+    """« Annuler le démarrage » : `vagrant up` est tué, puis les VM jamais préparées sont détruites."""
+    if sys.platform == "win32":
+        pytest.skip("faux vagrant en shell")
+    bundled = tmp_path / "bundled"
+    (bundled / "win-lab").mkdir(parents=True)
+    (bundled / "win-lab" / "Vagrantfile").write_text("")
+    fake = tmp_path / "vagrant"
+    fake.write_text(FAKE_VAGRANT_LENT)
+    fake.chmod(0o755)
+    ag = vagrant_agent.Agent(None, str(fake), bundled=bundled, work_dir=tmp_path / "work")
+    work = tmp_path / "work" / "win-lab"
+    action, steps = ag.lab_actions("tdm:win-lab")["/up"]
+    ag.run_job("tdm:win-lab", action, *steps)
+    for _ in range(50):
+        if "Waiting for machine to boot" in "\n".join(ag.jobs["tdm:win-lab"].log):
+            break
+        time.sleep(0.1)
+    started = time.monotonic()
+    action, steps = ag.lab_actions("tdm:win-lab")["/halt"]
+    ag.run_job("tdm:win-lab", action, *steps)
+    ag.jobs["tdm:win-lab"].wait(20)
+    assert time.monotonic() - started < 15
+    assert (work / "calls").read_text().splitlines()[-1] == "destroy -f"
+    assert ag.status("tdm:win-lab")["status"] == "stopped"
+    # Une fois la première préparation terminée, l'annulation éteint seulement (halt --force).
+    (work / ".tdm").mkdir(exist_ok=True)
+    (work / ".tdm" / vagrant_agent.READY).write_text("ok")
+    assert ag.cancel_steps("tdm:win-lab", work) == [[str(fake), "halt", "--force"]]
+
+
+def test_agent_bureau_a_distance(tmp_path, monkeypatch):
+    """Port du Bureau à distance de chaque VM : VBoxManage d'abord, `vagrant port` en secours."""
+    if sys.platform == "win32":
+        pytest.skip("faux outils en shell")
+    bundled = tmp_path / "bundled"
+    (bundled / "win-lab").mkdir(parents=True)
+    (bundled / "win-lab" / "Vagrantfile").write_text("v1")
+    vbox = tmp_path / "VBoxManage"
+    vbox.write_text('#!/bin/sh\n[ "$2" = "id-srv" ] && echo \'Forwarding(0)="rdp,tcp,127.0.0.1,33389,,3389"\'\n'
+                    'echo \'Forwarding(1)="ssh,tcp,127.0.0.1,2222,,22"\'\n')
+    vbox.chmod(0o755)
+    fake = tmp_path / "vagrant"
+    fake.write_text('#!/bin/sh\n[ "$1" = port ] && echo "1,$2,forwarded_port,3389,33390"\n')
+    fake.chmod(0o755)
+    ag = vagrant_agent.Agent(None, str(fake), bundled=bundled, work_dir=tmp_path / "work", vboxmanage=str(vbox))
+    ag.prepare("tdm:win-lab")
+    work = tmp_path / "work" / "win-lab"
+    for machine, vm_id in (("srv01", "id-srv"), ("pc01", "id-pc")):
+        (work / ".vagrant" / "machines" / machine / "virtualbox").mkdir(parents=True)
+        (work / ".vagrant" / "machines" / machine / "virtualbox" / "id").write_text(vm_id)
+    assert ag.desktops("tdm:win-lab") == [{"machine": "pc01", "port": 33390}, {"machine": "srv01", "port": 33389}]
+    monkeypatch.setattr(vagrant_agent.sys, "platform", "linux")
+    with pytest.raises(ValueError):
+        ag.open_desktop("tdm:win-lab", "srv01")

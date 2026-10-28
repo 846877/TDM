@@ -1,0 +1,292 @@
+title: Plan de reprise d'activité – restaurer un serveur après sinistre
+level: expert
+order: 7
+tags: [pra, sauvegarde, restauration, intégrité, comptes, nginx, mariadb, cron]
+summary: Choisir une sauvegarde intègre, la rapatrier, recréer comptes et propriétaires, restaurer site, configuration, base de données et tâches planifiées, puis rédiger le rapport de reprise.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Cette nuit, un incendie a détruit `srv-web`, le serveur de la **boutique en ligne**
+  d'*Ateliers Durand*. Un serveur de remplacement, `srv-neuf`, vient d'être installé (Ubuntu, nginx,
+  MariaDB et cron installés, **rien de configuré**). Les sauvegardes sont sur le NAS. La direction attend
+  la boutique en ligne au plus vite, **sans perte de données évitable**. C'est l'heure du **PRA**.
+
+  | Machine | Adresse | Rôle |
+  |---|---|---|
+  | `admin` | 10.177.0.5 | ton poste ; `boutique.durand.lan` désigne srv-neuf — terminal du lab |
+  | `srv-neuf` | 10.177.0.20 | serveur de remplacement ; le **kit PRA** est dans `/root/kit-pra/` (lis `LISEZMOI.txt`) |
+  | `nas` | 10.177.0.30 | sauvegardes de srv-web dans `/srv/sauvegardes/srv-web/<date>/` |
+
+  - `ssh srv-neuf`, `ssh nas` (root, par clé, depuis admin).
+  - Pas de systemd sur srv-neuf : `service mariadb start`, `nginx`, `cron`.
+  - Ne réinvente rien : tout ce qu'il faut est dans les sauvegardes. **N'écrase jamais** un fichier système
+    de srv-neuf par sa version de sauvegarde sans réfléchir.
+
+  Réponses à écrire dans `/root/reponses.txt` d'admin, au format `cle=valeur`.
+cours: |
+  ## PRA, PCA, RTO, RPO
+
+  | Terme | Signification |
+  |-------|---------------|
+  | **PCA** (plan de continuité) | continuer à fonctionner pendant l'incident (redondance, bascule automatique) |
+  | **PRA** (plan de reprise)    | redémarrer l'activité **après** l'incident, à partir des sauvegardes |
+  | **RTO** (durée maximale d'interruption) | combien de temps l'entreprise peut rester sans le service |
+  | **RPO** (perte de données maximale)     | jusqu'où dans le passé on accepte de remonter (dernière sauvegarde utilisable) |
+
+  ```
+   sauvegarde utilisable          sinistre                       service rétabli
+   18/10 01:00 ────── RPO ──────── 20/10 03:00 ────── RTO ──────── 20/10 11:00
+   (données perdues entre les deux)        (interruption entre les deux)
+  ```
+
+  Le PRA est un **document** préparé à l'avance (qui fait quoi, dans quel ordre, avec quels accès) et
+  **testé** régulièrement. Une sauvegarde jamais restaurée est une hypothèse, pas une sauvegarde.
+
+  ## L'ordre de restauration
+
+  ```
+  1. vérifier l'intégrité des sauvegardes, choisir la plus récente qui est saine
+  2. rapatrier les fichiers sur le nouveau serveur (et revérifier les empreintes)
+  3. comptes et groupes avec les MÊMES UID/GID  ← sinon les propriétaires des fichiers sont faux
+  4. données (site) avec leurs droits et propriétaires
+  5. configuration des services (nginx...) puis démarrage
+  6. bases de données, puis comptes applicatifs
+  7. tâches planifiées
+  8. recette du point de vue utilisateur, puis rapport (RPO réel, RTO réel, causes, améliorations)
+  ```
+
+  ## Intégrité : les empreintes
+
+  `sha256sum fichier > SHA256SUMS` à la sauvegarde, `sha256sum -c SHA256SUMS` à la restauration : toute
+  modification, même d'un seul octet (disque défaillant, transfert interrompu), change l'empreinte. Une
+  archive dont l'empreinte ne correspond pas ne doit **pas** être restaurée en production.
+
+  ## Restaurer sans casser
+
+  | Élément | Bonne méthode | À éviter |
+  |---------|---------------|----------|
+  | comptes | `groupadd -g`, `useradd -u -g`, `usermod -p '<hash>'` avec les valeurs de la sauvegarde | écraser `/etc/passwd`, `/etc/shadow` (perte des comptes système du nouveau serveur : `mysql`...) |
+  | fichiers | `tar -xzpf ... --numeric-owner -C /` (droits et UID d'origine) | extraire sans `-p`, ou dans le mauvais dossier |
+  | configuration | extraire dans un dossier temporaire, comparer, copier le nécessaire | extraire tout `/etc` par-dessus le système |
+  | base | `zcat bdd.sql.gz \| mariadb`, puis les droits | restaurer sur une base en service sans prévenir |
+  | crontab | `crontab -u <compte> <fichier>` | copier à la main dans `/var/spool/cron` (droits, groupe) |
+
+  Extraire **un seul** fichier d'une archive : `tar -xzf etc.tar.gz -C /tmp/restau etc/shadow` ; lister le
+  contenu : `tar -tzvf`.
+
+  ## Pièges courants
+
+  - Restaurer la sauvegarde la plus récente sans vérifier qu'elle est intègre.
+  - Recréer les comptes avec d'autres UID : le site appartient alors à un compte inconnu ou à quelqu'un
+    d'autre.
+  - Oublier les éléments « invisibles » : tâches cron, comptes de base de données, certificats, règles de
+    pare-feu, DNS.
+  - Ne pas consigner les heures : impossible ensuite de mesurer le RTO réel et d'améliorer le plan.
+
+  ## Bonnes pratiques en entreprise
+
+  - Règle **3-2-1** : 3 copies, 2 supports différents, 1 copie hors site (et une copie hors ligne contre
+    les rançongiciels).
+  - Kit PRA disponible même si le système d'information est entièrement détruit (accès, clés, procédures).
+  - Exercices de restauration planifiés (au moins une fois par an), avec mesure du RTO.
+  - Automatiser la reconstruction (scripts, Ansible) : les serveurs deviennent remplaçables, seules les
+    données sont précieuses.
+docs:
+  - title: tar(1) - archives (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man1/tar.1.html
+  - title: sha256sum(1) - empreintes SHA-256 (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man1/sha256sum.1.html
+  - title: Wikipédia - Plan de reprise d'activité
+    url: https://fr.wikipedia.org/wiki/Plan_de_reprise_d%27activit%C3%A9_(informatique)
+  - title: MariaDB - restaurer une sauvegarde logique
+    url: https://mariadb.com/kb/en/mariadb-dump/
+exercises:
+  - id: pra-choisir-sauvegarde
+    title: Choisir une sauvegarde intègre
+    cours: |
+      Avant de restaurer, on **vérifie** : la sauvegarde la plus récente n'est pas forcément utilisable
+      (sauvegarde incomplète, disque défaillant, rançongiciel qui a chiffré les données avant la sauvegarde).
+
+      Chaque dossier contient un fichier `SHA256SUMS`. Placé dans le dossier, `sha256sum -c SHA256SUMS`
+      recalcule l'empreinte de chaque fichier et affiche `OK` ou `FAILED`. `gzip -t <archive>` teste
+      aussi qu'une archive compressée est lisible.
+
+      On retient la sauvegarde **la plus récente entièrement saine** : c'est elle qui fixe le RPO réel.
+
+      Note l'archive corrompue dans le rapport : il faudra comprendre pourquoi elle l'est avant la prochaine sauvegarde.
+    description: |
+      Sur le NAS, vérifie l'intégrité de chacune des sauvegardes de `/srv/sauvegardes/srv-web/`.
+
+      Réponses : `sauvegarde_retenue=` (la date du dossier à restaurer, par exemple `2026-10-15`) et
+      `archive_corrompue=` (le fichier abîmé, sous la forme `<date>/<fichier>`).
+    hint: ssh nas ; cd /srv/sauvegardes/srv-web/<date> && sha256sum -c SHA256SUMS  (pour chaque date)
+    checks:
+      - desc: Sauvegarde retenue
+        run: grep -Eq '^sauvegarde_retenue *= *2026-10-18 *$' /root/reponses.txt
+      - desc: Archive corrompue identifiée
+        run: grep -Eq '^archive_corrompue *= *2026-10-19/www\.tar\.gz *$' /root/reponses.txt
+
+  - id: pra-rapatrier
+    title: Rapatrier la sauvegarde sur le nouveau serveur
+    cours: |
+      Le kit PRA contient la **clé SSH** du compte `sauvegarde` du NAS. Depuis srv-neuf :
+
+      ```
+      rsync -av -e "ssh -i /root/kit-pra/cle-sauvegarde" sauvegarde@<nas>:<dossier>/ <destination>/
+      ```
+
+      `rsync` reprend un transfert interrompu et conserve les dates ; `scp -i <clé> -r` convient aussi. La
+      première connexion demande de valider l'empreinte du serveur (`yes`).
+
+      Après le transfert, on **revérifie** les empreintes sur le serveur de destination : un transfert peut
+      lui aussi abîmer un fichier.
+
+      Contrôle ensuite les empreintes sur le serveur de destination : un transfert interrompu ou un disque fatigué peut abîmer une copie.
+    description: |
+      Sur `srv-neuf`, copie la sauvegarde retenue dans `/srv/restauration/` (les fichiers directement dans ce
+      dossier) avec la clé du kit PRA, puis vérifie les empreintes sur place.
+    hint: ssh srv-neuf ; mkdir -p /srv/restauration ; rsync -av -e "ssh -i /root/kit-pra/cle-sauvegarde" sauvegarde@10.177.0.30:/srv/sauvegardes/srv-web/2026-10-18/ /srv/restauration/ ; cd /srv/restauration && sha256sum -c SHA256SUMS
+    checks:
+      - desc: La sauvegarde du 18 est sur srv-neuf et intègre
+        run: |
+          ssh srv-neuf 'cd /srv/restauration && test -s SHA256SUMS && sha256sum -c --quiet SHA256SUMS' && test "$(ssh srv-neuf 'cat /srv/restauration/SHA256SUMS')" = "$(ssh nas 'cat /srv/sauvegardes/srv-web/2026-10-18/SHA256SUMS')"
+
+  - id: pra-comptes
+    title: Recréer les comptes à l'identique
+    cours: |
+      Les fichiers de la sauvegarde appartiennent à des **numéros** (UID/GID), pas à des noms. Si le compte
+      `web` reçoit un autre UID sur le nouveau serveur, il ne sera pas propriétaire de son site.
+
+      Extrais `etc/passwd`, `etc/group` et `etc/shadow` de l'archive dans un dossier **temporaire**
+      (`tar -xzf etc.tar.gz -C /tmp/restau`), lis les lignes des comptes concernés, puis recrée-les :
+
+      - `groupadd -g <GID> <groupe>` ;
+      - `useradd -u <UID> -g <GID> [-G <groupes>] -m -s <shell> -c "<commentaire>" <compte>` ;
+      - `usermod -p '<hash>' <compte>` remet le mot de passe haché tel quel (2e champ de `shadow`).
+
+      Ne remplace pas les fichiers de srv-neuf : ils contiennent des comptes système qui lui sont propres.
+    description: |
+      Sur srv-neuf, recrée les comptes `web` et `deploy` exactement comme sur l'ancien serveur : mêmes UID,
+      GID, groupes secondaires, shell et **même mot de passe** (hash de la sauvegarde). Les comptes propres
+      à srv-neuf (comme `mysql`) doivent être conservés.
+    hint: mkdir /tmp/restau ; tar -xzf /srv/restauration/etc.tar.gz -C /tmp/restau ; grep -E '^(web|deploy):' /tmp/restau/etc/{passwd,group,shadow} ; groupadd -g 1500 web ; useradd -u 1500 -g 1500 -m -s /bin/bash web ; usermod -p '<hash>' web ...
+    checks:
+      - desc: web (1500:1500) et deploy (1501:1501, membre de web)
+        run: |
+          ssh srv-neuf 'test "$(id -u web):$(id -g web)" = 1500:1500 && test "$(id -u deploy):$(id -g deploy)" = 1501:1501 && id -nG deploy | grep -qw web'
+      - desc: Mots de passe identiques à la sauvegarde
+        run: |
+          ssh srv-neuf 'mkdir -p /tmp/verif && tar -xzf /srv/restauration/etc.tar.gz -C /tmp/verif etc/shadow && for u in web deploy; do test "$(grep "^$u:" /etc/shadow | cut -d: -f2)" = "$(grep "^$u:" /tmp/verif/etc/shadow | cut -d: -f2)" || exit 1; done'
+      - desc: Les comptes système de srv-neuf sont conservés
+        run: ssh srv-neuf 'getent passwd mysql >/dev/null && getent passwd www-data >/dev/null'
+
+  - id: pra-site
+    title: Restaurer les fichiers du site
+    cours: |
+      `tar` restaure les droits avec `-p` (par défaut pour root) et les propriétaires d'origine ; avec
+      `--numeric-owner`, il utilise les numéros UID/GID enregistrés plutôt que les noms, ce qui est le plus
+      sûr quand les comptes ont été recréés à l'identique.
+
+      Les archives sont souvent faites depuis `/` avec des chemins relatifs (`var/www/boutique/...`) :
+      `tar -tzvf` montre les chemins et les propriétaires **avant** d'extraire, `-C /` choisit le dossier de
+      destination. Vérifie ensuite avec `ls -ln` (numéros) et `ls -l` (noms).
+    description: |
+      Restaure le site dans `/var/www/boutique` sur srv-neuf, avec ses droits et ses propriétaires d'origine
+      (compte `web`).
+    hint: tar -tzvf /srv/restauration/www.tar.gz | head ; tar -xzpf /srv/restauration/www.tar.gz --numeric-owner -C / ; ls -l /var/www/boutique
+    checks:
+      - desc: Les fichiers du site appartiennent à web
+        run: ssh srv-neuf 'test "$(stat -c %U:%G /var/www/boutique/index.html)" = web:web && test "$(stat -c %U /var/www/boutique/images/produit-2.jpg)" = web'
+      - desc: Droits d'origine conservés (script en 750)
+        run: ssh srv-neuf 'test "$(stat -c %a /var/www/boutique/bin/maj-stock.sh)" = 750 && grep -q "Boutique Ateliers Durand" /var/www/boutique/index.html'
+
+  - id: pra-nginx
+    title: Remettre le site en ligne
+    cours: |
+      La configuration du site est dans l'archive `etc.tar.gz`. On extrait **seulement** ce fichier
+      (`tar -xzf etc.tar.gz -C / etc/nginx/sites-available/boutique`), on l'active par un lien dans
+      `sites-enabled`, puis `nginx -t` et démarrage.
+
+      Le site par défaut d'Ubuntu (`default`) répond à tous les noms inconnus ; ici le site restauré a son
+      propre `server_name`, les deux peuvent cohabiter. Le test final se fait **du point de vue de
+      l'utilisateur**, depuis un poste, avec le nom du site.
+
+      Lis le journal d'erreurs de nginx si la page ne s'affiche pas : il indique précisément le fichier ou le droit qui manque.
+    description: |
+      Restaure et active la configuration nginx du site `boutique`, démarre nginx : depuis admin,
+      `http://boutique.durand.lan/` doit afficher la boutique.
+    hint: tar -xzf /srv/restauration/etc.tar.gz -C / etc/nginx/sites-available/boutique ; ln -s /etc/nginx/sites-available/boutique /etc/nginx/sites-enabled/ ; nginx -t && nginx
+    checks:
+      - desc: La boutique s'affiche depuis admin
+        run: curl -s --max-time 5 http://boutique.durand.lan/ | grep -q 'Boutique Ateliers Durand'
+      - desc: Configuration d'origine (dossier bin interdit)
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://boutique.durand.lan/bin/maj-stock.sh)" = 403
+
+  - id: pra-base
+    title: Restaurer la base et le compte de l'application
+    cours: |
+      La sauvegarde de la base a été faite avec `mariadb-dump --databases` : elle contient `CREATE DATABASE`
+      et `USE`, il suffit de la passer au client (`zcat bdd.sql.gz | mariadb`). Les **comptes** MariaDB ne
+      sont pas dans un dump de base : ils sont ici dans `droits.sql`, à rejouer de la même façon
+      (`mariadb < droits.sql`).
+
+      Vérifie ensuite le contenu (`SELECT COUNT(*)`) et l'accès avec le compte de l'application, comme le
+      ferait la boutique. Démarre d'abord MariaDB (`service mariadb start`).
+
+      Contrôle aussi le nombre de lignes des tables principales : il doit correspondre à ce qui existait à la date de la sauvegarde retenue.
+    description: |
+      Sur srv-neuf, démarre MariaDB, restaure la base `boutique` de la sauvegarde retenue et le compte
+      applicatif `boutique`. Ce compte doit pouvoir lire les 40 produits avec le mot de passe de la
+      sauvegarde.
+    hint: service mariadb start ; zcat /srv/restauration/bdd.sql.gz | mariadb ; mariadb < /srv/restauration/droits.sql ; mariadb -u boutique -p boutique -e 'SELECT COUNT(*) FROM produits'
+    checks:
+      - desc: Le compte boutique lit 40 produits
+        run: test "$(ssh srv-neuf "mariadb -u boutique -p'Boutique-Bdd-2026' -N boutique -e 'SELECT COUNT(*) FROM produits'" 2>/dev/null)" = 40
+      - desc: Données de la sauvegarde du 18 (et non du 17)
+        run: test "$(ssh srv-neuf "mariadb -N -e 'SELECT SUM(stock) FROM boutique.produits'" 2>/dev/null)" = "$(ssh nas 'zcat /srv/sauvegardes/srv-web/2026-10-18/bdd.sql.gz' | grep -o "([0-9]*,'[^']*',[0-9.]*,[0-9]*)" | awk -F, '{s += $NF} END {print s}' | tr -d ')')"
+
+  - id: pra-taches
+    title: Restaurer les tâches planifiées
+    cours: |
+      Les crontabs des utilisateurs sont dans `/var/spool/cron/crontabs/<compte>`. Elles sont faciles à
+      oublier lors d'une restauration... jusqu'à ce qu'un traitement ne tourne plus.
+
+      Plutôt que de copier le fichier à la main (propriétaire, groupe `crontab` et droits très précis), on
+      l'extrait dans un dossier temporaire puis on l'installe avec `crontab -u <compte> <fichier>`, qui fait
+      les vérifications. `crontab -l -u <compte>` contrôle le résultat. Le démon `cron` doit tourner.
+
+      Les tâches planifiées sont souvent oubliées lors d'une restauration : leur absence ne se remarque que des jours plus tard, quand une sauvegarde ou une purge n'a pas tourné. Note dans le rapport de reprise la liste des tâches restaurées.
+    description: |
+      Restaure la crontab du compte `web` de l'ancien serveur et démarre le service cron sur srv-neuf.
+    hint: mkdir -p /tmp/restau ; tar -xzf /srv/restauration/cron.tar.gz -C /tmp/restau ; crontab -u web /tmp/restau/var/spool/cron/crontabs/web ; cron
+    checks:
+      - desc: Crontab de web identique à la sauvegarde
+        run: |
+          ssh srv-neuf 'mkdir -p /tmp/verif && tar -xzf /srv/restauration/cron.tar.gz -C /tmp/verif && crontab -l -u web | grep -v "^#" | grep . > /tmp/verif/actuelle && grep -v "^#" /tmp/verif/var/spool/cron/crontabs/web | grep . | diff -q - /tmp/verif/actuelle'
+      - desc: cron est démarré
+        run: ssh srv-neuf 'pgrep -x cron >/dev/null'
+
+  - id: pra-rapport
+    title: Rédiger le rapport de reprise
+    cours: |
+      Le PRA se termine par un **rapport** destiné à la direction et à l'équipe :
+
+      - quelle sauvegarde a été utilisée et donc **quelles données sont perdues** (RPO réel) ;
+      - la durée d'interruption (RTO réel), comparée à l'objectif ;
+      - les incidents rencontrés pendant la reprise (sauvegarde abîmée...) ;
+      - les **actions** pour la prochaine fois (supervision des sauvegardes, test de restauration,
+        copie hors site, documentation à compléter).
+
+      Un retour d'expérience honnête, sans chercher de coupable, est ce qui améliore réellement le plan.
+    description: |
+      Rédige `/root/rapport-pra.txt` sur admin avec au moins les lignes `sauvegarde_utilisee=` (la date),
+      `donnees_perdues=` (ce qui a été perdu, texte libre), `incident=` (le problème rencontré avec les
+      sauvegardes) et `action=` (au moins une action d'amélioration ; plusieurs lignes `action=` possibles).
+    hint: nano /root/rapport-pra.txt
+    checks:
+      - desc: Sauvegarde utilisée
+        run: grep -Eq '^sauvegarde_utilisee *= *2026-10-18 *$' /root/rapport-pra.txt
+      - desc: Pertes, incident et actions renseignés
+        run: grep -Eq '^donnees_perdues *= *[^ ].{5,}' /root/rapport-pra.txt && grep -Eq '^incident *= *[^ ].{5,}' /root/rapport-pra.txt && grep -Eq '^action *= *[^ ].{5,}' /root/rapport-pra.txt

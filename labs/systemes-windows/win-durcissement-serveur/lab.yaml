@@ -1,0 +1,505 @@
+title: Durcissement d'un serveur Windows
+level: expert
+order: 5
+tags: [durcissement, sécurité, applocker, journalisation, powershell, lsa, wdigest, llmnr, smb, tls, audit, ntlm]
+summary: Appliquer une base de sécurité à un serveur - AppLocker (exécutables et scripts), journalisation PowerShell, protection de la LSA, protocoles réseau hérités, TLS, audit avancé, NTLM et services inutiles.
+vagrant: bundled
+machine: srv01
+description: |
+  **Contexte.** Le nouveau serveur d'applications des *Ateliers Durand* doit passer l'audit de sécurité
+  demandé par l'assureur cyber. Le rapport de l'auditeur liste une dizaine d'écarts par rapport aux
+  recommandations (guides de l'ANSSI, base de sécurité Microsoft, CIS). Corrige-les un par un, en
+  comprenant **quelle attaque** chaque réglage empêche.
+
+  **Machine** : `SRV01` (terminal), Windows Server 2022 autonome (2 Go), adresse LAN 192.168.10.10.
+
+  Sur un serveur du domaine, ces réglages seraient appliqués par GPO (et vérifiés par l'outil d'analyse
+  de la base de sécurité) ; ici, on les règle localement pour bien voir chaque valeur. Plusieurs ne
+  prennent effet qu'au **redémarrage** : redémarre à la fin du lab.
+cours: |
+  ## Réduire la surface d'attaque, augmenter la visibilité
+
+  Durcir un serveur, c'est appliquer deux principes : **réduire ce qu'un attaquant peut faire** (services
+  inutiles, protocoles hérités, exécution de programmes arbitraires, vol d'identifiants) et **voir ce qu'il
+  fait** (audit, journalisation PowerShell, journaux assez grands). Les recommandations existent déjà :
+  base de sécurité Microsoft (*Security Compliance Toolkit*), guides de l'ANSSI, CIS Benchmarks. On les
+  applique par GPO, on documente les exceptions, et on vérifie régulièrement l'écart.
+
+  ## Contrôler ce qui s'exécute : AppLocker
+
+  **AppLocker** autorise ou refuse l'exécution par **règles** (chemin, éditeur signataire, empreinte),
+  par type de fichier (exécutables, scripts, installateurs, DLL, applications empaquetées) et par
+  utilisateur ou groupe. Les **règles par défaut** autorisent `%WINDIR%` et `%PROGRAMFILES%` pour tous
+  (dossiers où un utilisateur ne peut pas écrire) et tout pour les administrateurs : un programme déposé
+  dans `C:\Users\...` ou `C:\Users\Public` ne s'exécute plus. Chaque collection a un **mode** : *audit
+  seulement* (journalise ce qui serait bloqué, pour préparer le déploiement) ou *appliquer*. Le service
+  **Identité de l'application** (`AppIDSvc`) doit tourner pour que les règles soient appliquées. Quand les
+  règles de scripts sont appliquées, PowerShell passe en mode de langage **restreint** pour les
+  utilisateurs non autorisés. WDAC (*App Control for Business*) est l'alternative plus robuste, au niveau
+  du noyau.
+
+  ## Protéger les identifiants
+
+  Les outils comme Mimikatz lisent les secrets dans la mémoire du processus **LSASS**. Deux réglages
+  limitent les dégâts : **LSA protégée** (`RunAsPPL`), qui interdit aux processus non protégés de lire
+  LSASS, et la désactivation du stockage en clair de **WDigest** (`UseLogonCredential` = 0). Côté réseau,
+  **NTLMv1** et les condensats **LM** sont cassables en quelques secondes : niveau d'authentification
+  LAN Manager à 5 (NTLMv2 uniquement) et pas de stockage LM.
+
+  ## Couper les protocoles hérités
+
+  **LLMNR** et **NetBIOS** répondent aux résolutions de noms ratées par diffusion : un attaquant sur le
+  réseau local répond à la place du vrai serveur et récupère des condensats (Responder). **SMB** sans
+  signature permet les attaques par relais ; SMBv1 est à bannir. **SSL 3.0** et **TLS 1.0** sont
+  obsolètes ; les applications .NET doivent utiliser les protocoles du système (`SchUseStrongCrypto`).
+
+  ## Voir : audit et journalisation
+
+  La **stratégie d'audit avancée** (sous-catégories) enregistre les ouvertures de session (4624, 4625),
+  la validation des identifiants (4776) et la création de processus (4688), avec la **ligne de commande**
+  si on l'active. La **journalisation des blocs de script** (4104) enregistre le code PowerShell
+  réellement exécuté, même obfusqué, et la **transcription** garde une copie texte des sessions. Encore
+  faut-il un journal *Security* assez grand pour couvrir quelques jours, et une collecte centrale.
+
+  ## Moins de services
+
+  Chaque service est une surface d'attaque : le **spouleur d'impression** (PrintNightmare) n'a rien à faire
+  démarré sur un serveur qui n'imprime pas, et encore moins sur un contrôleur de domaine.
+docs:
+  - title: Bases de sécurité Windows
+    url: https://learn.microsoft.com/fr-fr/windows/security/operating-system-security/device-management/windows-security-configuration-framework/windows-security-baselines
+  - title: AppLocker - vue d'ensemble
+    url: https://learn.microsoft.com/fr-fr/windows/security/application-security/application-control/app-control-for-business/applocker/applocker-overview
+  - title: Protection LSA supplémentaire
+    url: https://learn.microsoft.com/fr-fr/windows-server/security/credentials-protection-and-management/configuring-additional-lsa-protection
+exercises:
+  - id: win-dur-applocker-exe
+    title: AppLocker - les exécutables
+    description: |
+      Crée la stratégie AppLocker **locale** des **exécutables** avec les trois règles par défaut (tout le
+      monde : `%WINDIR%\*` et `%PROGRAMFILES%\*` ; administrateurs : `*`), en mode **appliquer**. Vérifie avec
+      `Test-AppLockerPolicy` que `C:\Users\Public\outil.exe` serait refusé à un utilisateur ordinaire.
+    hint: Écris un XML <AppLockerPolicy Version="1"><RuleCollection Type="Exe" EnforcementMode="Enabled"> avec trois <FilePathRule> puis Set-AppLockerPolicy -XmlPolicy fichier.xml -Merge ; Get-AppLockerPolicy -Local | Test-AppLockerPolicy -Path C:\Users\Public\outil.exe -User Everyone
+    cours: |
+      ```powershell
+      $xml = @'
+      <AppLockerPolicy Version="1">
+        <RuleCollection Type="Exe" EnforcementMode="Enabled">
+          <FilePathRule Id="921cc481-6e17-4653-8f75-050b80acca20" Name="Program Files" Description="" UserOrGroupSid="S-1-1-0" Action="Allow">
+            <Conditions><FilePathCondition Path="%PROGRAMFILES%\*" /></Conditions></FilePathRule>
+          <FilePathRule Id="a61c8b2c-a319-4cd0-9690-d2177cad7b51" Name="Windows" Description="" UserOrGroupSid="S-1-1-0" Action="Allow">
+            <Conditions><FilePathCondition Path="%WINDIR%\*" /></Conditions></FilePathRule>
+          <FilePathRule Id="fd686d83-a829-4351-8ff4-27c7de5755d2" Name="Administrateurs" Description="" UserOrGroupSid="S-1-5-32-544" Action="Allow">
+            <Conditions><FilePathCondition Path="*" /></Conditions></FilePathRule>
+        </RuleCollection>
+      </AppLockerPolicy>
+      '@
+      $xml | Set-Content C:\Admin\applocker-exe.xml -Encoding UTF8
+      Set-AppLockerPolicy -XmlPolicy C:\Admin\applocker-exe.xml -Merge
+      Get-AppLockerPolicy -Local | Test-AppLockerPolicy -Path C:\Users\Public\outil.exe -User Everyone
+      ```
+
+      En production, on commence **toujours** en mode *audit seulement* (`AuditOnly`) pendant quelques
+      semaines, on analyse le journal *Microsoft-Windows-AppLocker/EXE and DLL* (événements 8003 : aurait
+      été bloqué), on ajoute les règles manquantes (de préférence par **éditeur**), puis on passe en mode
+      appliquer. Les règles par chemin sont fragiles si un utilisateur peut écrire dans le dossier autorisé.
+    docs:
+      - title: Set-AppLockerPolicy
+        url: https://learn.microsoft.com/fr-fr/powershell/module/applocker/set-applockerpolicy
+      - title: Règles par défaut d'AppLocker
+        url: https://learn.microsoft.com/fr-fr/windows/security/application-security/application-control/app-control-for-business/applocker/understanding-applocker-default-rules
+    ci: true
+    checks:
+      - desc: La collection Exe locale est en mode appliquer avec au moins 3 règles
+        run: |
+          [xml]$p = Get-AppLockerPolicy -Local -Xml
+          $c = $p.AppLockerPolicy.RuleCollection | Where-Object Type -eq 'Exe'
+          [bool]$c -and $c.EnforcementMode -eq 'Enabled' -and @($c.ChildNodes | Where-Object { $_.Action -eq 'Allow' }).Count -ge 3
+      - desc: C:\Users\Public\outil.exe serait refusé à Tout le monde
+        run: |
+          $tous = (New-Object Security.Principal.SecurityIdentifier 'S-1-1-0').Translate([Security.Principal.NTAccount]).Value
+          (Get-AppLockerPolicy -Local | Test-AppLockerPolicy -Path C:\Users\Public\outil.exe -User $tous).PolicyDecision -match 'Denied'
+    solution: |
+      $xml = @'
+      <AppLockerPolicy Version="1">
+        <RuleCollection Type="Exe" EnforcementMode="Enabled">
+          <FilePathRule Id="921cc481-6e17-4653-8f75-050b80acca20" Name="Program Files" Description="" UserOrGroupSid="S-1-1-0" Action="Allow"><Conditions><FilePathCondition Path="%PROGRAMFILES%\*" /></Conditions></FilePathRule>
+          <FilePathRule Id="a61c8b2c-a319-4cd0-9690-d2177cad7b51" Name="Windows" Description="" UserOrGroupSid="S-1-1-0" Action="Allow"><Conditions><FilePathCondition Path="%WINDIR%\*" /></Conditions></FilePathRule>
+          <FilePathRule Id="fd686d83-a829-4351-8ff4-27c7de5755d2" Name="Administrateurs" Description="" UserOrGroupSid="S-1-5-32-544" Action="Allow"><Conditions><FilePathCondition Path="*" /></Conditions></FilePathRule>
+        </RuleCollection>
+      </AppLockerPolicy>
+      '@
+      $xml | Set-Content C:\Admin\applocker-exe.xml -Encoding UTF8
+      Set-AppLockerPolicy -XmlPolicy C:\Admin\applocker-exe.xml -Merge
+
+  - id: win-dur-appidsvc
+    title: AppLocker - le service Identité de l'application
+    description: |
+      Les règles AppLocker ne sont appliquées que si le service **Identité de l'application** (`AppIDSvc`)
+      tourne. Passe-le en démarrage **automatique** et démarre-le.
+    hint: sc.exe config AppIDSvc start= auto ; Start-Service AppIDSvc (Set-Service est refusé sur ce service protégé)
+    cours: |
+      ```powershell
+      sc.exe config AppIDSvc start= auto
+      Start-Service AppIDSvc
+      Get-Service AppIDSvc | Select-Object Status, StartType
+      ```
+
+      `AppIDSvc` est un service **protégé** : `Set-Service -StartupType` échoue avec « accès refusé », il
+      faut passer par `sc.exe` ou par GPO (*Paramètres de sécurité* › *Services système*), ce qui est la
+      méthode normale sur un parc. Sans ce service, la stratégie existe mais rien n'est bloqué : un oubli
+      fréquent qui donne une fausse impression de sécurité. Après démarrage, l'application de la stratégie
+      peut prendre quelques instants ; le journal AppLocker montre les premiers blocages (8004).
+    docs:
+      - title: Configurer le service Identité de l'application
+        url: https://learn.microsoft.com/fr-fr/windows/security/application-security/application-control/app-control-for-business/applocker/configure-the-application-identity-service
+    # Pas de ci : appliquer AppLocker sur un runner partagé pourrait bloquer les outils de la CI elle-même.
+    checks:
+      - desc: AppIDSvc est démarré et automatique
+        run: |
+          $s = Get-Service AppIDSvc
+          $s.Status -eq 'Running' -and $s.StartType -eq 'Automatic'
+    solution: |
+      sc.exe config AppIDSvc start= auto | Out-Null
+      Start-Service AppIDSvc
+
+  - id: win-dur-applocker-scripts
+    title: AppLocker - les scripts
+    description: |
+      Ajoute à la stratégie locale la collection **Script** avec ses trois règles par défaut (mêmes
+      emplacements que pour les exécutables), en mode **appliquer**, sans perdre la collection Exe.
+    hint: RuleCollection Type="Script" EnforcementMode="Enabled", règles 06dce67b-934c-454f-a263-2515c8796a5d (%PROGRAMFILES%), 9428c672-5fc3-49f4-8d7f-6fd3d8a5f2c5 (%WINDIR%), ed97d0cb-15ff-430f-b82c-8d7832957725 (Administrateurs) ; Set-AppLockerPolicy -Merge
+    cours: |
+      ```powershell
+      # même XML que pour les exécutables, avec RuleCollection Type="Script" et les identifiants :
+      # 06dce67b-934c-454f-a263-2515c8796a5d (%PROGRAMFILES%\*), 9428c672-5fc3-49f4-8d7f-6fd3d8a5f2c5 (%WINDIR%\*),
+      # ed97d0cb-15ff-430f-b82c-8d7832957725 (S-1-5-32-544, *)
+      Set-AppLockerPolicy -XmlPolicy C:\Admin\applocker-scripts.xml -Merge
+      (Get-AppLockerPolicy -Local).RuleCollections | Format-Table RuleCollectionType, EnforcementMode, Count
+      ```
+
+      La collection *Script* couvre `.ps1`, `.bat`, `.cmd`, `.vbs` et `.js`. Un utilisateur non administrateur
+      ne peut plus lancer de script depuis son profil ou un dossier temporaire, et PowerShell bascule pour
+      lui en **ConstrainedLanguage** (plus d'appels .NET arbitraires, plus de `Add-Type`) : une grande partie
+      des outils d'attaque en PowerShell cesse de fonctionner. `-Merge` ajoute la collection à la stratégie
+      existante au lieu de la remplacer.
+    docs:
+      - title: Modes de langage PowerShell
+        url: https://learn.microsoft.com/fr-fr/powershell/module/microsoft.powershell.core/about/about_language_modes
+    ci: true
+    checks:
+      - desc: La collection Script est en mode appliquer avec au moins 3 règles
+        run: |
+          [xml]$p = Get-AppLockerPolicy -Local -Xml
+          $c = $p.AppLockerPolicy.RuleCollection | Where-Object Type -eq 'Script'
+          [bool]$c -and $c.EnforcementMode -eq 'Enabled' -and @($c.ChildNodes | Where-Object { $_.Action -eq 'Allow' }).Count -ge 3
+      - desc: La collection Exe est toujours appliquée
+        run: |
+          [xml]$p = Get-AppLockerPolicy -Local -Xml
+          ($p.AppLockerPolicy.RuleCollection | Where-Object Type -eq 'Exe').EnforcementMode -eq 'Enabled'
+    solution: |
+      $xml = @'
+      <AppLockerPolicy Version="1">
+        <RuleCollection Type="Script" EnforcementMode="Enabled">
+          <FilePathRule Id="06dce67b-934c-454f-a263-2515c8796a5d" Name="Program Files" Description="" UserOrGroupSid="S-1-1-0" Action="Allow"><Conditions><FilePathCondition Path="%PROGRAMFILES%\*" /></Conditions></FilePathRule>
+          <FilePathRule Id="9428c672-5fc3-49f4-8d7f-6fd3d8a5f2c5" Name="Windows" Description="" UserOrGroupSid="S-1-1-0" Action="Allow"><Conditions><FilePathCondition Path="%WINDIR%\*" /></Conditions></FilePathRule>
+          <FilePathRule Id="ed97d0cb-15ff-430f-b82c-8d7832957725" Name="Administrateurs" Description="" UserOrGroupSid="S-1-5-32-544" Action="Allow"><Conditions><FilePathCondition Path="*" /></Conditions></FilePathRule>
+        </RuleCollection>
+      </AppLockerPolicy>
+      '@
+      $xml | Set-Content C:\Admin\applocker-scripts.xml -Encoding UTF8
+      Set-AppLockerPolicy -XmlPolicy C:\Admin\applocker-scripts.xml -Merge
+
+  - id: win-dur-powershell
+    title: Journaliser PowerShell
+    description: |
+      Active la **journalisation des blocs de script** et la **transcription** PowerShell (dossier
+      `C:\Transcripts`, avec en-têtes d'invocation), par les valeurs de stratégie de
+      `HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell`.
+    hint: ...\PowerShell\ScriptBlockLogging EnableScriptBlockLogging = 1 ; ...\PowerShell\Transcription EnableTranscripting = 1, OutputDirectory = C:\Transcripts, EnableInvocationHeader = 1
+    cours: |
+      ```powershell
+      $base = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell'
+      New-Item "$base\ScriptBlockLogging", "$base\Transcription" -Force
+      Set-ItemProperty "$base\ScriptBlockLogging" -Name EnableScriptBlockLogging -Value 1 -Type DWord
+      Set-ItemProperty "$base\Transcription" -Name EnableTranscripting -Value 1 -Type DWord
+      Set-ItemProperty "$base\Transcription" -Name OutputDirectory -Value C:\Transcripts
+      Set-ItemProperty "$base\Transcription" -Name EnableInvocationHeader -Value 1 -Type DWord
+      ```
+
+      Les événements **4104** (*Microsoft-Windows-PowerShell/Operational*) contiennent le code réellement
+      exécuté, après désobfuscation : c'est l'une des sources les plus utiles pour détecter une attaque.
+      La transcription écrit un fichier texte par session. Le dossier de transcription doit être protégé
+      (les utilisateurs écrivent, sans pouvoir lire ni modifier les fichiers des autres) ou, mieux, situé sur
+      un partage central. Ces réglages correspondent à *Modèles d'administration* › *Composants Windows* ›
+      *Windows PowerShell* ; PowerShell 7 a ses propres clés (`PowerShellCore`).
+    docs:
+      - title: Journalisation PowerShell sous Windows
+        url: https://learn.microsoft.com/fr-fr/powershell/module/microsoft.powershell.core/about/about_logging_windows
+    ci: true
+    checks:
+      - desc: La journalisation des blocs de script est activée
+        run: |
+          (Get-ItemProperty HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging -ErrorAction SilentlyContinue).EnableScriptBlockLogging -eq 1
+      - desc: La transcription est activée vers C:\Transcripts avec en-têtes
+        run: |
+          $t = Get-ItemProperty HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\Transcription -ErrorAction SilentlyContinue
+          $t.EnableTranscripting -eq 1 -and $t.OutputDirectory -eq 'C:\Transcripts' -and $t.EnableInvocationHeader -eq 1
+    solution: |
+      $base = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell'
+      foreach ($c in 'ScriptBlockLogging', 'Transcription') { if (-not (Test-Path "$base\$c")) { New-Item "$base\$c" -Force | Out-Null } }
+      Set-ItemProperty "$base\ScriptBlockLogging" -Name EnableScriptBlockLogging -Value 1 -Type DWord
+      Set-ItemProperty "$base\Transcription" -Name EnableTranscripting -Value 1 -Type DWord
+      Set-ItemProperty "$base\Transcription" -Name OutputDirectory -Value C:\Transcripts
+      Set-ItemProperty "$base\Transcription" -Name EnableInvocationHeader -Value 1 -Type DWord
+      New-Item C:\Transcripts -ItemType Directory -Force | Out-Null
+
+  - id: win-dur-lsa
+    title: Protéger LSASS
+    description: |
+      Active la **LSA protégée** (`RunAsPPL` = 1) et interdit à **WDigest** de conserver les mots de passe en
+      clair en mémoire (`UseLogonCredential` = 0).
+    hint: HKLM:\SYSTEM\CurrentControlSet\Control\Lsa RunAsPPL ; HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest UseLogonCredential
+    cours: |
+      ```powershell
+      Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\Lsa -Name RunAsPPL -Value 1 -Type DWord
+      Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest -Name UseLogonCredential -Value 0 -Type DWord
+      ```
+
+      Avec `RunAsPPL`, LSASS devient un processus *Protected Process Light* : même un administrateur ne peut
+      plus y injecter de code ni lire sa mémoire sans pilote signé (événement 12 du journal *System* au
+      démarrage : LSASS protégé). Certains modules d'authentification tiers non signés peuvent ne plus se
+      charger : on teste d'abord en mode audit. WDigest est un vieux protocole d'authentification HTTP ;
+      depuis Windows 8.1 il ne garde plus les mots de passe en clair... sauf si quelqu'un a remis cette
+      valeur à 1, ce que font précisément les attaquants. Prise en compte au **redémarrage**.
+    docs:
+      - title: Configurer la protection LSA supplémentaire
+        url: https://learn.microsoft.com/fr-fr/windows-server/security/credentials-protection-and-management/configuring-additional-lsa-protection
+    ci: true
+    checks:
+      - desc: RunAsPPL vaut 1
+        run: |
+          (Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\Lsa).RunAsPPL -eq 1
+      - desc: WDigest ne conserve plus les mots de passe (UseLogonCredential = 0)
+        run: |
+          (Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest).UseLogonCredential -eq 0
+    solution: |
+      Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\Lsa -Name RunAsPPL -Value 1 -Type DWord
+      Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest -Name UseLogonCredential -Value 0 -Type DWord
+
+  - id: win-dur-reseau
+    title: LLMNR, NetBIOS et SMB
+    description: |
+      Désactive **LLMNR** (stratégie `EnableMulticast` = 0) et **NetBIOS sur TCP/IP** sur toutes les
+      interfaces, exige la **signature SMB** côté serveur et vérifie que **SMBv1** est désactivé.
+    hint: HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient EnableMulticast 0 ; NetbiosOptions = 2 sous HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces\* ; Set-SmbServerConfiguration -RequireSecuritySignature $true -EnableSMB1Protocol $false -Force
+    cours: |
+      ```powershell
+      New-Item 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' -Force
+      Set-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' -Name EnableMulticast -Value 0 -Type DWord
+      Get-ChildItem HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces |
+          ForEach-Object { Set-ItemProperty $_.PSPath -Name NetbiosOptions -Value 2 }
+      Set-SmbServerConfiguration -RequireSecuritySignature $true -EnableSMB1Protocol $false -Force
+      ```
+
+      Quand un nom ne se résout pas par DNS, Windows le demande à la cantonade par LLMNR puis NetBIOS : un
+      outil comme *Responder* répond « c'est moi » et récupère un condensat NetNTLMv2, à casser hors ligne
+      ou à relayer. Sans ces protocoles, la résolution repose uniquement sur le DNS (ce qui est sain dans un
+      domaine). `NetbiosOptions` : 0 selon le DHCP, 1 activé, **2 désactivé**. La signature SMB obligatoire
+      empêche le relais NTLM vers ce serveur ; Windows Server 2025 l'exige d'ailleurs par défaut.
+    docs:
+      - title: Signature SMB
+        url: https://learn.microsoft.com/fr-fr/windows-server/storage/file-server/smb-signing-overview
+      - title: Set-SmbServerConfiguration
+        url: https://learn.microsoft.com/fr-fr/powershell/module/smbshare/set-smbserverconfiguration
+    ci: true
+    checks:
+      - desc: LLMNR est désactivé par stratégie
+        run: |
+          (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' -ErrorAction SilentlyContinue).EnableMulticast -eq 0
+      - desc: NetBIOS est désactivé sur toutes les interfaces
+        run: |
+          $i = Get-ChildItem HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces | ForEach-Object { (Get-ItemProperty $_.PSPath).NetbiosOptions }
+          @($i).Count -ge 1 -and @($i | Where-Object { $_ -ne 2 }).Count -eq 0
+      - desc: Signature SMB exigée et SMBv1 désactivé
+        run: |
+          $c = Get-SmbServerConfiguration
+          $c.RequireSecuritySignature -and -not $c.EnableSMB1Protocol
+    solution: |
+      $cle = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient'
+      if (-not (Test-Path $cle)) { New-Item $cle -Force | Out-Null }
+      Set-ItemProperty $cle -Name EnableMulticast -Value 0 -Type DWord
+      Get-ChildItem HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces | ForEach-Object { Set-ItemProperty $_.PSPath -Name NetbiosOptions -Value 2 -Type DWord }
+      Set-SmbServerConfiguration -RequireSecuritySignature $true -EnableSMB1Protocol $false -Force
+
+  - id: win-dur-tls
+    title: SSL 3.0, TLS 1.0 et .NET
+    description: |
+      Désactive **SSL 3.0** et **TLS 1.0**, côté **serveur et client** (`Enabled` = 0, `DisabledByDefault` = 1),
+      et oblige les applications .NET Framework (64 et 32 bits) à utiliser la cryptographie forte
+      (`SchUseStrongCrypto` = 1, `SystemDefaultTlsVersions` = 1).
+    hint: HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\<SSL 3.0|TLS 1.0>\<Server|Client> ; HKLM:\SOFTWARE\Microsoft\.NETFramework\v4.0.30319 et HKLM:\SOFTWARE\WOW6432Node\Microsoft\.NETFramework\v4.0.30319
+    cours: |
+      ```powershell
+      foreach ($v in 'SSL 3.0', 'TLS 1.0') { foreach ($r in 'Server', 'Client') {
+          $cle = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\$v\$r"
+          Set-ItemProperty $cle -Name Enabled -Value 0 -Type DWord
+          Set-ItemProperty $cle -Name DisabledByDefault -Value 1 -Type DWord } }
+      foreach ($cle in 'HKLM:\SOFTWARE\Microsoft\.NETFramework\v4.0.30319', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\.NETFramework\v4.0.30319') {
+          Set-ItemProperty $cle -Name SchUseStrongCrypto -Value 1 -Type DWord
+          Set-ItemProperty $cle -Name SystemDefaultTlsVersions -Value 1 -Type DWord }
+      ```
+
+      Côté **client**, le réglage concerne les connexions sortantes du serveur (vers une API, un proxy, un
+      serveur de messagerie) : un vieux service tiers qui ne parle que TLS 1.0 cessera de fonctionner, à
+      vérifier avant. Les applications .NET Framework anciennes choisissent elles-mêmes leurs protocoles :
+      `SystemDefaultTlsVersions` leur fait suivre la configuration du système, `SchUseStrongCrypto` leur
+      interdit les protocoles et algorithmes faibles. Il faut régler **les deux** vues du registre (64 et
+      32 bits). Prise en compte au redémarrage (SCHANNEL) ou au relancement de l'application (.NET).
+    docs:
+      - title: Bonnes pratiques TLS avec .NET Framework
+        url: https://learn.microsoft.com/fr-fr/dotnet/framework/network-programming/tls
+      - title: Paramètres de registre TLS (SCHANNEL)
+        url: https://learn.microsoft.com/fr-fr/windows-server/security/tls/tls-registry-settings
+    ci: true
+    checks:
+      - desc: SSL 3.0 et TLS 1.0 sont désactivés côté serveur et client
+        run: |
+          $erreurs = foreach ($v in 'SSL 3.0', 'TLS 1.0') { foreach ($r in 'Server', 'Client') {
+              $p = Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\$v\$r" -ErrorAction SilentlyContinue
+              if (-not $p -or $p.Enabled -ne 0 -or $p.DisabledByDefault -ne 1) { "$v $r" } } }
+          @($erreurs).Count -eq 0
+      - desc: .NET Framework utilise la cryptographie forte (64 et 32 bits)
+        run: |
+          $erreurs = foreach ($cle in 'HKLM:\SOFTWARE\Microsoft\.NETFramework\v4.0.30319', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\.NETFramework\v4.0.30319') {
+              $p = Get-ItemProperty $cle
+              if ($p.SchUseStrongCrypto -ne 1 -or $p.SystemDefaultTlsVersions -ne 1) { $cle } }
+          @($erreurs).Count -eq 0
+    solution: |
+      foreach ($v in 'SSL 3.0', 'TLS 1.0') { foreach ($r in 'Server', 'Client') {
+          $cle = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\$v\$r"
+          if (-not (Test-Path $cle)) { New-Item $cle -Force | Out-Null }
+          Set-ItemProperty $cle -Name Enabled -Value 0 -Type DWord
+          Set-ItemProperty $cle -Name DisabledByDefault -Value 1 -Type DWord } }
+      foreach ($cle in 'HKLM:\SOFTWARE\Microsoft\.NETFramework\v4.0.30319', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\.NETFramework\v4.0.30319') {
+          Set-ItemProperty $cle -Name SchUseStrongCrypto -Value 1 -Type DWord
+          Set-ItemProperty $cle -Name SystemDefaultTlsVersions -Value 1 -Type DWord }
+
+  - id: win-dur-audit
+    title: L'audit avancé
+    description: |
+      Active l'audit (réussite **et** échec) des sous-catégories **Ouvrir la session** et **Validation des
+      informations d'identification**, et l'audit des réussites de **Création du processus**, avec la **ligne
+      de commande** dans les événements 4688. Force l'usage des sous-catégories (`SCENoApplyLegacyAuditPolicy`)
+      et porte le journal *Security* à **256 Mo**.
+    hint: auditpol /set /subcategory:"{0CCE9215-69AE-11D9-BED3-505054503030}" /success:enable /failure:enable (Logon) ; {0CCE923F-...} (Credential Validation) ; {0CCE922B-...} /success:enable (Process Creation) ; ProcessCreationIncludeCmdLine_Enabled ; wevtutil sl Security /ms:268435456
+    cours: |
+      ```powershell
+      auditpol /set /subcategory:"{0CCE9215-69AE-11D9-BED3-505054503030}" /success:enable /failure:enable   # Ouvrir la session
+      auditpol /set /subcategory:"{0CCE923F-69AE-11D9-BED3-505054503030}" /success:enable /failure:enable   # Validation des identifiants
+      auditpol /set /subcategory:"{0CCE922B-69AE-11D9-BED3-505054503030}" /success:enable                   # Création du processus
+      Set-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System\Audit -Name ProcessCreationIncludeCmdLine_Enabled -Value 1
+      Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\Lsa -Name SCENoApplyLegacyAuditPolicy -Value 1
+      wevtutil sl Security /ms:268435456
+      ```
+
+      Les GUID évitent les noms de sous-catégories, traduits selon la langue du système. Les événements
+      clés : **4624/4625** (session ouverte/échouée, avec le type d'ouverture), **4776** (validation NTLM),
+      **4688** (processus créé : avec la ligne de commande, on voit `powershell -enc ...` ou `certutil
+      -urlcache`). La ligne de commande peut contenir des secrets passés en argument : le journal *Security*
+      doit rester réservé aux administrateurs. 256 Mo couvrent quelques jours sur un serveur ; la vraie
+      rétention se fait dans un SIEM.
+    docs:
+      - title: Stratégie d'audit avancée
+        url: https://learn.microsoft.com/fr-fr/windows/security/threat-protection/auditing/advanced-security-audit-policy-settings
+      - title: auditpol set
+        url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/auditpol-set
+    ci: true
+    checks:
+      - desc: Ouverture de session et validation des identifiants auditées en réussite et échec
+        run: |
+          # auditpol /r ne donne que le libellé traduit ; la sauvegarde CSV donne la valeur numérique
+          $f = Join-Path $env:TEMP 'tdm-audit.csv'
+          auditpol /backup /file:$f | Out-Null
+          $lignes = Import-Csv $f
+          Remove-Item $f
+          $v = foreach ($g in '{0CCE9215-69AE-11D9-BED3-505054503030}', '{0CCE923F-69AE-11D9-BED3-505054503030}') { [int]($lignes | Where-Object { $_.'Subcategory GUID' -eq $g } | Select-Object -First 1).'Setting Value' }
+          @($v | Where-Object { $_ -ne 3 }).Count -eq 0
+      - desc: Création de processus auditée avec la ligne de commande
+        run: |
+          $f = Join-Path $env:TEMP 'tdm-audit.csv'
+          auditpol /backup /file:$f | Out-Null
+          $lignes = Import-Csv $f
+          Remove-Item $f
+          $v = [int]($lignes | Where-Object { $_.'Subcategory GUID' -eq '{0CCE922B-69AE-11D9-BED3-505054503030}' } | Select-Object -First 1).'Setting Value'
+          ($v -band 1) -and (Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System\Audit).ProcessCreationIncludeCmdLine_Enabled -eq 1
+      - desc: Sous-catégories forcées et journal Security de 256 Mo
+        run: |
+          (Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\Lsa).SCENoApplyLegacyAuditPolicy -eq 1 -and (Get-WinEvent -ListLog Security).MaximumSizeInBytes -ge 256MB
+    solution: |
+      auditpol /set /subcategory:'{0CCE9215-69AE-11D9-BED3-505054503030}' /success:enable /failure:enable | Out-Null
+      auditpol /set /subcategory:'{0CCE923F-69AE-11D9-BED3-505054503030}' /success:enable /failure:enable | Out-Null
+      auditpol /set /subcategory:'{0CCE922B-69AE-11D9-BED3-505054503030}' /success:enable | Out-Null
+      Set-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System\Audit -Name ProcessCreationIncludeCmdLine_Enabled -Value 1 -Type DWord
+      Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\Lsa -Name SCENoApplyLegacyAuditPolicy -Value 1 -Type DWord
+      wevtutil sl Security /ms:268435456
+
+  - id: win-dur-ntlm
+    title: NTLMv2 uniquement
+    description: |
+      Règle le **niveau d'authentification LAN Manager** sur « Envoyer uniquement les réponses NTLMv2, refuser
+      LM et NTLM » (`LmCompatibilityLevel` = 5) et interdis le stockage des condensats **LM** (`NoLMHash` = 1).
+    hint: Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\Lsa -Name LmCompatibilityLevel -Value 5 ; -Name NoLMHash -Value 1
+    cours: |
+      ```powershell
+      Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\Lsa -Name LmCompatibilityLevel -Value 5 -Type DWord
+      Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\Lsa -Name NoLMHash -Value 1 -Type DWord
+      ```
+
+      Les niveaux vont de 0 (LM et NTLM, le pire) à **5** (NTLMv2 seulement, LM et NTLMv1 refusés en
+      réception). Les réponses NTLMv1 capturées se cassent en temps quasi réel ; le condensat LM d'un mot
+      de passe se casse en quelques secondes quelle que soit sa complexité. Option de sécurité : *Sécurité
+      réseau : niveau d'authentification LAN Manager*. L'étape suivante est de **réduire NTLM** tout court
+      (audit puis restriction de NTLM dans le domaine) au profit de Kerberos.
+    docs:
+      - title: Niveau d'authentification LAN Manager
+        url: https://learn.microsoft.com/fr-fr/windows/security/threat-protection/security-policy-settings/network-security-lan-manager-authentication-level
+    ci: true
+    checks:
+      - desc: LmCompatibilityLevel = 5 et NoLMHash = 1
+        run: |
+          $l = Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\Lsa
+          $l.LmCompatibilityLevel -eq 5 -and $l.NoLMHash -eq 1
+    solution: |
+      Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\Lsa -Name LmCompatibilityLevel -Value 5 -Type DWord
+      Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\Lsa -Name NoLMHash -Value 1 -Type DWord
+
+  - id: win-dur-spouleur
+    title: Le spouleur d'impression
+    description: |
+      Ce serveur n'imprime pas : **arrête** et **désactive** le service Spouleur d'impression.
+    hint: Stop-Service Spooler ; Set-Service Spooler -StartupType Disabled
+    cours: |
+      ```powershell
+      Stop-Service Spooler -Force
+      Set-Service Spooler -StartupType Disabled
+      Get-Service | Where-Object { $_.StartType -eq 'Automatic' } | Sort-Object Name | Format-Table Name, DisplayName, Status
+      ```
+
+      Le spouleur a concentré plusieurs failles graves (PrintNightmare, exécution de code à distance en
+      SYSTEM) et sert aux attaques par **coercition d'authentification** (*PrinterBug* : forcer un serveur à
+      s'authentifier auprès d'une machine de l'attaquant). Sur un contrôleur de domaine, Microsoft recommande
+      de le désactiver. Plus largement, la liste des services automatiques d'un serveur doit être revue :
+      chacun doit avoir une raison d'être.
+    docs:
+      - title: Désactiver le spouleur sur les contrôleurs de domaine
+        url: https://learn.microsoft.com/fr-fr/windows-server/security/windows-services/security-guidelines-for-disabling-system-services-in-windows-server
+    ci: true
+    checks:
+      - desc: Le spouleur est arrêté et désactivé
+        run: |
+          $s = Get-Service Spooler
+          $s.Status -eq 'Stopped' -and $s.StartType -eq 'Disabled'
+    solution: |
+      Stop-Service Spooler -Force
+      Set-Service Spooler -StartupType Disabled

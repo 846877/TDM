@@ -1,0 +1,386 @@
+title: Reverse proxy dynamique avec Traefik
+level: intermediaire
+order: 12
+tags: [traefik, reverse proxy, docker, compose, tls, middlewares, canari]
+summary: Router des conteneurs par leurs labels avec Traefik - routeurs, répartition, middlewares, authentification, HTTPS, tableau de bord sécurisé, déploiement canari et contrôles de santé.
+build: .
+privileged: true
+command: []
+shell: sh
+workdir: /root/traefik
+setup: |
+  grep -q 'bonjour.localhost' /etc/hosts || echo '127.0.0.1 bonjour.localhost canari.localhost tableau.localhost' >> /etc/hosts
+  for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+description: |
+  Un hôte Docker rien qu'à toi (Docker dans Docker). Tu vas décrire dans **`/root/traefik/compose.yaml`**
+  (lance toujours `docker compose` depuis `/root/traefik`) un reverse proxy **Traefik** et des services de
+  démonstration, puis les faire évoluer.
+
+  Images à utiliser : **`traefik:v3.5.3`** et **`traefik/whoami:v1.11.0`** (un petit serveur web qui répond
+  en affichant son nom de conteneur, sa variable `WHOAMI_NAME` et la requête reçue).
+
+  Les noms **`bonjour.localhost`**, **`canari.localhost`** et **`tableau.localhost`** pointent vers
+  `127.0.0.1` (`/etc/hosts`). Pour tester : `wget -qO- http://bonjour.localhost/`. Le dossier
+  **`/root/traefik/dynamique`** est prévu pour la configuration dynamique en fichiers.
+cours: |
+  ## Traefik : un reverse proxy qui se configure tout seul
+
+  Un **reverse proxy** reçoit les requêtes des clients et les transmet au bon service selon le nom d'hôte,
+  le chemin ou d'autres critères. Avec Nginx ou HAProxy, on écrit la liste des services dans un fichier ;
+  quand les conteneurs apparaissent, disparaissent ou changent d'adresse, il faut le mettre à jour.
+  **Traefik** découvre au contraire les services lui-même, en interrogeant un **fournisseur**
+  (*provider*) : Docker, Kubernetes, Consul, ou des fichiers. Chaque conteneur décrit son propre routage
+  dans ses **labels**.
+
+  ```
+   client ──> point d'entrée (entrypoint :80, :443)
+                  │
+                  ▼
+              routeur  (règle : Host(`bonjour.localhost`) && PathPrefix(`/api`))
+                  │
+                  ├──> middlewares (authentification, redirection, en-têtes, préfixe…)
+                  ▼
+              service  (répartition entre les conteneurs, contrôles de santé)
+                  │
+           ┌──────┼──────┐
+           ▼      ▼      ▼
+        bonjour-1  -2    -3        <── découverts via le socket Docker et leurs labels
+  ```
+
+  ### Configuration statique et dynamique
+
+  - La configuration **statique** est lue au démarrage : points d'entrée, fournisseurs, API, journaux.
+    On la passe en arguments (`--entrypoints.web.address=:80`), en fichier ou en variables
+    d'environnement. La changer impose de redémarrer Traefik.
+  - La configuration **dynamique** (routeurs, services, middlewares, certificats) change à chaud : labels
+    des conteneurs, fichiers surveillés, objets Kubernetes.
+
+  ### Mémo des labels Docker
+
+  | Label | Rôle |
+  |---|---|
+  | `traefik.enable=true` | exposer ce conteneur (si `exposedByDefault=false`) |
+  | `traefik.http.routers.R.rule=Host(...)` | règle du routeur `R` |
+  | `traefik.http.routers.R.entrypoints=web` | point d'entrée écouté |
+  | `traefik.http.routers.R.middlewares=M1,M2` | chaîne de middlewares |
+  | `traefik.http.routers.R.tls=true` | HTTPS sur ce routeur |
+  | `traefik.http.middlewares.M.basicauth.users=...` | définition d'un middleware |
+  | `traefik.http.services.S.loadbalancer.server.port=80` | port du conteneur |
+
+  Le nom d'un objet est suivi de son fournisseur : `bonjour@docker`, `canari@file`, `api@internal`.
+
+  ### Traefik, Nginx ou HAProxy ?
+
+  Nginx et HAProxy restent excellents pour des configurations stables et des performances maximales ;
+  Traefik brille quand les services changent souvent : conteneurs, Swarm, Kubernetes (où il sert aussi de
+  contrôleur Ingress et de Gateway API). Les concepts sont les mêmes partout : point d'entrée, règle de
+  routage, transformation de la requête, répartition entre des serveurs sains.
+
+  ### Pièges
+
+  - Monter le **socket Docker** donne à Traefik le contrôle du démon : en lecture seule (`:ro`), et
+    jamais pour un conteneur exposé sans nécessité (en production, on passe par un proxy de socket).
+  - Le tableau de bord en mode `insecure` est ouvert à tous.
+  - Dans un fichier Compose, chaque `$` d'un hachage de mot de passe doit être doublé (`$$`).
+  - Des règles qui se recouvrent : Traefik choisit la plus longue, sauf priorité explicite.
+  - Les règles utilisent des **accents graves** : ``Host(`exemple.fr`)``.
+
+  ### Bonnes pratiques
+
+  `exposedByDefault=false`, redirection HTTP vers HTTPS au niveau du point d'entrée, certificats
+  automatiques (Let's Encrypt avec un résolveur ACME) ou fournis par l'entreprise, tableau de bord derrière
+  une authentification, contrôles de santé sur les services, et journaux d'accès activés.
+
+  ### Pour réviser
+
+  1. Quelle différence entre configuration statique et dynamique ?
+  2. Que relie un routeur, et dans quel ordre interviennent les middlewares ?
+  3. Comment Traefik découvre-t-il un nouveau conteneur ?
+  4. Comment faire passer 10 % du trafic vers une nouvelle version ?
+docs:
+  - title: Documentation de Traefik
+    url: https://doc.traefik.io/traefik/
+  - title: Fournisseur Docker
+    url: https://doc.traefik.io/traefik/providers/docker/
+  - title: Les middlewares HTTP
+    url: https://doc.traefik.io/traefik/middlewares/http/overview/
+  - title: Image traefik/whoami
+    url: https://hub.docker.com/r/traefik/whoami
+exercises:
+  - id: tk-demarrer
+    title: Démarrer Traefik avec le fournisseur Docker
+    description: |
+      Dans `compose.yaml`, décris un service **`traefik`** (image `traefik:v3.5.3`) qui :
+      - active le **fournisseur Docker** sans exposer les conteneurs par défaut
+        (`--providers.docker.exposedbydefault=false`) ;
+      - définit un point d'entrée **`web`** sur le port **80** ;
+      - active l'API et le tableau de bord en mode non sécurisé (`--api.insecure=true`, port 8080) ;
+      - publie les ports 80 et 8080 et monte le socket Docker **en lecture seule**.
+
+      Démarre-le, puis teste : `wget -qO- http://localhost:8080/api/overview`.
+    hint: "command: [\"--providers.docker=true\", \"--providers.docker.exposedbydefault=false\", \"--entrypoints.web.address=:80\", \"--api.insecure=true\"] ; volumes: - /var/run/docker.sock:/var/run/docker.sock:ro"
+    cours: |
+      Traefik lit sa configuration **statique** au démarrage. Avec Docker, on la passe le plus souvent en
+      **arguments** dans `command:`. Trois éléments de base :
+      - les **points d'entrée** (*entrypoints*) : les ports où Traefik écoute (`web` sur :80, `websecure` sur
+        :443) ;
+      - les **fournisseurs** : où découvrir les services. Le fournisseur Docker lit les conteneurs et leurs
+        labels par le **socket Docker**, qu'on monte en lecture seule ;
+      - l'**API** et le **tableau de bord** : une vue de tous les routeurs, services et middlewares,
+        précieuse pour comprendre ce que Traefik a compris.
+
+      `exposedbydefault=false` évite de publier par erreur tous les conteneurs de la machine : seuls ceux qui
+      portent `traefik.enable=true` seront routés. `/api/overview` et `/api/http/routers` renvoient l'état
+      en JSON.
+    checks:
+      - desc: Le service traefik tourne avec l'image demandée
+        run: |
+          c=$(docker compose -f /root/traefik/compose.yaml ps -q traefik 2>/dev/null) && test -n "$c" && test "$(docker inspect -f '{{.Config.Image}} {{.State.Running}}' "$c")" = "traefik:v3.5.3 true"
+      - desc: Les conteneurs ne sont pas exposés par défaut et le socket est en lecture seule
+        run: |
+          c=$(docker compose -f /root/traefik/compose.yaml ps -q traefik) && docker inspect -f '{{join .Args " "}}' "$c" | grep -qi 'exposedbydefault=false' && docker inspect -f '{{range .Mounts}}{{.Source}} {{.RW}};{{end}}' "$c" | grep -q '/var/run/docker.sock false'
+      - desc: L'API répond sur le port 8080
+        run: wget -qO- http://localhost:8080/api/overview | grep -q '"http"'
+  - id: tk-routeur
+    title: Router un service par son nom d'hôte
+    description: |
+      Ajoute un service **`bonjour`** (image `traefik/whoami:v1.11.0`, variable `WHOAMI_NAME=v1`) qui, grâce à
+      ses **labels**, est routé par Traefik pour le nom d'hôte **`bonjour.localhost`** sur le point d'entrée
+      `web`. Ne publie **aucun port** pour `bonjour` : tout passe par Traefik.
+
+      Teste : `wget -qO- http://bonjour.localhost/`.
+    hint: "labels: traefik.enable=true, traefik.http.routers.bonjour.rule=Host(`bonjour.localhost`), traefik.http.routers.bonjour.entrypoints=web"
+    cours: |
+      Avec le fournisseur Docker, chaque conteneur décrit son routage dans ses **labels**. Un **routeur**
+      associe une **règle** à un **service** :
+      - `traefik.http.routers.bonjour.rule=Host(`bonjour.localhost`)` : les requêtes pour ce nom ;
+      - `traefik.http.routers.bonjour.entrypoints=web` : reçues sur ce point d'entrée.
+
+      Si tu ne déclares pas de service, Traefik en crée un portant le nom du conteneur ou du service
+      Compose, vers le **port exposé** par l'image (ici 80) ; `loadbalancer.server.port` le précise quand
+      l'image en expose plusieurs.
+
+      Les règles combinent `Host`, `PathPrefix`, `Path`, `Header`, `Method`, `Query`, `ClientIP` avec `&&`,
+      `||` et `!`. Les conteneurs n'ont plus besoin de publier de port : seul Traefik est exposé, ce qui
+      réduit la surface d'attaque.
+    checks:
+      - desc: bonjour.localhost répond via Traefik
+        run: |
+          wget -qO- http://bonjour.localhost/ 2>/dev/null | grep -q '^Name: v1'
+      - desc: Le service bonjour ne publie aucun port
+        run: |
+          c=$(docker compose -f /root/traefik/compose.yaml ps -q bonjour | head -1) && test -n "$c" && test -z "$(docker port "$c")"
+  - id: tk-replicas
+    title: Répartir la charge entre plusieurs conteneurs
+    description: |
+      Lance **3 réplicas** du service `bonjour` (`deploy.replicas` ou `docker compose up -d --scale
+      bonjour=3`). Sans rien changer d'autre, Traefik doit répartir les requêtes entre les trois : observe la
+      ligne `Hostname` sur plusieurs requêtes.
+    hint: "deploy: replicas: 3 sous le service bonjour, puis docker compose up -d"
+    cours: |
+      Quand plusieurs conteneurs portent les mêmes labels, Traefik les place dans le **même service** et
+      répartit les requêtes entre eux, par défaut en **tourniquet** (*round robin*). L'ajout ou la
+      suppression d'un réplica est détecté en quelques secondes, sans recharger ni redémarrer le proxy :
+      c'est tout l'intérêt de la découverte dynamique.
+
+      Pour qu'un service soit réplicable, il ne doit pas fixer de `container_name` ni publier de port sur
+      l'hôte (deux conteneurs ne peuvent pas prendre le même port). Les options de répartition se règlent
+      par labels : `loadbalancer.sticky.cookie` pour la persistance de session, `loadbalancer.healthcheck`
+      pour les contrôles de santé (dernier exercice).
+
+      Le tableau de bord, ou `/api/http/services`, liste les adresses des serveurs de chaque service.
+    checks:
+      - desc: bonjour a 3 conteneurs en marche
+        run: test "$(docker compose -f /root/traefik/compose.yaml ps -q bonjour | wc -l)" = 3
+      - desc: Traefik répartit les requêtes entre les 3
+        run: |
+          for i in 1 2 3 4 5 6 7 8 9; do wget -qO- http://bonjour.localhost/; done | grep '^Hostname:' | sort -u | wc -l | grep -qx 3
+  - id: tk-chemin
+    title: Router par chemin et retirer un préfixe
+    description: |
+      Ajoute un service **`api`** (image `traefik/whoami:v1.11.0`, `WHOAMI_NAME=api`) routé pour
+      **`bonjour.localhost`** avec le chemin **`/api`**. Le service ne connaît pas ce préfixe : grâce au
+      middleware **`stripprefix`**, une requête sur `/api/commandes` doit lui arriver en `/commandes`.
+    hint: "rule=Host(`bonjour.localhost`) && PathPrefix(`/api`) ; traefik.http.middlewares.api-strip.stripprefix.prefixes=/api ; traefik.http.routers.api.middlewares=api-strip"
+    cours: |
+      Plusieurs applications peuvent partager un même nom d'hôte, séparées par le chemin : `/` pour le site,
+      `/api` pour l'API. Traefik choisit le routeur dont la règle correspond, et la **règle la plus longue
+      l'emporte** : `Host(...) && PathPrefix(`/api`)` passe donc avant `Host(...)` seul. Le label
+      `priority` force un ordre si besoin.
+
+      Les **middlewares** transforment la requête ou la réponse entre le routeur et le service.
+      **`stripprefix`** retire un préfixe du chemin avant de transmettre la requête ; `addprefix`,
+      `replacepath` et `replacepathregex` font d'autres réécritures. Un middleware se **définit** une fois
+      (sur n'importe quel conteneur ou dans un fichier) puis s'**attache** à un ou plusieurs routeurs, dans
+      l'ordre de la liste.
+
+      Le service reçoit l'en-tête `X-Forwarded-Prefix`, qui lui permet de construire ses liens correctement.
+    checks:
+      - desc: /api/commandes arrive au service api en /commandes
+        run: |
+          r=$(wget -qO- http://bonjour.localhost/api/commandes 2>/dev/null) && echo "$r" | grep -q '^Name: api' && echo "$r" | grep -q '^GET /commandes HTTP'
+      - desc: La racine reste servie par bonjour
+        run: |
+          wget -qO- http://bonjour.localhost/ 2>/dev/null | grep -q '^Name: v1'
+  - id: tk-auth
+    title: Protéger l'API par mot de passe
+    description: |
+      Protège le routeur de l'**API** (`/api`) avec un middleware **`basicauth`** : utilisateur **`admin`**,
+      mot de passe **`admin-secret`**. Le site (`/`) reste public.
+
+      Génère le hachage avec `openssl passwd -apr1 admin-secret`.
+    hint: "traefik.http.middlewares.api-auth.basicauth.users=admin:$$apr1$$... (chaque $ doublé dans compose.yaml) ; routers.api.middlewares=api-auth,api-strip"
+    cours: |
+      Le middleware **`basicauth`** demande un identifiant et un mot de passe avant de transmettre la
+      requête. Les mots de passe sont donnés **hachés**, au format htpasswd : bcrypt, SHA-1 ou MD5 Apache
+      (`$apr1$`, produit par `openssl passwd -apr1`). On peut aussi pointer vers un fichier (`usersfile`).
+
+      Piège classique : dans un fichier Compose, `$` sert à l'interpolation de variables ; chaque `$` du
+      hachage doit être **doublé** (`$$`). Sinon, le hachage est tronqué et aucun mot de passe ne
+      fonctionne.
+
+      L'authentification basique n'est sûre que sur **HTTPS**. Pour une vraie gestion des utilisateurs, on
+      délègue à un fournisseur d'identité avec **`forwardauth`** (Authelia, oauth2-proxy, Keycloak).
+      L'ordre des middlewares compte : authentifier avant de réécrire est en général le plus lisible.
+    checks:
+      - desc: Sans identifiants, /api renvoie 401
+        run: |
+          printf 'GET /api/ HTTP/1.0\r\nHost: bonjour.localhost\r\n\r\n' | nc -w 3 127.0.0.1 80 | head -1 | grep -q ' 401 '
+      - desc: Avec admin / admin-secret, /api répond
+        run: |
+          wget -qO- --header "Authorization: Basic $(printf 'admin:admin-secret' | base64)" http://bonjour.localhost/api/x 2>/dev/null | grep -q '^Name: api'
+      - desc: Le site reste public
+        run: |
+          wget -qO- http://bonjour.localhost/ 2>/dev/null | grep -q '^Name: v1'
+  - id: tk-https
+    title: HTTPS et redirection
+    description: |
+      Ajoute un point d'entrée **`websecure`** sur le port **443** (publié), active **TLS** sur les routeurs
+      `bonjour` et `api` (Traefik utilise alors un certificat autosigné par défaut), et **redirige**
+      tout le trafic HTTP du point d'entrée `web` vers HTTPS.
+
+      Teste : `wget -qO- --no-check-certificate https://bonjour.localhost/`.
+    hint: "--entrypoints.websecure.address=:443, --entrypoints.web.http.redirections.entrypoint.to=websecure, --entrypoints.web.http.redirections.entrypoint.scheme=https ; labels routers.X.entrypoints=websecure et routers.X.tls=true"
+    cours: |
+      Pour servir en HTTPS, un routeur doit écouter sur un point d'entrée TLS (`websecure`, :443) et porter
+      `tls=true`. Sans certificat fourni, Traefik présente un **certificat autosigné** par défaut (« TRAEFIK
+      DEFAULT CERT »), suffisant pour un test mais refusé par les navigateurs.
+
+      En production, Traefik obtient et renouvelle seul des certificats **Let's Encrypt** grâce à un
+      **résolveur ACME** (`certificatesresolvers`, puis `tls.certresolver` sur le routeur), ou charge les
+      certificats de l'entreprise par la configuration dynamique en fichier (`tls.certificates`).
+
+      La **redirection** HTTP vers HTTPS se déclare une fois pour tout le point d'entrée :
+      `entrypoints.web.http.redirections.entrypoint.to=websecure`. Les routeurs n'écoutent alors plus que
+      `websecure`. L'en-tête HSTS (middleware `headers`) indique ensuite aux navigateurs de ne plus jamais
+      tenter HTTP.
+    checks:
+      - desc: HTTP redirige vers HTTPS
+        run: |
+          r=$(printf 'GET / HTTP/1.0\r\nHost: bonjour.localhost\r\n\r\n' | nc -w 3 127.0.0.1 80) && echo "$r" | head -1 | grep -Eq ' 30[1278] ' && echo "$r" | grep -qi '^location: https://bonjour.localhost'
+      - desc: Le site répond en HTTPS
+        run: |
+          wget -qO- --no-check-certificate https://bonjour.localhost/ 2>/dev/null | grep -q '^Name: v1'
+      - desc: L'API répond en HTTPS avec authentification
+        run: |
+          wget -qO- --no-check-certificate --header "Authorization: Basic $(printf 'admin:admin-secret' | base64)" https://bonjour.localhost/api/x 2>/dev/null | grep -q '^Name: api'
+  - id: tk-tableau
+    title: Sécuriser le tableau de bord
+    description: |
+      Le tableau de bord est ouvert à tous sur le port 8080. Corrige cela :
+      1. **désactive** le mode `insecure` et ne publie plus le port 8080 ;
+      2. publie le tableau de bord sur **`https://tableau.localhost/`** grâce à un routeur vers le service
+         interne **`api@internal`**, protégé par le même utilisateur `admin` / `admin-secret`.
+    hint: "--api.dashboard=true sans --api.insecure ; sur le conteneur traefik : routers.tableau.rule=Host(`tableau.localhost`), routers.tableau.service=api@internal, routers.tableau.tls=true, routers.tableau.middlewares=api-auth"
+    cours: |
+      `--api.insecure=true` publie l'API et le tableau de bord sur un point d'entrée dédié (:8080), **sans
+      aucune protection** : pratique pour démarrer, dangereux ensuite, car il révèle toute la topologie.
+
+      La bonne pratique consiste à traiter le tableau de bord comme n'importe quel service : un **routeur**
+      avec une règle, TLS et des middlewares d'authentification, vers le service **interne** `api@internal`
+      (le suffixe `@internal` désigne les services fournis par Traefik lui-même). Les labels se placent sur le
+      conteneur de Traefik, qui doit lui-même avoir `traefik.enable=true`.
+
+      Le tableau de bord est servi sous `/dashboard/` et l'API sous `/api` : la règle doit couvrir les deux,
+      ce que fait une simple règle `Host(...)`. Un middleware défini sur un autre conteneur se référence par
+      son nom (`api-auth@docker`).
+    checks:
+      - desc: Le port 8080 n'est plus servi
+        run: "! wget -q -T 3 -O- http://localhost:8080/api/overview >/dev/null 2>&1"
+      - desc: Sans identifiants, le tableau de bord renvoie 401
+        run: |
+          ! wget -q -T 3 --no-check-certificate -O- https://tableau.localhost/api/overview >/dev/null 2>&1 && printf 'GET /api/overview HTTP/1.0\r\nHost: tableau.localhost\r\n\r\n' | nc -w 3 127.0.0.1 80 | head -1 | grep -Eq ' (30[1278]|401) '
+      - desc: Avec identifiants, l'API du tableau de bord répond en HTTPS
+        run: |
+          wget -qO- --no-check-certificate --header "Authorization: Basic $(printf 'admin:admin-secret' | base64)" https://tableau.localhost/api/overview 2>/dev/null | grep -q '"http"'
+  - id: tk-canari
+    title: Déploiement canari pondéré
+    description: |
+      Une version 2 arrive. Ajoute un service **`bonjour-v2`** (whoami, `WHOAMI_NAME=v2`, exposé à Traefik mais
+      **sans routeur** à lui), puis, avec la **configuration dynamique en fichier**
+      (`--providers.file.directory=/etc/traefik/dynamique`, dossier monté depuis `/root/traefik/dynamique`),
+      crée :
+      - un service **`canari`** pondéré : **3** parts pour `bonjour@docker`, **1** part pour
+        `bonjour-v2@docker` ;
+      - un routeur pour **`canari.localhost`** (HTTPS) vers ce service.
+
+      Environ une requête sur quatre doit arriver à la v2.
+
+      Attention aux noms : sans indication, Traefik nomme le service d'un conteneur d'après le service
+      Compose **et le projet** (`bonjour-traefik`). Déclare donc explicitement les services **`bonjour`** et
+      **`bonjour-v2`** par labels (`traefik.http.services.bonjour.loadbalancer.server.port=80`, et relie le
+      routeur `bonjour` à ce service).
+    hint: "Labels services.bonjour.loadbalancer.server.port=80, routers.bonjour.service=bonjour, services.bonjour-v2.loadbalancer.server.port=80 ; fichier : http: services: canari: weighted: services: [{name: bonjour@docker, weight: 3}, {name: bonjour-v2@docker, weight: 1}]"
+    cours: |
+      Un **déploiement canari** envoie une petite part du trafic réel vers la nouvelle version, observe les
+      erreurs et la latence, puis augmente progressivement la part, ou revient en arrière en un instant. Le
+      **bleu/vert** bascule au contraire tout le trafic d'un coup entre deux environnements complets.
+
+      Traefik le permet avec un service **`weighted`** (*Weighted Round Robin*), qui répartit les requêtes
+      entre d'autres services selon des **poids**. Ce type de service ne peut pas se déclarer par labels
+      Docker : on utilise le **fournisseur de fichiers**, surveillé à chaud. Un service y référence ceux de
+      Docker avec leur suffixe (`bonjour@docker`).
+
+      Les fournisseurs se combinent : la découverte reste automatique pour les conteneurs, et le fichier
+      ajoute la logique de répartition. Modifier les poids dans le fichier s'applique en quelques secondes,
+      sans redémarrage.
+    checks:
+      - desc: canari.localhost envoie environ un quart du trafic à la v2
+        run: |
+          n=$(for i in $(seq 1 40); do wget -qO- --no-check-certificate https://canari.localhost/ 2>/dev/null; done | grep -c '^Name: v2'); test "$n" -ge 5 && test "$n" -le 15
+      - desc: Le reste du trafic va à la v1
+        run: |
+          n=$(for i in $(seq 1 20); do wget -qO- --no-check-certificate https://canari.localhost/ 2>/dev/null; done | grep -c '^Name: v1'); test "$n" -ge 10
+      - desc: Le service canari vient du fournisseur de fichiers
+        run: |
+          wget -qO- --no-check-certificate --header "Authorization: Basic $(printf 'admin:admin-secret' | base64)" https://tableau.localhost/api/http/services 2>/dev/null | grep -q '"canari@file"'
+  - id: tk-sante
+    title: Écarter un conteneur malade
+    description: |
+      Ajoute au service `bonjour` un **contrôle de santé** Traefik sur le chemin **`/health`**, toutes les
+      **2 secondes**. Un conteneur dont `/health` ne répond pas 200 doit être retiré de la répartition.
+
+      Pour tester, rends un réplica malade (whoami change le code renvoyé par `/health` quand on lui envoie un
+      code en POST) : `docker compose exec` n'est pas nécessaire, il suffit d'appeler l'adresse IP du
+      conteneur : `wget -qO- --post-data=500 http://<ip>/health`.
+    hint: "traefik.http.services.bonjour.loadbalancer.healthcheck.path=/health et traefik.http.services.bonjour.loadbalancer.healthcheck.interval=2s"
+    cours: |
+      Docker sait déjà si un conteneur est « en marche », mais un processus vivant peut très bien répondre
+      des erreurs. Le **contrôle de santé actif** de Traefik interroge régulièrement chaque serveur d'un
+      service sur un chemin (`healthcheck.path`) ; un serveur qui ne répond pas un code 2xx ou 3xx est
+      **retiré** de la répartition, puis réintégré dès qu'il redevient sain.
+
+      Options : `interval`, `timeout`, `port`, `hostname`, `headers`, `status`. Le point de santé doit être
+      léger, et vérifier ce dont l'application a besoin pour servir (base de données joignable, par exemple).
+
+      Le contrôle se déclare sur le **service** (`traefik.http.services.bonjour.loadbalancer.healthcheck.*`),
+      d'où l'intérêt de l'avoir nommé explicitement. L'état de santé de chaque serveur apparaît dans l'API
+      (`serverStatus`), et un service pondéré comme `canari` tient compte de la santé de ses membres.
+    checks:
+      - desc: Le service bonjour a un contrôle de santé sur /health
+        run: |
+          wget -qO- --no-check-certificate --header "Authorization: Basic $(printf 'admin:admin-secret' | base64)" https://tableau.localhost/api/http/services/bonjour@docker 2>/dev/null | grep -q '"path":"/health"'
+      - desc: Un réplica malade ne reçoit plus de requêtes, puis revient
+        timeout: 90
+        run: |
+          c=$(docker compose -f /root/traefik/compose.yaml ps -q bonjour | head -1) && test -n "$c" && ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$c" | cut -d' ' -f1) && h=$(docker inspect -f '{{.Config.Hostname}}' "$c") && wget -qO- --post-data=500 "http://$ip/health" >/dev/null 2>&1; sleep 7; n=$(for i in $(seq 1 12); do wget -qO- --no-check-certificate https://bonjour.localhost/ 2>/dev/null; done | grep -c "^Hostname: $h"); wget -qO- --post-data=200 "http://$ip/health" >/dev/null 2>&1; sleep 7; m=$(for i in $(seq 1 12); do wget -qO- --no-check-certificate https://bonjour.localhost/ 2>/dev/null; done | grep -c "^Hostname: $h"); test "$n" = 0 && test "$m" -ge 1

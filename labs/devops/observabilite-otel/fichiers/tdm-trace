@@ -1,0 +1,15 @@
+#!/bin/sh
+# tdm-trace NUMERO [SECONDES] : affiche en JSON la trace Jaeger dont un span porte l'attribut
+# commande.id=NUMERO (service « commandes »). Réessaie pendant SECONDES (20 par défaut), car les
+# spans arrivent par lots. Code de retour 1 si aucune trace n'est trouvée.
+id="$1"
+duree="${2:-20}"
+i=0
+while [ "$i" -lt "$duree" ]; do
+  curl -sf "http://localhost:16686/api/traces?service=commandes&limit=500&lookback=1h" 2>/dev/null \
+    | jq -ec --arg id "$id" '[.data[]? | select(any(.spans[].tags[]; .key == "commande.id" and (.value | tostring) == $id))] | first // empty' \
+    && exit 0
+  i=$((i + 1))
+  sleep 1
+done
+exit 1

@@ -1,0 +1,97 @@
+title: Passerelle redondante HSRP
+level: avance
+order: 10
+device: router
+hostname: R-GW1
+tags: [hsrp, redondance, fhrp]
+summary: Partager une adresse de passerelle virtuelle entre deux routeurs.
+description: |
+  Les PC du VLAN 10 ont pour passerelle `192.168.10.1`. Si le routeur tombe, plus personne ne
+  sort. Avec **HSRP**, deux routeurs (`R-GW1` en `.2`, `R-GW2` en `.3`) partagent une adresse
+  **virtuelle** `.1` : l'un est actif, l'autre prend le relais.
+
+  Sur `R-GW1`, interface `G0/0` :
+
+  1. `standby version 2` ;
+  2. groupe `10`, adresse virtuelle `192.168.10.1` (`standby 10 ip 192.168.10.1`) ;
+  3. priorité `110` (au-dessus des 100 par défaut de `R-GW2`) pour être le routeur actif ;
+  4. `standby 10 preempt` : quand `R-GW1` redémarre, il reprend le rôle actif.
+
+  Contrôle avec `show standby brief`.
+initial: |
+  interface g0/0
+  ip address 192.168.10.2 255.255.255.0
+  no shutdown
+checks:
+  - desc: HSRP version 2 sur G0/0
+    expr: intf("g0/0").standby_version == 2
+  - desc: Groupe 10 avec l'adresse virtuelle 192.168.10.1
+    expr: hsrp("g0/0", 10).ip == "192.168.10.1"
+    hint: "interface g0/0 puis standby 10 ip 192.168.10.1"
+  - desc: Priorité 110
+    expr: hsrp("g0/0", 10).priority == 110
+  - desc: Préemption activée
+    expr: hsrp("g0/0", 10).preempt
+solution: |
+  configure terminal
+  interface g0/0
+  standby version 2
+  standby 10 ip 192.168.10.1
+  standby 10 priority 110
+  standby 10 preempt
+  end
+cours: |
+  ## Le problème de la passerelle unique
+
+  Un PC ne connaît qu'**une** passerelle par défaut. Si ce routeur tombe, tout le réseau perd
+  l'accès aux autres réseaux, même si un second routeur est branché à côté. Les protocoles de
+  **redondance de passerelle** (FHRP) créent une **adresse IP virtuelle** partagée par plusieurs
+  routeurs : les PC l'utilisent comme passerelle, et le routeur actif répond pour elle.
+
+  | Protocole | Norme    | Rôles               | Partage de charge         |
+  |-----------|----------|---------------------|---------------------------|
+  | **HSRP**  | Cisco    | active / standby    | par groupes (un par VLAN) |
+  | VRRP      | standard | master / backup     | par groupes               |
+  | GLBP      | Cisco    | AVG / AVF           | oui, dans un même groupe  |
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R-A(config)# interface gi0/1
+  R-A(config-if)# ip address 172.16.40.2 255.255.255.0
+  R-A(config-if)# standby version 2
+  R-A(config-if)# standby 40 ip 172.16.40.254
+  R-A(config-if)# standby 40 priority 120
+  R-A(config-if)# standby 40 preempt
+  R-A# show standby brief
+  Interface  Grp  Pri P State    Active    Standby       Virtual IP
+  Gi0/1      40   120 P Active   local     172.16.40.3   172.16.40.254
+  ```
+
+  - le routeur à la **priorité** la plus haute (défaut 100) devient actif ;
+  - `preempt` : il reprend le rôle actif à son retour (sans `preempt`, l'actif reste en place) ;
+  - l'IP virtuelle a une **MAC virtuelle** (`0000.0c9f.fXXX` en version 2) : les PC n'ont rien à
+    réapprendre lors de la bascule ;
+  - les deux routeurs doivent avoir le même numéro de groupe, la même IP virtuelle et la même
+    version.
+
+  ### Aller plus loin
+
+  `standby 40 track gi0/0 30` baisse la priorité si le lien vers Internet tombe, pour que
+  l'autre routeur prenne le relais. On place souvent l'actif HSRP sur le même switch que le pont
+  racine STP du VLAN.
+
+  ### Pièges fréquents
+
+  - Passerelle des PC = adresse réelle d'un routeur au lieu de l'IP virtuelle.
+  - Versions HSRP différentes entre les deux routeurs.
+  - Oublier `preempt` et s'étonner que le routeur principal ne reprenne pas la main.
+
+  ### Pour le CCNA
+
+  Le rôle des FHRP et le fonctionnement de HSRP sont au programme.
+docs:
+  - title: "Cisco — Hot Standby Router Protocol (HSRP)"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/hot-standby-router-protocol-hsrp/9234-hsrpguidetoc.html
+  - title: "RFC 2281 — Cisco Hot Standby Router Protocol (HSRP)"
+    url: https://www.rfc-editor.org/rfc/rfc2281

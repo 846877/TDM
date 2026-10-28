@@ -1,0 +1,8 @@
+# Lab « IIS et certificats » : SRV-WEB01, un Windows Server 2022 autonome (2 Go) sans le rôle Serveur Web.
+require_relative "../_commun/tdm"
+
+Vagrant.configure("2") do |config|
+  TDM.lab(config, __dir__) do |lab|
+    lab.server "web01", hostname: "SRV-WEB01", ip: "192.168.10.30", primary: true, scenario: "scenario.ps1"
+  end
+end

@@ -1,0 +1,134 @@
+title: VRF-lite pour deux clients aux adresses identiques
+level: expert
+order: 18
+device: router
+hostname: R-MUTUALISE
+tags: [vrf, vrf-lite, multi-client, routage]
+summary: Isoler deux clients qui utilisent le même plan d'adressage sur un seul routeur.
+description: |
+  Un hébergeur raccorde deux clients sur `R-MUTUALISE`. Tous deux utilisent `192.168.1.0/24`
+  avec la passerelle `192.168.1.1` : impossible dans une table de routage unique. Il faut une
+  **VRF** par client.
+
+  | Client   | VRF        | RD        | LAN                         | Lien vers son cœur de réseau |
+  |----------|------------|-----------|-----------------------------|------------------------------|
+  | A        | `CLIENT-A` | `65000:1` | `G0/0` : `192.168.1.1/24`   | `G0/1.100` (VLAN 100) : `10.100.0.1/30`, voisin `10.100.0.2` |
+  | B        | `CLIENT-B` | `65000:2` | `G0/2` : `192.168.1.1/24`   | `G0/1.200` (VLAN 200) : `10.200.0.1/30`, voisin `10.200.0.2` |
+
+  1. crée les deux VRF (`vrf definition`, `rd`, `address-family ipv4`) ;
+  2. place chaque interface dans sa VRF **puis** (re)configure son adresse : `vrf forwarding`
+     efface l'adresse IP existante ;
+  3. une route par défaut **dans chaque VRF** vers le voisin du client
+     (`ip route vrf ...`).
+
+  Contrôle avec `show vrf`, `show ip route vrf CLIENT-A` et `ping vrf CLIENT-A 10.100.0.2`.
+initial: |
+  interface g0/0
+  ip address 192.168.1.1 255.255.255.0
+  no shutdown
+  interface g0/2
+  no shutdown
+  interface g0/1
+  no shutdown
+checks:
+  - desc: VRF CLIENT-A (65000:1) et CLIENT-B (65000:2) en IPv4
+    expr: d.vrfs["CLIENT-A"]["rd"] == "65000:1" and d.vrfs["CLIENT-B"]["rd"] == "65000:2" and d.vrfs["CLIENT-A"].get("ipv4") and d.vrfs["CLIENT-B"].get("ipv4")
+  - desc: LAN des deux clients en 192.168.1.1/24 dans leur VRF
+    expr: intf("g0/0").vrf == "CLIENT-A" and intf("g0/0").ip == "192.168.1.1" and intf("g0/2").vrf == "CLIENT-B" and intf("g0/2").ip == "192.168.1.1"
+  - desc: Liens G0/1.100 et G0/1.200 dans leur VRF
+    expr: intf("g0/1.100").vrf == "CLIENT-A" and intf("g0/1.100").ip == "10.100.0.1" and intf("g0/1.100").encapsulation_vlan == 100 and intf("g0/1.200").vrf == "CLIENT-B" and intf("g0/1.200").ip == "10.200.0.1" and intf("g0/1.200").encapsulation_vlan == 200
+  - desc: Route par défaut dans chaque VRF
+    expr: vrf_route("CLIENT-A", "0.0.0.0", "0.0.0.0", "10.100.0.2") and vrf_route("CLIENT-B", "0.0.0.0", "0.0.0.0", "10.200.0.2")
+solution: |
+  configure terminal
+  vrf definition CLIENT-A
+  rd 65000:1
+  address-family ipv4
+  exit-address-family
+  exit
+  vrf definition CLIENT-B
+  rd 65000:2
+  address-family ipv4
+  exit-address-family
+  exit
+  interface g0/0
+  vrf forwarding CLIENT-A
+  ip address 192.168.1.1 255.255.255.0
+  interface g0/2
+  vrf forwarding CLIENT-B
+  ip address 192.168.1.1 255.255.255.0
+  interface g0/1.100
+  encapsulation dot1Q 100
+  vrf forwarding CLIENT-A
+  ip address 10.100.0.1 255.255.255.252
+  interface g0/1.200
+  encapsulation dot1Q 200
+  vrf forwarding CLIENT-B
+  ip address 10.200.0.1 255.255.255.252
+  exit
+  ip route vrf CLIENT-A 0.0.0.0 0.0.0.0 10.100.0.2
+  ip route vrf CLIENT-B 0.0.0.0 0.0.0.0 10.200.0.2
+  end
+cours: |
+  ## Plusieurs tables de routage dans un routeur
+
+  Une **VRF** (*Virtual Routing and Forwarding*) est une table de routage indépendante, avec ses
+  propres interfaces. Les VRF d'un même routeur ne se voient pas : deux clients peuvent utiliser
+  les mêmes adresses, et un paquet entré dans une VRF ne peut sortir que par une interface de
+  cette VRF. C'est l'équivalent, au niveau 3, de ce que sont les VLAN au niveau 2.
+
+  - **VRF-lite** : VRF utilisées localement, sans MPLS ; on transporte la séparation entre
+    équipements par des sous-interfaces 802.1Q (une par VRF) ;
+  - dans les réseaux **MPLS L3VPN** des opérateurs, les VRF sont reliées par MP-BGP ; le
+    **RD** (*route distinguisher*) rend les préfixes uniques et les **route-targets** décident
+    des imports et exports.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# vrf definition INVITES
+  R1(config-vrf)# rd 64999:30
+  R1(config-vrf)# address-family ipv4
+  R1(config-vrf-af)# exit-address-family
+  R1(config)# interface gi0/3.30
+  R1(config-subif)# encapsulation dot1Q 30
+  R1(config-subif)# vrf forwarding INVITES
+  R1(config-subif)# ip address 172.30.0.1 255.255.255.0
+  R1(config)# ip route vrf INVITES 0.0.0.0 0.0.0.0 172.31.0.2
+  R1# show vrf
+    Name        Default RD     Protocols   Interfaces
+    INVITES     64999:30       ipv4        Gi0/3.30
+  R1# show ip route vrf INVITES
+  R1# ping vrf INVITES 172.31.0.2
+  ```
+
+  L'ancienne syntaxe `ip vrf NOM` + `ip vrf forwarding NOM` existe encore ; `vrf definition`
+  gère aussi IPv6.
+
+  ### Ordre des commandes
+
+  `vrf forwarding` **efface** l'adresse IP de l'interface (message
+  *IPv4 disabled and address(es) removed*) : on place l'interface dans la VRF, **puis** on
+  saisit l'adresse.
+
+  ### Les commandes qui doivent connaître la VRF
+
+  Toute commande qui manipule des adresses doit préciser la VRF, sinon elle agit dans la table
+  globale : `ping vrf`, `traceroute vrf`, `ip route vrf`, `show ip route vrf`, `router ospf 10
+  vrf NOM`, `ip nat inside source ... vrf NOM`...
+
+  ### Pièges fréquents
+
+  - Configurer l'adresse avant `vrf forwarding` : elle disparaît.
+  - Tester avec `ping` sans `vrf` : échec trompeur.
+  - Oublier que le routage entre VRF n'existe pas par défaut (il faut du *route leaking* ou un
+    pare-feu).
+
+  ### Pour le CCNP ENCOR
+
+  ENCOR couvre la virtualisation du réseau : VRF-lite, GRE, IPsec, VXLAN/LISP en principe.
+docs:
+  - title: Wikipédia (EN) — Virtual routing and forwarding
+    url: https://en.wikipedia.org/wiki/Virtual_routing_and_forwarding
+  - title: RFC 4364 — BGP/MPLS IP Virtual Private Networks
+    url: https://www.rfc-editor.org/rfc/rfc4364
