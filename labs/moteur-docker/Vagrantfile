@@ -25,7 +25,10 @@ Vagrant.configure("2") do |config|
   config.vm.box = ENV["TDM_DOCKER_VM_BOX"] || "bento/ubuntu-24.04"
   config.vm.box_check_update = false
   config.vm.hostname = "tdm-moteur-docker"
-  config.vm.boot_timeout = 600
+  # Premier démarrage généreux : télécharger puis importer la box et attendre le SSH peut être long,
+  # surtout si l'hyperviseur Windows est resté actif (VirtualBox tourne alors en mode lent). Trop court,
+  # `vagrant up` abandonnait avant le SSH : la VM était créée mais jamais provisionnée (Docker absent).
+  config.vm.boot_timeout = 1800
   config.vm.synced_folder ".", "/vagrant", disabled: true
 
   # Tout n'écoute que sur 127.0.0.1 : ni l'API Docker ni les labs ne sont visibles depuis le réseau.

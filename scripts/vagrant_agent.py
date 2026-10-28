@@ -482,7 +482,7 @@ class Agent:
             }
         if lab == ENGINE:
             return {
-                "/up": ("up", [self._wait_pauses, self._reload_engine, [self.vagrant, "up"], self._mark_ready]),
+                "/up": ("up", [self._wait_pauses, self._reload_engine, self._engine_up, self._mark_ready]),
                 "/halt": ("halt", [[self.vagrant, "suspend"]]),
                 "/reset": ("up", [self._wait_pauses, [self.vagrant, "destroy", "-f"], [self.vagrant, "up"], self._mark_ready]),
             }
@@ -515,6 +515,22 @@ class Agent:
         if code == 0:
             self.engine_reload = False
         return code
+
+    def _engine_up(self, job: Job) -> int:
+        """`vagrant up` du moteur Docker, avec rattrapage d'un premier démarrage interrompu.
+
+        Si `up` échoue alors que la VM n'a jamais été prête (pas de marqueur « pret »), c'est en général
+        un délai de démarrage dépassé : la VM a pu être créée sans être provisionnée (Docker jamais
+        installé), et un simple `up` suivant ne relancerait pas le provisionnement. On repart donc d'une
+        VM propre une seule fois. Une VM déjà prête qui échoue (incident passager) est laissée telle quelle
+        pour être reprise au prochain démarrage, sans être détruite.
+        """
+        code = job.call([self.vagrant, "up"])
+        if code == 0 or (job.cwd / ".tdm" / READY).exists():
+            return code
+        job.log.append("Démarrage incomplet de la VM moteur : reconstruction propre…")
+        job.call([self.vagrant, "destroy", "-f"])
+        return job.call([self.vagrant, "up"])
 
     # --- Une seule famille de labs à la fois ---------------------------------------------------
     # Les VM Windows et le moteur Docker ne tournent jamais en même temps (la mémoire ne suffirait pas) :

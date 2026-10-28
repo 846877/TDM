@@ -291,6 +291,30 @@ def test_agent_moteur_ports_et_rechargement(agent):
         vagrant_agent.parse_ports("8080,22")
 
 
+def test_agent_moteur_demarrage_incomplet_repart_propre(agent, tmp_path):
+    """Un premier `vagrant up` du moteur qui échoue (délai de démarrage dépassé) alors que la VM n'a jamais
+    été prête : elle a pu être créée sans Docker. L'agent la détruit et repart proprement une seule fois."""
+    timeout_vagrant = """#!/bin/sh
+echo "$(basename "$PWD") $*" >> "$CALLS"
+case "$1" in
+  status) if [ -f up ]; then s=running; else s=saved; fi; echo "1,default,state,$s" ;;
+  up) mkdir -p .vagrant/machines/default/virtualbox; echo id > .vagrant/machines/default/virtualbox/id
+      if [ -f clean ]; then touch up; exit 0; fi; exit 1 ;;
+  destroy) rm -f up; touch clean ;;
+esac
+exit 0
+"""
+    fake = tmp_path / "vagrant-timeout"
+    fake.write_text(timeout_vagrant)
+    fake.chmod(0o755)
+    agent.vagrant = str(fake)
+    agent.engine_ports = []
+    _run(agent, vagrant_agent.ENGINE, "/up")  # _run exige un code de retour final nul : le rattrapage a marché
+    work = agent.work_dir / "moteur-docker"
+    assert (work / ".tdm" / vagrant_agent.READY).exists()  # VM finalement prête
+    assert _take_calls(agent) == ["moteur-docker up", "moteur-docker destroy -f", "moteur-docker up"]
+
+
 def test_agent_un_seul_lab_a_la_fois(agent):
     agent.engine_ports = []
     for lab in ("tdm:win-a", vagrant_agent.ENGINE):
