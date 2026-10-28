@@ -1,13 +1,13 @@
-# Poste d'attaque commun à toutes les machines offensives : un environnement Kali Linux, en ligne de
-# commande ET en interface graphique (bureau Kali XFCE accessible dans le navigateur via noVNC). Image
-# partagée (construite une seule fois, puis réutilisée par toutes les machines grâce au cache Docker).
-# Le conteneur attaquant atteint la cible par le réseau interne du lab ; son bureau est publié sur
-# 127.0.0.1:6080 via un réseau bridge dédié.
+# Poste d'attaque commun à toutes les machines offensives : un environnement Kali Linux complet, en
+# ligne de commande ET en interface graphique (bureau Kali XFCE accessible dans le navigateur via
+# noVNC). Image partagée (construite une seule fois, puis réutilisée par toutes les machines grâce au
+# cache Docker). Le conteneur attaquant atteint la cible par le réseau interne du lab ; son bureau est
+# publié sur 127.0.0.1:6080 via un réseau bridge dédié.
 #
 # On N'UTILISE PAS les métapaquets kali-tools-* / kali-linux-default : ils tiraient des centaines de
-# paquets (dont Metasploit, Java, Maltego…) et l'installation échouait de façon répétée (exit 100). On
-# installe à la place un jeu d'outils Kali ciblé mais complet pour résoudre les machines, bien plus
-# fiable et plus rapide. L'installation reste découpée en couches : un build interrompu reprend au cache.
+# paquets et l'installation échouait de façon répétée (exit 100). On installe à la place, en couches
+# (chacune mise en cache : un build interrompu reprend au lieu de tout refaire), un jeu d'outils Kali
+# complet mais fiable, Metasploit et les outils d'énumération de privesc (LinPEAS…) compris.
 # apt est configuré pour réessayer les téléchargements (miroirs Kali rolling parfois capricieux).
 FROM kalilinux/kali-rolling
 
@@ -24,7 +24,7 @@ RUN apt-get update \
       firefox-esr \
  && rm -rf /var/lib/apt/lists/*
 
-# Couche 2 : outils en ligne de commande (recon, web, mots de passe) — l'essentiel pour les machines.
+# Couche 2 : outils en ligne de commande (recon, web, mots de passe).
 RUN apt-get update \
  && apt-get install -y \
       nmap netcat-traditional socat \
@@ -41,12 +41,28 @@ RUN apt-get update \
       git jq vim nano less iproute2 net-tools iputils-ping procps ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# Couche 4 : outils graphiques emblématiques (Burp Suite, Wireshark). Dans leur propre couche : s'ils
-# posent souci, tout le reste est déjà construit et en cache.
+# Couche 4 : outils graphiques emblématiques (Burp Suite, Wireshark), dans leur propre couche.
 RUN apt-get update \
  && apt-get install -y \
       burpsuite wireshark \
  && rm -rf /var/lib/apt/lists/*
+
+# Couche 5 : Metasploit Framework (gros paquet, isolé dans sa couche pour ne pas refaire le reste).
+RUN apt-get update \
+ && apt-get install -y metasploit-framework \
+ && rm -rf /var/lib/apt/lists/*
+
+# Couche 6 : outils d'énumération d'élévation de privilèges. unix-privesc-check via apt ; LinPEAS,
+# linux-exploit-suggester et LinEnum récupérés dans /root/tools (téléchargements non bloquants : si l'un
+# échoue, le build continue). Les scripts sont aussi exposés dans la cible via le réseau du lab au besoin.
+RUN apt-get update \
+ && apt-get install -y unix-privesc-check \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /root/tools \
+ && curl -fsSL -o /root/tools/linpeas.sh https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh || true \
+ && curl -fsSL -o /root/tools/linux-exploit-suggester.sh https://raw.githubusercontent.com/The-Z-Labs/linux-exploit-suggester/master/linux-exploit-suggester.sh || true \
+ && curl -fsSL -o /root/tools/LinEnum.sh https://raw.githubusercontent.com/rebootuser/LinEnum/master/LinEnum.sh || true \
+ && chmod +x /root/tools/*.sh 2>/dev/null || true
 
 # Script de démarrage du bureau (idempotent) : lance Xtigervnc sans mot de passe (lab local isolé) puis
 # la session Kali XFCE et le pont noVNC sur le port 6080. Appelé à la demande par la plateforme. On
