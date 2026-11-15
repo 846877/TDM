@@ -210,18 +210,27 @@ def installed_boxes(vagrant: str) -> set[str]:
 
 
 _USER_WIN_CPUS = os.environ.get("TDM_WIN_CPUS")  # choix explicite de l'utilisateur : jamais modifié
+_USER_WIN_BOOT_TIMEOUT = os.environ.get("TDM_WIN_BOOT_TIMEOUT")  # idem : jamais écrasé
 
 
 def apply_cpu_limit(hypervisor: bool) -> None:
-    """Avec l'hyperviseur Windows actif, VirtualBox reste bloqué au tout début du démarrage d'une VM Windows
-    à 2 processeurs (constaté avec VirtualBox 7.2) ; à 1 processeur elle démarre normalement. Les Vagrantfile
-    des labs Windows lisent TDM_WIN_CPUS (voir labs/systemes-windows/_commun/tdm.rb)."""
-    if _USER_WIN_CPUS:
-        return
-    if hypervisor:
-        os.environ["TDM_WIN_CPUS"] = "1"
-    else:
-        os.environ.pop("TDM_WIN_CPUS", None)
+    """Réglages des VM Windows selon l'état de l'hyperviseur Windows (lus par labs/systemes-windows/_commun/tdm.rb).
+
+    - Processeurs : avec l'hyperviseur Windows actif, VirtualBox reste bloqué au tout début du démarrage
+      d'une VM Windows à 2 processeurs (constaté avec VirtualBox 7.2) ; à 1 processeur elle démarre. TDM_WIN_CPUS.
+    - Délai de démarrage : à 1 processeur (mode « logiciel »/NEM), le tout premier démarrage de Windows
+      (OOBE + spécialisation) est bien plus long. On laisse alors 40 min au lieu de 20 pour qu'un premier
+      boot lent n'échoue pas (ce qui déclencherait une reconstruction). TDM_WIN_BOOT_TIMEOUT."""
+    if not _USER_WIN_CPUS:
+        if hypervisor:
+            os.environ["TDM_WIN_CPUS"] = "1"
+        else:
+            os.environ.pop("TDM_WIN_CPUS", None)
+    if not _USER_WIN_BOOT_TIMEOUT:
+        if hypervisor:
+            os.environ["TDM_WIN_BOOT_TIMEOUT"] = "2400"
+        else:
+            os.environ.pop("TDM_WIN_BOOT_TIMEOUT", None)
 
 
 def preflight_warnings(vagrantfile: Path, vagrant: str, hypervisor: bool | None = None) -> list[str]:

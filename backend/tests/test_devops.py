@@ -266,6 +266,21 @@ def test_agent_un_processeur_avec_hyperviseur(monkeypatch):
     assert os.environ["TDM_WIN_CPUS"] == "4"
 
 
+def test_agent_delai_demarrage_allonge_avec_hyperviseur(monkeypatch):
+    # À 1 cœur (hyperviseur actif), le premier boot Windows est lent : on laisse 40 min au lieu de 20.
+    monkeypatch.setattr(vagrant_agent, "_USER_WIN_BOOT_TIMEOUT", None)
+    monkeypatch.delenv("TDM_WIN_BOOT_TIMEOUT", raising=False)
+    vagrant_agent.apply_cpu_limit(True)
+    assert os.environ["TDM_WIN_BOOT_TIMEOUT"] == "2400"
+    vagrant_agent.apply_cpu_limit(False)
+    assert "TDM_WIN_BOOT_TIMEOUT" not in os.environ  # hyperviseur éteint : on revient au défaut de tdm.rb
+    # Un choix explicite de l'utilisateur n'est jamais modifié.
+    monkeypatch.setattr(vagrant_agent, "_USER_WIN_BOOT_TIMEOUT", "3600")
+    monkeypatch.setenv("TDM_WIN_BOOT_TIMEOUT", "3600")
+    vagrant_agent.apply_cpu_limit(True)
+    assert os.environ["TDM_WIN_BOOT_TIMEOUT"] == "3600"
+
+
 FAKE_VAGRANT_LENT = """#!/bin/sh
 echo "$*" >> calls
 case "$1" in

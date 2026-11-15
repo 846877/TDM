@@ -97,7 +97,9 @@ module TDM
         m.winrm.password = "vagrant"
         m.winrm.retry_limit = 60
         m.winrm.retry_delay = 10
-        m.vm.boot_timeout = 1200
+        # 20 min par défaut ; 40 min quand l'hyperviseur Windows est actif (VirtualBox à 1 cœur, premier
+        # boot Windows très lent) — l'agent TDM pose alors TDM_WIN_BOOT_TIMEOUT (voir apply_cpu_limit).
+        m.vm.boot_timeout = (ENV["TDM_WIN_BOOT_TIMEOUT"] || "1200").to_i
         m.vm.graceful_halt_timeout = 300
         m.vm.network :forwarded_port, guest: 22, host: 2222, host_ip: "127.0.0.1", id: "ssh", auto_correct: true
         m.vm.network :forwarded_port, guest: 3389, host: 33389, host_ip: "127.0.0.1", id: "rdp", auto_correct: true
