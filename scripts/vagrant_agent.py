@@ -482,14 +482,14 @@ class Agent:
             }
         if lab == ENGINE:
             return {
-                "/up": ("up", [self._wait_pauses, self._reload_engine, self._engine_up, self._mark_ready]),
+                "/up": ("up", [self._wait_pauses, self._heal_stale_vms, self._reload_engine, self._engine_up, self._mark_ready]),
                 "/halt": ("halt", [[self.vagrant, "suspend"]]),
-                "/reset": ("up", [self._wait_pauses, [self.vagrant, "destroy", "-f"], [self.vagrant, "up"], self._mark_ready]),
+                "/reset": ("up", [self._wait_pauses, self._heal_stale_vms, [self.vagrant, "destroy", "-f"], [self.vagrant, "up"], self._mark_ready]),
             }
         return {
-            "/up": ("up", [self._wait_pauses, self._preflight, [self.vagrant, "up"], self._mark_ready, self._snapshot_once]),
+            "/up": ("up", [self._wait_pauses, self._heal_stale_vms, self._preflight, [self.vagrant, "up"], self._mark_ready, self._snapshot_once]),
             "/halt": ("halt", [[self.vagrant, "suspend"]]),
-            "/reset": ("up", [self._wait_pauses, self._preflight, self._restore_or_rebuild]),
+            "/reset": ("up", [self._wait_pauses, self._heal_stale_vms, self._preflight, self._restore_or_rebuild]),
         }
 
     def cancel_steps(self, lab: str, path: Path) -> list:
@@ -531,6 +531,47 @@ class Agent:
         job.log.append("Démarrage incomplet de la VM moteur : reconstruction propre…")
         job.call([self.vagrant, "destroy", "-f"])
         return job.call([self.vagrant, "up"])
+
+    def _vm_accessible(self, vm_id: str) -> bool | None:
+        """Une VM enregistrée dans VirtualBox répond-elle ? ``None`` si on ne peut pas savoir (pas de
+        VBoxManage). ``False`` pour une VM « inaccessible » (ses fichiers ont disparu)."""
+        if not self.vboxmanage:
+            return None
+        try:
+            result = subprocess.run([self.vboxmanage, "showvminfo", vm_id, "--machinereadable"],
+                                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return result.returncode == 0
+
+    def _heal_stale_vms(self, job: Job) -> int:
+        """Répare une VM « fantôme » avant de (re)démarrer un lab.
+
+        Si le pointeur ``.vagrant`` d'une machine désigne une VM que VirtualBox ne connaît plus ou juge
+        « inaccessible » (disque supprimé entre-temps, par ex. lors d'un nettoyage de disque), un
+        ``vagrant up`` buterait sur « The object functionality is limited / E_ACCESSDENIED » et le lab
+        afficherait « Échec ». On désenregistre alors cette VM et on efface le pointeur pour que Vagrant la
+        recrée proprement. Best-effort : ne bloque jamais le démarrage (renvoie toujours 0).
+        """
+        if not self.vboxmanage:
+            return 0
+        for id_file in sorted(job.cwd.glob(".vagrant/machines/*/virtualbox/id")):
+            try:
+                vm_id = id_file.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if not vm_id or self._vm_accessible(vm_id):
+                continue
+            job.log.append("Nettoyage d'une VM devenue inaccessible (recréation propre)…")
+            for args in ([vm_id, "--delete"], [vm_id]):  # --delete d'abord ; sinon simple désenregistrement
+                try:
+                    done = subprocess.run([self.vboxmanage, "unregistervm", *args], capture_output=True, timeout=120)
+                    if done.returncode == 0:
+                        break
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            id_file.unlink(missing_ok=True)
+        return 0
 
     # --- Une seule famille de labs à la fois ---------------------------------------------------
     # Les VM Windows et le moteur Docker ne tournent jamais en même temps (la mémoire ne suffirait pas) :

@@ -1,0 +1,83 @@
+# Parcours guidé « Entreprise » de la catégorie Systèmes & réseaux.
+#
+# Ce n'est PAS un lab (il n'est pas dans un sous-dossier avec un Vagrantfile) : c'est un scénario qui
+# enchaîne, dans l'ordre d'une vraie mission, des labs qui existent déjà. Chaque étape (`labs:`) renvoie
+# un identifiant de lab de la catégorie « systemes » (dossiers labs/systemes et labs/systemes-windows).
+# Le backend (labs.load_parcours) résout ces identifiants et ignore en silence ceux qui n'existent pas ;
+# un test vérifie qu'ils pointent tous vers un lab réel. Rien n'est dupliqué : on réutilise les labs.
+id: entreprise
+title: Monter l'informatique d'un client de A à Z
+client: Novalex
+intro: |
+  Tu viens de signer **Novalex**, une PME d'une vingtaine de postes sur deux sites. Leur « informatique »,
+  aujourd'hui, c'est un vieux NAS et des comptes locaux. À toi de livrer un environnement complet, propre
+  et documentable, comme un prestataire en mission : chaque chapitre monte une brique de l'infrastructure,
+  dans l'ordre où un technicien la poserait sur le terrain, et chaque brique s'appuie sur la précédente.
+
+  Les chapitres réutilisent les labs Windows de la catégorie Systèmes : tu les fais dans l'ordre, tu
+  valides leurs exercices, et tu avances dans le projet. Pour ménager ta machine, tu ne démarres qu'un
+  lab à la fois ; entre deux, « Mettre en pause » suffit (la reprise prend quelques secondes).
+phases:
+  - title: "Chapitre 1 — Signature et préparation"
+    mission: >
+      Avant de monter quoi que ce soit, tu prépares ton poste d'administration, tu prépares le premier
+      serveur et tu poses le plan d'adressage du client.
+    labs: [win-powershell-admin, win-roles-fonctionnalites, win-adressage-diagnostic]
+
+  - title: "Chapitre 2 — Le cœur : l'annuaire Active Directory"
+    mission: >
+      Rien ne tourne sans annuaire. Tu crées la forêt et le domaine, le DNS qui va avec, puis la structure
+      des comptes et des groupes selon le modèle AGDLP. Tout le reste s'appuiera là-dessus.
+    labs: [win-adds-premier-dc, win-dns-serveur, win-ad-objets-agdlp]
+
+  - title: "Chapitre 3 — Distribuer le réseau"
+    mission: >
+      Les postes doivent recevoir une adresse et trouver le domaine tout seuls : tu montes le serveur DHCP.
+    labs: [win-dhcp-serveur]
+
+  - title: "Chapitre 4 — Les postes entrent dans le domaine"
+    mission: >
+      Tu prépares un poste Windows 11, tu le joins au domaine et tu vérifies qu'un utilisateur ordinaire
+      ouvre bien sa session.
+    labs: [win-poste-client, win-jonction-domaine, win-comptes-locaux]
+
+  - title: "Chapitre 5 — Les données de l'entreprise"
+    mission: >
+      Le bien le plus précieux du client : un serveur de fichiers, des partages, des droits NTFS propres,
+      et des clichés instantanés pour récupérer un fichier effacé.
+    labs: [win-ntfs-partages, win-serveur-fichiers]
+
+  - title: "Chapitre 6 — Piloter tout le parc d'un seul endroit"
+    mission: >
+      Plutôt que de configurer poste par poste, tu centralises tout par stratégies de groupe (GPO), des
+      bases jusqu'aux filtres et préférences avancés.
+    labs: [win-gpo-base, win-gpo-avancees]
+
+  - title: "Chapitre 7 — Sécuriser et ouvrir l'accès"
+    mission: >
+      Durcir les postes, permettre un accès distant maîtrisé, piloter le pare-feu par GPO et gérer les mots
+      de passe administrateur locaux (LAPS).
+    labs: [win-securite-poste, win-acces-distant, win-parefeu-gpo, win-delegation-laps]
+
+  - title: "Chapitre 8 — Les services qui font la différence"
+    mission: >
+      Selon les besoins du client : des chemins qui ne dépendent d'aucun serveur (DFS), des certificats
+      internes (PKI), un intranet en HTTPS, du routage/NAT, un DHCP redondant et un second site.
+    labs: [win-dfs-domaine, win-adcs-pki, win-iis-certificats, win-rras-nat, win-dhcp-basculement, win-multisite]
+
+  - title: "Chapitre 9 — Exploitation et résilience"
+    mission: >
+      Ce qui distingue un prestataire sérieux : gérer le stockage, des sauvegardes vérifiées, le
+      durcissement du serveur, et un modèle d'administration en tiers.
+    labs: [win-exploitation-courante, win-disques-stockage, win-sauvegarde-vss, win-durcissement-serveur, win-modele-tiers]
+
+  - title: "Chapitre 10 — Quand ça casse (le quotidien)"
+    mission: >
+      Le client appelle : un poste en rade, puis l'Active Directory, puis un cas bien tordu. Tu dépannes
+      méthodiquement.
+    labs: [win-depannage-poste, win-depannage-ad, win-depannage-poste-expert]
+
+  - title: "Chapitre 11 — La recette finale"
+    mission: >
+      Ton examen de passage : monter toute l'informatique d'une PME en un seul projet, de bout en bout.
+    labs: [win-projet-pme]

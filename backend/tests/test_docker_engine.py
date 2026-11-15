@@ -315,6 +315,38 @@ exit 0
     assert _take_calls(agent) == ["moteur-docker up", "moteur-docker destroy -f", "moteur-docker up"]
 
 
+def test_agent_repare_une_vm_inaccessible(agent, tmp_path):
+    """Un pointeur .vagrant qui désigne une VM « inaccessible » (disque disparu) est nettoyé avant le
+    démarrage : la VM est désenregistrée et le pointeur effacé, pour que Vagrant la recrée proprement."""
+    calls = tmp_path / "vbox-calls"
+    vbox = tmp_path / "VBoxManage"
+    vbox.write_text(f'#!/bin/sh\necho "$@" >> "{calls}"\n'
+                    'case "$1" in showvminfo) exit 1 ;; esac\nexit 0\n')  # toute VM jugée inaccessible
+    vbox.chmod(0o755)
+    agent.vboxmanage = str(vbox)
+
+    work = agent.work_dir / "win-a"
+    id_file = work / ".vagrant" / "machines" / "default" / "virtualbox" / "id"
+    id_file.parent.mkdir(parents=True)
+    id_file.write_text("vm-fantome", encoding="utf-8")
+
+    class FakeJob:
+        cwd = work
+        log: list = []
+
+    assert agent._heal_stale_vms(FakeJob()) == 0
+    assert not id_file.exists()  # pointeur périmé effacé
+    assert any("unregistervm vm-fantome" in line for line in calls.read_text().splitlines())
+
+    # Une VM accessible (showvminfo renvoie 0) n'est jamais touchée.
+    vbox.write_text(f'#!/bin/sh\necho "$@" >> "{calls}"\nexit 0\n')
+    id_file.parent.mkdir(parents=True, exist_ok=True)
+    id_file.write_text("vm-ok", encoding="utf-8")
+    FakeJob.log = []
+    assert agent._heal_stale_vms(FakeJob()) == 0
+    assert id_file.exists() and id_file.read_text() == "vm-ok"
+
+
 def test_agent_un_seul_lab_a_la_fois(agent):
     agent.engine_ports = []
     for lab in ("tdm:win-a", vagrant_agent.ENGINE):

@@ -88,6 +88,30 @@ def test_machine_soumission_drapeau():
     assert client.post("/api/devops/labs/offensif-recon-web/flag", json={"flag": "x"}).status_code == 400
 
 
+def test_parcours_entreprise():
+    # Le parcours guidé « Entreprise » de Systèmes existe et enchaîne des chapitres non vides.
+    data = client.get("/api/devops/parcours?category=systemes").json()
+    assert data["client"] and data["intro"] and len(data["phases"]) >= 5
+    assert all(ph["steps"] and ph["title"] for ph in data["phases"])
+    # Chaque étape pointe vers un lab Systèmes réel (aucune référence cassée).
+    known = {lab["id"] for lab in client.get("/api/devops/labs?category=systemes").json()}
+    steps = [s for ph in data["phases"] for s in ph["steps"]]
+    assert steps and all(s["id"] in known for s in steps)
+    assert all(s["exercise_count"] > 0 for s in steps)
+    # Aucune référence du fichier n'est silencieusement perdue (garde contre les fautes de frappe).
+    import yaml as _yaml
+
+    from app import config as _config
+    raw = _yaml.safe_load((_config.SYSTEMS_LABS_DIR / "entreprise.yaml").read_text(encoding="utf-8"))
+    refs = [str(x).lower() for ph in raw["phases"] for x in ph["labs"]]
+    assert len(refs) == len(steps)
+
+
+def test_parcours_absent_renvoie_404():
+    assert client.get("/api/devops/parcours?category=devops").status_code == 404
+    assert client.get("/api/devops/parcours?category=cyber").status_code == 404
+
+
 def _winpty_importable() -> bool:
     # Sous Windows, le terminal local s'appuie sur pywinpty (DLL native). Sur certains runners CI, cette
     # DLL ne se charge pas (dépendance absente) alors que le terminal fonctionne sur une vraie machine :

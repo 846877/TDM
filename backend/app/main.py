@@ -285,6 +285,15 @@ def devops_labs(category: str = "devops"):
     ]
 
 
+@app.get("/api/devops/parcours")
+def devops_parcours(category: str = "systemes"):
+    """Parcours guidé (scénario « Entreprise ») d'une catégorie, s'il en a un."""
+    data = devops.load_parcours(category)
+    if data is None:
+        raise HTTPException(404, "Aucun parcours pour cette catégorie")
+    return data
+
+
 @app.get("/api/devops/labs/{lab_id}")
 def devops_lab(lab_id: str, status: bool = True):
     """``status=false`` : contenu seul, tout de suite (l'interface demande l'état ensuite, il peut être lent)."""

@@ -116,6 +116,44 @@ def _load_dir(root: Path, default_category: str, os_name: str = "linux", bundled
     return labs
 
 
+PARCOURS_FILE = "entreprise.yaml"  # scénario guidé optionnel, à la racine du dossier d'une catégorie
+_PARCOURS_DIR = {"systemes": lambda: config.SYSTEMS_LABS_DIR}  # où chercher le parcours d'une catégorie
+
+
+def load_parcours(category: str) -> dict[str, Any] | None:
+    """Parcours guidé d'une catégorie : un scénario qui enchaîne des labs existants dans l'ordre.
+
+    Renvoie ``None`` si la catégorie n'a pas de parcours. Chaque étape référence un identifiant de lab de
+    la catégorie ; les identifiants inconnus sont ignorés (un test garantit qu'ils pointent tous vers un
+    lab réel). On ne duplique aucun contenu : on résout juste les labs référencés.
+    """
+    source = _PARCOURS_DIR.get(category)
+    path = (source() if source else None)
+    if path is None:
+        return None
+    file = Path(path) / PARCOURS_FILE
+    if not file.exists():
+        return None
+    data = _read_yaml(file)
+    by_id = {lab["id"]: lab for lab in load_labs(category=category)}
+    phases = []
+    for phase in data.get("phases", []):
+        steps = []
+        for ref in phase.get("labs", []):
+            lab = by_id.get(_slug(str(ref)))
+            if lab is not None:
+                steps.append({
+                    "id": lab["id"], "title": lab["title"], "level": lab["level"],
+                    "summary": lab.get("summary", ""), "os": lab.get("os", "linux"),
+                    "kind": "vagrant" if "vagrant" in lab else "docker",
+                    "exercise_count": len(lab.get("exercises", [])),
+                })
+        if steps:
+            phases.append({"title": phase.get("title", ""), "mission": phase.get("mission", ""), "steps": steps})
+    return {"id": data.get("id", "entreprise"), "title": data.get("title", ""),
+            "client": data.get("client", ""), "intro": data.get("intro", ""), "phases": phases}
+
+
 def public(lab: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": lab["id"],

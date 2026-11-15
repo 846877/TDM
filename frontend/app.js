@@ -343,24 +343,66 @@ async function renderList(cat) {
   // Deux catégories se divisent en deux parcours : Systèmes par système (Windows/Linux) et
   // Cybersécurité par posture (offensif/défensif). Même sélecteur, même mémorisation.
   const facets = {
-    systemes: { field: "os", default: "windows", options: [["windows", "🪟 Windows"], ["linux", "🐧 Linux"]] },
+    // Systèmes propose aussi « Entreprise » : un parcours guidé (scénario client) qui enchaîne les labs
+    // Windows dans l'ordre d'une vraie mission. Ce n'est pas une valeur de `os` : il a son propre affichage.
+    systemes: { field: "os", default: "windows",
+                options: [["windows", "🪟 Windows"], ["linux", "🐧 Linux"], ["entreprise", "🏢 Entreprise"]] },
     cyber: { field: "track", default: "offensif", options: [["offensif", "🗡 Offensif"], ["defensif", "🛡 Défensif"]] },
   };
   const facet = facets[cat];
+  const PARCOURS = { systemes: "entreprise" };  // valeur du sélecteur qui bascule en mode parcours guidé
   const facetOf = (it) => (facet ? it[facet.field] || facet.default : null);
   let current = facet ? storage.get(`${cat}.${facet.field}`, facet.default) : null;
-  let items = facet ? allItems.filter((it) => facetOf(it) === current) : allItems;
+  const isParcours = PARCOURS[cat] === current;
+  let items = facet && !isParcours ? allItems.filter((it) => facetOf(it) === current) : (facet ? [] : allItems);
   const osButtons = facet ? facet.options.map(([key, label]) => h("button", {
     class: `os-btn ${key === current ? "active" : ""}`,
     onclick: () => { storage.set(`${cat}.${facet.field}`, key); router(); },
-  }, label, h("span", { class: "os-count" }, String(allItems.filter((it) => facetOf(it) === key).length)))) : [];
+  }, label, key === PARCOURS[cat] ? null
+     : h("span", { class: "os-count" }, String(allItems.filter((it) => facetOf(it) === key).length)))) : [];
   const hasOs = Boolean(facet);
   const search = h("input", { class: "search", type: "search", placeholder: "Filtrer (titre, notion…)" });
   const body = h("div");
 
+  // Parcours guidé « Entreprise » : récupéré une fois, puis dessiné comme une suite de chapitres.
+  const parcours = isParcours ? await api(`/api/devops/parcours?category=${cat}`).catch(() => null) : null;
+
+  const drawParcours = (q) => {
+    if (!parcours) { body.append(h("p", { class: "muted" }, "Parcours indisponible.")); return; }
+    const steps = parcours.phases.flatMap((ph) => ph.steps);
+    const done = steps.filter((s) => labDoneCount(cat, s) === s.exercise_count && s.exercise_count > 0).length;
+    body.append(h("section", { class: "parcours-intro" },
+      parcours.client ? h("div", { class: "parcours-client" }, `Client : ${parcours.client}`) : null,
+      h("p", {}, parcours.intro || ""),
+      h("div", { class: "parcours-progress muted" }, `Progression : ${done} / ${steps.length} étapes validées`)));
+    let n = 0;
+    for (const phase of parcours.phases) {
+      const matched = phase.steps.filter((s) =>
+        !q || [s.title, s.summary, phase.title, phase.mission].join(" ").toLowerCase().includes(q));
+      if (!matched.length) continue;
+      body.append(h("section", { class: "level-section parcours-phase" },
+        h("h2", {}, phase.title),
+        phase.mission ? h("p", { class: "muted parcours-mission" }, phase.mission) : null,
+        h("div", { class: "ex-list" }, matched.map((s) => {
+          n = steps.indexOf(s) + 1;
+          const stepDone = labDoneCount(cat, s) === s.exercise_count && s.exercise_count > 0;
+          const line = `${s.os === "windows" ? "🪟 VM Windows" : "🖥 VM Vagrant"} · ${LEVEL_LABEL[s.level] || s.level} · ${labDoneCount(cat, s)} / ${s.exercise_count} exercice(s)`;
+          return h("a", { class: `ex-item ${stepDone ? "done" : ""}`, href: `#/${cat}/${s.id}` },
+            h("span", { class: "check" }, stepDone ? "✓" : String(n)),
+            h("div", {},
+              h("div", { class: "title" }, s.title),
+              s.summary ? h("div", { class: "summary" }, s.summary) : null,
+              h("div", { class: "summary" }, line)));
+        }))));
+    }
+    if (!body.children.length || (body.children.length === 1 && q))
+      body.append(h("p", { class: "muted" }, q ? "Aucun chapitre ne correspond." : ""));
+  };
+
   const draw = () => {
     const q = search.value.trim().toLowerCase();
     body.replaceChildren();
+    if (isParcours) { drawParcours(q); return; }
     for (const [level, label] of LEVELS) {
       const group = items.filter((it) => it.level === level).filter((it) =>
         !q || [it.title, it.summary, ...(it.tags || [])].join(" ").toLowerCase().includes(q));
@@ -402,7 +444,7 @@ async function renderList(cat) {
     cat === "cyber" ? h("p", { class: "muted" }, current === "offensif"
       ? "Parcours offensif (red team) : chaque lab démarre une cible volontairement vulnérable, isolée dans Docker. Tu l'attaques depuis le terminal intégré, et les exercices vérifient que tu as bien obtenu le résultat attendu. Rien ne sort de ta machine."
       : "Parcours défensif (blue team) : analyse d'incidents, durcissement, détection. Chaque lab démarre un environnement compromis ou à sécuriser dans Docker, avec les traces à exploiter.") : null,
-    meta.labs && cat !== "cyber" ? h("p", { class: "muted" }, current === "windows"
+    meta.labs && cat !== "cyber" && !isParcours ? h("p", { class: "muted" }, current === "windows"
       ? "Chaque lab démarre de vraies machines virtuelles Windows Server et Windows 11 (Vagrant + VirtualBox) en un clic, avec un terminal PowerShell intégré et des exercices vérifiés automatiquement."
       : "Chaque lab démarre un environnement isolé dans Docker en un clic, avec un terminal intégré et des exercices vérifiés automatiquement.") : null,
     body));

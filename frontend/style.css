@@ -130,6 +130,22 @@ main { flex: 1; min-height: 0; overflow: auto; }
 .ex-item .tags { margin-top: 4px; display: flex; gap: 4px; flex-wrap: wrap; }
 .tag { font-size: 11px; color: #7dffb0; background: #0c2416; border-radius: 4px; padding: 0 6px; }
 
+/* Parcours guidé « Entreprise » (catégorie Systèmes). */
+.parcours-intro {
+  background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: var(--radius); padding: 14px 16px; margin-bottom: 22px;
+}
+.parcours-intro p { margin: 0 0 8px; }
+.parcours-client {
+  display: inline-block; font-family: var(--mono); font-size: 12px; letter-spacing: .04em;
+  color: var(--accent); border: 1px solid #1f5132; border-radius: 4px; padding: 1px 8px; margin-bottom: 10px;
+}
+.parcours-progress { font-size: 13px; }
+.parcours-phase .parcours-mission { margin: -4px 0 10px; max-width: 70ch; }
+/* Dans un parcours, la pastille montre le numéro d'étape tant qu'elle n'est pas validée. */
+.parcours-phase .ex-item .check { font-family: var(--mono); color: var(--muted); }
+.parcours-phase .ex-item.done .check { color: var(--accent-ink); }
+
 /* --- Vue exercice ------------------------------------------------------- */
 .workspace {
   display: grid; grid-template-columns: minmax(320px, 40%) 1fr;
