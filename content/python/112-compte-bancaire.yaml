@@ -1,0 +1,127 @@
+title: Compte bancaire
+level: intermediaire
+order: 12
+tags: [classes, exceptions]
+summary: Ta première classe avec des exceptions.
+description: |
+  Crée une classe `CompteBancaire` :
+
+  - `CompteBancaire(titulaire, solde=0)`
+  - attribut `titulaire` et propriété/attribut `solde`
+  - `deposer(montant)` : ajoute le montant ; lève `ValueError` si le montant est ≤ 0
+  - `retirer(montant)` : retire le montant ; lève `ValueError` si le montant est ≤ 0
+    **ou** si le solde est insuffisant
+  - `historique` : liste des opérations sous forme de tuples `("depot", montant)` / `("retrait", montant)`
+starter: |
+  class CompteBancaire:
+      def __init__(self, titulaire, solde=0):
+          pass
+tests: |
+  def test_creation():
+      "Création du compte"
+      c = solution.CompteBancaire("Alice", 100)
+      assert c.titulaire == "Alice" and c.solde == 100
+
+  def test_depot_retrait():
+      "Dépôt puis retrait"
+      c = solution.CompteBancaire("Bob")
+      c.deposer(50)
+      c.retirer(20)
+      assert c.solde == 30
+      assert c.historique == [("depot", 50), ("retrait", 20)]
+
+  def test_solde_insuffisant():
+      "Retrait refusé si solde insuffisant"
+      c = solution.CompteBancaire("Chloé", 10)
+      try:
+          c.retirer(50)
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("retirer(50) aurait dû lever ValueError")
+      assert c.solde == 10
+
+  def test_montant_negatif():
+      "Montant négatif refusé"
+      c = solution.CompteBancaire("Dan")
+      for action in (c.deposer, c.retirer):
+          try:
+              action(-5)
+          except ValueError:
+              continue
+          raise AssertionError("un montant négatif aurait dû lever ValueError")
+solution: |
+  class CompteBancaire:
+      def __init__(self, titulaire, solde=0):
+          self.titulaire = titulaire
+          self.solde = solde
+          self.historique = []
+
+      def deposer(self, montant):
+          if montant <= 0:
+              raise ValueError("montant invalide")
+          self.solde += montant
+          self.historique.append(("depot", montant))
+
+      def retirer(self, montant):
+          if montant <= 0:
+              raise ValueError("montant invalide")
+          if montant > self.solde:
+              raise ValueError("solde insuffisant")
+          self.solde -= montant
+          self.historique.append(("retrait", montant))
+cours: |
+  ## Classe, instance, attribut, méthode
+
+  Une **classe** est un modèle ; une **instance** est un objet construit à partir de ce
+  modèle. Les données de l'objet sont ses **attributs**, les fonctions qui agissent dessus
+  ses **méthodes**.
+
+  ```python
+  class Serveur:
+      def __init__(self, nom, ram_go=8):
+          self.nom = nom
+          self.ram_go = ram_go
+          self.services = []          # chaque instance a SA liste
+
+      def ajouter_service(self, service):
+          self.services.append(service)
+
+  web = Serveur("web01")
+  web.ajouter_service("nginx")
+  web.services          # ["nginx"]
+  ```
+
+  - `__init__` est appelé automatiquement à la création ; il initialise les attributs.
+  - `self` désigne l'instance courante : `web.ajouter_service("nginx")` est équivalent à
+    `Serveur.ajouter_service(web, "nginx")`.
+  - Crée les listes dans `__init__`, **pas** au niveau de la classe : un attribut de classe
+    mutable serait partagé par toutes les instances.
+
+  ## Lever une exception
+
+  Quand une opération est impossible, on **lève** une exception plutôt que de renvoyer une
+  valeur spéciale ou d'afficher un message :
+
+  ```python
+  if ram_go <= 0:
+      raise ValueError("la RAM doit être positive")
+  ```
+
+  `ValueError` signale une valeur du bon type mais inacceptable. L'appelant peut l'attraper
+  avec `try / except ValueError`. Si personne ne l'attrape, le programme s'arrête avec un
+  message clair : c'est mieux qu'une erreur silencieuse.
+
+  ## Invariants
+
+  Un objet bien conçu garantit ses **invariants** (ici : le solde n'est jamais négatif, et
+  l'historique reflète exactement les opérations réussies). Règle d'or : **vérifier avant de
+  modifier**. Si on modifie le solde puis qu'on lève l'exception, l'objet reste dans un état
+  incohérent.
+
+  Pour aller plus loin, une `@property` permet d'exposer `solde` en lecture seule.
+docs:
+  - title: Tutoriel — les classes
+    url: https://docs.python.org/fr/3/tutorial/classes.html
+  - title: Tutoriel — lever des exceptions
+    url: https://docs.python.org/fr/3/tutorial/errors.html#raising-exceptions

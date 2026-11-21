@@ -1,0 +1,377 @@
+title: Réseau Linux et diagnostic
+level: debutant
+order: 6
+tags: [réseau, linux, dns, tcp, iptables, tcpdump, diagnostic]
+summary: Adresses, DNS, ports, HTTP, routage, pare-feu et capture de trafic sur un petit réseau à diagnostiquer.
+compose: docker-compose.yml
+service: poste
+shell: bash
+workdir: /root
+description: |
+  Tu es sur le **poste** d'un petit réseau d'entreprise (tu es `root`). Autour de toi :
+
+  | Machine | Rôle | Réseau |
+  |---|---|---|
+  | `web` | serveur web de l'intranet | LAN |
+  | `dns` | serveur DNS de la zone `tdm.lab` | LAN |
+  | `routeur` | relie le LAN à la DMZ (10.89.10.254 / 10.89.20.254) | LAN + DMZ |
+  | `db` | base Redis (10.89.20.10) | DMZ, derrière le routeur |
+
+  Outils installés : `ip`, `ping`, `dig`, `curl`, `nc`, `nmap`, `ss`, `traceroute`, `tcpdump`, `iptables`.
+
+  Le parcours suit la démarche de diagnostic, couche par couche : adressage, résolution de noms, ports ouverts,
+  protocole HTTP, routage vers un autre réseau, pare-feu, puis capture de trafic.
+cours: |
+  ## Réseau : comprendre pour diagnostiquer
+
+  « Ça ne marche pas » est souvent un problème réseau. La bonne démarche consiste à remonter les couches,
+  de l'adressage jusqu'à l'application, en éliminant les hypothèses une par une.
+
+  ### Les couches utiles au quotidien
+
+  ```
+  Couche            Question à se poser                 Outils
+  ───────────────── ─────────────────────────────────── ──────────────────────
+  Application (7)   Le service répond-il correctement ?  curl -v, dig, redis-cli
+  Transport (4)     Le port est-il ouvert ?              ss -tlnp, nc -zv, nmap
+  Réseau (3)        L'adresse est-elle joignable ?       ip addr, ip route, ping, traceroute
+  Liaison (2)       La carte est-elle active ?           ip link
+  ```
+
+  ### Adressage IPv4
+
+  Une adresse comme `10.89.10.5/24` contient un **réseau** (les 24 premiers bits : `10.89.10.0`) et un
+  **hôte**. Deux machines du même réseau se parlent directement ; sinon, le paquet est confié à un
+  **routeur**. La **table de routage** (`ip route`) dit, pour chaque destination, par où passer ; la route
+  `default` (passerelle par défaut) sert pour tout le reste.
+
+  ```
+  poste 10.89.10.x ──── LAN 10.89.10.0/24 ──── routeur ──── DMZ 10.89.20.0/24 ──── db 10.89.20.10
+                                         .254          .254
+  ```
+
+  ### DNS
+
+  Le DNS traduit des noms en adresses. Types d'enregistrements : `A` (IPv4), `AAAA` (IPv6), `CNAME` (alias),
+  `MX` (mail), `TXT` (texte libre), `PTR` (résolution inverse : adresse → nom), `NS` (serveurs de la zone).
+  `dig @serveur nom TYPE +short` interroge un serveur précis ; `dig -x adresse` fait une requête inverse.
+  Le résolveur du système est configuré dans `/etc/resolv.conf`, et `/etc/hosts` est consulté avant.
+
+  ### TCP, UDP et ports
+
+  Un service écoute sur un **port** (80 HTTP, 443 HTTPS, 22 SSH, 53 DNS, 5432 PostgreSQL, 6379 Redis…).
+  TCP établit une connexion par une poignée de main en trois temps : `SYN`, `SYN-ACK`, `ACK`. Un port fermé
+  répond par `RST` ; un port filtré par un pare-feu ne répond pas du tout (délai dépassé).
+
+  `ss -tlnp` liste les sockets TCP en écoute (`-u` pour UDP) avec le programme associé. Un service qui
+  écoute sur `127.0.0.1` n'est joignable que localement ; sur `0.0.0.0`, depuis toutes les interfaces.
+
+  ### HTTP
+
+  Une requête a une méthode (`GET`, `POST`…), un chemin et des en-têtes ; la réponse un **code** (2xx succès,
+  3xx redirection, 4xx erreur client dont 401/403/404, 5xx erreur serveur) et des en-têtes. `curl -v`
+  montre tout l'échange, `curl -I` seulement les en-têtes.
+
+  ### Pare-feu
+
+  Netfilter filtre les paquets du noyau, piloté par `iptables` (ou `nftables`). Les chaînes `INPUT`,
+  `OUTPUT` et `FORWARD` contiennent des règles évaluées dans l'ordre ; la première qui correspond décide.
+  `DROP` ignore silencieusement, `REJECT` renvoie une erreur immédiate.
+
+  ### Mémo
+
+  ```bash
+  ip -br addr ; ip route ; ip route add 10.89.20.0/24 via 10.89.10.254
+  ping -c3 hote ; traceroute -n hote
+  dig @10.89.10.53 intranet.tdm.lab +short ; dig -x 10.89.10.80 +short
+  nc -zv -w2 hote 6380 ; nmap -p1-1000 hote ; ss -tlnp
+  curl -v http://web/ ; curl -s -o /dev/null -w '%{http_code}' URL
+  tcpdump -ni eth0 host 10.89.10.80 and port 80
+  ```
+
+  ### Pièges courants
+
+  - Conclure « le réseau est en panne » alors que c'est le DNS : teste avec l'adresse IP.
+  - Oublier qu'un `ping` peut être bloqué alors que le service TCP fonctionne.
+  - Une route ajoutée avec `ip route add` disparaît au redémarrage.
+  - Un service qui écoute sur `127.0.0.1` dans un conteneur n'est pas joignable de l'extérieur.
+
+  ### Bonnes pratiques
+
+  Diagnostiquer couche par couche, noter ce qu'on a testé, et capturer le trafic quand les symptômes ne
+  suffisent plus : un paquet ne ment jamais.
+docs:
+  - title: Manuel de la commande ip (iproute2)
+    url: https://man7.org/linux/man-pages/man8/ip.8.html
+  - title: Guide de référence Nmap (français)
+    url: https://nmap.org/man/fr/
+  - title: Codes de réponse HTTP (MDN)
+    url: https://developer.mozilla.org/fr/docs/Web/HTTP/Status
+exercises:
+  - id: interfaces
+    title: Adresse IP et passerelle
+    description: |
+      Identifie la configuration réseau du poste :
+      - écris son **adresse IPv4** (interface `eth0`, sans le masque) dans `/root/ip.txt` ;
+      - écris l'adresse de sa **passerelle par défaut** dans `/root/passerelle.txt`.
+    hint: "ip -4 addr show eth0 et ip route (la ligne « default via … »)"
+    cours: |
+      `ip addr` (ou `ip a`, ou la forme compacte `ip -br addr`) affiche les interfaces et leurs adresses au
+      format CIDR, par exemple `10.89.10.5/24` : l'adresse, puis la longueur du masque. Seule la partie avant
+      la barre est l'adresse de l'hôte. `lo` est l'interface de bouclage (`127.0.0.1`).
+
+      `ip route` affiche la table de routage. La ligne `default via X dev eth0` désigne la **passerelle par
+      défaut** : le routeur à qui le poste confie tout paquet destiné à un réseau qu'il ne connaît pas
+      directement.
+
+      Pour extraire une valeur dans un script, combine `ip` avec `awk` ou `cut`, ou utilise la sortie JSON
+      (`ip -j addr`).
+    checks:
+      - desc: L'adresse IP du poste est correcte
+        run: test -s /root/ip.txt && test "$(tr -d '[:space:]' < /root/ip.txt)" = "$(ip -4 -o addr show eth0 | awk '{print $4}' | cut -d/ -f1)"
+      - desc: La passerelle par défaut est correcte
+        run: test -s /root/passerelle.txt && test "$(tr -d '[:space:]' < /root/passerelle.txt)" = "$(ip route | awk '/^default/ {print $3; exit}')"
+  - id: dns
+    title: Interroger un serveur DNS
+    description: |
+      Le serveur DNS de l'entreprise est `10.89.10.53` (il n'est pas configuré sur le poste : interroge-le
+      directement avec `dig @10.89.10.53 ...`). Trouve :
+      - l'adresse IP de `intranet.tdm.lab` → `/root/intranet.txt` ;
+      - la valeur de l'enregistrement **TXT** de `flag.tdm.lab` → `/root/flag.txt` (sans les guillemets) ;
+      - le nom associé à l'adresse `10.89.10.80` (résolution **inverse**) → `/root/inverse.txt` (sans le point final).
+    hint: "dig @10.89.10.53 intranet.tdm.lab +short ; dig @10.89.10.53 TXT flag.tdm.lab +short ; dig @10.89.10.53 -x 10.89.10.80 +short"
+    cours: |
+      `dig` interroge un serveur DNS et affiche la réponse détaillée. Les éléments utiles :
+      - `@serveur` : interroger ce serveur plutôt que celui de `/etc/resolv.conf` ;
+      - le **type** d'enregistrement après le nom : `A` (par défaut), `TXT`, `MX`, `NS`… ;
+      - `+short` : n'afficher que la valeur ;
+      - `-x adresse` : résolution **inverse**, qui interroge l'enregistrement `PTR` dans la zone spéciale
+        `in-addr.arpa`.
+
+      Les noms DNS complets se terminent par un point (`intranet.tdm.lab.`), qui représente la racine : retire-le
+      si on te demande le nom seul. Les valeurs TXT sont affichées entre guillemets.
+    checks:
+      - desc: Adresse de intranet.tdm.lab
+        run: test "$(tr -d '[:space:]' < /root/intranet.txt)" = 10.89.10.80
+      - desc: Enregistrement TXT de flag.tdm.lab
+        run: test "$(tr -d '[:space:]"' < /root/flag.txt)" = TDM-DNS-42
+      - desc: Résolution inverse de 10.89.10.80
+        run: test "$(tr -d '[:space:]' < /root/inverse.txt | sed 's/\.$//')" = intranet.tdm.lab
+  - id: ports
+    title: Découvrir les ports ouverts
+    description: |
+      Quels services TCP le serveur `web` expose-t-il ? Scanne ses ports **1 à 10000** (avec `nmap` ou `nc -z`)
+      et écris dans `/root/ports-web.txt` les numéros des ports ouverts, **un par ligne, triés**.
+    hint: "nmap -p 1-10000 web ; ou for p in $(seq 1 10000); do nc -z -w1 web $p && echo $p; done"
+    cours: |
+      Un port est **ouvert** si un service l'écoute et accepte les connexions. Pour le savoir de l'extérieur, on
+      tente de se connecter : c'est le rôle d'un scanner.
+
+      - `nmap -p 1-10000 hote` teste une plage de ports TCP et affiche leur état (`open`, `closed`, `filtered`).
+        Par défaut, il ne teste que les 1000 ports les plus courants : précise la plage.
+      - `nc -zv -w1 hote port` teste un seul port (`-z` = sans envoyer de données).
+
+      Pour un résultat exploitable par un script, `nmap` propose une sortie « grepable » (`-oG -`). Ne scanne que
+      les machines dont tu as la responsabilité : sur un réseau tiers, c'est considéré comme une attaque.
+    checks:
+      - desc: La liste des ports ouverts est exacte
+        run: test "$(tr -s '[:space:]' ' ' < /root/ports-web.txt | sed 's/ $//')" = "80 8765"
+  - id: http
+    title: Inspecter des échanges HTTP
+    description: |
+      Le service du port 8765 de `web` renvoie un en-tête HTTP particulier :
+      - écris la valeur de l'en-tête `X-TDM-Secret` dans `/root/entete.txt` ;
+      - écris le **code de statut** HTTP renvoyé par `http://web:8765/admin` dans `/root/code-admin.txt`.
+    hint: "curl -I (ou -v) affiche les en-têtes ; curl -s -o /dev/null -w '%{http_code}' donne le code"
+    cours: |
+      Une réponse HTTP commence par une ligne de statut (`HTTP/1.1 200 OK`) suivie d'en-têtes `Nom: valeur`,
+      puis du corps. Avec curl :
+      - `curl -I URL` envoie une requête `HEAD` et affiche les en-têtes (certains serveurs ne gèrent pas `HEAD` :
+        `curl -s -D - -o /dev/null URL` affiche les en-têtes d'un vrai `GET`) ;
+      - `curl -v URL` montre la requête envoyée (`>`) et la réponse reçue (`<`) ;
+      - `curl -s -o /dev/null -w '%{http_code}' URL` n'affiche que le code de statut.
+
+      Les noms d'en-têtes sont insensibles à la casse. Attention aux fins de ligne `\r` présentes dans les
+      en-têtes si tu les extrais avec `grep` ou `cut` : `tr -d '\r'` les retire.
+    checks:
+      - desc: Valeur de l'en-tête X-TDM-Secret
+        run: test "$(tr -d '[:space:]' < /root/entete.txt)" = reseau-2026
+      - desc: Code de statut de /admin
+        run: test "$(tr -d '[:space:]' < /root/code-admin.txt)" = 403
+  - id: routage
+    title: Atteindre un autre réseau
+    description: |
+      La base Redis `db` est dans la DMZ, à l'adresse `10.89.20.10`, port **6380**. Depuis le poste, elle est
+      injoignable : vérifie-le (`nc -zv -w2 10.89.20.10 6380`), puis regarde `ip route`.
+
+      Ajoute une **route** vers le réseau `10.89.20.0/24` qui passe par le routeur (`10.89.10.254`), puis vérifie
+      que Redis répond : `printf 'PING\r\n' | nc -q1 10.89.20.10 6380` doit afficher `+PONG`.
+      Contrôle le chemin avec `traceroute -n 10.89.20.10`.
+    hint: "ip route add 10.89.20.0/24 via 10.89.10.254"
+    cours: |
+      Un poste ne sait joindre directement que les réseaux sur lesquels il a une interface. Pour tout le reste,
+      il consulte sa **table de routage** : chaque route associe un réseau de destination à une passerelle
+      (`via`) ou à une interface (`dev`). La route `default` sert quand aucune autre ne correspond.
+
+      `ip route add RESEAU/MASQUE via PASSERELLE` ajoute une route statique (non persistante : elle disparaît au
+      redémarrage ; pour la rendre permanente, on passe par netplan, NetworkManager ou systemd-networkd).
+      La passerelle doit être joignable directement.
+
+      `traceroute -n` affiche chaque routeur traversé : tu dois voir le routeur avant la destination.
+      `ip route get ADRESSE` indique quelle route serait utilisée.
+    checks:
+      - desc: Le trafic vers 10.89.20.10 passe par le routeur
+        run: ip route get 10.89.20.10 | grep -q 'via 10.89.10.254'
+      - desc: Redis répond PONG
+        run: printf 'PING\r\n' | nc -q1 -w3 10.89.20.10 6380 | grep -q PONG
+  - id: ecoute
+    title: Services en écoute sur le poste
+    description: |
+      1. Un service que personne n'a documenté écoute en TCP sur le poste. Trouve son **port** et le **nom du
+         programme** avec `ss`, et écris-les dans `/root/ecoute.txt` au format `port programme` (exemple : `22 sshd`).
+      2. Lance à ton tour un serveur web de test qui écoute sur le port **7000** de toutes les interfaces
+         (`python3 -m http.server 7000`, en arrière-plan avec `nohup … &`).
+    hint: "ss -ltnp affiche les sockets TCP en écoute avec le processus"
+    cours: |
+      `ss` (successeur de `netstat`) liste les sockets. Les options à retenir : `-t` TCP, `-u` UDP, `-l` en
+      écoute seulement, `-n` numérique (sans résoudre les noms de ports), `-p` programme et PID (nécessite
+      root). `ss -tlnp` est le réflexe pour savoir « qui écoute sur quel port ».
+
+      La colonne d'adresse locale indique l'interface : `0.0.0.0:7000` ou `*:7000` = toutes les interfaces,
+      `127.0.0.1:7000` = seulement en local.
+
+      `python3 -m http.server PORT` lance un serveur web minimal qui sert le dossier courant, très pratique pour
+      un test rapide. Lancé avec `nohup ... &`, il continue après la fermeture du terminal.
+    checks:
+      - desc: Le service inconnu est identifié
+        run: test "$(tr -s '[:space:]' ' ' < /root/ecoute.txt | sed 's/^ //; s/ $//')" = "4321 python3"
+      - desc: Un service écoute sur le port 7000
+        run: ss -ltn | awk '{print $4}' | grep -Eq '(^|:)7000$'
+  - id: pare-feu
+    title: Filtrer le trafic avec iptables
+    description: |
+      Par sécurité, le poste ne doit plus joindre le service du port **8765** de `web` (`10.89.10.80`), mais doit
+      toujours accéder au site sur le port **80**. Ajoute une règle `iptables` dans la chaîne `OUTPUT` qui
+      **rejette** (`REJECT`) ou **bloque** (`DROP`) ce trafic.
+    hint: "iptables -A OUTPUT -p tcp -d 10.89.10.80 --dport 8765 -j REJECT ; iptables -L OUTPUT -n -v pour voir les compteurs"
+    cours: |
+      `iptables` gère les règles de filtrage du noyau, organisées en **chaînes** : `INPUT` (paquets entrants à
+      destination de la machine), `OUTPUT` (paquets émis par la machine) et `FORWARD` (paquets routés).
+
+      Une règle combine des critères et une cible : `-d` destination, `-p tcp`, `--dport` port de destination,
+      `-j DROP` ou `-j REJECT`. `-A` ajoute à la fin de la chaîne, `-I` insère au début. Les règles sont
+      évaluées dans l'ordre : la première qui correspond l'emporte.
+
+      `iptables -L OUTPUT -n -v --line-numbers` affiche les règles et leurs compteurs de paquets, utiles pour
+      vérifier qu'une règle est bien atteinte. Sois précis : bloquer toute l'adresse couperait aussi le port 80.
+    checks:
+      - desc: Une règle OUTPUT vise le port 8765
+        run: iptables -S OUTPUT | grep -- '--dport 8765' | grep -Eq 'DROP|REJECT'
+      - desc: Le port 8765 n'est plus joignable
+        run: "! nc -z -w2 10.89.10.80 8765"
+      - desc: Le port 80 reste joignable
+        run: nc -z -w2 10.89.10.80 80
+  - id: capture
+    title: Capturer du trafic avec tcpdump
+    description: |
+      Capture le trafic HTTP entre le poste et `web` dans le fichier `/root/capture.pcap` :
+      lance `tcpdump` en arrière-plan (filtre `host 10.89.10.80 and port 80`), fais une requête
+      `curl http://web/`, puis arrête la capture. Relis-la avec `tcpdump -nr /root/capture.pcap -A`
+      et repère la requête `GET` et la poignée de main TCP (`[S]`, `[S.]`, `[.]`).
+    hint: "tcpdump -i eth0 -w /root/capture.pcap host 10.89.10.80 and port 80 & ; curl http://web/ ; kill %1"
+    cours: |
+      `tcpdump` capture les paquets qui passent sur une interface. Un **filtre** (syntaxe BPF) limite la capture :
+      `host 10.89.10.80`, `port 80`, `tcp`, combinés avec `and`, `or`, `not`. Options utiles : `-i` interface,
+      `-n` sans résolution de noms, `-w fichier.pcap` enregistre, `-r fichier` relit, `-A` affiche le contenu en
+      ASCII.
+
+      Lancée en arrière-plan, la capture doit être arrêtée proprement (`kill` envoie SIGTERM, tcpdump écrit
+      alors ses derniers paquets). Laisse-lui une seconde pour démarrer avant de faire la requête.
+
+      Dans la sortie, les drapeaux TCP racontent la connexion : `[S]` SYN, `[S.]` SYN-ACK, `[.]` ACK,
+      `[P.]` données, `[F.]` fin. Un fichier pcap s'ouvre aussi dans Wireshark.
+    checks:
+      - desc: La capture contient une requête GET vers web
+        run: tcpdump -nr /root/capture.pcap -A 2>/dev/null | grep -q 'GET / HTTP/1.1'
+      - desc: La capture contient l'établissement de connexion (SYN)
+        run: tcpdump -nr /root/capture.pcap 'tcp[tcpflags] & tcp-syn != 0 and host 10.89.10.80' 2>/dev/null | grep -q .
+  - id: rl-hosts
+    title: Résolution locale avec /etc/hosts
+    description: |
+      Le poste n'utilise pas le DNS de l'entreprise, et `getent hosts intranet.tdm.lab` ne renvoie rien.
+      Sans toucher au serveur DNS, fais en sorte que le poste résolve localement :
+      - `intranet.tdm.lab` vers **la même adresse** que celle donnée par le DNS `10.89.10.53` ;
+      - `base.tdm.lab` vers `10.89.20.10`.
+
+      Vérifie avec `getent hosts` (qui suit l'ordre de `/etc/nsswitch.conf`) et non avec `dig` (qui interroge
+      toujours un serveur DNS).
+    hint: "echo '10.89.10.80 intranet.tdm.lab' >> /etc/hosts (vérifie l'adresse avec dig @10.89.10.53 intranet.tdm.lab +short)"
+    cours: |
+      Avant même d'interroger un serveur DNS, le système consulte `/etc/hosts` : une ligne par adresse, suivie
+      d'un ou plusieurs noms (`10.89.10.80 intranet.tdm.lab intranet`). L'ordre des sources est fixé par la
+      ligne `hosts:` de `/etc/nsswitch.conf` (en général `files dns` : le fichier d'abord).
+
+      C'est pratique pour un test (pointer un nom vers un nouveau serveur avant de modifier le DNS), mais
+      dangereux à long terme : ces entrées locales sont oubliées et masquent les changements du DNS.
+
+      Distingue les outils :
+      - `getent hosts nom` et `ping` utilisent la résolution du **système** (fichier puis DNS) ;
+      - `dig` et `nslookup` interrogent **directement** un serveur DNS et ignorent `/etc/hosts`.
+
+      Le serveur DNS utilisé par défaut se trouve dans `/etc/resolv.conf` (ligne `nameserver`).
+    checks:
+      - desc: intranet.tdm.lab est résolu comme dans le DNS
+        run: test -n "$(getent hosts intranet.tdm.lab)" && test "$(getent hosts intranet.tdm.lab | awk '{print $1}' | head -1)" = "$(dig @10.89.10.53 intranet.tdm.lab +short | tail -1)"
+      - desc: base.tdm.lab est résolu en 10.89.20.10
+        run: test "$(getent hosts base.tdm.lab | awk '{print $1}' | head -1)" = 10.89.20.10
+  - id: rl-arp
+    title: Adresses MAC et table ARP
+    description: |
+      Sur un réseau local, les trames Ethernet sont adressées par **adresse MAC**. Le protocole ARP fait la
+      correspondance entre IP et MAC.
+      1. Écris dans `/root/mac-poste.txt` l'adresse MAC de l'interface `eth0` du poste.
+      2. Fais en sorte que le poste connaisse l'adresse MAC du serveur `web` (`10.89.10.80`), puis écris-la dans
+         `/root/mac-web.txt`.
+
+      Format attendu : `aa:bb:cc:dd:ee:ff` (minuscules).
+    hint: "ip link show eth0 ; ping -c1 10.89.10.80 puis ip neigh show 10.89.10.80"
+    cours: |
+      Chaque carte réseau possède une adresse **MAC** de 48 bits (`02:42:0a:59:0a:0a`), utilisée pour
+      acheminer les trames sur le réseau local. `ip link show` l'affiche après `link/ether`.
+
+      Pour envoyer un paquet à une IP du même réseau, la machine doit connaître sa MAC : elle diffuse une
+      requête **ARP** (« qui a 10.89.10.80 ? »), la machine concernée répond, et la réponse est gardée en cache
+      dans la **table des voisins** : `ip neigh` (anciennement `arp -n`). Les états `REACHABLE`, `STALE`,
+      `FAILED` indiquent la fraîcheur de l'entrée.
+
+      Pour une IP d'un **autre** réseau, la machine ne cherche pas la MAC de la destination mais celle de sa
+      passerelle. Un conflit d'adresses IP ou une usurpation ARP (*ARP spoofing*) se diagnostiquent en observant
+      cette table et avec `tcpdump arp`.
+    checks:
+      - desc: La MAC du poste est correcte
+        run: test -s /root/mac-poste.txt && test "$(tr -d '[:space:]' < /root/mac-poste.txt)" = "$(cat /sys/class/net/eth0/address)"
+      - desc: La MAC de web est correcte
+        run: test -s /root/mac-web.txt && ping -c1 -W2 10.89.10.80 >/dev/null 2>&1; test "$(tr -d '[:space:]' < /root/mac-web.txt)" = "$(ip neigh show 10.89.10.80 | awk '{print $5}')"
+  - id: rl-redis
+    title: Parler un protocole à la main avec nc
+    description: |
+      Beaucoup de protocoles applicatifs sont du **texte** : on peut les parler sans client dédié. Grâce à la
+      route de l'exercice « Atteindre un autre réseau », la base Redis `10.89.20.10:6380` est joignable.
+
+      Avec `nc` uniquement (pas de `redis-cli`), enregistre dans Redis la clé **`tdm:eleve`** avec la valeur
+      **`connecte`**, puis relis-la.
+    hint: "printf 'SET tdm:eleve connecte\\r\\n' | nc -q1 10.89.20.10 6380 (Redis répond +OK)"
+    cours: |
+      `nc` (netcat) ouvre une connexion TCP (ou UDP avec `-u`) et relie ton terminal au service distant : ce que
+      tu tapes est envoyé, ce qui revient est affiché. C'est le couteau suisse du diagnostic : tester un port,
+      observer une bannière, rejouer une requête.
+
+      De nombreux protocoles historiques sont textuels : HTTP/1.1, SMTP, POP3, FTP… et Redis, dont les commandes
+      simples peuvent être envoyées en clair, terminées par `\r\n` (retour chariot + saut de ligne). Redis
+      répond `+OK` pour un succès, `$<longueur>` suivi de la valeur pour une chaîne, `-ERR ...` pour une erreur.
+
+      `printf` (contrairement à `echo`) interprète `\r\n` de façon portable. L'option `-q1` de `nc` ferme la
+      connexion une seconde après la fin de l'entrée, sinon il attend indéfiniment.
+    checks:
+      - desc: La clé tdm:eleve vaut connecte
+        run: printf 'GET tdm:eleve\r\n' | nc -q1 -w3 10.89.20.10 6380 | tr -d '\r' | grep -qx connecte

@@ -1,0 +1,244 @@
+title: Classes abstraites et héritage
+level: avance
+order: 17
+tags: [POO, héritage, abc]
+summary: Une hiérarchie de formes avec abc.ABC et abstractmethod.
+description: |
+  Avec le module `abc`, crée une hiérarchie de formes géométriques :
+
+  - `Forme` : classe **abstraite** (`ABC`) avec deux méthodes abstraites `aire()` et `perimetre()`,
+    et une méthode concrète `decrire()` qui renvoie
+    `"<NomDeLaClasse> : aire=<aire>, périmètre=<périmètre>"` avec 2 décimales ;
+    `Forme()` doit lever `TypeError` (c'est automatique avec `ABC`) ;
+  - `Rectangle(largeur, hauteur)` ;
+  - `Carre(cote)` qui **hérite** de `Rectangle` (appelle `super().__init__`) ;
+  - `Cercle(rayon)` (utilise `math.pi`).
+
+  Une dimension négative ou nulle lève `ValueError`.
+
+  Enfin, les formes se comparent **par aire** : définis `__lt__` et `__eq__` dans `Forme`
+  (deux formes de même aire, à `1e-9` près, sont égales) et écris `trier_par_aire(formes)` qui
+  renvoie une nouvelle liste triée par aire croissante.
+
+  ```python
+  Carre(2).decrire()          # "Carre : aire=4.00, périmètre=8.00"
+  isinstance(Carre(2), Rectangle)  # True
+  Rectangle(1, 4) == Carre(2)      # True (même aire)
+  ```
+starter: |
+  import math
+  from abc import ABC, abstractmethod
+
+
+  class Forme(ABC):
+      pass
+
+
+  class Rectangle(Forme):
+      pass
+
+
+  class Carre(Rectangle):
+      pass
+
+
+  class Cercle(Forme):
+      pass
+
+
+  def trier_par_aire(formes):
+      pass
+tests: |
+  import math
+
+  def test_abstraite():
+      "Forme ne peut pas être instanciée"
+      try:
+          solution.Forme()
+      except TypeError:
+          pass
+      else:
+          raise AssertionError("Forme() doit lever TypeError (classe abstraite)")
+
+  def test_sous_classe_incomplete():
+      "Une sous-classe incomplète reste abstraite"
+      class Triangle(solution.Forme):
+          def aire(self):
+              return 1
+      try:
+          Triangle()
+      except TypeError:
+          pass
+      else:
+          raise AssertionError("perimetre doit être une méthode abstraite")
+
+  def test_rectangle():
+      "Rectangle"
+      r = solution.Rectangle(3, 4)
+      assert r.aire() == 12 and r.perimetre() == 14
+
+  def test_carre():
+      "Carre hérite de Rectangle"
+      c = solution.Carre(2)
+      assert isinstance(c, solution.Rectangle) and isinstance(c, solution.Forme)
+      assert c.aire() == 4 and c.perimetre() == 8
+      assert solution.Carre.__mro__[1] is solution.Rectangle
+
+  def test_cercle():
+      "Cercle"
+      c = solution.Cercle(1)
+      assert math.isclose(c.aire(), math.pi) and math.isclose(c.perimetre(), 2 * math.pi)
+
+  def test_decrire():
+      "Méthode concrète decrire"
+      assert solution.Carre(2).decrire() == "Carre : aire=4.00, périmètre=8.00"
+      assert solution.Cercle(1).decrire() == "Cercle : aire=3.14, périmètre=6.28"
+
+  def test_dimensions_invalides():
+      "Dimensions négatives ou nulles refusées"
+      for fabrique in (lambda: solution.Rectangle(0, 2), lambda: solution.Carre(-1), lambda: solution.Cercle(0)):
+          try:
+              fabrique()
+          except ValueError:
+              continue
+          raise AssertionError("ValueError attendue pour une dimension <= 0")
+
+  def test_comparaison():
+      "Comparaison par aire"
+      assert solution.Rectangle(1, 4) == solution.Carre(2)
+      assert solution.Carre(1) < solution.Cercle(1)
+      assert solution.Rectangle(1, 2) != solution.Carre(1)
+
+  def test_tri():
+      "trier_par_aire"
+      formes = [solution.Cercle(2), solution.Carre(1), solution.Rectangle(2, 3)]
+      r = solution.trier_par_aire(formes)
+      assert [type(f).__name__ for f in r] == ["Carre", "Rectangle", "Cercle"]
+      assert [type(f).__name__ for f in formes] == ["Cercle", "Carre", "Rectangle"], "la liste d'origine ne doit pas changer"
+solution: |
+  import math
+  from abc import ABC, abstractmethod
+
+
+  class Forme(ABC):
+      @abstractmethod
+      def aire(self):
+          ...
+
+      @abstractmethod
+      def perimetre(self):
+          ...
+
+      def decrire(self):
+          return f"{type(self).__name__} : aire={self.aire():.2f}, périmètre={self.perimetre():.2f}"
+
+      def __eq__(self, autre):
+          if not isinstance(autre, Forme):
+              return NotImplemented
+          return math.isclose(self.aire(), autre.aire(), abs_tol=1e-9)
+
+      def __lt__(self, autre):
+          if not isinstance(autre, Forme):
+              return NotImplemented
+          return self.aire() < autre.aire() and self != autre
+
+      __hash__ = None
+
+
+  def _verifier(*dimensions):
+      if any(d <= 0 for d in dimensions):
+          raise ValueError("les dimensions doivent être strictement positives")
+
+
+  class Rectangle(Forme):
+      def __init__(self, largeur, hauteur):
+          _verifier(largeur, hauteur)
+          self.largeur, self.hauteur = largeur, hauteur
+
+      def aire(self):
+          return self.largeur * self.hauteur
+
+      def perimetre(self):
+          return 2 * (self.largeur + self.hauteur)
+
+
+  class Carre(Rectangle):
+      def __init__(self, cote):
+          super().__init__(cote, cote)
+
+
+  class Cercle(Forme):
+      def __init__(self, rayon):
+          _verifier(rayon)
+          self.rayon = rayon
+
+      def aire(self):
+          return math.pi * self.rayon ** 2
+
+      def perimetre(self):
+          return 2 * math.pi * self.rayon
+
+
+  def trier_par_aire(formes):
+      return sorted(formes, key=lambda f: f.aire())
+cours: |
+  ## L'héritage
+
+  Une classe fille hérite des attributs et méthodes de sa mère, et peut les redéfinir :
+
+  ```python
+  class Equipement:
+      def __init__(self, nom):
+          self.nom = nom
+      def decrire(self):
+          return f"{type(self).__name__} {self.nom}"
+
+  class Routeur(Equipement):
+      def __init__(self, nom, nb_ports):
+          super().__init__(nom)     # réutilise l'initialisation de la mère
+          self.nb_ports = nb_ports
+  ```
+
+  `super()` appelle la méthode de la classe parente. `type(self).__name__` donne le nom de
+  la classe **réelle** de l'objet, ce qui permet d'écrire une méthode générique dans la
+  classe mère. `isinstance(r, Equipement)` est vrai pour un `Routeur`.
+
+  ## Les classes abstraites
+
+  Une classe abstraite définit une **interface** que les filles doivent implémenter, et ne
+  peut pas être instanciée elle-même :
+
+  ```python
+  from abc import ABC, abstractmethod
+
+  class Sauvegarde(ABC):
+      @abstractmethod
+      def executer(self): ...
+
+      def lancer(self):                 # méthode concrète qui utilise l'abstraite
+          print("Début"); self.executer(); print("Fin")
+  ```
+
+  `Sauvegarde()` lève `TypeError`, tout comme une sous-classe qui oublierait d'implémenter
+  `executer`. L'erreur arrive à la création de l'objet plutôt qu'au milieu de l'exécution.
+
+  C'est le patron **méthode template** : la mère fixe l'algorithme, les filles fournissent
+  les étapes.
+
+  ## Le principe de substitution (Liskov)
+
+  Un objet fille doit pouvoir remplacer un objet mère sans surprise. Faire hériter `Carre`
+  de `Rectangle` est un exemple célèbre de débat : si un rectangle permet de changer sa
+  largeur seule, un carré ne respecte plus son invariant. Ici, les formes sont immuables
+  après création, donc l'héritage est sain.
+
+  ## Comparaisons
+
+  Définir `__lt__` et `__eq__` dans la classe mère les rend disponibles pour toutes les
+  formes, et `sorted` utilise `__lt__`. Comparer des flottants exige une tolérance
+  (`math.isclose` ou un écart < 1e-9).
+docs:
+  - title: Module abc
+    url: https://docs.python.org/fr/3/library/abc.html
+  - title: Tutoriel — héritage
+    url: https://docs.python.org/fr/3/tutorial/classes.html#inheritance

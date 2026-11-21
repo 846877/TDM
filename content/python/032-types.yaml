@@ -1,0 +1,146 @@
+title: Reconnaître les types
+level: debutant
+order: 32
+tags: [types, isinstance, conditions]
+summary: Identifier le type d'une valeur avec type() et isinstance().
+description: |
+  Écris `nom_du_type(valeur)` qui renvoie, en français, le nom du type de la valeur :
+
+  | Valeur | Résultat |
+  |--------|----------|
+  | un booléen (`True`, `False`) | `"booléen"` |
+  | un entier (`int`) | `"entier"` |
+  | un nombre décimal (`float`) | `"décimal"` |
+  | une chaîne (`str`) | `"texte"` |
+  | une liste (`list`) | `"liste"` |
+  | `None` | `"rien"` |
+  | autre chose | `"inconnu"` |
+
+  ```python
+  nom_du_type(42)       # "entier"
+  nom_du_type("42")     # "texte"
+  nom_du_type(4.2)      # "décimal"
+  nom_du_type(True)     # "booléen"   (attention au piège !)
+  nom_du_type((1, 2))   # "inconnu"
+  ```
+
+  Écris aussi `est_numerique(valeur)` qui renvoie `True` si la valeur est un entier ou un
+  décimal **mais pas un booléen**, et `False` sinon.
+starter: |
+  def nom_du_type(valeur):
+      pass
+
+
+  def est_numerique(valeur):
+      pass
+tests: |
+  def test_entier():
+      "42 est un entier"
+      assert solution.nom_du_type(42) == "entier", solution.nom_du_type(42)
+      assert solution.nom_du_type(-7) == "entier"
+
+  def test_texte():
+      "Une chaîne est du texte, même \"42\""
+      assert solution.nom_du_type("42") == "texte"
+      assert solution.nom_du_type("") == "texte"
+
+  def test_decimal():
+      "4.2 est un décimal"
+      assert solution.nom_du_type(4.2) == "décimal"
+      assert solution.nom_du_type(2.0) == "décimal"
+
+  def test_booleen():
+      "True et False sont des booléens (et pas des entiers)"
+      assert solution.nom_du_type(True) == "booléen", f"obtenu {solution.nom_du_type(True)!r}"
+      assert solution.nom_du_type(False) == "booléen"
+
+  def test_liste_none():
+      "Liste et None"
+      assert solution.nom_du_type([1, 2]) == "liste"
+      assert solution.nom_du_type([]) == "liste"
+      assert solution.nom_du_type(None) == "rien"
+
+  def test_inconnu():
+      "Les autres types donnent \"inconnu\""
+      for v in [(1, 2), {"a": 1}, {1, 2}]:
+          assert solution.nom_du_type(v) == "inconnu", f"{v!r} -> {solution.nom_du_type(v)!r}"
+
+  def test_est_numerique():
+      "est_numerique"
+      assert solution.est_numerique(3) is True
+      assert solution.est_numerique(3.5) is True
+      assert solution.est_numerique("3") is False
+      assert solution.est_numerique(True) is False, "un booléen n'est pas considéré comme numérique"
+      assert solution.est_numerique(None) is False
+solution: |
+  def nom_du_type(valeur):
+      if isinstance(valeur, bool):
+          return "booléen"
+      if isinstance(valeur, int):
+          return "entier"
+      if isinstance(valeur, float):
+          return "décimal"
+      if isinstance(valeur, str):
+          return "texte"
+      if isinstance(valeur, list):
+          return "liste"
+      if valeur is None:
+          return "rien"
+      return "inconnu"
+
+
+  def est_numerique(valeur):
+      return isinstance(valeur, (int, float)) and not isinstance(valeur, bool)
+cours: |
+  ## Chaque valeur a un type
+
+  Le type d'une valeur détermine ce qu'on peut en faire : on additionne des nombres, on met
+  une chaîne en majuscules, on ajoute un élément à une liste.
+
+  ```python
+  type(3)          # <class 'int'>
+  type(3.0)        # <class 'float'>
+  type("3")        # <class 'str'>
+  type([3])        # <class 'list'>
+  type(None)       # <class 'NoneType'>
+  ```
+
+  Python est **dynamiquement typé** : une variable n'a pas de type fixé, c'est la valeur
+  qu'elle désigne qui en a un. `x = 3` puis `x = "trois"` est permis.
+
+  ## `type()` ou `isinstance()` ?
+
+  - `type(x) == int` teste le type **exact** ;
+  - `isinstance(x, int)` teste si `x` est un `int` **ou d'un type dérivé** de `int`.
+
+  `isinstance` accepte un tuple de types : `isinstance(x, (int, float))` est vrai si `x` est
+  l'un ou l'autre. C'est la forme recommandée dans la plupart des cas.
+
+  ## Le piège des booléens
+
+  En Python, `bool` est une **sous-classe** de `int` : `True` vaut 1 et `False` vaut 0.
+
+  ```python
+  isinstance(True, int)   # True !
+  True + True             # 2
+  ```
+
+  Conséquence : si tu testes `isinstance(x, int)` **avant** `isinstance(x, bool)`, les
+  booléens seront classés comme entiers. Quand des types sont emboîtés, on teste toujours le
+  plus **spécifique** en premier.
+
+  ## Tester `None`
+
+  `None` est une valeur unique : on le teste avec `is` (`x is None`), pas avec `==`.
+
+  ## Pourquoi c'est utile
+
+  Les données qui arrivent d'un fichier JSON, d'une API ou d'un formulaire n'ont pas
+  toujours le type attendu. Vérifier le type avant de calculer évite des erreurs comme
+  `TypeError: unsupported operand type(s) for +: 'int' and 'str'`. Mais n'en abuse pas : en
+  Python, on préfère souvent essayer l'opération et gérer l'erreur (`try / except`).
+docs:
+  - title: Documentation Python — isinstance()
+    url: https://docs.python.org/fr/3/library/functions.html#isinstance
+  - title: Types natifs (int, float, bool, str…)
+    url: https://docs.python.org/fr/3/library/stdtypes.html

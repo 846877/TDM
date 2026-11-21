@@ -1,0 +1,10 @@
+# Lab « Accès distant » : SRV01 (Windows Server 2022, 2 Go, serveur à administrer) et PC01
+# (Windows 11, 3 Go, poste du technicien : c'est là que s'ouvre le terminal). Prévoir 8 Go de RAM libres.
+require_relative "../_commun/tdm"
+
+Vagrant.configure("2") do |config|
+  TDM.lab(config, __dir__) do |lab|
+    lab.server "srv01", hostname: "SRV01", ip: "192.168.10.10", scenario: "scenario-srv01.ps1"
+    lab.client "pc01", hostname: "PC01", ip: "192.168.10.101", dns: "192.168.10.10", primary: true
+  end
+end

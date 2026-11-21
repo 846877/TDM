@@ -1,0 +1,98 @@
+title: Découverte des voisins CDP et LLDP
+level: intermediaire
+order: 13
+device: router
+hostname: R-EDGE
+tags: [cdp, lldp, sécurité]
+summary: Garder la découverte en interne, la couper côté Internet.
+description: |
+  **CDP** (Cisco) et **LLDP** (standard IEEE) annoncent le modèle, la version d'IOS et les adresses
+  de l'équipement à ses voisins. Très pratique pour cartographier le réseau... et pour un attaquant.
+
+  Sur le routeur de bordure :
+
+  1. le réseau interne mélange plusieurs constructeurs : active **LLDP** globalement (`lldp run`) ;
+  2. sur l'interface Internet `G0/1`, **coupe CDP** (`no cdp enable`) ;
+  3. toujours sur `G0/1`, coupe l'émission et la réception LLDP (`no lldp transmit`, `no lldp receive`).
+
+  CDP doit rester actif globalement et sur le LAN `G0/0`. Contrôle avec `show cdp` et `show lldp`.
+initial: |
+  interface g0/0
+  ip address 192.168.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 203.0.113.2 255.255.255.252
+  no shutdown
+checks:
+  - desc: LLDP activé globalement
+    expr: d.lldp_run
+  - desc: CDP désactivé sur G0/1
+    expr: not intf("g0/1").cdp_enabled
+    hint: "interface g0/1 puis no cdp enable"
+  - desc: LLDP coupé (émission et réception) sur G0/1
+    expr: not intf("g0/1").lldp_transmit and not intf("g0/1").lldp_receive
+  - desc: CDP toujours actif globalement et sur G0/0
+    expr: d.cdp_run and intf("g0/0").cdp_enabled
+    hint: "Ne tape pas no cdp run : cela couperait CDP partout."
+solution: |
+  configure terminal
+  lldp run
+  interface g0/1
+  no cdp enable
+  no lldp transmit
+  no lldp receive
+  end
+cours: |
+  ## Découvrir ses voisins
+
+  **CDP** (*Cisco Discovery Protocol*) et **LLDP** (*Link Layer Discovery Protocol*, IEEE
+  802.1AB) font envoyer à chaque équipement, sur chaque lien, une annonce de niveau 2 : nom,
+  modèle, version logicielle, port, adresse IP de gestion, VLAN natif... Les voisins directs
+  l'enregistrent. C'est précieux pour cartographier un réseau ou retrouver où est branché un
+  câble.
+
+  | CDP                           | LLDP                                    |
+  |-------------------------------|-----------------------------------------|
+  | Cisco, activé par défaut      | standard, souvent **désactivé** par défaut sur IOS |
+  | annonces toutes les 60 s      | toutes les 30 s                         |
+  | `show cdp neighbors [detail]` | `show lldp neighbors [detail]`          |
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# lldp run
+  SW1(config)# interface gi0/4
+  SW1(config-if)# no cdp enable
+  SW1(config-if)# no lldp transmit
+  SW1(config-if)# no lldp receive
+  SW1# show cdp neighbors
+  Device ID   Local Intrfce  Holdtme  Capability  Platform   Port ID
+  SW-CORE     Gig 0/1        152      R S I       WS-C3850   Gig 1/0/12
+  SW1# show lldp neighbors detail
+  ```
+
+  - `cdp run` / `no cdp run` : activation globale ; `cdp enable` : par interface ;
+  - `lldp transmit` / `lldp receive` : par interface et par sens.
+
+  ### Le risque
+
+  Ces annonces circulent **en clair** : sur un lien vers Internet ou un réseau non maîtrisé,
+  elles livrent à un attaquant le modèle et la version exacte de l'équipement (et donc ses
+  vulnérabilités connues). Règle : garder CDP/LLDP sur les liens **internes** et les ports des
+  téléphones IP (qui en ont besoin pour le VLAN voix), les **désactiver** côté Internet, DMZ et
+  prises publiques.
+
+  ### Pièges fréquents
+
+  - Désactiver CDP globalement : les téléphones Cisco perdent leur VLAN voix.
+  - Oublier que LLDP doit être activé globalement avant de fonctionner.
+  - Laisser CDP actif vers l'opérateur.
+
+  ### Pour le CCNA
+
+  CDP et LLDP (configuration, vérification, usage en dépannage) sont au programme.
+docs:
+  - title: "Wikipédia — Cisco Discovery Protocol"
+    url: https://fr.wikipedia.org/wiki/Cisco_Discovery_Protocol
+  - title: "Wikipédia — Link Layer Discovery Protocol"
+    url: https://fr.wikipedia.org/wiki/Link_Layer_Discovery_Protocol

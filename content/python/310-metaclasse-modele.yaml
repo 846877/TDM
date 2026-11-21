@@ -1,0 +1,280 @@
+title: Une métaclasse pour des modèles
+level: expert
+order: 10
+tags: [métaclasses, POO avancée, introspection]
+summary: Générer __init__, __repr__ et __eq__ à la création de la classe, comme un mini-ORM.
+description: |
+  Les ORM (Django, SQLAlchemy) et `dataclasses` génèrent du code **au moment où la classe est créée**.
+  Reproduis ce mécanisme avec une métaclasse.
+
+  - `Champ(type_attendu, defaut=...)` décrit un champ. Le défaut est facultatif.
+  - `MetaModele` (métaclasse) : lors de la création d'une classe, elle
+    1. collecte les attributs de type `Champ`, **dans l'ordre de définition**, à la suite de ceux
+       hérités des classes parentes ;
+    2. les range dans `cls._champs` : un `dict` `{nom: Champ}` (les attributs `Champ` ne restent pas
+       comme attributs de classe ordinaires) ;
+    3. refuse (avec `TypeError` **dès la définition de la classe**) un champ sans défaut placé après un
+       champ avec défaut, comme `dataclasses` ;
+    4. génère `__init__`, `__repr__` et `__eq__`, sauf si la classe définit déjà la méthode.
+  - `Modele` : classe de base vide (`class Modele(metaclass=MetaModele)`).
+
+  Le `__init__` généré :
+
+  - accepte les valeurs par position **ou** par nom, dans l'ordre des champs ;
+  - lève `TypeError` si un champ obligatoire manque, si un nom est inconnu, s'il y a trop d'arguments
+    positionnels ou si une valeur n'est pas du bon type (`isinstance`) ;
+  - attention aux défauts modifiables : si le défaut est une `list` ou un `dict`, chaque instance doit
+    recevoir sa **propre copie**.
+
+  ```python
+  class Point(Modele):
+      x = Champ(int)
+      y = Champ(int, defaut=0)
+
+  class Point3D(Point):
+      z = Champ(int, defaut=0)
+
+  Point3D(1, z=5)        # Point3D(x=1, y=0, z=5)
+  list(Point3D._champs)  # ["x", "y", "z"]
+  ```
+starter: |
+  import copy
+
+  _AUCUN = object()
+
+
+  class Champ:
+      def __init__(self, type_attendu, defaut=_AUCUN):
+          pass
+
+
+  class MetaModele(type):
+      pass
+
+
+  class Modele(metaclass=MetaModele):
+      pass
+tests: |
+  def classes():
+      class Point(solution.Modele):
+          x = solution.Champ(int)
+          y = solution.Champ(int, defaut=0)
+      class Point3D(Point):
+          z = solution.Champ(int, defaut=0)
+      return Point, Point3D
+
+  def leve_type_error(appel, quoi):
+      try:
+          appel()
+      except TypeError:
+          pass
+      else:
+          raise AssertionError(f"TypeError attendue : {quoi}")
+
+  def test_init():
+      "__init__ généré (positionnel et nommé)"
+      Point, _ = classes()
+      p = Point(1, 2)
+      assert (p.x, p.y) == (1, 2)
+      q = Point(y=5, x=3)
+      assert (q.x, q.y) == (3, 5)
+      assert Point(7).y == 0, "le défaut doit s'appliquer"
+
+  def test_champs_ordonnes():
+      "_champs ordonné, héritage compris"
+      Point, Point3D = classes()
+      assert list(Point._champs) == ["x", "y"]
+      assert list(Point3D._champs) == ["x", "y", "z"]
+      assert all(isinstance(c, solution.Champ) for c in Point3D._champs.values())
+      assert list(solution.Modele._champs) == []
+
+  def test_heritage():
+      "Sous-classe avec champs hérités"
+      _, Point3D = classes()
+      p = Point3D(1, z=5)
+      assert (p.x, p.y, p.z) == (1, 0, 5)
+
+  def test_repr_eq():
+      "__repr__ et __eq__ générés"
+      Point, Point3D = classes()
+      assert repr(Point3D(1, z=5)) == "Point3D(x=1, y=0, z=5)"
+      assert Point(1, 2) == Point(1, 2) and Point(1, 2) != Point(2, 1)
+      assert Point(1, 0) != Point3D(1, 0, 0), "des classes différentes ne sont pas égales"
+
+  def test_erreurs_init():
+      "Erreurs à l'appel du constructeur"
+      Point, _ = classes()
+      leve_type_error(lambda: Point(), "champ x manquant")
+      leve_type_error(lambda: Point(1, 2, 3), "trop d'arguments")
+      leve_type_error(lambda: Point(1, w=2), "champ inconnu")
+      leve_type_error(lambda: Point("1"), "mauvais type")
+      leve_type_error(lambda: Point(1, x=1), "x donné deux fois")
+
+  def test_ordre_defauts():
+      "Champ obligatoire après un champ avec défaut : refusé dès la définition"
+      def definir():
+          class Mauvais(solution.Modele):
+              a = solution.Champ(int, defaut=1)
+              b = solution.Champ(int)
+      leve_type_error(definir, "à la création de la classe")
+
+  def test_defaut_modifiable():
+      "Chaque instance a sa propre copie du défaut"
+      class Panier(solution.Modele):
+          articles = solution.Champ(list, defaut=[])
+      a, b = Panier(), Panier()
+      a.articles.append("pomme")
+      assert b.articles == [], "le défaut est partagé entre instances !"
+
+  def test_methode_existante():
+      "Une méthode écrite à la main n'est pas écrasée"
+      class Temperature(solution.Modele):
+          celsius = solution.Champ(float)
+          def __repr__(self):
+              return f"{self.celsius} °C"
+      assert repr(Temperature(21.5)) == "21.5 °C"
+
+  def test_attributs_ordinaires():
+      "Les autres attributs de classe sont conservés"
+      class Chien(solution.Modele):
+          nom = solution.Champ(str)
+          espece = "canis"
+          def aboyer(self):
+              return f"{self.nom} : wouf"
+      assert Chien("Rex").aboyer() == "Rex : wouf" and Chien.espece == "canis"
+      assert type(Chien) is solution.MetaModele
+solution: |
+  import copy
+
+  _AUCUN = object()
+
+
+  class Champ:
+      def __init__(self, type_attendu, defaut=_AUCUN):
+          self.type_attendu = type_attendu
+          self.defaut = defaut
+
+      @property
+      def obligatoire(self):
+          return self.defaut is _AUCUN
+
+
+  def _init(self, *args, **kwargs):
+      champs = type(self)._champs
+      if len(args) > len(champs):
+          raise TypeError(f"{type(self).__name__} attend au plus {len(champs)} arguments positionnels")
+      valeurs = dict(zip(champs, args))
+      for nom, valeur in kwargs.items():
+          if nom not in champs:
+              raise TypeError(f"champ inconnu : {nom}")
+          if nom in valeurs:
+              raise TypeError(f"{nom} donné deux fois")
+          valeurs[nom] = valeur
+      for nom, champ in champs.items():
+          if nom not in valeurs:
+              if champ.obligatoire:
+                  raise TypeError(f"champ obligatoire manquant : {nom}")
+              valeurs[nom] = copy.deepcopy(champ.defaut)
+          if not isinstance(valeurs[nom], champ.type_attendu):
+              raise TypeError(f"{nom} doit être de type {champ.type_attendu.__name__}")
+          setattr(self, nom, valeurs[nom])
+
+
+  def _repr(self):
+      contenu = ", ".join(f"{nom}={getattr(self, nom)!r}" for nom in type(self)._champs)
+      return f"{type(self).__name__}({contenu})"
+
+
+  def _eq(self, autre):
+      if type(autre) is not type(self):
+          return NotImplemented
+      return all(getattr(self, n) == getattr(autre, n) for n in self._champs)
+
+
+  class MetaModele(type):
+      def __new__(mcs, nom, bases, namespace):
+          champs = {}
+          for base in reversed(bases):
+              champs.update(getattr(base, "_champs", {}))
+          propres = {cle: val for cle, val in namespace.items() if isinstance(val, Champ)}
+          for cle in propres:
+              del namespace[cle]
+          champs.update(propres)
+
+          defaut_vu = False
+          for nom_champ, champ in champs.items():
+              if champ.obligatoire and defaut_vu:
+                  raise TypeError(f"le champ obligatoire {nom_champ} suit un champ avec défaut")
+              defaut_vu = defaut_vu or not champ.obligatoire
+
+          namespace["_champs"] = champs
+          namespace.setdefault("__init__", _init)
+          namespace.setdefault("__repr__", _repr)
+          if "__eq__" not in namespace:
+              namespace["__eq__"] = _eq
+              namespace["__hash__"] = None
+          return super().__new__(mcs, nom, bases, namespace)
+
+
+  class Modele(metaclass=MetaModele):
+      pass
+cours: |
+  ## Générer du code à la création de la classe
+
+  `dataclasses`, les ORM (Django, SQLAlchemy) ou Pydantic lisent la **déclaration** de la
+  classe et en déduisent des méthodes. Une métaclasse permet d'intervenir exactement à ce
+  moment.
+
+  ## Le dictionnaire du corps de classe
+
+  Dans `__new__(mcs, nom, bases, ns)`, `ns` contient tout ce qui a été défini dans le corps,
+  **dans l'ordre de définition** (les dictionnaires sont ordonnés). On peut le filtrer, le
+  modifier (retirer des entrées, en ajouter) avant d'appeler `super().__new__`.
+
+  ```python
+  class Meta(type):
+      def __new__(mcs, nom, bases, ns):
+          declares = {k: v for k, v in ns.items() if isinstance(v, int)}
+          for k in declares:
+              del ns[k]
+          cls = super().__new__(mcs, nom, bases, ns)
+          cls._entiers = declares
+          return cls
+  ```
+
+  ## Héritage des champs
+
+  Les champs des classes parentes ont déjà été collectés lors de la création de celles-ci :
+  on part de l'attribut des bases (dans le bon ordre), puis on ajoute (ou remplace) les
+  champs déclarés dans la classe. Copier le dictionnaire du parent évite de le modifier.
+
+  ## Générer des méthodes
+
+  Une méthode générée est une simple fonction affectée sur la classe. Pour `__init__`, on
+  accepte `*args, **kwargs`, on les associe aux champs dans l'ordre, et on vérifie : trop
+  d'arguments, argument inconnu, argument donné deux fois, champ obligatoire manquant (des
+  `TypeError`, comme Python). `inspect.Signature` peut aussi faire ce travail
+  d'association.
+
+  Ne pas écraser une méthode définie par l'utilisateur : `if "__repr__" not in ns`.
+
+  ## Valider à la définition
+
+  Comme `dataclasses`, on refuse un champ obligatoire après un champ à valeur par défaut,
+  avec une erreur **au moment de la définition** de la classe : le développeur la voit
+  immédiatement à l'import, pas lors d'un appel en production.
+
+  ## Valeurs par défaut absentes
+
+  Pour distinguer « pas de défaut » de « défaut = None », on utilise une **sentinelle**
+  (`MANQUANT = object()`), exactement comme `dataclasses.MISSING`.
+
+  ## Mot de la fin
+
+  Les métaclasses sont puissantes mais complexes : la plupart du temps, un décorateur de
+  classe ou `__init_subclass__` suffit.
+docs:
+  - title: Référence — personnaliser la création de classes
+    url: https://docs.python.org/fr/3/reference/datamodel.html#customizing-class-creation
+  - title: Module dataclasses (le modèle à imiter)
+    url: https://docs.python.org/fr/3/library/dataclasses.html

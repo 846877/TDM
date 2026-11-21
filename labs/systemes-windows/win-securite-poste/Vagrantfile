@@ -1,0 +1,8 @@
+# Lab « Sécuriser un poste Windows » : PC01, un Windows 11 (3 Go de RAM) avec un disque virtuel de données (V:).
+require_relative "../_commun/tdm"
+
+Vagrant.configure("2") do |config|
+  TDM.lab(config, __dir__) do |lab|
+    lab.client "pc01", hostname: "PC01", ip: "192.168.10.101", primary: true, scenario: "scenario.ps1"
+  end
+end

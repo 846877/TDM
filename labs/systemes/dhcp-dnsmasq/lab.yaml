@@ -1,0 +1,426 @@
+title: Serveur DHCP et DNS local avec dnsmasq
+level: intermediaire
+order: 1
+tags: [dhcp, dns, dnsmasq, bail, réservation, tcpdump]
+summary: Plage DHCP, options, réservation, exclusion d'un appareil inconnu, DNS dynamique, journaux et capture de l'échange DORA.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Le LAN de l'agence d'*Ateliers Durand* (`10.20.0.0/24`) doit distribuer ses adresses
+  automatiquement. Tu installes le service DHCP sur `srv-dhcp` avec **dnsmasq**, qui fera aussi office de
+  DNS local pour le domaine `durand.lan`.
+
+  **Machines.**
+
+  | Machine      | Adresse / MAC                    | Rôle                                         |
+  |--------------|----------------------------------|----------------------------------------------|
+  | `admin`      | 10.20.0.5                        | ton poste (terminal `root`)                  |
+  | `srv-dhcp`   | 10.20.0.2                        | serveur DHCP/DNS, accès `ssh srv-dhcp` (root par clé) |
+  | `poste1`     | MAC `02:00:00:00:01:01`          | client DHCP                                  |
+  | `poste2`     | MAC `02:00:00:00:01:02`          | client DHCP                                  |
+  | `imprimante` | MAC `02:00:00:00:01:50`          | client DHCP                                  |
+  | `intrus`     | MAC `02:00:00:00:09:99`          | appareil inconnu branché sur une prise libre |
+
+  Les clients refont une demande DHCP complète toutes les 10 secondes environ et publient le bail reçu :
+  `curl http://poste1/bail.txt`. La passerelle du LAN sera `10.20.0.254`.
+
+  Sur `srv-dhcp` : dnsmasq lit `/etc/dnsmasq.conf` et les fichiers `/etc/dnsmasq.d/*.conf`.
+  - tester la configuration : `dnsmasq --test`
+  - démarrer : `dnsmasq` ; redémarrer après modification : `pkill dnsmasq; sleep 1; dnsmasq`
+  - baux attribués : `/var/lib/misc/dnsmasq.leases`
+cours: |
+  ## À quoi sert le DHCP
+
+  Sans DHCP, chaque poste devrait être configuré à la main (adresse, masque, passerelle, DNS). Le
+  **DHCP** (Dynamic Host Configuration Protocol, UDP **67** côté serveur, **68** côté client) distribue
+  automatiquement ces paramètres et les **loue** pour une durée limitée : le **bail**.
+
+  ## L'échange DORA
+
+  ```
+  client (0.0.0.0, MAC 02:..:01:01)                     serveur 10.20.0.2
+     │ ── DHCPDISCOVER (broadcast) « un serveur DHCP ? » ──▶ │
+     │ ◀── DHCPOFFER « je te propose 10.20.0.103 » ───────── │
+     │ ── DHCPREQUEST (broadcast) « je prends .103 » ──────▶ │  (informe aussi les autres serveurs)
+     │ ◀── DHCPACK « c'est à toi pour 12 h + options » ───── │
+  ```
+
+  - Le client n'a pas encore d'adresse : il parle en **broadcast**. Le DHCP ne traverse donc pas un
+    routeur, sauf si celui-ci fait **relais DHCP** (`ip helper-address` chez Cisco, `dhcrelay` sous Linux).
+  - À mi-bail (T1), le client renouvelle directement auprès du serveur ; s'il n'y arrive pas, il diffuse
+    à 87,5 % (T2) ; à expiration, il perd son adresse.
+  - Un `DHCPNAK` refuse une demande (adresse qui n'appartient pas au réseau, par exemple après un
+    déménagement de poste).
+
+  ## Options DHCP courantes
+
+  | Option | Nom                    | Exemple            |
+  |--------|------------------------|--------------------|
+  | 1      | masque                 | 255.255.255.0      |
+  | 3      | passerelle (router)    | 10.20.0.254        |
+  | 6      | serveurs DNS           | 10.20.0.2          |
+  | 15     | nom de domaine         | durand.lan         |
+  | 42     | serveurs NTP           | 10.20.0.2          |
+  | 51     | durée du bail          | 43200 s            |
+  | 66/67  | serveur et fichier PXE | démarrage réseau   |
+
+  ## dnsmasq : DHCP + DNS + TFTP en un seul démon
+
+  dnsmasq est léger et très répandu (box Internet, routeurs, petits sites). Sa configuration est une
+  liste de `clé=valeur` :
+
+  ```
+  # /etc/dnsmasq.d/dhcp.conf
+  interface=eth0
+  dhcp-range=10.20.0.100,10.20.0.150,255.255.255.0,12h
+  dhcp-option=option:router,10.20.0.254
+  dhcp-host=02:00:00:00:01:50,imprimante,10.20.0.50     # réservation
+  domain=durand.lan
+  ```
+
+  | Besoin                       | Commande / fichier                         |
+  |------------------------------|--------------------------------------------|
+  | Tester la syntaxe            | `dnsmasq --test`                           |
+  | Baux en cours                | `/var/lib/misc/dnsmasq.leases`             |
+  | Journal détaillé             | `log-dhcp`, `log-facility=/var/log/dnsmasq.log` |
+  | Interroger son DNS           | `dig @10.20.0.2 poste1.durand.lan`         |
+  | Capturer                     | `tcpdump -vni eth0 port 67 or port 68`     |
+
+  Côté client Linux : `dhclient -v eth0` ou, avec Netplan/systemd-networkd, `networkctl renew eth0`.
+  Côté Windows : `ipconfig /release`, `ipconfig /renew`, `ipconfig /all`.
+
+  Sous Windows Server, le rôle DHCP propose les mêmes notions sous d'autres noms : **étendue** (plage),
+  **exclusions**, **réservations**, **options d'étendue**, et le **basculement DHCP** entre deux serveurs.
+
+  ## Réservation ou adresse fixe ?
+
+  - **Réservation DHCP** : l'équipement reste en DHCP mais reçoit toujours la même adresse. On centralise
+    la gestion (changer de DNS = changer une option) : idéal pour imprimantes, bornes Wi-Fi, caméras.
+  - **Adresse fixe** configurée sur la machine : pour les serveurs d'infrastructure (DNS, DHCP lui-même,
+    passerelle), qui doivent fonctionner même si le DHCP est en panne.
+  - Dans les deux cas, l'adresse est **hors de la plage dynamique** pour éviter les conflits.
+
+  ## Pièges courants
+
+  - **Deux serveurs DHCP** sur le même réseau (une box oubliée, un routeur Wi-Fi branché par un
+    utilisateur) : les postes reçoivent des paramètres aléatoires. Une capture montre deux `DHCPOFFER`.
+  - Plage épuisée : baux trop longs sur un réseau invités. Surveille le nombre de baux.
+  - Un poste qui affiche **169.254.x.x** (APIPA) n'a reçu aucune réponse DHCP : câble, VLAN, relais ou
+    serveur arrêté.
+  - Modifier la configuration sans redémarrer dnsmasq : rien ne change.
+
+  ## Bonnes pratiques en entreprise
+
+  - Documenter le plan : plage dynamique, réservations, exclusions par VLAN.
+  - Activer le **DHCP snooping** sur les commutateurs pour bloquer les serveurs DHCP pirates.
+  - Prévoir la redondance (basculement Windows, ou deux serveurs avec des plages disjointes).
+  - Pour bloquer les appareils inconnus, la vraie réponse est **802.1X** (authentification sur le port) :
+    filtrer par MAC se contourne facilement.
+docs:
+  - title: Documentation de dnsmasq (page officielle)
+    url: https://thekelleys.org.uk/dnsmasq/doc.html
+  - title: Wikipédia - Dynamic Host Configuration Protocol
+    url: https://fr.wikipedia.org/wiki/Dynamic_Host_Configuration_Protocol
+  - title: dnsmasq(8) - toutes les options (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man8/dnsmasq.8.html
+exercises:
+  - id: plage
+    title: Distribuer des adresses
+    cours: |
+      Une configuration DHCP minimale indique sur quelle interface écouter et quelle **plage** distribuer.
+
+      - `interface=` limite dnsmasq à une interface ;
+      - `dhcp-range=<début>,<fin>,<masque>,<durée>` définit la plage dynamique et la durée du bail
+        (`12h`, `30m`, `infinite`) ;
+      - `dhcp-authoritative` : le serveur répond immédiatement aux clients qui redemandent une ancienne
+        adresse au lieu d'attendre ; à n'utiliser que s'il est seul sur le réseau.
+
+      `dnsmasq --test` valide la syntaxe avant de démarrer. Le bail est exprimé en secondes côté client
+      (12 h = 43200 s).
+    description: |
+      Sur `srv-dhcp`, crée `/etc/dnsmasq.d/dhcp.conf` pour que dnsmasq distribue, sur l'interface `eth0`,
+      les adresses **10.20.0.100 à 10.20.0.150** (masque `255.255.255.0`) avec des baux de **12 heures**.
+      Déclare-le **autoritaire** (`dhcp-authoritative`) : c'est le seul serveur DHCP du réseau.
+
+      Démarre dnsmasq puis vérifie que `poste1` et `poste2` obtiennent une adresse de la plage.
+    hint: "interface=eth0 / dhcp-range=10.20.0.100,10.20.0.150,255.255.255.0,12h / dhcp-authoritative"
+    checks:
+      - desc: dnsmasq tourne sur srv-dhcp
+        run: ssh srv-dhcp pgrep -x dnsmasq >/dev/null
+      - desc: poste1 et poste2 ont une adresse entre .100 et .150 (attente jusqu'à 60 s)
+        timeout: 150
+        run: |
+          for h in poste1 poste2; do
+            ok=0
+            for i in $(seq 1 30); do
+              curl -fsS -m3 http://$h/bail.txt 2>/dev/null | grep -Eq '^ip=10\.20\.0\.(1[0-4][0-9]|150)$' && { ok=1; break; }
+              sleep 2
+            done
+            test $ok = 1 || exit 1
+          done
+      - desc: Bail de 12 heures (43200 s)
+        run: curl -fsS -m3 http://poste1/bail.txt | grep -qx 'bail=43200'
+
+  - id: options
+    title: Options DHCP - passerelle, DNS et domaine
+    cours: |
+      Les options DHCP transmettent la configuration réseau complète au client. Dans dnsmasq :
+
+      - `dhcp-option=option:<nom>,<valeurs>` ou `dhcp-option=<numéro>,<valeurs>` ;
+      - noms utiles : `router` (option 3), `dns-server` (6), `domain-name` (15), `ntp-server` (42) ;
+      - `domain=` fixe le domaine des clients DHCP et sert aussi au DNS local de dnsmasq.
+
+      `dnsmasq --help dhcp` liste toutes les options connues. Sans l'option `dns-server`, dnsmasq annonce sa
+      propre adresse comme DNS par défaut : il vaut mieux l'écrire explicitement.
+
+      Sur un poste client, renouvelle le bail puis lis les options reçues : c'est la seule preuve que le serveur les distribue vraiment.
+    description: |
+      Un poste a besoin de plus qu'une adresse. Ajoute les options :
+      - **passerelle** (option 3, `router`) : `10.20.0.254` ;
+      - **serveur DNS** (option 6, `dns-server`) : `10.20.0.2` ;
+      - **nom de domaine** (option 15) : `durand.lan`.
+
+      Redémarre dnsmasq et vérifie le bail de `poste1`.
+    hint: "dhcp-option=option:router,10.20.0.254 / dhcp-option=option:dns-server,10.20.0.2 / domain=durand.lan"
+    checks:
+      - desc: poste1 reçoit la passerelle, le DNS et le domaine (attente jusqu'à 40 s)
+        timeout: 90
+        run: |
+          for i in $(seq 1 20); do
+            b=$(curl -fsS -m3 http://poste1/bail.txt 2>/dev/null)
+            echo "$b" | grep -qx 'routeur=10.20.0.254' && echo "$b" | grep -qx 'dns=10.20.0.2' && echo "$b" | grep -qx 'domaine=durand.lan' && exit 0
+            sleep 2
+          done
+          exit 1
+
+  - id: reservation
+    title: Réservation pour l'imprimante
+    cours: |
+      Une **réservation** associe une adresse MAC à une adresse IP (et éventuellement à un nom). Dans dnsmasq,
+      la directive `dhcp-host=` accepte dans l'ordre l'adresse MAC, un nom d'hôte, une adresse IP, voire une
+      durée de bail.
+
+      La MAC d'un équipement se lit sur son étiquette, dans `ip neigh` d'une machine du même réseau ou dans le
+      fichier des baux. L'adresse réservée peut être hors de la plage dynamique : c'est même recommandé.
+      Si le client avait déjà un bail différent, il gardera l'ancien jusqu'à sa prochaine demande complète.
+    description: |
+      L'imprimante doit **toujours** avoir l'adresse `10.20.0.50` (les postes y impriment par adresse) et le
+      nom `imprimante`. Crée une **réservation** sur son adresse MAC `02:00:00:00:01:50`.
+
+      Note : `10.20.0.50` est en dehors de la plage dynamique, c'est la bonne pratique pour les adresses
+      réservées.
+    hint: dhcp-host=02:00:00:00:01:50,imprimante,10.20.0.50
+    checks:
+      - desc: L'imprimante obtient 10.20.0.50 (attente jusqu'à 40 s)
+        timeout: 90
+        run: |
+          for i in $(seq 1 20); do
+            curl -fsS -m3 http://imprimante/bail.txt 2>/dev/null | grep -qx 'ip=10.20.0.50' && exit 0
+            sleep 2
+          done
+          exit 1
+      - desc: Le bail est enregistré sur le serveur
+        run: ssh srv-dhcp cat /var/lib/misc/dnsmasq.leases | grep -i '02:00:00:00:01:50' | grep -q ' 10\.20\.0\.50 '
+
+  - id: intrus
+    title: Refuser un appareil inconnu
+    cours: |
+      `dhcp-host=<MAC>,ignore` demande à dnsmasq de ne jamais répondre à cette adresse MAC.
+
+      Mais un bail déjà accordé reste mémorisé dans `/var/lib/misc/dnsmasq.leases` (une ligne par bail :
+      expiration, MAC, IP, nom, identifiant client) et dnsmasq le relit au démarrage. Il faut donc arrêter le
+      service avant d'éditer ce fichier, sinon dnsmasq le réécrit avec ses données en mémoire. `sed -i
+      '/motif/d' fichier` supprime les lignes qui contiennent un motif.
+
+      Ce filtrage est une mesure d'urgence : une adresse MAC se change en une commande.
+    description: |
+      Un appareil inconnu (`02:00:00:00:09:99`) a été branché sur une prise libre et a obtenu une adresse.
+      En attendant une vraie solution (802.1X), demande à dnsmasq de **l'ignorer** (`dhcp-host=...,ignore`).
+
+      Le bail déjà attribué reste valable 12 h : arrête dnsmasq, **supprime sa ligne** de
+      `/var/lib/misc/dnsmasq.leases`, puis redémarre dnsmasq. L'appareil ne doit plus rien obtenir.
+    hint: "dhcp-host=02:00:00:00:09:99,ignore ; pkill dnsmasq ; sed -i '/02:00:00:00:09:99/d' /var/lib/misc/dnsmasq.leases ; dnsmasq"
+    checks:
+      - desc: L'intrus n'obtient plus de bail (attente jusqu'à 40 s)
+        timeout: 90
+        run: |
+          for i in $(seq 1 20); do
+            curl -fsS -m3 http://intrus/bail.txt 2>/dev/null | grep -qx 'etat=echec' && exit 0
+            sleep 2
+          done
+          exit 1
+      - desc: Aucun bail pour l'intrus sur le serveur
+        run: "! ssh srv-dhcp cat /var/lib/misc/dnsmasq.leases | grep -qi '02:00:00:00:09:99'"
+      - desc: Les postes obtiennent toujours une adresse
+        run: curl -fsS -m3 http://poste2/bail.txt | grep -q '^etat=ok'
+
+  - id: dns-local
+    title: DNS local alimenté par le DHCP
+    cours: |
+      dnsmasq sert aussi de serveur DNS et connaît le nom que chaque client envoie dans sa requête DHCP.
+
+      - `local=/<domaine>/` : répondre seul pour ce domaine, sans jamais transmettre la question ailleurs ;
+      - `expand-hosts` : ajouter le domaine aux noms courts (de `/etc/hosts` et des baux) ;
+      - `no-resolv` : ne pas lire `/etc/resolv.conf` pour trouver des serveurs amont ;
+      - les réservations `dhcp-host` avec un nom alimentent aussi le DNS, résolution inverse comprise.
+
+      Teste avec `dig @<serveur> <nom>` et `dig @<serveur> -x <adresse>`.
+    description: |
+      dnsmasq est aussi un serveur DNS : il peut résoudre automatiquement le nom des postes qui lui ont
+      demandé une adresse (ils envoient leur nom dans la requête DHCP).
+
+      Configure-le pour qu'il réponde avec autorité pour `durand.lan` (`local=/durand.lan/`), qu'il complète
+      les noms courts avec le domaine (`expand-hosts`) et qu'il n'interroge pas Internet (`no-resolv`).
+      `dig @10.20.0.2 poste1.durand.lan` doit renvoyer l'adresse louée par poste1, et
+      `imprimante.durand.lan` doit donner `10.20.0.50`.
+    hint: "domain=durand.lan / local=/durand.lan/ / expand-hosts / no-resolv"
+    checks:
+      - desc: poste1.durand.lan renvoie l'adresse du bail de poste1
+        run: |
+          ip=$(curl -fsS -m3 http://poste1/bail.txt | sed -n 's/^ip=//p')
+          test -n "$ip" && test "$(dig +short @10.20.0.2 poste1.durand.lan)" = "$ip"
+      - desc: imprimante.durand.lan renvoie 10.20.0.50
+        run: test "$(dig +short @10.20.0.2 imprimante.durand.lan)" = 10.20.0.50
+      - desc: Résolution inverse de 10.20.0.50
+        run: dig +short @10.20.0.2 -x 10.20.0.50 | grep -q '^imprimante\.durand\.lan\.$'
+
+  - id: dhcp-journaux
+    title: Journaliser les échanges DHCP
+    cours: |
+      Par défaut, dnsmasq écrit peu de choses et les envoie à syslog. Deux directives aident au dépannage :
+
+      - `log-dhcp` : détaille chaque échange DHCP (messages, options envoyées, étiquettes) ;
+      - `log-facility=<fichier>` : écrit le journal dans un fichier plutôt que dans syslog.
+
+      Chaque transaction apparaît sous la forme `DHCPDISCOVER(eth0) <mac>`, puis `DHCPOFFER`, `DHCPREQUEST`,
+      `DHCPACK` avec l'adresse attribuée. `tail -f` suit le fichier en direct. Pense à redémarrer dnsmasq
+      après modification.
+
+      Les quatre messages DISCOVER, OFFER, REQUEST et ACK doivent apparaître pour chaque client : s'il en manque un, le dialogue s'est arrêté là.
+    description: |
+      Pour le dépannage, active la journalisation détaillée du DHCP (`log-dhcp`) dans le fichier
+      `/var/log/dnsmasq.log` (`log-facility`). Après redémarrage, on doit y voir les échanges
+      `DHCPDISCOVER`, `DHCPOFFER`, `DHCPREQUEST` et `DHCPACK` des postes.
+    hint: "log-dhcp / log-facility=/var/log/dnsmasq.log"
+    checks:
+      - desc: Le journal contient des DHCPACK pour poste1 (attente jusqu'à 40 s)
+        timeout: 90
+        run: |
+          for i in $(seq 1 20); do
+            ssh srv-dhcp "grep -q 'DHCPACK.*02:00:00:00:01:01' /var/log/dnsmasq.log" 2>/dev/null && exit 0
+            sleep 2
+          done
+          exit 1
+      - desc: Le journal contient les quatre étapes DORA
+        run: |
+          ssh srv-dhcp 'for m in DHCPDISCOVER DHCPOFFER DHCPREQUEST DHCPACK; do grep -q $m /var/log/dnsmasq.log || exit 1; done'
+
+  - id: capture-dora
+    title: Capturer l'échange DORA
+    cours: |
+      Le DHCP utilise **UDP 67** (serveur) et **UDP 68** (client). Un filtre tcpdump peut combiner plusieurs
+      conditions avec `or` (le filtre entier entre guillemets).
+
+      - `timeout <secondes> <commande>` arrête automatiquement une commande au bout d'une durée : pratique
+        pour une capture lancée à distance par SSH ;
+      - `-w` enregistre, `-r` relit ;
+      - `-v` (et `-vv`) décode les options DHCP : type de message, masque, passerelle, DNS, durée du bail.
+
+      Les clients du lab refont une demande toutes les 10 secondes environ : capture assez longtemps pour en
+      voir au moins une complète.
+    description: |
+      Sur `srv-dhcp`, capture le trafic DHCP (ports UDP **67 et 68**) pendant au moins 15 secondes dans
+      `/root/dhcp.pcap`, puis relis-le en mode détaillé : `tcpdump -vnr /root/dhcp.pcap`.
+
+      Repère les quatre messages (Discover, Offer, Request, ACK) et les options transmises
+      (Subnet-Mask, Default-Gateway, Domain-Name-Server, Domain-Name, Lease-Time).
+    hint: "ssh srv-dhcp \"timeout 20 tcpdump -i eth0 -w /root/dhcp.pcap 'port 67 or port 68'\""
+    checks:
+      - desc: La capture contient un Discover et un ACK
+        run: |
+          ssh srv-dhcp 'tcpdump -vnr /root/dhcp.pcap 2>/dev/null' > /tmp/dora.txt
+          grep -q 'DHCP-Message.*Discover' /tmp/dora.txt && grep -q 'DHCP-Message.*ACK' /tmp/dora.txt
+      - desc: La capture montre l'option passerelle 10.20.0.254
+        run: grep -q 'Default-Gateway.*10\.20\.0\.254' /tmp/dora.txt || ssh srv-dhcp 'tcpdump -vnr /root/dhcp.pcap 2>/dev/null' | grep -q 'Default-Gateway.*10\.20\.0\.254'
+
+  - id: dnsmasq-hotes-fixes
+    title: Noms des serveurs à adresse fixe
+    cours: |
+      Les serveurs ont une adresse fixe : ils ne demandent rien au DHCP, donc dnsmasq ne connaît pas leur
+      nom. Deux façons de les ajouter au DNS local :
+
+      - écrire des lignes `<adresse> <nom>` dans le fichier `/etc/hosts` **du serveur dnsmasq** (qui le lit
+        au démarrage ; avec `expand-hosts`, le domaine est ajouté automatiquement) ;
+      - ou utiliser la directive `host-record=<nom>,<adresse>` dans la configuration.
+
+      Les deux méthodes créent aussi l'enregistrement **inverse** (PTR). Redémarre dnsmasq puis interroge-le
+      avec `dig`.
+
+      Garde ces noms dans un seul fichier versionné : c'est l'inventaire des adresses fixes du réseau, utile bien au-delà du DNS.
+    description: |
+      Les serveurs ne passent pas par le DHCP : dnsmasq ne connaît donc pas leur nom. Ajoute au DNS local de
+      `srv-dhcp` les machines suivantes (avec leur résolution inverse) :
+
+      | Nom            | Adresse     |
+      |----------------|-------------|
+      | `srv-dhcp`     | 10.20.0.2   |
+      | `srv-fichiers` | 10.20.0.10  |
+      | `routeur`      | 10.20.0.254 |
+
+      `dig @10.20.0.2 srv-fichiers.durand.lan` doit répondre `10.20.0.10`.
+    hint: "Dans /etc/hosts de srv-dhcp : 10.20.0.10 srv-fichiers (expand-hosts ajoute le domaine) ou host-record=srv-fichiers.durand.lan,10.20.0.10 ; puis redémarre dnsmasq"
+    checks:
+      - desc: Les trois noms sont résolus
+        run: |
+          test "$(dig +short +time=3 @10.20.0.2 srv-dhcp.durand.lan)" = 10.20.0.2 &&
+          test "$(dig +short +time=3 @10.20.0.2 srv-fichiers.durand.lan)" = 10.20.0.10 &&
+          test "$(dig +short +time=3 @10.20.0.2 routeur.durand.lan)" = 10.20.0.254
+      - desc: Résolution inverse de 10.20.0.10
+        run: dig +short +time=3 @10.20.0.2 -x 10.20.0.10 | grep -q '^srv-fichiers\.durand\.lan\.$'
+
+  - id: dnsmasq-alias
+    title: Alias DNS pour l'intranet
+    cours: |
+      Un **alias** (enregistrement CNAME) donne un second nom à une machine : les utilisateurs retiennent
+      `intranet`, et le jour où le site déménage sur un autre serveur, on ne change que l'alias.
+
+      Dans dnsmasq, la directive `cname=<alias>,<cible>` crée un CNAME. La cible doit être un nom que dnsmasq
+      connaît lui-même (`/etc/hosts`, `host-record`, bail DHCP) ; le nom complet avec le domaine est le plus
+      sûr.
+
+      `dig <alias>` affiche la chaîne : d'abord le CNAME, puis l'enregistrement A de la cible.
+    description: |
+      L'intranet est hébergé sur `srv-fichiers`. Les utilisateurs doivent pouvoir taper `intranet` :
+      crée l'alias (CNAME) `intranet.durand.lan` vers `srv-fichiers.durand.lan`.
+    hint: cname=intranet.durand.lan,srv-fichiers.durand.lan
+    checks:
+      - desc: intranet.durand.lan est un CNAME de srv-fichiers.durand.lan
+        run: dig +short +time=3 @10.20.0.2 intranet.durand.lan CNAME | grep -qx 'srv-fichiers.durand.lan.'
+      - desc: intranet.durand.lan aboutit à 10.20.0.10
+        run: dig +short +time=3 @10.20.0.2 intranet.durand.lan | grep -qx '10.20.0.10'
+
+  - id: dnsmasq-blocage
+    title: Bloquer un domaine indésirable
+    cours: |
+      Un serveur DNS peut **refuser de résoudre** certains domaines en renvoyant une adresse qui ne mène nulle
+      part : c'est le principe des bloqueurs de publicité (Pi-hole repose sur dnsmasq) et de certains filtres
+      d'entreprise.
+
+      La directive `address=/<domaine>/<adresse>` répond `<adresse>` pour le domaine **et tous ses
+      sous-domaines**. L'adresse `0.0.0.0` est la convention pour « n'existe pas ».
+
+      Ce filtrage se contourne facilement (autre DNS, DNS sur HTTPS) : il complète un pare-feu ou un proxy,
+      il ne les remplace pas.
+    description: |
+      La direction demande de bloquer le site de jeux `jeux-en-ligne.example` **et tous ses sous-domaines**
+      au niveau du DNS : dnsmasq doit répondre `0.0.0.0` pour ces noms.
+    hint: address=/jeux-en-ligne.example/0.0.0.0
+    checks:
+      - desc: Le domaine et ses sous-domaines renvoient 0.0.0.0
+        run: |
+          test "$(dig +short +time=3 @10.20.0.2 jeux-en-ligne.example)" = 0.0.0.0 &&
+          test "$(dig +short +time=3 @10.20.0.2 www.jeux-en-ligne.example)" = 0.0.0.0
+      - desc: Les noms internes sont toujours résolus
+        run: test "$(dig +short +time=3 @10.20.0.2 imprimante.durand.lan)" = 10.20.0.50

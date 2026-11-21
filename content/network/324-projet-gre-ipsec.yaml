@@ -1,0 +1,157 @@
+title: "Projet : agence en GRE sur IPsec avec OSPF et QoS"
+level: expert
+order: 24
+device: router
+hostname: R-AGENCE9
+tags: [projet, gre, ipsec, ospf, qos, vpn]
+summary: Raccorder une agence au siège par un tunnel GRE chiffré, routé en OSPF et priorisé.
+description: |
+  L'agence 9 (LAN `10.9.0.0/24` sur `G0/0`) sort sur Internet par `G0/1` (`203.0.113.10`). Le
+  routeur du siège est joignable en `198.51.100.1`. On veut un tunnel **GRE** (pour faire
+  passer OSPF) **protégé par IPsec**, et la voix prioritaire.
+
+  **Tunnel**
+  - `Tunnel0` : `172.16.9.2/30`, source `G0/1`, destination `198.51.100.1` ;
+  - `ip mtu 1400` et `ip tcp adjust-mss 1360`.
+
+  **IPsec**
+  - politique ISAKMP `10` : `aes 256`, `sha256`, `pre-share`, groupe `14` ;
+  - clé `Ag9-Tunn3l` avec `198.51.100.1` ;
+  - transform-set `TS-GRE` : `esp-aes 256 esp-sha256-hmac`, mode **transport** ;
+  - profil `PROT-GRE` utilisant `TS-GRE`, appliqué au tunnel
+    (`tunnel protection ipsec profile PROT-GRE`).
+
+  **OSPF** (processus `1`, router-id `9.9.9.9`, zone `0`)
+  - réseaux `172.16.9.0/30` et `10.9.0.0/24` ; `G0/0` passive.
+
+  **QoS**
+  - classe `VOIX` (`match dscp ef`) ; politique `AGENCE-WAN` : `VOIX` en `priority percent 25`,
+    `class-default` en `fair-queue` ; appliquée en sortie de `G0/1`.
+initial: |
+  interface g0/0
+  ip address 10.9.0.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 203.0.113.10 255.255.255.252
+  no shutdown
+  ip route 0.0.0.0 0.0.0.0 203.0.113.9
+checks:
+  - desc: Tunnel0 172.16.9.2/30 de G0/1 vers 198.51.100.1, MTU 1400 et MSS 1360
+    expr: intf("tu0").ip == "172.16.9.2" and prefix(intf("tu0").mask) == 30 and intf("tu0").tunnel_source == ifname("g0/1") and intf("tu0").tunnel_destination == "198.51.100.1" and intf("tu0").ip_mtu == 1400 and intf("tu0").tcp_mss == 1360
+  - desc: Phase 1 (politique 10 et clé avec 198.51.100.1)
+    expr: d.isakmp_policies[10]["encryption"] == "aes 256" and d.isakmp_policies[10]["hash"] == "sha256" and d.isakmp_policies[10]["authentication"] == "pre-share" and d.isakmp_policies[10]["group"] == "14" and d.isakmp_keys.get("198.51.100.1") == "Ag9-Tunn3l"
+  - desc: Transform-set TS-GRE en mode transport et profil PROT-GRE sur le tunnel
+    expr: 'd.transform_sets.get("TS-GRE") == {"transforms": ["esp-aes 256", "esp-sha256-hmac"], "mode": "transport"} and d.ipsec_profiles.get("PROT-GRE", {}).get("transform_set") == "TS-GRE" and intf("tu0").tunnel_protection == "PROT-GRE"'
+  - desc: OSPF 1 (router-id 9.9.9.9) sur le tunnel et le LAN, LAN passif
+    expr: d.ospf[1].router_id == "9.9.9.9" and ospf_net("172.16.9.0", "0.0.0.3", 0) and ospf_net("10.9.0.0", "0.0.0.255", 0) and d.ospf[1].is_passive("g0/0") and not d.ospf[1].is_passive("tu0")
+  - desc: QoS AGENCE-WAN (voix 25 %, fair-queue) en sortie de G0/1
+    expr: 'cmap("VOIX").get("matches") == ["dscp ef"] and pmap("AGENCE-WAN") == {"VOIX": ["priority percent 25"], "class-default": ["fair-queue"]} and intf("g0/1").service_policies == {"output": "AGENCE-WAN"}'
+solution: |
+  configure terminal
+  crypto isakmp policy 10
+  encryption aes 256
+  hash sha256
+  authentication pre-share
+  group 14
+  exit
+  crypto isakmp key Ag9-Tunn3l address 198.51.100.1
+  crypto ipsec transform-set TS-GRE esp-aes 256 esp-sha256-hmac
+  mode transport
+  exit
+  crypto ipsec profile PROT-GRE
+  set transform-set TS-GRE
+  exit
+  interface tunnel 0
+  ip address 172.16.9.2 255.255.255.252
+  tunnel source g0/1
+  tunnel destination 198.51.100.1
+  ip mtu 1400
+  ip tcp adjust-mss 1360
+  tunnel protection ipsec profile PROT-GRE
+  exit
+  router ospf 1
+  router-id 9.9.9.9
+  network 172.16.9.0 0.0.0.3 area 0
+  network 10.9.0.0 0.0.0.255 area 0
+  passive-interface g0/0
+  exit
+  class-map match-any VOIX
+  match dscp ef
+  exit
+  policy-map AGENCE-WAN
+  class VOIX
+  priority percent 25
+  class class-default
+  fair-queue
+  exit
+  exit
+  interface g0/1
+  service-policy output AGENCE-WAN
+  end
+cours: |
+  ## Pourquoi combiner GRE et IPsec ?
+
+  | Technologie | Apporte                                   | Ne sait pas faire                        |
+  |-------------|-------------------------------------------|------------------------------------------|
+  | GRE         | une **interface** tunnel, multicast, protocoles de routage | chiffrer                 |
+  | IPsec seul (crypto map) | chiffrement, authentification | transporter du multicast (OSPF, EIGRP) ; pas d'interface |
+
+  **GRE sur IPsec** cumule les deux : OSPF voit un lien point à point (`Tunnel0`) et apprend
+  dynamiquement les réseaux du siège ; IPsec chiffre les paquets GRE entre les deux adresses
+  publiques. C'est la base des architectures **DMVPN** et des VTI (`tunnel mode ipsec ipv4`).
+
+  ### Le profil IPsec
+
+  Avec un tunnel GRE, pas besoin d'ACL « intéressante » ni de crypto map : le **profil** est
+  attaché à l'interface tunnel et protège tout ce qui y passe.
+
+  ```
+  R1(config)# crypto ipsec transform-set TS-DC esp-aes 256 esp-sha256-hmac
+  R1(cfg-crypto-trans)# mode transport
+  R1(config)# crypto ipsec profile PROFIL-DC
+  R1(ipsec-profile)# set transform-set TS-DC
+  R1(config)# interface tunnel 20
+  R1(config-if)# ip address 172.20.0.1 255.255.255.252
+  R1(config-if)# tunnel source gi0/2
+  R1(config-if)# tunnel destination 192.0.2.77
+  R1(config-if)# tunnel protection ipsec profile PROFIL-DC
+  R1# show crypto session
+  Interface: Tunnel20
+  Session status: UP-ACTIVE
+  R1# show ip ospf neighbor
+  ```
+
+  Le mode **transport** suffit : GRE ajoute déjà un nouvel en-tête IP (les adresses publiques),
+  inutile qu'ESP en ajoute un second ; on gagne 20 octets par paquet.
+
+  ### MTU et MSS
+
+  GRE (24 octets) + ESP (jusqu'à ~60-70 octets) réduisent la charge utile possible sous un MTU
+  Ethernet de 1500. Sans réglage, les gros paquets sont fragmentés ou jetés (sites web qui ne
+  chargent qu'à moitié). `ip mtu 1400` sur le tunnel et `ip tcp adjust-mss 1360` (MTU − 40)
+  font négocier aux sessions TCP des segments qui passent sans fragmentation.
+
+  ### QoS et chiffrement
+
+  IOS recopie le DSCP de l'en-tête d'origine dans les en-têtes GRE puis ESP : une politique de
+  sortie sur l'interface physique peut donc encore classer la voix. Pour classer sur d'autres
+  critères (ACL, ports), il faut `qos pre-classify` sur le tunnel.
+
+  ### Pièges fréquents
+
+  - Annoncer dans OSPF le réseau de l'adresse publique : le tunnel tente de passer par lui-même
+    (*recursive routing*, le tunnel tombe).
+  - Mode tunnel/transport ou algorithmes différents entre les deux sites.
+  - Oublier MTU/MSS : « le VPN marche mais certains sites ne s'affichent pas ».
+
+  ### Pour le CCNP ENCOR
+
+  GRE, IPsec, leur combinaison et les problèmes de MTU font partie du domaine virtualisation
+  d'ENCOR.
+docs:
+  - title: RFC 2784 — Generic Routing Encapsulation (GRE)
+    url: https://www.rfc-editor.org/rfc/rfc2784
+  - title: RFC 4303 — IP Encapsulating Security Payload (ESP)
+    url: https://www.rfc-editor.org/rfc/rfc4303
+  - title: Wikipédia — IPsec
+    url: https://fr.wikipedia.org/wiki/IPsec

@@ -1,0 +1,190 @@
+title: zip, enumerate, any, all et compagnie
+level: intermediaire
+order: 48
+tags: [fonctions intégrées, zip, itérateurs]
+summary: Remplacer des boucles d'indices par les fonctions intégrées.
+description: |
+  Écris chaque fonction **sans** utiliser `range(len(...))`, en t'appuyant sur `zip`,
+  `enumerate`, `any`, `all`, `sum`, `min`, `max`, `sorted`, `reversed`, `map` ou `filter`.
+
+  1. `associer(noms, ips)` : dictionnaire `{nom: ip}` ; si les deux listes n'ont pas la même
+     longueur, lève `ValueError`.
+  2. `numeroter(lignes, debut=1)` : liste de chaînes `"<numéro>: <ligne>"`.
+  3. `ecarts(valeurs)` : liste des différences entre chaque valeur et la précédente
+     (`[3, 5, 4]` → `[2, -1]`).
+  4. `tous_joignables(resultats)` : `True` si tous les pings ont réussi ; `resultats` est un
+     dictionnaire `{hote: bool}`. Un dictionnaire vide renvoie `True`.
+  5. `premier_en_panne(resultats)` : le premier hôte (dans l'ordre du dictionnaire) dont le
+     ping a échoué, ou `None`. Utilise `next()` avec une valeur par défaut.
+  6. `transposer(lignes)` : transforme une liste de lignes (listes de même longueur) en liste
+     de colonnes (listes).
+  7. `produit_scalaire(a, b)` : `a[0]*b[0] + a[1]*b[1] + …`.
+
+  ```python
+  associer(["web", "db"], ["10.0.0.1", "10.0.0.2"])   # {"web": "10.0.0.1", "db": "10.0.0.2"}
+  numeroter(["a", "b"])                               # ["1: a", "2: b"]
+  premier_en_panne({"a": True, "b": False, "c": False})   # "b"
+  transposer([[1, 2, 3], [4, 5, 6]])                  # [[1, 4], [2, 5], [3, 6]]
+  ```
+starter: |
+  def associer(noms, ips):
+      pass
+
+
+  def numeroter(lignes, debut=1):
+      pass
+
+
+  def ecarts(valeurs):
+      pass
+
+
+  def tous_joignables(resultats):
+      pass
+
+
+  def premier_en_panne(resultats):
+      pass
+
+
+  def transposer(lignes):
+      pass
+
+
+  def produit_scalaire(a, b):
+      pass
+tests: |
+  def test_associer():
+      "associer"
+      assert solution.associer(["web", "db"], ["10.0.0.1", "10.0.0.2"]) == {"web": "10.0.0.1", "db": "10.0.0.2"}
+      assert solution.associer([], []) == {}
+      try:
+          solution.associer(["a", "b"], ["1"])
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("longueurs différentes : ValueError attendue")
+
+  def test_numeroter():
+      "numeroter"
+      assert solution.numeroter(["a", "b"]) == ["1: a", "2: b"]
+      assert solution.numeroter(["x"], debut=0) == ["0: x"]
+
+  def test_ecarts():
+      "ecarts"
+      assert solution.ecarts([3, 5, 4]) == [2, -1]
+      assert solution.ecarts([7]) == []
+      assert solution.ecarts([]) == []
+
+  def test_joignables():
+      "tous_joignables"
+      assert solution.tous_joignables({"a": True, "b": True}) is True
+      assert solution.tous_joignables({"a": True, "b": False}) is False
+      assert solution.tous_joignables({}) is True
+
+  def test_premier_en_panne():
+      "premier_en_panne"
+      assert solution.premier_en_panne({"a": True, "b": False, "c": False}) == "b"
+      assert solution.premier_en_panne({"a": True}) is None
+
+  def test_transposer():
+      "transposer"
+      assert solution.transposer([[1, 2, 3], [4, 5, 6]]) == [[1, 4], [2, 5], [3, 6]]
+      assert solution.transposer([]) == []
+
+  def test_scalaire():
+      "produit_scalaire"
+      assert solution.produit_scalaire([1, 2, 3], [4, 5, 6]) == 32
+      assert solution.produit_scalaire([], []) == 0
+solution: |
+  def associer(noms, ips):
+      if len(noms) != len(ips):
+          raise ValueError("les listes n'ont pas la même longueur")
+      return dict(zip(noms, ips))
+
+
+  def numeroter(lignes, debut=1):
+      return [f"{i}: {ligne}" for i, ligne in enumerate(lignes, start=debut)]
+
+
+  def ecarts(valeurs):
+      return [b - a for a, b in zip(valeurs, valeurs[1:])]
+
+
+  def tous_joignables(resultats):
+      return all(resultats.values())
+
+
+  def premier_en_panne(resultats):
+      return next((hote for hote, ok in resultats.items() if not ok), None)
+
+
+  def transposer(lignes):
+      return [list(colonne) for colonne in zip(*lignes)]
+
+
+  def produit_scalaire(a, b):
+      return sum(x * y for x, y in zip(a, b))
+cours: |
+  ## Parcourir sans indices
+
+  En Python, écrire `for i in range(len(liste)):` est rarement nécessaire. Les fonctions
+  intégrées expriment l'intention plus clairement et évitent les erreurs d'indice.
+
+  ## `zip` : parcourir en parallèle
+
+  ```python
+  noms = ["web", "db"]
+  ports = [80, 5432]
+  for nom, port in zip(noms, ports):
+      print(nom, port)
+  dict(zip(noms, ports))           # {"web": 80, "db": 5432}
+  ```
+
+  `zip` s'arrête à la **plus courte** séquence, sans prévenir. Vérifie les longueurs si une
+  différence est une erreur (ou utilise `zip(a, b, strict=True)`, Python 3.10+).
+
+  **Astuce** : `zip(l, l[1:])` donne les paires de voisins `(l[0], l[1]), (l[1], l[2])…`
+  (ou `itertools.pairwise(l)`). Et `zip(*lignes)` **transpose** : l'étoile passe chaque ligne
+  comme un argument séparé.
+
+  ## `enumerate` : l'indice et la valeur
+
+  `enumerate(sequence, start=1)` produit des couples `(numéro, élément)`.
+
+  ## `any` et `all`
+
+  - `any(it)` : vrai si **au moins un** élément est vrai (faux si vide) ;
+  - `all(it)` : vrai si **tous** sont vrais (vrai si vide : aucun contre-exemple).
+
+  Avec une expression génératrice : `all(p > 0 for p in ports)`. Ils s'arrêtent dès que la
+  réponse est connue.
+
+  ## `next` avec une valeur par défaut
+
+  Pour trouver le premier élément qui vérifie une condition :
+
+  ```python
+  next((x for x in valeurs if x < 0), None)
+  ```
+
+  Le générateur n'est parcouru que jusqu'au premier résultat ; sans valeur par défaut, `next`
+  lèverait `StopIteration` s'il n'y en a aucun.
+
+  ## `sum`, `min`, `max`, `sorted`, `reversed`
+
+  Tous acceptent n'importe quel itérable, y compris une expression génératrice :
+  `sum(x * y for x, y in zip(a, b))`. `min` et `max` acceptent `default=` pour une séquence
+  vide et `key=` pour comparer selon un critère.
+
+  ## `map` et `filter`
+
+  `map(f, it)` applique `f` à chaque élément, `filter(f, it)` garde ceux pour lesquels
+  `f` est vrai. Ils renvoient des itérateurs paresseux : `list(map(int, "1 2 3".split()))`
+  → `[1, 2, 3]`. Les compréhensions sont souvent plus lisibles, sauf avec une fonction déjà
+  existante comme `int` ou `str.strip`.
+docs:
+  - title: Fonctions natives (zip, enumerate, any, all…)
+    url: https://docs.python.org/fr/3/library/functions.html
+  - title: Tutoriel — techniques de boucles
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#looping-techniques

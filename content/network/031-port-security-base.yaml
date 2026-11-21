@@ -1,0 +1,106 @@
+title: Port-security de base
+level: debutant
+order: 31
+device: switch
+hostname: SW-DIRECTION
+tags: [port-security, sécurité, access]
+summary: Un seul appareil autorisé sur la prise du bureau de la direction.
+description: |
+  Les prises `Fa0/5` et `Fa0/6` du bureau de la direction ne doivent accueillir **qu'un seul**
+  appareil chacune. Si quelqu'un branche un autre PC (ou un petit switch), le port doit se couper.
+
+  1. la port-security refuse les ports en négociation automatique : passe `Fa0/5` et `Fa0/6` en
+     `switchport mode access` (ils sont déjà dans le VLAN 10) ;
+  2. active `switchport port-security` sur ces deux ports, avec les réglages **par défaut**
+     (1 adresse MAC, violation `shutdown`).
+
+  Essaie d'abord `switchport port-security` sans le mode access : lis le message d'erreur.
+  Contrôle avec `show port-security`.
+initial: |
+  vlan 10
+  name DIRECTION
+  interface range fa0/5 - 6
+  switchport access vlan 10
+checks:
+  - desc: Fa0/5 et Fa0/6 en mode access
+    expr: intf("fa0/5").mode == "access" and intf("fa0/6").mode == "access"
+  - desc: Port-security active sur Fa0/5 et Fa0/6
+    expr: intf("fa0/5").port_security and intf("fa0/6").port_security
+  - desc: Réglages par défaut (1 adresse MAC, violation shutdown) et autres ports intacts
+    expr: all(i.port_security_max == 1 and i.port_security_violation == "shutdown" for i in ports("fa0/5-6")) and intf("fa0/5").port_security and not intf("fa0/7").port_security
+solution: |
+  configure terminal
+  interface range fa0/5 - 6
+  switchport mode access
+  switchport port-security
+  end
+cours: |
+  ## Le principe de la port-security
+
+  La **port-security** limite les adresses MAC autorisées à émettre sur un port d'accès. Elle
+  protège contre :
+
+  - le branchement d'un appareil non autorisé (PC personnel, mini-switch, point d'accès pirate) ;
+  - l'**inondation de la table MAC** (des milliers d'adresses inventées qui saturent le switch).
+
+  ### Réglages par défaut
+
+  `switchport port-security` seul active :
+
+  - **1** adresse MAC autorisée (la première apprise) ;
+  - mode de violation **shutdown** : au premier appareil en trop, le port passe en
+    **err-disabled** (éteint) et un message `%PM-4-ERR_DISABLE` est journalisé ;
+  - adresses apprises **dynamiquement** (perdues au redémarrage).
+
+  ```
+  SW1(config)# interface fa0/8
+  SW1(config-if)# switchport port-security
+  Command rejected: FastEthernet0/8 is a dynamic port.
+  SW1(config-if)# switchport mode access
+  SW1(config-if)# switchport port-security
+  SW1# show port-security interface fa0/8
+  Port Security              : Enabled
+  Port Status                : Secure-up
+  Violation Mode             : Shutdown
+  Maximum MAC Addresses      : 1
+  ```
+
+  La port-security ne fonctionne que sur un port **statiquement** en access (ou trunk) : un port
+  en DTP dynamique est refusé.
+
+  ### Les trois modes de violation
+
+  | Mode       | Trafic interdit | Journal / compteur | Port         |
+  |------------|-----------------|--------------------|--------------|
+  | `protect`  | jeté            | non                | reste actif  |
+  | `restrict` | jeté            | oui                | reste actif  |
+  | `shutdown` | —               | oui                | err-disabled |
+
+  ### Remettre un port en service
+
+  Après une violation en mode shutdown, il faut retirer l'appareil fautif puis :
+
+  ```
+  SW1(config)# interface fa0/8
+  SW1(config-if)# shutdown
+  SW1(config-if)# no shutdown
+  ```
+
+  ou configurer une réactivation automatique (`errdisable recovery cause psecure-violation`).
+
+  ### Pièges fréquents
+
+  - Un téléphone IP avec un PC derrière = **2** adresses MAC (voire 3) : il faut augmenter le
+    maximum (`switchport port-security maximum 2`), sinon le port tombe aussitôt.
+  - Activer la port-security sur un **trunk** vers un autre switch sans y réfléchir.
+  - Oublier que l'adresse apprise est perdue au redémarrage sans `mac-address sticky`.
+
+  ### Pour le CCNA
+
+  Les trois modes de violation et l'état err-disabled sont des questions très fréquentes.
+  Les options (maximum, sticky, vieillissement) sont vues aux niveaux suivants.
+docs:
+  - title: Wikipédia — Adresse MAC
+    url: https://fr.wikipedia.org/wiki/Adresse_MAC
+  - title: Cisco Catalyst 2960-X — guides de configuration
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html

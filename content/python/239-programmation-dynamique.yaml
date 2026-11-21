@@ -1,0 +1,186 @@
+title: Programmation dynamique en trois problèmes
+level: avance
+order: 39
+tags: [programmation dynamique, algorithmes, complexité]
+summary: Chemins dans une grille, sous-tableau maximal et plus longue sous-suite croissante.
+description: |
+  Trois problèmes classiques, à résoudre efficacement.
+
+  1. `chemins(grille)` : `grille` est une liste de chaînes où `"."` est libre et `"#"` un
+     obstacle. En partant du coin haut-gauche et en ne se déplaçant que vers la **droite** ou
+     vers le **bas**, combien de chemins mènent au coin bas-droit ? (0 si le départ ou
+     l'arrivée est un obstacle.) En O(lignes × colonnes) : une grille 100 × 100 doit être
+     instantanée.
+  2. `pic_de_trafic(mesures)` : `mesures` est une liste d'entiers (variation de trafic par
+     minute, positive ou négative). Renvoie un tuple `(somme, debut, fin)` du sous-tableau
+     **contigu non vide** de somme maximale, `debut` et `fin` inclus. En cas d'égalité, garde
+     celui qui commence le plus tôt, puis le plus court. En O(n) (algorithme de Kadane).
+  3. `plus_longue_croissante(valeurs)` : longueur de la plus longue sous-suite (pas forcément
+     contiguë) **strictement** croissante. En O(n log n) : 100 000 valeurs en moins d'une
+     seconde. Utilise `bisect`.
+
+  ```python
+  chemins(["...", ".#.", "..."])                 # 2
+  pic_de_trafic([-2, 1, -3, 4, -1, 2, 1, -5, 4])  # (6, 3, 6)
+  plus_longue_croissante([10, 9, 2, 5, 3, 7, 101, 18])   # 4  (2, 3, 7, 18)
+  ```
+starter: |
+  import bisect
+
+
+  def chemins(grille):
+      pass
+
+
+  def pic_de_trafic(mesures):
+      pass
+
+
+  def plus_longue_croissante(valeurs):
+      pass
+tests: |
+  import random
+  import time
+
+  def test_chemins():
+      "chemins"
+      assert solution.chemins(["...", ".#.", "..."]) == 2
+      assert solution.chemins(["..."]) == 1
+      assert solution.chemins(["...", "...", "..."]) == 6
+      assert solution.chemins(["#.."]) == 0
+      assert solution.chemins(["..", ".#"]) == 0
+      assert solution.chemins([".#", "#."]) == 0
+      assert solution.chemins(["."]) == 1
+
+  def test_chemins_grand():
+      "chemins sur 100 × 100"
+      grille = ["." * 100] * 100
+      debut = time.perf_counter()
+      import math
+      assert solution.chemins(grille) == math.comb(198, 99)
+      assert time.perf_counter() - debut < 1
+
+  def test_kadane():
+      "pic_de_trafic"
+      assert solution.pic_de_trafic([-2, 1, -3, 4, -1, 2, 1, -5, 4]) == (6, 3, 6)
+      assert solution.pic_de_trafic([5]) == (5, 0, 0)
+      assert solution.pic_de_trafic([-3, -1, -2]) == (-1, 1, 1)
+      assert solution.pic_de_trafic([1, 2, 3]) == (6, 0, 2)
+      assert solution.pic_de_trafic([2, -2, 2]) == (2, 0, 0), "égalité : le plus tôt, puis le plus court"
+
+  def test_kadane_aleatoire():
+      "pic_de_trafic contre force brute"
+      rng = random.Random(7)
+      for _ in range(200):
+          t = [rng.randint(-10, 10) for _ in range(rng.randint(1, 15))]
+          meilleur = max((sum(t[i:j + 1]), -i, -(j - i), i, j) for i in range(len(t)) for j in range(i, len(t)))
+          assert solution.pic_de_trafic(t) == (meilleur[0], meilleur[3], meilleur[4]), t
+
+  def test_lis():
+      "plus_longue_croissante"
+      p = solution.plus_longue_croissante
+      assert p([10, 9, 2, 5, 3, 7, 101, 18]) == 4
+      assert p([]) == 0
+      assert p([7, 7, 7]) == 1
+      assert p([1, 2, 3, 4]) == 4
+      assert p([4, 3, 2, 1]) == 1
+      assert p([0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15]) == 6
+
+  def test_lis_rapide():
+      "plus_longue_croissante en O(n log n)"
+      rng = random.Random(1)
+      valeurs = [rng.randint(0, 10**9) for _ in range(100_000)]
+      debut = time.perf_counter()
+      r = solution.plus_longue_croissante(valeurs)
+      assert time.perf_counter() - debut < 1.5, "trop lent"
+      assert 550 < r < 700
+      assert solution.plus_longue_croissante(list(range(100_000))) == 100_000
+solution: |
+  import bisect
+
+
+  def chemins(grille):
+      if not grille or grille[0][0] == "#" or grille[-1][-1] == "#":
+          return 0
+      largeur = len(grille[0])
+      ligne = [0] * largeur
+      ligne[0] = 1
+      for rangee in grille:
+          for c in range(largeur):
+              if rangee[c] == "#":
+                  ligne[c] = 0
+              elif c > 0:
+                  ligne[c] += ligne[c - 1]
+      return ligne[-1]
+
+
+  def pic_de_trafic(mesures):
+      meilleur = (mesures[0], 0, 0)
+      courant, debut = 0, 0
+      for i, v in enumerate(mesures):
+          if courant < 0:
+              courant, debut = v, i
+          else:
+              courant += v
+          if courant > meilleur[0]:
+              meilleur = (courant, debut, i)
+      return meilleur
+
+
+  def plus_longue_croissante(valeurs):
+      fins = []          # fins[k] = plus petite fin d'une sous-suite de longueur k + 1
+      for v in valeurs:
+          k = bisect.bisect_left(fins, v)
+          if k == len(fins):
+              fins.append(v)
+          else:
+              fins[k] = v
+      return len(fins)
+cours: |
+  ## L'idée
+
+  La **programmation dynamique** s'applique quand un problème se décompose en
+  sous-problèmes qui **se répètent**. Au lieu de les recalculer (récursion naïve,
+  exponentielle), on stocke leurs résultats et on construit la réponse de proche en proche.
+  Deux styles : **descendant** (récursion + mémoïsation, `functools.cache`) ou **ascendant**
+  (on remplit un tableau dans le bon ordre, sans récursion).
+
+  La démarche :
+
+  1. définir l'**état** : que représente `dp[i]` ou `dp[l][c]` ?
+  2. écrire la **relation de récurrence** entre un état et des états plus petits ;
+  3. fixer les **cas de base** ;
+  4. choisir un **ordre** de calcul où les dépendances sont déjà prêtes.
+
+  ## Compter des chemins
+
+  Le nombre de façons d'atteindre une case est la somme des façons d'atteindre la case du
+  dessus et celle de gauche ; un obstacle vaut 0. Comme chaque ligne ne dépend que de la
+  précédente, une seule liste suffit : la mémoire passe de O(l × c) à O(c). Python gère les
+  grands entiers nativement, inutile de craindre le dépassement.
+
+  ## Kadane : la meilleure fin à chaque position
+
+  État : la meilleure somme d'un sous-tableau **qui se termine** en `i`. Soit on prolonge le
+  précédent, soit on repart de zéro à `i` (si ce qu'on traîne est négatif, il ne fait
+  que nuire). La réponse est le maximum de ces valeurs, en un seul passage. Le piège classique :
+  initialiser le maximum à 0 donne un résultat faux quand toutes les valeurs sont négatives.
+
+  ## Plus longue sous-suite croissante
+
+  La version simple est en O(n²) : `dp[i] = 1 + max(dp[j])` pour `j < i` et `t[j] < t[i]`.
+  La version rapide garde, pour chaque longueur, la **plus petite valeur finale** possible :
+  cette liste reste triée, ce qui permet de placer chaque nouvel élément par **dichotomie**
+  (`bisect_left` pour une croissance stricte, `bisect_right` pour une croissance large).
+  Attention : cette liste n'est pas elle-même une sous-suite valide, seule sa longueur compte.
+
+  ## Reconnaître un problème de DP
+
+  Mots-clés : « nombre de façons », « minimum / maximum de… », « est-il possible de… », sur
+  des préfixes, des intervalles ou des grilles. Rendu de monnaie, sac à dos, distance
+  d'édition et plus longue sous-séquence commune sont de la même famille.
+docs:
+  - title: Module bisect
+    url: https://docs.python.org/fr/3/library/bisect.html
+  - title: functools.cache
+    url: https://docs.python.org/fr/3/library/functools.html

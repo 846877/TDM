@@ -1,0 +1,113 @@
+title: "Ticket : impossible d'ouvrir une session SSH"
+level: intermediaire
+order: 28
+device: switch
+hostname: SW-ETAGE3
+tags: [dépannage, ssh, vty, sécurité]
+summary: Trouver pourquoi le switch refuse les connexions SSH et corriger.
+description: |
+  **Ticket n° 4318** — « Putty affiche *Connection refused* sur `SW-ETAGE3`. Telnet marche, mais
+  la politique de sécurité l'interdit. »
+
+  Le compte `admin` existe déjà. Examine `show ip ssh`, `show running-config | section line vty`
+  et `show crypto key mypubkey rsa`, puis corrige :
+
+  - domaine `entreprise.local` (indispensable pour générer les clés) ;
+  - clés RSA de **2048** bits ;
+  - SSH **version 2** uniquement ;
+  - délai de négociation `60` s et `3` tentatives d'authentification ;
+  - lignes VTY 0 à 15 : authentification par les **comptes locaux** et **SSH seulement**.
+initial: |
+  username admin privilege 15 secret Adm1n#Et3
+  ip ssh version 1
+  line vty 0 4
+  password cisco
+  login
+  transport input telnet
+checks:
+  - desc: Domaine entreprise.local et clés RSA de 2048 bits
+    expr: d.domain_name == "entreprise.local" and (d.rsa_modulus or 0) >= 2048
+    hint: "% Please define a domain-name first : ip domain-name avant crypto key generate"
+  - desc: SSH version 2
+    expr: d.ssh_version == 2
+  - desc: Délai de 60 s et 3 tentatives
+    expr: d.ssh_timeout == 60 and d.ssh_retries == 3
+  - desc: VTY en login local et SSH seulement
+    expr: line("vty").login == "local" and line("vty").transport_input == "ssh"
+solution: |
+  configure terminal
+  ip domain-name entreprise.local
+  crypto key generate rsa general-keys modulus 2048
+  ip ssh version 2
+  ip ssh time-out 60
+  ip ssh authentication-retries 3
+  line vty 0 15
+  login local
+  transport input ssh
+  end
+cours: |
+  ## Ce qu'il faut pour qu'un équipement Cisco accepte SSH
+
+  SSH n'est pas activé par une commande unique : il **démarre tout seul** dès qu'une paire de clés
+  RSA existe. La chaîne complète :
+
+  1. un **hostname** autre que le nom par défaut (`Switch`, `Router`) ;
+  2. un **nom de domaine** (`ip domain-name`) — les deux forment le nom des clés ;
+  3. des **clés RSA** (`crypto key generate rsa`) ; ≥ 768 bits pour SSHv2, 2048 recommandés ;
+  4. un moyen d'authentifier : comptes locaux (`username ... secret`) ou AAA ;
+  5. des lignes VTY qui **acceptent** SSH (`transport input ssh`) et utilisent ces comptes
+     (`login local`).
+
+  Si un seul maillon manque, le client reçoit *Connection refused* ou la session se ferme
+  aussitôt.
+
+  ### Diagnostic
+
+  ```
+  SW1# show ip ssh
+  SSH Disabled - version 1.99
+  %Please create RSA keys to enable SSH (and of atleast 768 bits for SSH v2).
+  Authentication timeout: 120 secs; Authentication retries: 3
+  SW1# show crypto key mypubkey rsa
+  SW1# show running-config | section line vty
+  line vty 0 4
+   password 7 0822455D0A16
+   login
+   transport input telnet
+  ```
+
+  Lecture : pas de clés → SSH désactivé ; `login` (sans `local`) → mot de passe de ligne et non
+  compte nominatif ; `transport input telnet` → SSH refusé par la ligne.
+
+  ### Correction type (autres valeurs)
+
+  ```
+  SW1(config)# ip domain-name labo.example
+  SW1(config)# crypto key generate rsa general-keys modulus 4096
+  SW1(config)# ip ssh version 2
+  SW1(config)# ip ssh time-out 90
+  SW1(config)# ip ssh authentication-retries 2
+  SW1(config)# line vty 0 15
+  SW1(config-line)# login local
+  SW1(config-line)# transport input ssh
+  ```
+
+  `line vty 0 15` couvre les 16 lignes : configurer seulement `0 4` laisse les lignes 5 à 15 avec
+  leurs anciens réglages.
+
+  ### Pièges fréquents
+
+  - Générer les clés **avant** de définir le domaine : la commande est refusée.
+  - Changer le hostname après coup : les clés gardent l'ancien nom (à régénérer proprement).
+  - `login local` sans aucun compte local : plus personne ne peut se connecter.
+  - Garder `transport input all` : Telnet reste ouvert.
+
+  ### Pour le CCNA
+
+  La configuration complète de SSH et son dépannage font partie des incontournables du domaine
+  « sécurité ».
+docs:
+  - title: Wikipédia — Secure Shell
+    url: https://fr.wikipedia.org/wiki/Secure_Shell
+  - title: RFC 4253 — SSH Transport Layer Protocol
+    url: https://www.rfc-editor.org/rfc/rfc4253

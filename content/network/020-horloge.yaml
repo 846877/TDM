@@ -1,0 +1,99 @@
+title: Fuseau horaire, heure d'été et horodatage
+level: debutant
+order: 20
+device: router
+hostname: R-PARIS
+tags: [clock, heure d'été, timestamps, journaux]
+summary: Des journaux à l'heure locale, été comme hiver.
+description: |
+  Les journaux de `R-PARIS` sont horodatés en UTC : en juillet, un incident de 14 h apparaît à
+  12 h. Règle l'heure locale française :
+
+  1. fuseau horaire : `clock timezone CET 1` ;
+  2. heure d'été européenne (dernier dimanche de mars à 2 h → dernier dimanche d'octobre à 3 h) :
+     `clock summer-time CEST recurring last Sun Mar 2:00 last Sun Oct 3:00` ;
+  3. horodatage des messages **et** des débogages en heure locale, à la milliseconde, avec le
+     fuseau affiché :
+     `service timestamps log datetime msec localtime show-timezone`
+     (et la même chose avec `debug`).
+
+  Contrôle avec `show clock` et `show running-config | include clock|timestamps`.
+checks:
+  - desc: Fuseau horaire CET +1
+    expr: d.clock_timezone == ("CET", 1)
+  - desc: Heure d'été CEST selon la règle européenne
+    expr: (d.clock_summer_time or "").startswith("CEST recurring last Sun Mar")
+    hint: "clock summer-time CEST recurring last Sun Mar 2:00 last Sun Oct 3:00"
+  - desc: Journaux horodatés en heure locale avec millisecondes et fuseau
+    expr: all(w in d.service_timestamps["log"] for w in ("localtime", "msec", "show-timezone"))
+    hint: "service timestamps log datetime msec localtime show-timezone"
+  - desc: Débogages horodatés en heure locale
+    expr: '"localtime" in d.service_timestamps["debug"]'
+    hint: "service timestamps debug datetime msec localtime show-timezone"
+solution: |
+  configure terminal
+  clock timezone CET 1
+  clock summer-time CEST recurring last Sun Mar 2:00 last Sun Oct 3:00
+  service timestamps log datetime msec localtime show-timezone
+  service timestamps debug datetime msec localtime show-timezone
+  end
+cours: |
+  ## Pourquoi l'heure compte autant
+
+  Lors d'un incident, on compare les journaux du pare-feu, des switchs, des serveurs. Si chaque
+  équipement a sa propre idée de l'heure, impossible de reconstituer la chronologie. Deux
+  éléments sont nécessaires :
+
+  1. une heure **exacte** : synchronisation NTP (niveau intermédiaire) ;
+  2. une heure **lisible** : fuseau horaire, heure d'été et format d'horodatage.
+
+  ### Fuseau et heure d'été
+
+  ```
+  R1(config)# clock timezone EST -5
+  R1(config)# clock summer-time EDT recurring 2 Sun Mar 2:00 1 Sun Nov 2:00
+  ```
+
+  - `clock timezone <nom> <décalage>` : le nom est libre, seul le décalage compte ;
+  - `clock summer-time <nom> recurring` sans argument applique la règle **américaine** ;
+    pour l'Europe, il faut préciser `last Sun Mar 2:00 last Sun Oct 3:00` ;
+  - `clock summer-time <nom> date ...` sert pour une année précise.
+
+  L'horloge interne d'IOS reste en UTC : le fuseau ne change que l'**affichage**.
+
+  ### Horodatage des messages
+
+  ```
+  R1(config)# service timestamps log datetime msec localtime show-timezone
+  R1(config)# service timestamps debug datetime msec localtime show-timezone
+  *Jul 14 14:02:11.523 CEST: %LINK-3-UPDOWN: Interface GigabitEthernet0/1, changed state to down
+  ```
+
+  | Option          | Effet                                         |
+  |-----------------|-----------------------------------------------|
+  | `uptime`        | temps depuis le démarrage (illisible)         |
+  | `datetime`      | date et heure                                 |
+  | `msec`          | millisecondes, pour ordonner des événements rapprochés |
+  | `localtime`     | heure locale au lieu d'UTC                    |
+  | `show-timezone` | affiche le nom du fuseau (CET/CEST)           |
+  | `year`          | ajoute l'année                                |
+
+  ### Pièges fréquents
+
+  - Un astérisque devant l'heure (`*Jul 14...`) signifie que l'horloge **n'est pas synchronisée** :
+    l'heure n'est pas fiable.
+  - Mélanger des équipements en UTC et d'autres en heure locale dans le même serveur syslog.
+    Beaucoup d'entreprises gardent volontairement **UTC partout** : c'est un choix, mais il doit
+    être le même pour tous.
+  - Régler l'heure à la main (`clock set`) sur un routeur : elle dérive et se perd au redémarrage
+    sur la plupart des modèles.
+
+  ### Pour le CCNA
+
+  Savoir lire et configurer `service timestamps` et `clock timezone`, et faire le lien avec NTP et
+  syslog dans la gestion des équipements.
+docs:
+  - title: Wikipédia — Heure d'été
+    url: https://fr.wikipedia.org/wiki/Heure_d%27%C3%A9t%C3%A9
+  - title: Wikipédia — Network Time Protocol
+    url: https://fr.wikipedia.org/wiki/Network_Time_Protocol

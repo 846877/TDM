@@ -1,0 +1,11 @@
+[Unit]
+Description=Génération périodique du rapport TDM
+After=network.target
+
+[Service]
+Type=simple
+User=rapport
+ExecStart=/usr/bin/pyhton3 /opt/rapport/rapport.py
+
+[Install]
+WantedBy=multi-user.target

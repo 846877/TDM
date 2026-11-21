@@ -1,0 +1,17 @@
+#!/bin/sh
+# tdm-envoyer-span [SERVICE] [URL] : envoie un span de test au format OTLP/HTTP JSON.
+# Par défaut : service « tdm-test », vers le collecteur (http://localhost:4318/v1/traces).
+service="${1:-tdm-test}"
+url="${2:-http://localhost:4318/v1/traces}"
+trace_id=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+span_id=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
+debut=$(date +%s%N)
+fin=$((debut + 25000000))
+cat > /tmp/span-test.json <<EOF
+{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"$service"}}]},
+ "scopeSpans":[{"scope":{"name":"tdm-envoyer-span"},"spans":[{"traceId":"$trace_id","spanId":"$span_id",
+ "name":"span-de-test","kind":1,"startTimeUnixNano":"$debut","endTimeUnixNano":"$fin"}]}]}]}
+EOF
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data @/tmp/span-test.json "$url")
+echo "trace $trace_id envoyée à $url (HTTP $code)"
+test "$code" = 200

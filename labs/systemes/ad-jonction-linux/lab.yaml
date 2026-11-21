@@ -1,0 +1,394 @@
+title: Joindre des serveurs et postes Linux au domaine
+level: avance
+order: 2
+tags: [active directory, samba, winbind, sssd, adcli, kerberos, smb, partage, sso]
+summary: Joindre un serveur de fichiers Samba (winbind) et un poste Linux (SSSD) au domaine, partages SMB par groupe AD, contrôle d'accès et authentification unique Kerberos.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Le domaine `DURAND.LAN` est en service sur `dc1`. Il faut maintenant y raccorder le
+  **serveur de fichiers** (les droits des partages seront donnés aux groupes AD) et un **poste Linux** du
+  service informatique (ouverture de session avec les comptes du domaine).
+
+  **Machines** (réseau `10.61.0.0/24`, DNS = 10.61.0.10 pour toutes ; `ssh <machine>` en root par clé) :
+
+  | Machine        | Adresse    | Rôle                                                       |
+  |----------------|------------|------------------------------------------------------------|
+  | `admin`        | 10.61.0.5  | ton poste (`kinit`, `smbclient`, `sshpass`)                 |
+  | `dc1`          | 10.61.0.10 | contrôleur de domaine Samba AD (déjà configuré)             |
+  | `srv-fichiers` | 10.61.0.20 | serveur de fichiers : Samba + winbind installés, non configurés |
+  | `poste01`      | 10.61.0.30 | poste Linux : SSSD + adcli installés, non configurés        |
+
+  **Annuaire** (domaine NetBIOS `DURAND`, Administrator / `Durand@dmin2024`) :
+
+  | Compte     | Mot de passe      | Groupe            |
+  |------------|-------------------|-------------------|
+  | `mdupont`  | `Compta!2024pass` | `GG_Compta`       |
+  | `jmartin`  | `RhDurand!2024`   | `GG_RH`           |
+  | `tbernard` | `Technicien!2024` | `GG_Informatique` |
+
+  OU disponibles : `OU=Serveurs,OU=Durand` et `OU=Ordinateurs,OU=Durand`.
+  Au premier démarrage, dc1 provisionne le domaine (environ une minute) : `ssh dc1 test -f /run/lab-pret`
+  indique qu'il est prêt.
+
+  Démarrage des services sans systemd : `winbindd`, `smbd` (après modification : `smbcontrol all reload-config`),
+  `sssd -D` (après modification : `pkill sssd; sssd -D`).
+cours: |
+  ## Joindre Linux à Active Directory
+
+  Un serveur ou un poste Linux joint au domaine utilise les comptes AD : un seul mot de passe pour
+  l'utilisateur, une gestion centralisée pour le technicien. Deux outils dominent :
+
+  | Outil              | Pour quoi                                                  | Jonction        |
+  |--------------------|------------------------------------------------------------|-----------------|
+  | **winbind** (Samba)| serveurs de fichiers SMB (droits par groupes AD, ACL Windows) | `net ads join` |
+  | **SSSD**           | postes et serveurs sans partage SMB : connexion, sudo, cache hors ligne | `adcli join` / `realm join` |
+
+  ## Ce que fait une jonction
+
+  ```
+  1. DNS          srv-fichiers trouve les DC (SRV _ldap._tcp.durand.lan)
+  2. Kerberos     authentification de l'administrateur (kinit / -U)
+  3. Compte machine créé dans l'OU choisie (CN=SRV-FICHIERS,OU=Serveurs,...)
+  4. Secret       mot de passe machine stocké localement (secrets.tdb ou /etc/krb5.keytab)
+  5. NSS / PAM    Linux apprend à résoudre et authentifier les comptes du domaine
+  ```
+
+  ## Des SID aux UID : l'idmap
+
+  Windows identifie les comptes par des **SID** (`S-1-5-21-...-1105`), Linux par des **UID/GID**. Il faut
+  une correspondance **stable** et, idéalement, **identique sur tous les serveurs** :
+
+  | Backend idmap | Principe                                               | Usage                        |
+  |---------------|--------------------------------------------------------|------------------------------|
+  | `tdb`         | attribution au fil de l'eau, locale à la machine        | domaine `*` (comptes intégrés) |
+  | `rid`         | UID = début de plage + RID (fin du SID) : calculé, identique partout | cas le plus courant |
+  | `ad`          | lit `uidNumber`/`gidNumber` (RFC 2307) dans l'annuaire  | quand l'annuaire les gère    |
+
+  ```ini
+  [global]
+     workgroup = DURAND
+     realm = DURAND.LAN
+     security = ADS
+     idmap config * : backend = tdb
+     idmap config * : range = 3000-7999
+     idmap config DURAND : backend = rid
+     idmap config DURAND : range = 10000-999999
+  ```
+
+  Les plages ne doivent **jamais** se chevaucher, ni avec les comptes locaux.
+
+  ## NSS et PAM
+
+  - **NSS** (`/etc/nsswitch.conf`) : *qui* existe. La ligne `passwd: files winbind` (ou `sss`) fait
+    apparaître les comptes du domaine dans `getent passwd`, `id`, `ls -l`.
+  - **PAM** (`/etc/pam.d/`, géré par `pam-auth-update` sur Ubuntu) : *comment* on s'authentifie et ce qu'on
+    fait à l'ouverture de session (création du dossier personnel avec `mkhomedir`).
+
+  ## SSSD
+
+  ```ini
+  # /etc/sssd/sssd.conf  (propriétaire root, droits 600, sinon sssd refuse de démarrer)
+  [sssd]
+  domains = durand.lan
+  services = nss, pam
+  [domain/durand.lan]
+  id_provider = ad
+  access_provider = simple
+  simple_allow_groups = gg_informatique
+  use_fully_qualified_names = False
+  fallback_homedir = /home/%u
+  default_shell = /bin/bash
+  ```
+
+  SSSD garde un **cache** : un portable peut ouvrir une session hors du réseau de l'entreprise. Après une
+  modification dans l'annuaire, `sss_cache -E` vide ce cache.
+
+  ## Mémo des commandes
+
+  | Besoin                         | Commande                                       |
+  |--------------------------------|------------------------------------------------|
+  | Tester le DNS du domaine       | `host -t SRV _ldap._tcp.durand.lan`            |
+  | Ticket Kerberos                | `kinit administrator`, `klist`                 |
+  | Joindre (winbind)              | `net ads join -U administrator createcomputer=Durand/Serveurs` |
+  | Tester la jonction             | `net ads testjoin`, `wbinfo -t`                |
+  | Lister comptes / groupes AD    | `wbinfo -u`, `wbinfo -g`                       |
+  | Joindre (SSSD)                 | `adcli join --domain=durand.lan --domain-ou=...` |
+  | Clés de la machine             | `klist -k /etc/krb5.keytab`                    |
+  | Identité d'un compte           | `id tbernard`, `getent passwd mdupont`         |
+
+  ## Droits sur un partage : deux niveaux
+
+  ```
+  accès SMB  ──▶ niveau partage : valid users = @gg_compta, read only = no
+             ──▶ niveau fichiers : dossier root:gg_compta 2770 (ou ACL)
+  ```
+
+  Les deux doivent autoriser l'utilisateur ; le plus restrictif l'emporte, comme les autorisations de
+  partage et NTFS sous Windows.
+
+  ## Pièges courants
+
+  - DNS du serveur qui ne pointe pas vers les DC : la jonction échoue avec des erreurs obscures.
+  - Horloge décalée de plus de 5 minutes : Kerberos refuse (« Clock skew too great »).
+  - Nom d'hôte trop long (plus de 15 caractères pour NetBIOS) ou non résolu.
+  - Changer de backend idmap après coup : tous les fichiers changent de propriétaire apparent.
+
+  ## Bonnes pratiques en entreprise
+
+  - Comptes ordinateurs créés dans les bonnes OU (serveurs, postes) pour les GPO et la délégation.
+  - Accès aux serveurs limité par groupe AD (`simple_allow_groups`, `AllowGroups` dans sshd).
+  - Droits sudo donnés à des groupes AD (`%gg_informatique ALL=(ALL) ALL`).
+  - Supervision du canal sécurisé (`net ads testjoin`) et de la synchronisation horaire.
+docs:
+  - title: Samba Wiki - Samba comme membre de domaine
+    url: https://wiki.samba.org/index.php/Setting_up_Samba_as_a_Domain_Member
+  - title: sssd-ad(5) - fournisseur Active Directory de SSSD (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/sssd-ad.5.html
+  - title: smb.conf(5) - configuration de Samba (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/smb.conf.5.html
+  - title: Ubuntu Server - documentation officielle
+    url: https://ubuntu.com/server/docs
+exercises:
+  - id: kerberos-membre
+    title: Préparer srv-fichiers - DNS et Kerberos
+    cours: |
+      Avant toute jonction, deux prérequis : le **DNS** du domaine (le serveur doit trouver les contrôleurs par
+      leurs enregistrements SRV) et **Kerberos** (qui authentifiera l'administrateur et la machine).
+
+      - `host -t SRV _ldap._tcp.<domaine>` ou `dig SRV ...` teste le DNS ;
+      - `/etc/krb5.conf` contient une section `[libdefaults]` avec `default_realm` (en majuscules) et
+        `dns_lookup_kdc = true` pour trouver les KDC par le DNS ;
+      - `kinit <compte>` obtient un ticket, `klist` l'affiche.
+
+      Si `kinit` échoue, vérifie dans l'ordre : résolution DNS, heure, nom du royaume.
+    description: |
+      Sur **srv-fichiers** :
+      1. vérifie que le DNS du domaine répond (`host -t SRV _ldap._tcp.durand.lan`) ;
+      2. écris `/etc/krb5.conf` avec `default_realm = DURAND.LAN`, `dns_lookup_kdc = true` ;
+      3. obtiens un ticket pour `administrator` avec `kinit` et affiche-le (`klist`).
+    hint: "printf '[libdefaults]\\n default_realm = DURAND.LAN\\n dns_lookup_kdc = true\\n dns_lookup_realm = false\\n' > /etc/krb5.conf ; kinit administrator"
+    checks:
+      - desc: krb5.conf de srv-fichiers définit le royaume DURAND.LAN
+        run: ssh srv-fichiers "grep -Eq '^\s*default_realm\s*=\s*DURAND\.LAN' /etc/krb5.conf"
+      - desc: srv-fichiers obtient un ticket Kerberos
+        run: ssh srv-fichiers "echo 'Durand@dmin2024' | KRB5CCNAME=FILE:/tmp/krb5cc_verif kinit administrator@DURAND.LAN >/dev/null 2>&1 && KRB5CCNAME=FILE:/tmp/krb5cc_verif klist | grep -q krbtgt/DURAND.LAN"
+
+  - id: jonction-winbind
+    title: Joindre srv-fichiers au domaine (winbind)
+    cours: |
+      Dans `smb.conf`, `security = ADS` fait de Samba un **membre** de domaine Active Directory ; `workgroup`
+      est le nom NetBIOS et `realm` le royaume Kerberos. Les lignes `idmap config` décident comment les SID
+      deviennent des UID/GID (ici calculés à partir du RID pour le domaine DURAND).
+
+      `net ads join` crée le compte ordinateur ; le paramètre `createcomputer=` choisit l'OU, écrite comme un
+      chemin (`Parent/Enfant`). `net ads testjoin` vérifie que le secret machine est valide. Le démon
+      `winbindd` fait ensuite le lien permanent avec les contrôleurs.
+    description: |
+      Écris `/etc/samba/smb.conf` pour un **serveur membre** :
+
+      ```ini
+      [global]
+         workgroup = DURAND
+         realm = DURAND.LAN
+         security = ADS
+         idmap config * : backend = tdb
+         idmap config * : range = 3000-7999
+         idmap config DURAND : backend = rid
+         idmap config DURAND : range = 10000-999999
+         winbind use default domain = yes
+         template shell = /bin/bash
+         template homedir = /home/%U
+      ```
+
+      Joins la machine au domaine **dans l'OU `Serveurs`** (`net ads join -U administrator
+      createcomputer=Durand/Serveurs`), puis démarre `winbindd`. Contrôle : `net ads testjoin`.
+    hint: net ads join -U administrator%'Durand@dmin2024' createcomputer=Durand/Serveurs && winbindd
+    checks:
+      - desc: La jonction est valide
+        run: ssh srv-fichiers 'net ads testjoin 2>&1' | grep -qi 'join is ok'
+      - desc: Le compte ordinateur SRV-FICHIERS est dans OU=Serveurs
+        run: |
+          ssh dc1 'ldbsearch -H /var/lib/samba/private/sam.ldb "(sAMAccountName=SRV-FICHIERS\$)" dn' | grep -qi '^dn: CN=SRV-FICHIERS,OU=Serveurs,OU=Durand,DC=durand,DC=lan'
+      - desc: winbind répond
+        run: ssh srv-fichiers 'wbinfo -p' | grep -qi 'succeeded'
+
+  - id: nss-winbind
+    title: Les comptes du domaine vus par Linux
+    cours: |
+      `/etc/nsswitch.conf` liste, pour chaque base (`passwd`, `group`, `hosts`...), les sources à interroger
+      dans l'ordre. Ajouter `winbind` après `files` permet à Linux de « voir » les comptes du domaine.
+
+      - `wbinfo -u` / `wbinfo -g` interrogent winbind directement (prouve que la jonction marche) ;
+      - `getent passwd <login>` passe par NSS (prouve que le système voit le compte) ;
+      - avec `winbind use default domain = yes`, on écrit `mdupont` au lieu de `DURAND\mdupont`.
+
+      Les noms de groupes AD apparaissent en minuscules côté Linux.
+    description: |
+      Configure `/etc/nsswitch.conf` pour que `passwd` et `group` interrogent aussi **winbind**. Les comptes
+      et groupes du domaine doivent alors apparaître comme des comptes Linux, avec des UID/GID calculés à
+      partir de leur SID (`idmap rid`) : `getent passwd mdupont`, `getent group gg_compta`, `wbinfo -u`.
+    hint: "passwd: files winbind  /  group: files winbind  dans /etc/nsswitch.conf"
+    checks:
+      - desc: wbinfo liste les utilisateurs du domaine
+        run: ssh srv-fichiers 'wbinfo -u' | grep -qix 'mdupont'
+      - desc: getent passwd mdupont renvoie un UID de la plage DURAND
+        run: |
+          uid=$(ssh srv-fichiers 'getent passwd mdupont' | cut -d: -f3)
+          test -n "$uid" && test "$uid" -ge 10000
+      - desc: getent group gg_compta contient mdupont
+        run: ssh srv-fichiers 'getent group gg_compta' | grep -qi 'mdupont'
+
+  - id: partages
+    title: Partages SMB par groupe AD
+    cours: |
+      Un partage Samba est une section `[nom]` de `smb.conf` :
+
+      - `path` : dossier partagé ; `read only = no` : écriture autorisée ;
+      - `valid users = @<groupe>` : seuls les membres du groupe se connectent (le `@` désigne un groupe) ;
+      - `create mask` / `directory mask` : droits des fichiers et dossiers créés par SMB.
+
+      Côté système de fichiers, le dossier doit aussi être accessible au groupe (propriétaire, setgid,
+      droits). `testparm -s` vérifie la configuration ; `smbd` démarre le service et
+      `smbcontrol all reload-config` recharge sans couper les sessions.
+    description: |
+      Sur srv-fichiers, crée deux partages :
+
+      | Partage  | Dossier                 | Accès                          |
+      |----------|-------------------------|--------------------------------|
+      | `compta` | `/srv/partages/compta`  | lecture/écriture pour `GG_Compta` uniquement |
+      | `rh`     | `/srv/partages/rh`      | lecture/écriture pour `GG_RH` uniquement     |
+
+      Applique les droits à **deux niveaux** : sur le partage (`valid users = @gg_compta`) et sur le
+      système de fichiers (dossier `root:gg_compta` en `2770`). Démarre `smbd`.
+    hint: "[compta] path = /srv/partages/compta / read only = no / valid users = @gg_compta / create mask = 0660 / directory mask = 2770"
+    checks:
+      - desc: mdupont écrit dans compta
+        run: |
+          smbclient //srv-fichiers/compta -U 'DURAND\mdupont%Compta!2024pass' -c 'put /etc/hostname verif-mdupont.txt; rm verif-mdupont.txt' >/dev/null 2>&1
+      - desc: jmartin n'accède pas à compta, mais écrit dans rh
+        run: |
+          ! smbclient //srv-fichiers/compta -U 'DURAND\jmartin%RhDurand!2024' -c 'ls' >/dev/null 2>&1 &&
+          smbclient //srv-fichiers/rh -U 'DURAND\jmartin%RhDurand!2024' -c 'put /etc/hostname verif-jmartin.txt; rm verif-jmartin.txt' >/dev/null 2>&1
+      - desc: Droits Unix des dossiers
+        run: test "$(ssh srv-fichiers stat -c %a:%G /srv/partages/compta)" = 2770:gg_compta && test "$(ssh srv-fichiers stat -c %a:%G /srv/partages/rh)" = 2770:gg_rh
+
+  - id: abe
+    title: Masquer les partages inaccessibles
+    cours: |
+      Sans réglage, la liste des partages (`smbclient -L`, l'explorateur Windows) montre **tous** les
+      partages à tout le monde. L'**énumération basée sur l'accès** (Access-Based Enumeration, ABE) masque
+      ceux auxquels l'utilisateur n'a pas accès.
+
+      Dans Samba, l'option `access based share enum = yes` se place dans la section de chaque partage
+      concerné. Elle s'appuie sur les droits du partage (`valid users`...).
+
+      Windows Server propose la même option dans les propriétés du partage (et `hide unreadable` côté Samba
+      masque les fichiers illisibles à l'intérieur d'un partage).
+    description: |
+      Les utilisateurs voient tous les partages dans l'explorateur, même ceux qui leur sont interdits, et
+      appellent le support. Active l'**énumération basée sur l'accès** (`access based share enum = yes`)
+      sur les partages `compta` et `rh` : chacun ne doit plus voir que ses partages.
+    hint: "access based share enum = yes dans chaque section de partage, puis smbcontrol all reload-config"
+    checks:
+      - desc: mdupont voit compta mais pas rh
+        run: |
+          smbclient -L //srv-fichiers -U 'DURAND\mdupont%Compta!2024pass' 2>/dev/null > /tmp/liste.txt
+          grep -Eq '^\s+compta\s+Disk' /tmp/liste.txt && ! grep -Eq '^\s+rh\s+Disk' /tmp/liste.txt
+
+  - id: jonction-sssd
+    title: Joindre le poste Linux (adcli et SSSD)
+    cours: |
+      `adcli` joint une machine sans Samba : il crée le compte ordinateur dans l'OU indiquée (`--domain-ou`,
+      DN complet) et écrit les clés de la machine dans `/etc/krb5.keytab` (`klist -k` les affiche).
+
+      SSSD lit `/etc/sssd/sssd.conf` : une section `[sssd]` (domaines servis) et une section
+      `[domain/<nom>]` avec `id_provider = ad`. Le fichier doit appartenir à root avec les droits `600`,
+      sinon SSSD refuse de démarrer.
+
+      `use_fully_qualified_names = False` permet `tbernard` au lieu de `tbernard@durand.lan`. Le
+      `/etc/nsswitch.conf` d'Ubuntu contient déjà `sss` pour `passwd` et `group`.
+    description: |
+      Sur **poste01** :
+      1. écris `/etc/krb5.conf` (comme sur srv-fichiers) ;
+      2. joins le poste au domaine dans `OU=Ordinateurs,OU=Durand` avec `adcli join` (il crée le compte
+         ordinateur et le fichier `/etc/krb5.keytab`) ;
+      3. écris `/etc/sssd/sssd.conf` (droits `600`) pour le domaine `durand.lan` avec
+         `id_provider = ad`, `use_fully_qualified_names = False`, `fallback_homedir = /home/%u`,
+         `default_shell = /bin/bash`, puis démarre `sssd -D`.
+
+      `id tbernard` doit afficher ses groupes du domaine.
+    hint: "adcli join --domain=durand.lan --host-fqdn=poste01.durand.lan --domain-ou='OU=Ordinateurs,OU=Durand,DC=durand,DC=lan' -U administrator  ;  [sssd] domains = durand.lan  /  [domain/durand.lan] id_provider = ad ..."
+    checks:
+      - desc: Le compte ordinateur POSTE01 est dans OU=Ordinateurs
+        run: |
+          ssh dc1 'ldbsearch -H /var/lib/samba/private/sam.ldb "(sAMAccountName=POSTE01\$)" dn' | grep -qi '^dn: CN=POSTE01,OU=Ordinateurs,OU=Durand,DC=durand,DC=lan'
+      - desc: Le keytab du poste existe
+        run: ssh poste01 'klist -k /etc/krb5.keytab' | grep -qi 'host/poste01'
+      - desc: id tbernard affiche le groupe gg_informatique
+        run: ssh poste01 'id tbernard' | grep -qi 'gg_informatique'
+
+  - id: acces-poste
+    title: Ouverture de session et contrôle d'accès
+    cours: |
+      Par défaut, tout compte du domaine peut ouvrir une session sur une machine jointe. SSSD propose des
+      **fournisseurs d'accès** :
+
+      - `access_provider = simple` avec `simple_allow_groups` / `simple_allow_users` : liste blanche ;
+      - `access_provider = ad` : applique aussi les GPO de droits de connexion.
+
+      Le dossier personnel n'existe pas à la première connexion d'un compte du domaine : le module PAM
+      `pam_mkhomedir`, activé par `pam-auth-update --enable mkhomedir`, le crée depuis `/etc/skel`.
+      Après modification de `sssd.conf`, redémarre SSSD.
+
+      En cas de refus, le journal d'authentification (`/var/log/auth.log`) indique quelle étape a échoué : SSSD, PAM ou la règle d'accès elle-même.
+    description: |
+      Sur poste01 :
+      1. seuls les membres de `GG_Informatique` peuvent ouvrir une session : `access_provider = simple` et
+         `simple_allow_groups = gg_informatique` dans `sssd.conf` ;
+      2. le dossier personnel est créé à la première connexion :
+         `pam-auth-update --enable mkhomedir`.
+
+      Depuis admin, `ssh tbernard@poste01` (mot de passe du domaine) doit fonctionner, mais pas
+      `ssh mdupont@poste01`.
+    hint: "access_provider = simple / simple_allow_groups = gg_informatique ; pam-auth-update --enable mkhomedir ; pkill sssd; sssd -D"
+    checks:
+      - desc: tbernard ouvre une session SSH avec son mot de passe du domaine
+        run: test "$(sshpass -p 'Technicien!2024' ssh -o PubkeyAuthentication=no -o StrictHostKeyChecking=no tbernard@poste01 id -un 2>/dev/null)" = tbernard
+      - desc: Son dossier personnel a été créé
+        run: ssh poste01 'test -d /home/tbernard'
+      - desc: mdupont est refusée
+        run: |
+          ssh poste01 'grep -Eq "^\s*simple_allow_groups" /etc/sssd/sssd.conf' &&
+          ! sshpass -p 'Compta!2024pass' ssh -o PubkeyAuthentication=no -o StrictHostKeyChecking=no mdupont@poste01 true 2>/dev/null
+
+  - id: sso-kerberos
+    title: Authentification unique (SSO) Kerberos
+    cours: |
+      Avec **GSSAPI**, SSH présente un ticket Kerberos au lieu d'un mot de passe : c'est l'authentification
+      unique (SSO) qu'on connaît sous Windows.
+
+      - côté serveur : `GSSAPIAuthentication yes` dans la configuration de sshd ; le serveur vérifie le ticket
+        avec les clés de `/etc/krb5.keytab` (créé par la jonction) ;
+      - côté client : un TGT (`kinit`), l'option `GSSAPIAuthentication=yes`, et le **nom DNS complet** du
+        serveur (le ticket est demandé pour `host/<fqdn>`).
+
+      `klist` montre ensuite le ticket de service obtenu. Toujours `sshd -t` avant de recharger.
+    description: |
+      Dernière étape : depuis admin, un technicien qui a un ticket Kerberos doit se connecter à poste01
+      **sans retaper son mot de passe** (GSSAPI).
+      1. Sur poste01, active `GSSAPIAuthentication yes` (et `GSSAPIStrictAcceptorCheck no`, le nom court
+         du conteneur différant de son nom DNS) dans la configuration de sshd, teste-la (`sshd -t`) et
+         recharge-la (`kill -HUP $(cat /run/sshd.pid)`).
+      2. Sur admin : `kinit tbernard` puis `ssh -o GSSAPIAuthentication=yes tbernard@poste01.durand.lan`.
+
+      Le ticket de service `host/poste01.durand.lan` apparaît ensuite dans `klist`.
+    hint: "printf 'GSSAPIAuthentication yes\\nGSSAPIStrictAcceptorCheck no\\n' > /etc/ssh/sshd_config.d/gssapi.conf && sshd -t && kill -HUP $(cat /run/sshd.pid)"
+    checks:
+      - desc: Connexion par ticket Kerberos, sans mot de passe
+        run: |
+          export KRB5CCNAME=FILE:/tmp/krb5cc_sso
+          echo 'Technicien!2024' | kinit tbernard@DURAND.LAN >/dev/null 2>&1 || exit 1
+          test "$(ssh -o GSSAPIAuthentication=yes -o PreferredAuthentications=gssapi-with-mic -o PubkeyAuthentication=no -o BatchMode=yes tbernard@poste01.durand.lan id -un 2>/dev/null)" = tbernard

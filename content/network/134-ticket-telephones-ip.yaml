@@ -1,0 +1,109 @@
+title: "Ticket : les téléphones IP ne s'enregistrent pas"
+level: intermediaire
+order: 34
+device: switch
+hostname: SW-PLATEAU
+tags: [dépannage, voix, voice vlan, portfast]
+summary: Corriger des ports configurés en trunk à la place d'un VLAN voix.
+description: |
+  **Ticket n° 4456** — « Sur le plateau, les téléphones des bureaux 1 à 8 restent bloqués sur
+  *Configuring IP* ; les PC branchés derrière fonctionnent mal. »
+
+  Un technicien a configuré `Fa0/1` à `Fa0/8` en trunk « pour faire passer la voix ». Le standard
+  attend la configuration habituelle des postes téléphoniques.
+
+  Corrige :
+
+  - VLAN `150` nommé `VOIX` (il n'existe pas encore) ;
+  - `Fa0/1` à `Fa0/8` : ports **d'accès** dans le VLAN de données `10` ;
+  - VLAN voix `150` sur ces ports ;
+  - PortFast sur ces ports.
+initial: |
+  vlan 10
+  name DATA
+  interface range fa0/1 - 8
+  switchport mode trunk
+  switchport trunk native vlan 10
+checks:
+  - desc: VLAN 150 nommé VOIX
+    expr: vlan(150) == "VOIX"
+  - desc: Fa0/1-8 en accès dans le VLAN 10
+    expr: all(i.mode == "access" and i.access_vlan == 10 for i in ports("fa0/1-8"))
+  - desc: VLAN voix 150 sur Fa0/1-8
+    expr: all(i.voice_vlan == 150 for i in ports("fa0/1-8"))
+  - desc: PortFast sur Fa0/1-8
+    expr: all(i.portfast for i in ports("fa0/1-8"))
+solution: |
+  configure terminal
+  vlan 150
+  name VOIX
+  exit
+  interface range fa0/1 - 8
+  no switchport trunk native vlan 10
+  switchport mode access
+  switchport access vlan 10
+  switchport voice vlan 150
+  spanning-tree portfast
+  end
+cours: |
+  ## Un téléphone, un PC, un seul câble
+
+  Le PC est branché sur le petit switch intégré au téléphone IP. Sur le câble entre le switch et
+  le téléphone circulent donc deux trafics :
+
+  - les **données** du PC, **sans étiquette**, dans le VLAN d'accès ;
+  - la **voix** du téléphone, **étiquetée 802.1Q** avec le VLAN voix (et une priorité CoS 5).
+
+  Ce n'est pas un trunk : le port reste un **port d'accès** avec une option supplémentaire,
+  `switchport voice vlan`. Le switch annonce le VLAN voix au téléphone par **CDP** (ou LLDP-MED) ;
+  le téléphone étiquette alors sa voix tout seul.
+
+  ### Configuration type (autres valeurs)
+
+  ```
+  SW1(config)# vlan 200
+  SW1(config-vlan)# name TELEPHONIE
+  SW1(config)# interface range gi1/0/1 - 24
+  SW1(config-if-range)# switchport mode access
+  SW1(config-if-range)# switchport access vlan 20
+  SW1(config-if-range)# switchport voice vlan 200
+  SW1(config-if-range)# spanning-tree portfast
+  SW1# show interfaces gi1/0/5 switchport
+  Administrative Mode: static access
+  Access Mode VLAN: 20 (BUREAUX)
+  Voice VLAN: 200 (TELEPHONIE)
+  ```
+
+  ### Pourquoi un trunk pose problème
+
+  - le téléphone ne reçoit pas l'information du VLAN voix par CDP de la même façon et reste
+    souvent dans le VLAN natif ;
+  - le PC derrière reçoit tous les VLAN autorisés : risque de sécurité ;
+  - le port n'est pas un port d'accès : PortFast « simple » ne s'applique pas, et chaque
+    redémarrage coûte ~30 s de spanning tree, pendant lesquelles le téléphone échoue à obtenir son
+    adresse DHCP.
+
+  ### Les autres prérequis de la téléphonie
+
+  - le VLAN voix doit **exister** sur le switch (`show vlan brief`) ;
+  - un pool DHCP pour ce VLAN, souvent avec l'**option 150** (adresse du serveur TFTP du
+    standard) ;
+  - le PoE pour alimenter le téléphone (`show power inline`) ;
+  - la QoS pour donner la priorité à la voix (`mls qos trust device cisco-phone` ou équivalent).
+
+  ### Pièges fréquents
+
+  - Supprimer le trunk mais laisser `switchport trunk native vlan` : sans effet en access, mais
+    trompeur à la lecture ; mieux vaut nettoyer.
+  - VLAN voix non créé : le port l'accepte mais le trafic voix est jeté.
+  - CDP désactivé globalement : les téléphones Cisco n'apprennent plus leur VLAN voix.
+
+  ### Pour le CCNA
+
+  Le VLAN voix (données sans étiquette, voix étiquetée) et sa configuration sont des notions
+  explicitement au programme.
+docs:
+  - title: Wikipédia — Voix sur IP
+    url: https://fr.wikipedia.org/wiki/Voix_sur_IP
+  - title: Cisco Catalyst 2960-X — guides de configuration
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html

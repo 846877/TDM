@@ -1,0 +1,226 @@
+title: Dataclasses avancées
+level: avance
+order: 19
+tags: [dataclasses, POO, validation]
+summary: frozen, field, default_factory et __post_init__ sur un panier de commande.
+description: |
+  Avec le module `dataclasses`, modélise une commande.
+
+  **`Article`** : dataclass **immuable** (`frozen=True`) et **ordonnable** (`order=True`) avec les champs
+  `nom: str`, `prix_unitaire: float` et `quantite: int = 1`.
+
+  - `__post_init__` valide les données : nom vide, prix négatif ou quantité `< 1` → `ValueError` ;
+  - propriété `total` = `prix_unitaire * quantite` arrondi à 2 décimales.
+
+  **`Commande`** : dataclass (modifiable) avec :
+
+  - `client: str` ;
+  - `articles: list` — liste vide par défaut, **propre à chaque commande** (`field(default_factory=...)`) ;
+  - `remise: float = 0.0` — taux entre 0 et 1 (`ValueError` sinon), **absent du `repr`** ;
+  - `numero: int` — **non passé au constructeur** (`init=False`), attribué automatiquement :
+    1, 2, 3… dans l'ordre de création des commandes.
+
+  Méthodes de `Commande` :
+
+  - `ajouter(article)` : si un article de même nom **et** même prix est déjà présent, le remplace par
+    un nouvel article dont la quantité est la somme (indice : `dataclasses.replace`, puisque `Article`
+    est immuable) ; sinon l'ajoute à la fin. Renvoie `self` ;
+  - propriété `total` : somme des totaux des articles, remise appliquée, arrondie à 2 décimales.
+starter: |
+  import itertools
+  from dataclasses import dataclass, field, replace
+
+
+  @dataclass
+  class Article:
+      nom: str
+      prix_unitaire: float
+      quantite: int = 1
+
+
+  @dataclass
+  class Commande:
+      client: str
+tests: |
+  import dataclasses
+
+  A = lambda *a, **k: solution.Article(*a, **k)
+
+  def test_article():
+      "Article : valeurs et total"
+      a = A("stylo", 1.5, 4)
+      assert a.total == 6.0 and A("gomme", 0.8).quantite == 1
+
+  def test_frozen():
+      "Article est immuable et hachable"
+      a = A("stylo", 1.5)
+      try:
+          a.quantite = 3
+      except dataclasses.FrozenInstanceError:
+          pass
+      else:
+          raise AssertionError("un Article frozen ne doit pas être modifiable")
+      assert len({A("x", 1.0), A("x", 1.0)}) == 1
+
+  def test_ordre():
+      "Les articles sont ordonnables (ordre des champs)"
+      r = sorted([A("b", 1.0), A("a", 5.0), A("a", 2.0)])
+      assert [(x.nom, x.prix_unitaire) for x in r] == [("a", 2.0), ("a", 5.0), ("b", 1.0)]
+
+  def test_validation_article():
+      "__post_init__ valide l'article"
+      for args in (("", 1.0), ("x", -1.0), ("x", 1.0, 0)):
+          try:
+              A(*args)
+          except ValueError:
+              continue
+          raise AssertionError(f"Article{args} aurait dû lever ValueError")
+
+  def test_default_factory():
+      "Chaque commande a sa propre liste"
+      c1, c2 = solution.Commande("ana"), solution.Commande("bob")
+      c1.ajouter(A("x", 1.0))
+      assert c2.articles == [], "la liste d'articles est partagée entre commandes !"
+
+  def test_numero():
+      "numero automatique et hors constructeur"
+      champs = {f.name: f for f in dataclasses.fields(solution.Commande)}
+      assert "numero" in champs and champs["numero"].init is False, "numero doit être un field(init=False)"
+      a, b = solution.Commande("a"), solution.Commande("b")
+      assert b.numero == a.numero + 1 and a.numero >= 1
+
+  def test_repr():
+      "La remise n'apparaît pas dans le repr"
+      r = repr(solution.Commande("ana", remise=0.1))
+      assert "ana" in r and "remise" not in r, f"repr : {r}"
+
+  def test_ajouter_fusion():
+      "ajouter fusionne les articles identiques"
+      c = solution.Commande("ana")
+      assert c.ajouter(A("stylo", 1.5, 2)) is c
+      c.ajouter(A("cahier", 3.0)).ajouter(A("stylo", 1.5, 3)).ajouter(A("stylo", 2.0))
+      assert c.articles == [A("stylo", 1.5, 5), A("cahier", 3.0), A("stylo", 2.0)], f"obtenu {c.articles}"
+
+  def test_total():
+      "Total avec remise"
+      c = solution.Commande("ana", remise=0.25)
+      c.ajouter(A("a", 10.0, 3)).ajouter(A("b", 2.5, 2))
+      assert c.total == 26.25, f"total {c.total} (attendu 26.25)"
+
+  def test_remise_invalide():
+      "Remise hors de [0, 1] refusée"
+      try:
+          solution.Commande("ana", remise=1.5)
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("ValueError attendue")
+solution: |
+  import itertools
+  from dataclasses import dataclass, field, replace
+
+  _compteur = itertools.count(1)
+
+
+  @dataclass(frozen=True, order=True)
+  class Article:
+      nom: str
+      prix_unitaire: float
+      quantite: int = 1
+
+      def __post_init__(self):
+          if not self.nom:
+              raise ValueError("nom vide")
+          if self.prix_unitaire < 0:
+              raise ValueError("prix négatif")
+          if self.quantite < 1:
+              raise ValueError("quantité invalide")
+
+      @property
+      def total(self):
+          return round(self.prix_unitaire * self.quantite, 2)
+
+
+  @dataclass
+  class Commande:
+      client: str
+      articles: list = field(default_factory=list)
+      remise: float = field(default=0.0, repr=False)
+      numero: int = field(init=False)
+
+      def __post_init__(self):
+          if not 0 <= self.remise <= 1:
+              raise ValueError("la remise doit être entre 0 et 1")
+          self.numero = next(_compteur)
+
+      def ajouter(self, article):
+          for i, existant in enumerate(self.articles):
+              if (existant.nom, existant.prix_unitaire) == (article.nom, article.prix_unitaire):
+                  self.articles[i] = replace(existant, quantite=existant.quantite + article.quantite)
+                  break
+          else:
+              self.articles.append(article)
+          return self
+
+      @property
+      def total(self):
+          return round(sum(a.total for a in self.articles) * (1 - self.remise), 2)
+cours: |
+  ## Les options de `@dataclass`
+
+  ```python
+  @dataclass(frozen=True, order=True)
+  class Adresse:
+      ip: str
+      port: int = 80
+  ```
+
+  - `frozen=True` : les attributs ne peuvent plus être modifiés après création
+    (`FrozenInstanceError`), et la classe devient **hachable** ;
+  - `order=True` : génère `<`, `<=`, `>`, `>=`, en comparant les champs **dans l'ordre de
+    déclaration** comme des tuples ;
+  - `eq=True` (défaut) : `==` compare tous les champs.
+
+  ## `field()` : régler chaque champ
+
+  ```python
+  from dataclasses import dataclass, field
+
+  @dataclass
+  class Ticket:
+      titre: str
+      tags: list = field(default_factory=list)   # une liste neuve par instance
+      secret: str = field(default="", repr=False) # absent du repr
+      id: int = field(init=False)                  # pas dans le constructeur
+  ```
+
+  Une valeur par défaut mutable écrite directement (`tags: list = []`) est refusée par les
+  dataclasses, justement pour éviter le partage entre instances.
+
+  ## `__post_init__`
+
+  Appelée automatiquement à la fin du `__init__` généré, elle sert à **valider** ou à
+  calculer des champs `init=False`. Dans une classe `frozen`, on ne peut pas faire
+  `self.x = ...` : il faut `object.__setattr__(self, "x", valeur)`.
+
+  ## Compteur partagé
+
+  Pour numéroter les instances (1, 2, 3…), on garde un compteur **au niveau de la classe**
+  (attribut de classe, ou `itertools.count()`), incrémenté dans `__post_init__`. Avec une
+  annotation, ce compteur deviendrait un champ : utilise `typing.ClassVar` ou ne
+  l'annote pas.
+
+  ## Immuabilité et modifications
+
+  Pour « modifier » un objet gelé, on en crée un nouveau : `dataclasses.replace(obj,
+  quantite=3)`. C'est le style immuable, qui évite les effets de bord.
+
+  ## Utilitaires
+
+  `dataclasses.asdict(obj)` convertit récursivement en dictionnaire (pratique pour JSON),
+  `fields(obj)` liste les champs.
+docs:
+  - title: Module dataclasses
+    url: https://docs.python.org/fr/3/library/dataclasses.html
+  - title: dataclasses.field
+    url: https://docs.python.org/fr/3/library/dataclasses.html#dataclasses.field

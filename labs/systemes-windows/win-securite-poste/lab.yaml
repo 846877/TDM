@@ -1,0 +1,438 @@
+title: Sécuriser un poste Windows 11
+level: intermediaire
+order: 9
+tags: [windows 11, sécurité, defender, pare-feu, bitlocker, uac, audit, stratégie de mots de passe, durcissement]
+summary: Remettre d'aplomb un poste compromis par de mauvaises pratiques - Defender, pare-feu et journalisation, mots de passe et verrouillage, audit, comptes intégrés, UAC, exécution automatique et chiffrement BitLocker.
+vagrant: bundled
+machine: pc01
+description: |
+  **Contexte.** Le portable `PC01` revient de chez un prestataire qui l'a « optimisé ». Avant de le rendre au
+  commercial qui part en clientèle avec les contrats sur son disque `V:`, tu dois le **durcir** : chaque
+  réglage dangereux laissé par le prestataire doit être retrouvé et corrigé, et les protections de base
+  activées.
+
+  **Machine.** `PC01`, Windows 11, hors domaine (les réglages se font en **stratégie locale**, comme sur un
+  poste isolé ; en entreprise, on les déploierait par GPO). Terminal PowerShell administrateur. Le disque
+  `V:` (« COFFRE », 1 Go) contient les contrats clients.
+cours: |
+  ## Défense en profondeur
+
+  Aucun réglage ne protège seul. On empile des couches indépendantes, pour qu'une défaillance de l'une soit
+  rattrapée par une autre :
+
+  | Couche | Outil Windows | Protège contre |
+  |--------|---------------|----------------|
+  | Logiciels malveillants | **Microsoft Defender Antivirus** | fichiers et comportements malveillants connus |
+  | Réseau | **Pare-feu Windows Defender** | connexions entrantes non sollicitées, mouvements latéraux |
+  | Comptes | stratégie de mots de passe, verrouillage, comptes intégrés désactivés | devinette, force brute |
+  | Privilèges | **UAC**, utilisateur standard au quotidien | élévation silencieuse d'un programme |
+  | Données au repos | **BitLocker** | vol ou perte du portable, disque retiré |
+  | Traçabilité | **stratégie d'audit**, journaux | attaques non détectées, enquêtes impossibles |
+  | Surface d'attaque | exécution automatique coupée, services inutiles arrêtés | clé USB piégée |
+
+  ## Microsoft Defender
+
+  Intégré à Windows, il suffit largement à un poste bien tenu, à condition de rester **actif et à jour**.
+  Points de contrôle : protection en temps réel, protection cloud, signatures récentes, protection contre
+  les applications potentiellement indésirables (**PUA**), et surtout les **exclusions** : un dossier ou un
+  processus exclu est un angle mort, que les logiciels malveillants adorent créer. Commandes :
+  `Get-MpComputerStatus`, `Get-MpPreference`, `Update-MpSignature`, `Start-MpScan`, `Remove-MpPreference`.
+
+  ## Pare-feu
+
+  Trois **profils** : *Domaine* (réseau de l'entreprise détecté), *Privé* (réseau de confiance), *Public*
+  (le reste : hôtel, gare, salon). Un portable passe sa vie en *Public* : ce profil doit être **actif** et
+  bloquer l'entrant par défaut. Toute règle entrante doit avoir une raison documentée. La **journalisation**
+  des paquets rejetés aide à diagnostiquer et à repérer un balayage de ports.
+
+  ## Comptes et mots de passe
+
+  Sur un poste hors domaine, la **stratégie de sécurité locale** (`secpol.msc`, ou `net accounts` et
+  `secedit`) fixe la longueur minimale et le **verrouillage** après N échecs. Les comptes intégrés
+  **Invité** (SID terminé par -501) et **Administrateur** (-500) sont des cibles connues de tous : on les
+  désactive (l'administrateur intégré n'est pas soumis au verrouillage ni à l'UAC). Pour les comptes
+  administrateurs locaux d'un parc, **Windows LAPS** génère un mot de passe unique par poste.
+
+  ## Contrôle de compte d'utilisateur (UAC)
+
+  Même un administrateur travaille avec un jeton **standard** ; l'élévation demande une confirmation sur le
+  **bureau sécurisé** (l'écran assombri, inaccessible aux autres programmes). Régler l'UAC sur « ne jamais
+  m'avertir » permet à n'importe quel programme lancé par l'utilisateur de devenir administrateur en
+  silence. Clés : `EnableLUA`, `ConsentPromptBehaviorAdmin`, `PromptOnSecureDesktop` sous
+  `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System`.
+
+  ## Audit
+
+  La **stratégie d'audit avancée** (`auditpol`) choisit les événements écrits dans le journal *Sécurité* :
+  ouvertures de session réussies et échouées (4624, 4625), verrouillages (4740), gestion des comptes (4720
+  création, 4732 ajout à un groupe local)... Sans audit, impossible de savoir qui a fait quoi après un
+  incident. On n'active pas tout : un journal noyé est aussi inutile qu'un journal vide.
+
+  ## BitLocker
+
+  BitLocker chiffre un volume entier. Sur le disque système, il s'appuie sur la puce **TPM** (déverrouillage
+  transparent si le démarrage n'a pas été modifié). Un volume de **données** peut être protégé par mot de
+  passe, carte à puce ou déverrouillage automatique. Dans tous les cas, on sauvegarde la **clé de
+  récupération** (48 chiffres) **ailleurs** que sur le disque chiffré : dans Active Directory ou Entra ID en
+  entreprise, sinon dans un coffre-fort de mots de passe. Sans elle, une panne de TPM ou un mot de passe
+  oublié signifie la perte définitive des données.
+
+  ## Vérifier son travail
+
+  `Get-MpComputerStatus`, `Get-NetFirewallProfile`, `secedit /export`, `auditpol /get /category:*`,
+  `Get-LocalUser`, `Get-BitLockerVolume` et `manage-bde -status`. Les référentiels de durcissement (guides
+  de l'ANSSI, références de sécurité Microsoft, CIS Benchmarks) listent des centaines de réglages : ceux de
+  ce lab sont le socle.
+docs:
+  - title: Microsoft Defender Antivirus dans Windows
+    url: https://learn.microsoft.com/fr-fr/defender-endpoint/microsoft-defender-antivirus-windows
+  - title: Pare-feu Windows - meilleures pratiques
+    url: https://learn.microsoft.com/fr-fr/windows/security/operating-system-security/network-security/windows-firewall/
+  - title: Vue d'ensemble de BitLocker
+    url: https://learn.microsoft.com/fr-fr/windows/security/operating-system-security/data-protection/bitlocker/
+  - title: Paramètres de stratégie d'audit avancée
+    url: https://learn.microsoft.com/fr-fr/windows/security/threat-protection/auditing/advanced-security-audit-policy-settings
+exercises:
+  - id: win-sec-exclusions
+    title: Les angles morts de Defender
+    description: |
+      Le prestataire a ajouté des **exclusions** à Microsoft Defender. Trouve-les et supprime **toutes** les
+      exclusions de chemin et de processus, puis analyse le dossier qui était exclu.
+    hint: Get-MpPreference | Select-Object Exclusion* ; Remove-MpPreference -ExclusionPath C:\ProgramData\Updater -ExclusionProcess svchost64.exe ; Start-MpScan -ScanType CustomScan -ScanPath C:\ProgramData\Updater
+    cours: |
+      ```powershell
+      Get-MpPreference | Select-Object ExclusionPath, ExclusionProcess, ExclusionExtension
+      Remove-MpPreference -ExclusionPath C:\ProgramData\Updater -ExclusionProcess svchost64.exe
+      Start-MpScan -ScanType CustomScan -ScanPath C:\ProgramData\Updater
+      Get-MpThreatDetection
+      ```
+
+      Une exclusion se justifie rarement (base de données d'un logiciel métier, sur recommandation écrite de
+      l'éditeur) et doit être aussi **étroite** que possible. Un processus au nom presque légitime
+      (`svchost64.exe` n'existe pas dans Windows) exclu de l'analyse est un indice classique de compromission :
+      les attaquants désactivent ainsi l'antivirus sans le couper, ce qui attirerait l'attention. En
+      entreprise, la **protection contre les falsifications** (*Tamper Protection*) empêche ces modifications
+      locales.
+    checks:
+      - desc: Plus aucune exclusion de chemin ni de processus
+        run: |
+          $p = Get-MpPreference
+          @($p.ExclusionPath | Where-Object { $_ }).Count -eq 0 -and @($p.ExclusionProcess | Where-Object { $_ }).Count -eq 0
+    solution: |
+      $p = Get-MpPreference
+      if ($p.ExclusionPath) { Remove-MpPreference -ExclusionPath $p.ExclusionPath }
+      if ($p.ExclusionProcess) { Remove-MpPreference -ExclusionProcess $p.ExclusionProcess }
+      Start-MpScan -ScanType CustomScan -ScanPath C:\ProgramData\Updater
+
+  - id: win-sec-defender
+    title: Defender actif, à jour et vigilant
+    description: |
+      Vérifie que la **protection en temps réel** est active, réactive la protection contre les **applications
+      potentiellement indésirables** (PUA) en mode blocage, mets à jour les **signatures** et lance une
+      **analyse rapide**.
+    hint: Set-MpPreference -DisableRealtimeMonitoring $false -PUAProtection Enabled ; Update-MpSignature ; Start-MpScan -ScanType QuickScan
+    cours: |
+      ```powershell
+      Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled, AntivirusSignatureLastUpdated, QuickScanEndTime
+      Set-MpPreference -DisableRealtimeMonitoring $false -PUAProtection Enabled
+      Update-MpSignature
+      Start-MpScan -ScanType QuickScan
+      ```
+
+      Les **PUA** sont des logiciels pas tout à fait malveillants : barres d'outils, « optimiseurs », mineurs de
+      cryptomonnaie, installeurs qui ajoutent des logiciels publicitaires. Les bloquer évite bien des
+      tickets. `Update-MpSignature` télécharge les définitions depuis Windows Update ou le Centre de
+      téléchargement Microsoft (sans Internet, la commande échoue : la protection cloud et la date des
+      signatures sont alors à surveiller). L'analyse rapide examine les emplacements où les logiciels
+      malveillants s'installent habituellement ; l'analyse complète, longue, est planifiée la nuit.
+    checks:
+      - desc: Protection en temps réel active et PUA en blocage
+        run: |
+          (Get-MpComputerStatus).RealTimeProtectionEnabled -and (Get-MpPreference).PUAProtection -eq 1
+      - desc: Une analyse rapide a été faite dans les dernières 24 heures
+        run: |
+          $fin = (Get-MpComputerStatus).QuickScanEndTime
+          [bool]$fin -and $fin -gt (Get-Date).AddDays(-1)
+    solution: |
+      Set-MpPreference -DisableRealtimeMonitoring $false -PUAProtection Enabled
+      try { Update-MpSignature } catch { Write-Host "Signatures : $_" }
+      Start-MpScan -ScanType QuickScan
+
+  - id: win-sec-parefeu
+    title: Refermer le pare-feu
+    description: |
+      Supprime la règle entrante `Assistance distante (TCP 4444)` (aucune assistance n'utilise ce port, c'est
+      celui d'outils d'attaque bien connus). Assure-toi que les **trois profils** du pare-feu sont **actifs**
+      et **bloquent** les connexions entrantes par défaut.
+    hint: Remove-NetFirewallRule -DisplayName 'Assistance distante (TCP 4444)' ; Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True -DefaultInboundAction Block
+    cours: |
+      ```powershell
+      Get-NetFirewallProfile | Format-Table Name, Enabled, DefaultInboundAction, DefaultOutboundAction
+      Get-NetFirewallRule -Direction Inbound -Action Allow -Enabled True |
+          Where-Object DisplayGroup -eq $null | Format-Table DisplayName, Profile
+      Remove-NetFirewallRule -DisplayName 'Assistance distante (TCP 4444)'
+      Set-NetFirewallProfile -Profile Domain, Private, Public -Enabled True -DefaultInboundAction Block
+      ```
+
+      Le filtre `DisplayGroup -eq $null` isole les règles **ajoutées à la main** (celles de Windows
+      appartiennent à un groupe) : c'est là qu'on trouve les surprises. `NotConfigured` pour
+      `DefaultInboundAction` équivaut à *Block* sur un poste, mais on l'écrit explicitement. Un profil
+      *Public* désactivé laisse un portable entièrement ouvert dans n'importe quel Wi-Fi d'hôtel :
+      c'est le réglage le plus dangereux de ce poste.
+    ci: true
+    checks:
+      - desc: La règle Assistance distante (TCP 4444) n'existe plus (ou est désactivée)
+        run: |
+          -not (Get-NetFirewallRule -DisplayName 'Assistance distante (TCP 4444)' -ErrorAction SilentlyContinue | Where-Object Enabled -eq 'True')
+      - desc: Les trois profils sont actifs et bloquent l'entrant
+        run: |
+          $p = Get-NetFirewallProfile
+          @($p | Where-Object { $_.Enabled -eq 'True' -and $_.DefaultInboundAction -eq 'Block' }).Count -eq 3
+    solution: |
+      Remove-NetFirewallRule -DisplayName 'Assistance distante (TCP 4444)' -ErrorAction SilentlyContinue
+      Set-NetFirewallProfile -Profile Domain, Private, Public -Enabled True -DefaultInboundAction Block
+
+  - id: win-sec-parefeu-journal
+    title: Journaliser les connexions bloquées
+    description: |
+      Active, pour les trois profils, la **journalisation des paquets rejetés** dans le fichier par défaut
+      `%SystemRoot%\System32\LogFiles\Firewall\pfirewall.log`, avec une taille maximale de **16 384 Ko**.
+    hint: Set-NetFirewallProfile -Profile Domain,Private,Public -LogBlocked True -LogMaxSizeKilobytes 16384 -LogFileName '%SystemRoot%\System32\LogFiles\Firewall\pfirewall.log'
+    cours: |
+      ```powershell
+      Set-NetFirewallProfile -Profile Domain, Private, Public -LogBlocked True -LogMaxSizeKilobytes 16384 `
+          -LogFileName '%SystemRoot%\System32\LogFiles\Firewall\pfirewall.log'
+      Get-NetFirewallProfile | Format-Table Name, LogBlocked, LogAllowed, LogMaxSizeKilobytes, LogFileName
+      Get-Content C:\Windows\System32\LogFiles\Firewall\pfirewall.log -Tail 20
+      ```
+
+      Le journal liste chaque paquet rejeté : date, action, protocole, adresses et ports. Utile pour
+      comprendre pourquoi une application ne joint pas le poste (le paquet arrive-t-il seulement ?) et pour
+      repérer un balayage de ports. La taille par défaut (4 Mo) est vite remplie ; au-delà de la limite, le
+      fichier est renommé en `.old` et un nouveau commence. On journalise rarement les connexions
+      **autorisées** (`LogAllowed`), trop volumineuses sur un poste.
+    ci: true
+    checks:
+      - desc: Les trois profils journalisent les paquets rejetés
+        run: |
+          @(Get-NetFirewallProfile | Where-Object { $_.LogBlocked -eq 'True' }).Count -eq 3
+      - desc: Taille maximale 16 384 Ko, fichier pfirewall.log
+        run: |
+          @(Get-NetFirewallProfile | Where-Object { $_.LogMaxSizeKilobytes -eq 16384 -and $_.LogFileName -like '*\LogFiles\Firewall\pfirewall.log' }).Count -eq 3
+    solution: |
+      Set-NetFirewallProfile -Profile Domain, Private, Public -LogBlocked True -LogMaxSizeKilobytes 16384 -LogFileName '%SystemRoot%\System32\LogFiles\Firewall\pfirewall.log'
+
+  - id: win-sec-mdp
+    title: Mots de passe et verrouillage locaux
+    description: |
+      Règle la stratégie de comptes locale : longueur minimale **12**, verrouillage après **10** échecs,
+      pendant **15 minutes**, compteur remis à zéro après **15 minutes**.
+    hint: net accounts /minpwlen:12 /lockoutthreshold:10 /lockoutduration:15 /lockoutwindow:15
+    cours: |
+      ```powershell
+      net accounts
+      net accounts /minpwlen:12 /lockoutthreshold:10 /lockoutduration:15 /lockoutwindow:15
+      secedit /export /cfg C:\Admin\securite.inf /areas SECURITYPOLICY
+      Select-String 'MinimumPasswordLength|LockoutBadCount|LockoutDuration' C:\Admin\securite.inf
+      ```
+
+      `net accounts` règle l'essentiel de la stratégie de comptes locale ; `secpol.msc` › *Stratégies de
+      comptes* offre la même chose en graphique, et `secedit` exporte ou importe toute la stratégie de
+      sécurité dans un fichier `.inf` (pratique pour comparer deux postes). Le verrouillage limite la force
+      brute, mais un seuil trop bas permet à un attaquant de **bloquer** tous les comptes : 10 tentatives
+      est un bon compromis. Rappel : le compte Administrateur intégré n'est jamais verrouillé, une raison de
+      plus pour le désactiver.
+    ci: true
+    checks:
+      - desc: Longueur minimale 12, verrouillage après 10 échecs pendant 15 minutes
+        run: |
+          $f = Join-Path $env:TEMP 'tdm-secpol.inf'
+          secedit /export /cfg $f /areas SECURITYPOLICY | Out-Null
+          $t = Get-Content $f -Raw
+          Remove-Item $f
+          ($t -match 'MinimumPasswordLength\s*=\s*12\b') -and ($t -match 'LockoutBadCount\s*=\s*10\b') -and ($t -match 'LockoutDuration\s*=\s*15\b') -and ($t -match 'ResetLockoutCount\s*=\s*15\b')
+    solution: |
+      net accounts /minpwlen:12 /lockoutthreshold:10 /lockoutduration:15 /lockoutwindow:15 | Out-Null
+
+  - id: win-sec-audit
+    title: Une stratégie d'audit utile
+    description: |
+      Active l'audit (stratégie avancée) :
+
+      | Sous-catégorie | Succès | Échec |
+      |----------------|--------|-------|
+      | Ouverture de session (*Logon*) | oui | oui |
+      | Verrouillage du compte (*Account Lockout*) | oui | oui |
+      | Gestion des comptes d'utilisateur (*User Account Management*) | oui | oui |
+    hint: auditpol /set /subcategory:'{0CCE9215-69AE-11D9-BED3-505054503030}' /success:enable /failure:enable (idem {0CCE9217-...} et {0CCE9235-...})
+    cours: |
+      ```powershell
+      auditpol /get /category:*
+      $sous = '{0CCE9215-69AE-11D9-BED3-505054503030}',   # Ouverture de session
+              '{0CCE9217-69AE-11D9-BED3-505054503030}',   # Verrouillage du compte
+              '{0CCE9235-69AE-11D9-BED3-505054503030}'    # Gestion des comptes d'utilisateur
+      foreach ($s in $sous) { auditpol /set /subcategory:$s /success:enable /failure:enable }
+      Get-WinEvent -LogName Security -MaxEvents 5
+      ```
+
+      Les noms des sous-catégories dépendent de la langue de Windows, leurs **GUID** non : un script portable
+      utilise les GUID. Ces trois sous-catégories couvrent les questions qu'on pose après un incident : qui
+      s'est connecté, qui a essayé sans succès (4625), quel compte a été bloqué (4740), quel compte a été
+      créé ou ajouté aux administrateurs (4720, 4732). Le journal *Sécurité* a une taille limitée (20 Mo par
+      défaut) : en entreprise, on centralise les journaux sur un collecteur ou un SIEM.
+    ci: true
+    checks:
+      - desc: Logon, Account Lockout et User Account Management en succès et échec
+        run: |
+          $f = Join-Path $env:TEMP 'tdm-audit.csv'
+          auditpol /backup /file:$f | Out-Null
+          $lignes = Import-Csv $f
+          Remove-Item $f
+          $guids = '{0CCE9215-69AE-11D9-BED3-505054503030}', '{0CCE9217-69AE-11D9-BED3-505054503030}', '{0CCE9235-69AE-11D9-BED3-505054503030}'
+          $ok = foreach ($g in $guids) { [bool]($lignes | Where-Object { $_.'Subcategory GUID' -eq $g -and $_.'Setting Value' -eq '3' }) }
+          @($ok | Where-Object { $_ }).Count -eq 3
+    solution: |
+      foreach ($s in '{0CCE9215-69AE-11D9-BED3-505054503030}', '{0CCE9217-69AE-11D9-BED3-505054503030}', '{0CCE9235-69AE-11D9-BED3-505054503030}') {
+          auditpol /set /subcategory:$s /success:enable /failure:enable | Out-Null
+      }
+
+  - id: win-sec-comptes
+    title: Désactiver les comptes intégrés
+    description: |
+      Désactive les comptes intégrés **Invité** (SID terminé par `-501`) et **Administrateur** (SID terminé par
+      `-500`). Le compte `vagrant`, lui, doit rester actif et administrateur.
+    hint: Get-LocalUser | Where-Object { $_.SID.Value -match '-50[01]$' } | Disable-LocalUser
+    cours: |
+      ```powershell
+      Get-LocalUser | Format-Table Name, Enabled, SID
+      Get-LocalUser | Where-Object { $_.SID.Value -match '-50[01]$' } | Disable-LocalUser
+      ```
+
+      Les noms changent avec la langue (*Guest*/*Invité*, *Administrator*/*Administrateur*) et peuvent être
+      renommés : on désigne ces comptes par la fin de leur **SID**, qui ne change jamais. L'invité donne une
+      session sans mot de passe à n'importe qui ; l'administrateur intégré est la première cible des attaques
+      par force brute, échappe au verrouillage et, par défaut, à l'UAC. Avant de le désactiver, on vérifie
+      qu'un **autre** compte administrateur fonctionne : ici, `vagrant`.
+    checks:
+      - desc: Les comptes -500 et -501 sont désactivés
+        run: |
+          @(Get-LocalUser | Where-Object { $_.SID.Value -match '-50[01]$' -and $_.Enabled }).Count -eq 0
+      - desc: Il reste au moins un autre administrateur local actif
+        run: |
+          $admins = Get-LocalGroupMember -SID S-1-5-32-544 | Where-Object { $_.PrincipalSource -eq 'Local' -and $_.ObjectClass -eq 'User' }
+          [bool]($admins | ForEach-Object { Get-LocalUser -SID $_.SID } | Where-Object { $_.Enabled -and $_.SID.Value -notmatch '-500$' })
+    solution: |
+      Get-LocalUser | Where-Object { $_.SID.Value -match '-50[01]$' } | Disable-LocalUser
+
+  - id: win-sec-uac
+    title: Rétablir le contrôle de compte d'utilisateur
+    description: |
+      Le prestataire a réglé l'UAC sur « ne jamais m'avertir » pour les administrateurs. Rétablis le
+      comportement par défaut de Windows : UAC actif, **demande de consentement pour les binaires non
+      Windows**, sur le **bureau sécurisé**.
+    hint: Clés HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System - EnableLUA 1, ConsentPromptBehaviorAdmin 5, PromptOnSecureDesktop 1
+    cours: |
+      ```powershell
+      $uac = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+      Get-ItemProperty $uac | Select-Object EnableLUA, ConsentPromptBehaviorAdmin, PromptOnSecureDesktop
+      Set-ItemProperty $uac -Name EnableLUA -Value 1
+      Set-ItemProperty $uac -Name ConsentPromptBehaviorAdmin -Value 5
+      Set-ItemProperty $uac -Name PromptOnSecureDesktop -Value 1
+      ```
+
+      | `ConsentPromptBehaviorAdmin` | Comportement |
+      |---|---|
+      | 0 | élever sans demander (le réglage du prestataire) |
+      | 2 | toujours demander, sur le bureau sécurisé (niveau le plus haut) |
+      | 5 | demander pour les binaires non Windows (défaut) |
+
+      Le **bureau sécurisé** empêche un programme de cliquer « Oui » à la place de l'utilisateur. Modifier
+      `EnableLUA` demande un redémarrage ; les deux autres valeurs s'appliquent immédiatement. En entreprise,
+      on règle l'UAC par GPO (*Options de sécurité* › *Contrôle de compte d'utilisateur*).
+    ci: true
+    checks:
+      - desc: UAC actif, consentement demandé (2 ou 5), bureau sécurisé
+        run: |
+          $u = Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System
+          $u.EnableLUA -eq 1 -and $u.ConsentPromptBehaviorAdmin -in 2, 5 -and $u.PromptOnSecureDesktop -eq 1
+    solution: |
+      $uac = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+      Set-ItemProperty $uac -Name EnableLUA -Value 1
+      Set-ItemProperty $uac -Name ConsentPromptBehaviorAdmin -Value 5
+      Set-ItemProperty $uac -Name PromptOnSecureDesktop -Value 1
+
+  - id: win-sec-autorun
+    title: Couper l'exécution automatique
+    description: |
+      Une clé USB « trouvée » sur le parking ne doit rien pouvoir lancer toute seule. Désactive l'**exécution
+      automatique** (*AutoRun*) pour **tous les types de lecteurs** et la lecture automatique des fichiers
+      `autorun.inf`, au niveau de la machine.
+    hint: Clé HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer - NoDriveTypeAutoRun 255 et NoAutorun 1 (créer la clé si besoin, sans -Force sur une clé existante)
+    cours: |
+      ```powershell
+      $cle = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'
+      if (-not (Test-Path $cle)) { New-Item $cle | Out-Null }
+      Set-ItemProperty $cle -Name NoDriveTypeAutoRun -Value 255 -Type DWord
+      Set-ItemProperty $cle -Name NoAutorun -Value 1 -Type DWord
+      ```
+
+      `NoDriveTypeAutoRun` est un masque de bits par type de lecteur : 255 (`0xFF`) les couvre tous. `NoAutorun`
+      empêche l'interprétation des fichiers `autorun.inf`, vecteur historique de vers comme Conficker.
+      Attention : `New-Item -Force` sur une clé de registre **existante** la recrée vide et efface toutes ses
+      valeurs ; on teste son existence avant. Ce réglage correspond à la stratégie *Modèles
+      d'administration* › *Composants Windows* › *Stratégies d'exécution automatique*.
+    ci: true
+    checks:
+      - desc: AutoRun désactivé pour tous les lecteurs (255) et autorun.inf ignoré
+        run: |
+          $p = Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer
+          $p.NoDriveTypeAutoRun -eq 255 -and $p.NoAutorun -eq 1
+    solution: |
+      $cle = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'
+      if (-not (Test-Path $cle)) { New-Item $cle | Out-Null }
+      Set-ItemProperty $cle -Name NoDriveTypeAutoRun -Value 255 -Type DWord
+      Set-ItemProperty $cle -Name NoAutorun -Value 1 -Type DWord
+
+  - id: win-sec-bitlocker
+    title: Chiffrer le disque des contrats avec BitLocker
+    description: |
+      Chiffre le volume `V:` avec **BitLocker** (chiffrement XTS-AES 128, **espace utilisé uniquement**) :
+
+      - protecteur **mot de passe** `Coffre-Fort-2026!` ;
+      - protecteur **mot de passe de récupération** (48 chiffres), recopié dans `C:\Admin\recuperation-V.txt`
+        (en vrai : dans un coffre-fort de mots de passe, **jamais** sur le disque chiffré).
+    hint: 'Enable-BitLocker -MountPoint V: -EncryptionMethod XtsAes128 -UsedSpaceOnly -PasswordProtector -Password (ConvertTo-SecureString ''Coffre-Fort-2026!'' -AsPlainText -Force) ; Add-BitLockerKeyProtector -MountPoint V: -RecoveryPasswordProtector ; (Get-BitLockerVolume V:).KeyProtector'
+    cours: |
+      ```powershell
+      $mdp = ConvertTo-SecureString 'Coffre-Fort-2026!' -AsPlainText -Force
+      Enable-BitLocker -MountPoint V: -EncryptionMethod XtsAes128 -UsedSpaceOnly -PasswordProtector -Password $mdp
+      Add-BitLockerKeyProtector -MountPoint V: -RecoveryPasswordProtector
+      (Get-BitLockerVolume V:).KeyProtector | Where-Object KeyProtectorType -eq RecoveryPassword |
+          Select-Object KeyProtectorId, RecoveryPassword | Out-File C:\Admin\recuperation-V.txt
+      Get-BitLockerVolume V: | Format-List VolumeStatus, EncryptionPercentage, ProtectionStatus, KeyProtector
+      manage-bde -status V:
+      ```
+
+      Un **protecteur** est une façon de déverrouiller le volume : mot de passe, clé de récupération, TPM,
+      carte à puce, déverrouillage automatique. On en a toujours au moins **deux**, dont la clé de
+      récupération. *Espace utilisé uniquement* chiffre vite un disque neuf (les secteurs libres seront
+      chiffrés à l'écriture) ; sur un disque qui a déjà contenu des données effacées, on chiffre tout. En
+      domaine, `Backup-BitLockerKeyProtector` envoie la clé de récupération dans Active Directory.
+    checks:
+      - desc: V est chiffré (ou en cours) par BitLocker
+        run: |
+          $v = Get-BitLockerVolume -MountPoint V:
+          $v.VolumeStatus -in 'FullyEncrypted', 'EncryptionInProgress' -and $v.EncryptionMethod -eq 'XtsAes128'
+      - desc: Protecteurs mot de passe et mot de passe de récupération présents
+        run: |
+          $types = (Get-BitLockerVolume -MountPoint V:).KeyProtector.KeyProtectorType
+          ($types -contains 'Password') -and ($types -contains 'RecoveryPassword')
+      - desc: C:\Admin\recuperation-V.txt contient le mot de passe de récupération
+        run: |
+          $rp = ((Get-BitLockerVolume -MountPoint V:).KeyProtector | Where-Object KeyProtectorType -eq 'RecoveryPassword').RecoveryPassword
+          [bool]$rp -and [bool](Select-String -Path C:\Admin\recuperation-V.txt -Pattern ([regex]::Escape(@($rp)[0])) -Quiet)
+    solution: |
+      $mdp = ConvertTo-SecureString 'Coffre-Fort-2026!' -AsPlainText -Force
+      Enable-BitLocker -MountPoint V: -EncryptionMethod XtsAes128 -UsedSpaceOnly -PasswordProtector -Password $mdp | Out-Null
+      Add-BitLockerKeyProtector -MountPoint V: -RecoveryPasswordProtector | Out-Null
+      (Get-BitLockerVolume V:).KeyProtector | Where-Object KeyProtectorType -eq RecoveryPassword | Select-Object KeyProtectorId, RecoveryPassword | Format-List | Out-File C:\Admin\recuperation-V.txt

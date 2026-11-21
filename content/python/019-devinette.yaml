@@ -1,0 +1,128 @@
+title: Jeu de devinette
+level: debutant
+order: 19
+tags: [while, input, conditions]
+summary: Une boucle while qui s'arrête quand on a trouvé.
+mode: stdio
+description: |
+  On simule un jeu de « plus ou moins ». La **première ligne** contient le nombre secret, les
+  lignes suivantes sont les propositions du joueur.
+
+  Pour chaque proposition, affiche :
+  - `Trop petit` si elle est inférieure au secret ;
+  - `Trop grand` si elle est supérieure ;
+  - `Gagné en N essais !` si c'est le bon nombre, puis le programme s'arrête (même s'il reste
+    des lignes). Avec un seul essai, affiche `Gagné en 1 essai !` (sans « s »).
+
+  Exemple d'entrée :
+
+  ```
+  42
+  50
+  25
+  42
+  ```
+
+  Sortie attendue :
+
+  ```
+  Trop grand
+  Trop petit
+  Gagné en 3 essais !
+  ```
+
+  Astuce : une boucle `while` et un compteur d'essais.
+starter: |
+  secret = int(input())
+cases:
+  - name: "Trois essais"
+    input: "42\n50\n25\n42\n"
+    output: |
+      Trop grand
+      Trop petit
+      Gagné en 3 essais !
+  - name: "Du premier coup"
+    input: "7\n7\n"
+    output: "Gagné en 1 essai !"
+  - name: "Lignes en trop ignorées"
+    input: "10\n1\n10\n99\n5\n"
+    output: |
+      Trop petit
+      Gagné en 2 essais !
+  - name: "Recherche par dichotomie"
+    input: "63\n50\n75\n62\n68\n65\n63\n"
+    output: |
+      Trop petit
+      Trop grand
+      Trop petit
+      Trop grand
+      Trop grand
+      Gagné en 6 essais !
+solution: |
+  secret = int(input())
+  essais = 0
+  trouve = False
+  while not trouve:
+      proposition = int(input())
+      essais += 1
+      if proposition < secret:
+          print("Trop petit")
+      elif proposition > secret:
+          print("Trop grand")
+      else:
+          trouve = True
+  pluriel = "s" if essais > 1 else ""
+  print(f"Gagné en {essais} essai{pluriel} !")
+cours: |
+  ## La boucle `while`
+
+  `while condition:` répète son bloc **tant que** la condition est vraie. On l'utilise quand
+  on ne sait pas à l'avance combien de tours seront nécessaires.
+
+  ```python
+  solde = 100
+  annees = 0
+  while solde < 200:
+      solde *= 1.05
+      annees += 1
+  print(annees)   # 15
+  ```
+
+  **Piège n°1 : la boucle infinie.** Si rien dans le corps ne rend la condition fausse, le
+  programme ne s'arrête jamais. Vérifie qu'une variable de la condition évolue à chaque tour.
+
+  ## Sortir avec `break`
+
+  `break` quitte immédiatement la boucle la plus proche. Un motif fréquent :
+
+  ```python
+  while True:
+      commande = input()
+      if commande == "quitter":
+          break
+      print("Commande :", commande)
+  ```
+
+  `continue`, lui, passe directement au tour suivant.
+
+  ## Compteur et accord
+
+  Un compteur s'initialise avant la boucle et s'incrémente à chaque essai (`essais += 1`).
+  Pour accorder un mot au pluriel, une expression conditionnelle est pratique :
+
+  ```python
+  s = "s" if nombre > 1 else ""
+  print(f"{nombre} fichier{s}")
+  ```
+
+  ## Lire plusieurs lignes
+
+  Chaque appel à `input()` lit la ligne suivante de l'entrée. Ici, la première ligne a un
+  rôle particulier (le secret) : lis-la **avant** la boucle. Les comparaisons doivent se
+  faire entre **nombres** : `"9" < "10"` est faux en comparant des chaînes (ordre
+  alphabétique), alors que `9 < 10` est vrai. Convertis donc chaque saisie avec `int()`.
+docs:
+  - title: Tutoriel — while, break et continue
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html
+  - title: Référence — l'instruction while
+    url: https://docs.python.org/fr/3/reference/compound_stmts.html#the-while-statement

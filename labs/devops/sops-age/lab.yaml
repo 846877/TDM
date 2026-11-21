@@ -1,0 +1,353 @@
+title: Secrets chiffrés avec SOPS et age
+level: avance
+order: 6
+tags: [sops, age, secrets, chiffrement, git, gitops, sécurité]
+summary: Versionner des secrets sans les exposer - clés age, chiffrement de fichiers, SOPS et ses règles, plusieurs destinataires, rotation des clés, exec-env, diff Git lisible et garde-fou contre les fuites.
+build: .
+shell: bash
+user: eleve
+workdir: /home/eleve/infra
+description: |
+  Un poste Ubuntu (utilisateur `eleve`, `sudo` sans mot de passe) avec **`sops`** (3.10) et **`age`**
+  (1.2). Le dossier **`~/infra`** est le dépôt Git de configuration d'une boutique en ligne :
+  - `secrets/prod.yaml` et `secrets/staging.yaml` contiennent des secrets **en clair**, pas encore
+    versionnés ;
+  - `donnees/sauvegarde.sql` est une sauvegarde à protéger ;
+  - `cles/equipe.pub` est la **clé publique age de l'équipe d'exploitation** (sa clé privée est dans
+    `/opt/equipe/keys.txt`, pour que les vérifications puissent jouer le rôle d'un collègue) ;
+  - `outils/connexion.sh` simule une application qui lit ses secrets dans l'environnement ;
+  - l'historique contient déjà une erreur de débutant : un fichier `ancien/.env` committé en clair.
+
+  Objectif : pouvoir **versionner tous les secrets dans Git**, chiffrés, lisibles par les seules personnes
+  autorisées, et empêcher qu'un secret en clair soit à nouveau committé.
+cours: |
+  ## Des secrets dans Git, mais chiffrés
+
+  Une infrastructure décrite en code (Ansible, Terraform, Kubernetes, Compose) a besoin de secrets : mots
+  de passe, jetons d'API, clés privées. Les écrire en clair dans le dépôt est l'une des fuites les plus
+  courantes : quiconque accède au dépôt, à une copie ou à son historique les obtient. Deux familles de
+  solutions :
+  - un **coffre** externe (Vault, gestionnaires de secrets des clouds), interrogé au déploiement ;
+  - des **fichiers chiffrés versionnés** avec le code : c'est l'approche de **SOPS**, très utilisée en
+    GitOps (Flux le gère nativement, Argo CD et Helm via des greffons).
+
+  ### age : un chiffrement simple et moderne
+
+  **age** chiffre des fichiers pour un ou plusieurs **destinataires** (clés publiques `age1...`). Chaque
+  personne garde sa clé **privée** (`AGE-SECRET-KEY-1...`). Pas de configuration ni de toile de confiance
+  comme avec GPG : `age-keygen`, `age -r <publique>`, `age -d -i <privée>`.
+
+  ### SOPS : chiffrer les valeurs, pas la structure
+
+  SOPS (*Secrets OPerationS*) chiffre les **valeurs** d'un fichier YAML, JSON, ENV ou INI et laisse les
+  **clés lisibles** : on voit quels secrets existent et les diffs restent utiles.
+
+  ```
+   secrets/prod.yaml (en clair)            secrets/prod.yaml (chiffré, versionné)
+   DB_USER: boutique            sops -e    DB_USER: ENC[AES256_GCM,data:...,type:str]
+   DB_PASSWORD: Pr0d-...       ───────>    DB_PASSWORD: ENC[AES256_GCM,data:...,type:str]
+                                           sops:
+                                             age: [ destinataire 1 : clé de données chiffrée,
+                                                    destinataire 2 : clé de données chiffrée ]
+                                             mac: ENC[...]   (intégrité de tout le fichier)
+  ```
+
+  Une **clé de données** aléatoire chiffre les valeurs (AES-256-GCM) ; elle est elle-même chiffrée pour
+  chaque destinataire (age, GPG, KMS des clouds, Vault). Ajouter ou retirer une personne ne rechiffre que
+  cette clé (`sops updatekeys`). Un **MAC** détecte toute modification manuelle du fichier chiffré.
+
+  ### Mémo
+
+  | Commande | Effet |
+  |---|---|
+  | `age-keygen -o keys.txt` | nouvelle paire de clés age |
+  | `sops -e -i f.yaml` | chiffre sur place (destinataires : `.sops.yaml` ou `--age`) |
+  | `sops -d f.yaml` | affiche la version déchiffrée |
+  | `sops f.yaml` | ouvre l'éditeur sur la version déchiffrée, rechiffre à l'enregistrement |
+  | `sops set f.yaml '["CLE"]' '"valeur"'` | modifie une valeur |
+  | `sops updatekeys f.yaml` | applique les destinataires de `.sops.yaml` |
+  | `sops exec-env f.yaml 'cmd'` | lance `cmd` avec les secrets en variables d'environnement |
+
+  SOPS cherche les clés privées age dans `~/.config/sops/age/keys.txt` (ou la variable
+  `SOPS_AGE_KEY_FILE`).
+
+  ### Pièges
+
+  - Committer le fichier **avant** de le chiffrer : le secret est dans l'historique pour toujours. Il faut
+    alors le **changer** (rotation) ; réécrire l'historique ne suffit pas, des copies existent.
+  - Perdre la seule clé privée : les secrets sont perdus. Toujours au moins deux destinataires (une clé
+    d'équipe ou de secours).
+  - Déchiffrer dans un fichier temporaire oublié sur le disque.
+  - Chiffrer tout le fichier alors que seuls certains champs sont secrets : la relecture devient opaque.
+
+  ### Bonnes pratiques
+
+  Une règle `.sops.yaml` par dossier ou environnement, des destinataires différents pour la production,
+  un hook ou une CI qui refuse tout secret en clair (gitleaks, detect-secrets), et la rotation régulière
+  des secrets et des clés.
+docs:
+  - title: Documentation de SOPS
+    url: https://getsops.io/docs/
+  - title: age - spécification et usage
+    url: https://age-encryption.org/
+  - title: Pro Git - Attributs Git (diff personnalisé)
+    url: https://git-scm.com/book/fr/v2/Personnalisation-de-Git-Attributs-Git
+  - title: OWASP - Secrets Management Cheat Sheet
+    url: https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html
+exercises:
+  - id: so-cle
+    title: Créer sa clé age
+    description: |
+      Génère ta paire de clés age dans **`~/.config/sops/age/keys.txt`** (l'emplacement où SOPS la cherche par
+      défaut), lisible par toi seul. Publie ta **clé publique** dans **`~/infra/cles/eleve.pub`** (une seule
+      ligne `age1...`).
+    hint: "mkdir -p ~/.config/sops/age && age-keygen -o ~/.config/sops/age/keys.txt ; age-keygen -y ~/.config/sops/age/keys.txt > ~/infra/cles/eleve.pub"
+    cours: |
+      Une paire de clés age se compose d'une **clé privée** (`AGE-SECRET-KEY-1...`), à garder secrète, et
+      d'une **clé publique** (`age1...`), à partager librement : on chiffre **pour** une clé publique, et
+      seule la clé privée correspondante peut déchiffrer.
+
+      `age-keygen -o fichier` crée la paire et écrit la clé publique en commentaire dans le fichier ;
+      `age-keygen -y fichier` la recalcule à partir de la clé privée. age crée le fichier avec des droits
+      restreints (`600`) : vérifie-le avec `ls -l`.
+
+      Publier les clés publiques dans le dépôt (`cles/`) permet à chacun de chiffrer pour l'équipe. La clé
+      privée, elle, ne quitte jamais le poste, ou se range dans un gestionnaire de mots de passe ; pour un
+      usage plus sûr, age sait aussi utiliser une clé matérielle (YubiKey) via un greffon.
+    checks:
+      - desc: La clé privée existe et n'est lisible que par toi
+        run: |
+          f=/home/eleve/.config/sops/age/keys.txt; grep -q '^AGE-SECRET-KEY-1' "$f" && test "$(stat -c %a "$f")" = 600
+      - desc: eleve.pub contient la clé publique correspondante
+        run: test "$(tr -d ' \n' < /home/eleve/infra/cles/eleve.pub)" = "$(age-keygen -y /home/eleve/.config/sops/age/keys.txt)"
+  - id: so-fichier
+    title: Chiffrer un fichier avec age
+    description: |
+      Chiffre **`~/infra/donnees/sauvegarde.sql`** pour **deux destinataires** : toi et l'équipe
+      (`cles/equipe.pub`). Produis **`donnees/sauvegarde.sql.age`** au format **texte** (ASCII armor), puis
+      supprime la version en clair.
+    hint: "age -a -R ~/infra/cles/eleve.pub -R ~/infra/cles/equipe.pub -o donnees/sauvegarde.sql.age donnees/sauvegarde.sql && rm donnees/sauvegarde.sql"
+    cours: |
+      **age** chiffre un fichier entier. `-r age1...` ajoute un destinataire par sa clé publique, `-R fichier`
+      lit les clés publiques d'un fichier ; on peut en cumuler autant que nécessaire. Chaque destinataire
+      pourra déchiffrer avec sa propre clé privée : `age -d -i keys.txt fichier.age`.
+
+      Le format par défaut est binaire ; `-a` (*armor*) produit un texte encadré par
+      `-----BEGIN AGE ENCRYPTED FILE-----`, plus pratique à copier ou à versionner. age chiffre en flux :
+      il convient aussi aux gros fichiers, comme une sauvegarde de base de données envoyée vers un
+      stockage externe.
+
+      Chiffrer pour au moins **deux** destinataires (toi et une clé d'équipe ou de secours) évite de tout
+      perdre avec un seul poste. Penser à supprimer l'original en clair, et à ne pas le laisser dans la
+      corbeille, une sauvegarde ou l'historique Git.
+    checks:
+      - desc: sauvegarde.sql.age est au format texte et l'original a disparu
+        run: |
+          d=/home/eleve/infra/donnees; head -1 "$d/sauvegarde.sql.age" | grep -q 'BEGIN AGE ENCRYPTED FILE' && test ! -e "$d/sauvegarde.sql"
+      - desc: Tu peux le déchiffrer et le contenu est intact
+        run: |
+          test "$(age -d -i /home/eleve/.config/sops/age/keys.txt /home/eleve/infra/donnees/sauvegarde.sql.age | sha256sum | cut -d' ' -f1)" = "$(cat /opt/reference/sauvegarde.sha256)"
+      - desc: L'équipe peut aussi le déchiffrer
+        run: |
+          test "$(age -d -i /opt/equipe/keys.txt /home/eleve/infra/donnees/sauvegarde.sql.age | sha256sum | cut -d' ' -f1)" = "$(cat /opt/reference/sauvegarde.sha256)"
+  - id: so-sops
+    title: Chiffrer un fichier YAML avec SOPS
+    description: |
+      Chiffre **sur place** `secrets/prod.yaml` avec SOPS, pour **ta** clé age uniquement (option `--age`).
+      Observe le résultat : les clés restent lisibles, les valeurs sont chiffrées, et une section `sops:`
+      a été ajoutée. Vérifie que `sops -d secrets/prod.yaml` restitue les valeurs.
+    hint: "sops -e -i --age \"$(cat ~/infra/cles/eleve.pub)\" secrets/prod.yaml"
+    cours: |
+      **SOPS** chiffre chaque **valeur** d'un document structuré (YAML, JSON, dotenv, INI) et conserve la
+      structure : `DB_PASSWORD: ENC[AES256_GCM,data:...,iv:...,tag:...,type:str]`. Le type d'origine est
+      mémorisé, si bien que nombres et booléens reviennent tels quels au déchiffrement.
+
+      La section **`sops:`** ajoutée en fin de fichier contient, pour chaque destinataire, la clé de données
+      chiffrée, la date de dernière modification et un **MAC** qui couvre toutes les valeurs : une
+      modification à la main du fichier chiffré est détectée et refusée.
+
+      `-e` chiffre, `-d` déchiffre, `-i` travaille sur place. Sans `-i`, le résultat va sur la sortie
+      standard : pratique pour un tube (`sops -d f.yaml | kubectl apply -f -`), mais attention à ne pas
+      le rediriger dans un fichier oublié.
+    checks:
+      - desc: prod.yaml est chiffré par SOPS (aucun secret en clair)
+        run: |
+          f=/home/eleve/infra/secrets/prod.yaml; grep -q '^sops:' "$f" && grep -q 'DB_PASSWORD: ENC\[AES256_GCM' "$f" && ! grep -q 'Pr0d-S3cret' "$f" && ! grep -q 'tok_prod' "$f"
+      - desc: Le déchiffrement restitue les valeurs
+        run: |
+          f=/home/eleve/infra/secrets/prod.yaml; test "$(sops -d --extract '["DB_PASSWORD"]' "$f")" = 'Pr0d-S3cret!2025' && test "$(sops -d --extract '["ENV"]' "$f")" = production
+  - id: so-regles
+    title: Des règles avec .sops.yaml
+    description: |
+      Crée **`~/infra/.sops.yaml`** avec une règle de création qui s'applique aux fichiers
+      **`secrets/*.yaml`** :
+      - destinataires age : **toi et l'équipe** ;
+      - seules les clés qui se terminent par **`PASSWORD`** ou **`TOKEN`** sont chiffrées
+        (`encrypted_regex`), les autres restent lisibles.
+
+      Chiffre ensuite **`secrets/staging.yaml`** sur place **sans** préciser de destinataire en ligne de
+      commande.
+    hint: "creation_rules: - path_regex: secrets/.*\\.yaml$  encrypted_regex: (PASSWORD|TOKEN)$  age: >- clé_eleve,clé_equipe ; puis sops -e -i secrets/staging.yaml"
+    cours: |
+      Retenir les destinataires et les options à chaque commande est fastidieux et source d'erreurs. Le
+      fichier **`.sops.yaml`**, à la racine du dépôt, contient des **règles de création** (`creation_rules`)
+      essayées dans l'ordre : la première dont le `path_regex` correspond au fichier s'applique. Chaque
+      règle indique les destinataires (`age`, `pgp`, `kms`, `hc_vault_transit_uri`…), séparés par des
+      virgules.
+
+      Options utiles :
+      - `encrypted_regex` : ne chiffrer que les clés qui correspondent (le reste reste lisible, ce qui
+        facilite la relecture des changements) ;
+      - `unencrypted_suffix` ou `encrypted_suffix` : même idée avec un suffixe de nom ;
+      - des règles différentes par environnement : `secrets/prod/` pour l'équipe de production seulement.
+
+      Les options utilisées sont mémorisées dans la section `sops:` du fichier chiffré, et réappliquées à
+      chaque modification.
+    checks:
+      - desc: staging.yaml chiffre les mots de passe et jetons, et laisse le reste lisible
+        run: |
+          f=/home/eleve/infra/secrets/staging.yaml; grep -q '^sops:' "$f" && grep -q 'DB_PASSWORD: ENC\[' "$f" && grep -q 'API_TOKEN: ENC\[' "$f" && grep -q '^NOM_BASE: boutique_staging' "$f" && grep -q '^ENV: staging' "$f"
+      - desc: L'équipe peut déchiffrer staging.yaml
+        run: |
+          test "$(XDG_CONFIG_HOME=/nonexistent HOME=/nonexistent SOPS_AGE_KEY_FILE=/opt/equipe/keys.txt sops -d --extract '["API_TOKEN"]' /home/eleve/infra/secrets/staging.yaml 2>/dev/null)" = tok_stg_11aa
+      - desc: .sops.yaml désigne les deux destinataires
+        run: |
+          f=/home/eleve/infra/.sops.yaml; grep -q "$(tr -d ' \n' < /home/eleve/infra/cles/eleve.pub)" "$f" && grep -q "$(tr -d ' \n' < /home/eleve/infra/cles/equipe.pub)" "$f"
+  - id: so-modifier
+    title: Modifier une valeur chiffrée
+    description: |
+      Le mot de passe de staging change. Remplace la valeur de `DB_PASSWORD` dans `secrets/staging.yaml`
+      par **`Nouveau-St4ging-2025`**, sans jamais écrire de fichier en clair : avec `sops set`, ou avec
+      `sops secrets/staging.yaml`, qui ouvre ton éditeur sur la version déchiffrée.
+    hint: "sops set secrets/staging.yaml '[\"DB_PASSWORD\"]' '\"Nouveau-St4ging-2025\"'"
+    cours: |
+      Ne déchiffre **pas** dans un fichier pour l'éditer puis le rechiffrer : c'est ainsi que des copies en
+      clair traînent sur les disques. SOPS propose deux méthodes sûres :
+      - `sops fichier` ouvre l'éditeur (`$EDITOR`) sur une copie temporaire déchiffrée, puis rechiffre et
+        supprime la copie à la fermeture ;
+      - `sops set fichier '["CLE"]' '"valeur"'` modifie une seule valeur (la valeur est en JSON, d'où les
+        guillemets doubles), et `sops unset` en supprime une.
+
+      Le MAC et la date `lastmodified` sont recalculés. Dans Git, seule la ligne de la valeur modifiée et
+      les métadonnées changent : le diff montre **quel** secret a changé, sans dire **comment**.
+    checks:
+      - desc: La nouvelle valeur est en place, chiffrée
+        run: |
+          f=/home/eleve/infra/secrets/staging.yaml; ! grep -q 'Nouveau-St4ging' "$f" && test "$(sops -d --extract '["DB_PASSWORD"]' "$f")" = Nouveau-St4ging-2025
+      - desc: Les autres valeurs n'ont pas changé
+        run: |
+          f=/home/eleve/infra/secrets/staging.yaml; test "$(sops -d --extract '["API_TOKEN"]' "$f")" = tok_stg_11aa && grep -q '^NOM_BASE: boutique_staging' "$f"
+  - id: so-updatekeys
+    title: Ajouter un destinataire à un fichier existant
+    description: |
+      `secrets/prod.yaml` a été chiffré avant la création de `.sops.yaml`, pour toi seul : l'équipe
+      d'exploitation ne peut pas le lire. Applique-lui les destinataires définis dans `.sops.yaml`, sans
+      le déchiffrer dans un fichier.
+    hint: "sops updatekeys secrets/prod.yaml (confirme avec y, ou ajoute -y)"
+    cours: |
+      SOPS chiffre les valeurs avec une **clé de données**, elle-même chiffrée pour chaque destinataire.
+      Ajouter ou retirer un destinataire ne demande donc pas de rechiffrer les valeurs : **`sops
+      updatekeys`** relit les règles de `.sops.yaml` et chiffre la clé de données pour la nouvelle liste.
+
+      Retirer quelqu'un est plus délicat : il a pu conserver la clé de données d'une version précédente
+      (dans l'historique Git). Après un départ, on fait donc aussi tourner la clé de données (`sops rotate
+      -i fichier`) et, surtout, on **change les secrets** eux-mêmes.
+
+      Cette séparation entre clé de données et clés des destinataires (le *chiffrement d'enveloppe*) est la
+      même que celle des KMS des clouds et de Vault Transit.
+    checks:
+      - desc: L'équipe peut déchiffrer prod.yaml
+        run: |
+          test "$(XDG_CONFIG_HOME=/nonexistent HOME=/nonexistent SOPS_AGE_KEY_FILE=/opt/equipe/keys.txt sops -d --extract '["DB_PASSWORD"]' /home/eleve/infra/secrets/prod.yaml 2>/dev/null)" = 'Pr0d-S3cret!2025'
+      - desc: Tu peux toujours le déchiffrer et il reste chiffré
+        run: |
+          f=/home/eleve/infra/secrets/prod.yaml; ! grep -q 'Pr0d-S3cret' "$f" && test "$(sops -d --extract '["DB_USER"]' "$f")" = boutique
+  - id: so-exec-env
+    title: Passer les secrets à une application
+    description: |
+      Écris le script exécutable **`~/infra/deployer.sh`** qui lance `outils/connexion.sh` avec les secrets de
+      `secrets/prod.yaml` dans ses **variables d'environnement**, grâce à `sops exec-env`, sans écrire de
+      fichier déchiffré. Le script doit fonctionner quel que soit le dossier d'où on l'appelle.
+
+      Résultat attendu : `connexion OK (utilisateur boutique, environnement production)`.
+    hint: "cd \"$(dirname \"$0\")\" puis exec sops exec-env secrets/prod.yaml ./outils/connexion.sh"
+    cours: |
+      Une application lit souvent ses secrets dans des **variables d'environnement**. `sops exec-env
+      fichier 'commande'` déchiffre le fichier en mémoire et lance la commande avec chaque clé de premier
+      niveau comme variable : rien n'est écrit sur le disque. `sops exec-file` fournit à la place un fichier
+      temporaire (un tube nommé), pour les programmes qui attendent un chemin.
+
+      Dans une chaîne de déploiement, la machine qui déploie possède une clé age (variable
+      `SOPS_AGE_KEY` fournie par la CI) ; les outils déchiffrent au dernier moment : `sops -d | kubectl
+      apply -f -`, le greffon helm-secrets, ou le contrôleur Flux qui déchiffre dans le cluster.
+
+      Attention : les variables d'environnement d'un processus sont lisibles par son propriétaire et par
+      root (`/proc/<pid>/environ`), et elles se retrouvent parfois dans les journaux d'erreur.
+    checks:
+      - desc: deployer.sh affiche la connexion réussie, depuis n'importe quel dossier
+        run: |
+          test -x /home/eleve/infra/deployer.sh && (cd / && /home/eleve/infra/deployer.sh 2>/dev/null) | grep -q '^connexion OK (utilisateur boutique, environnement production)'
+      - desc: Le script ne contient pas de secret et n'écrit pas de fichier en clair
+        run: |
+          ! grep -q 'Pr0d-S3cret' /home/eleve/infra/deployer.sh && grep -q 'sops' /home/eleve/infra/deployer.sh && ! grep -rl 'Pr0d-S3cret' /home/eleve/infra --exclude-dir=.git 2>/dev/null | grep -q .
+  - id: so-git
+    title: Versionner les secrets et lire les diffs
+    description: |
+      1. Configure Git pour que `git diff` et `git show --textconv` affichent les fichiers `secrets/*.yaml`
+         **déchiffrés** : un attribut `diff=sopsdiffer` dans **`~/infra/.gitattributes`** et un pilote de
+         diff `sopsdiffer` dont le `textconv` est `sops -d`.
+      2. Committe `.sops.yaml`, `.gitattributes`, `cles/eleve.pub`, les deux fichiers de secrets chiffrés,
+         `donnees/sauvegarde.sql.age` et `deployer.sh`.
+    hint: "echo 'secrets/*.yaml diff=sopsdiffer' > .gitattributes ; git config diff.sopsdiffer.textconv 'sops -d' ; git add ... && git commit -m '...'"
+    cours: |
+      Un fichier chiffré produit des diffs illisibles. Git permet de transformer un fichier avant de le
+      comparer : un attribut dans **`.gitattributes`** associe des chemins à un **pilote de diff**, et la
+      configuration `diff.<pilote>.textconv` donne la commande de conversion. Avec `sops -d`, `git diff` et
+      `git log -p` montrent les valeurs déchiffrées **sur ton poste**, alors que le dépôt ne contient que la
+      version chiffrée.
+
+      `.gitattributes` est versionné et partagé, mais la commande `textconv` vient de la configuration de
+      chacun : quelqu'un qui n'a pas de clé voit simplement le texte chiffré.
+
+      Ce qui se committe : les fichiers chiffrés, `.sops.yaml` et les clés **publiques**. Ce qui ne se
+      committe jamais : les clés privées et toute version déchiffrée.
+    checks:
+      - desc: Les fichiers attendus sont committés, chiffrés
+        run: |
+          cd /home/eleve/infra && git ls-files --error-unmatch .sops.yaml .gitattributes cles/eleve.pub secrets/prod.yaml secrets/staging.yaml donnees/sauvegarde.sql.age deployer.sh >/dev/null 2>&1 && git show HEAD:secrets/prod.yaml | grep -q '^sops:' && ! git show HEAD:secrets/prod.yaml | grep -q 'Pr0d-S3cret'
+      - desc: git show --textconv affiche prod.yaml déchiffré
+        run: |
+          cd /home/eleve/infra && git check-attr diff secrets/prod.yaml | grep -q 'sopsdiffer' && git show --textconv HEAD:secrets/prod.yaml 2>/dev/null | grep -q 'Pr0d-S3cret!2025'
+  - id: so-garde-fou
+    title: Garde-fou contre les fuites
+    description: |
+      L'historique contient `ancien/.env`, committé en clair. Dans un vrai projet, ce mot de passe devrait
+      être **changé** immédiatement. Ici :
+      1. retire `ancien/.env` du dépôt (dernier commit), ajoute `.env` et `*.env` au **`.gitignore`** et
+         committe ;
+      2. installe un hook **`pre-commit`** qui **refuse** tout commit contenant un fichier `secrets/*.yaml`
+         qui n'est **pas** chiffré par SOPS (pas de section `sops:` ni de valeur `ENC[`).
+    hint: "git rm ancien/.env ; le hook parcourt git diff --cached --name-only --diff-filter=ACM | grep '^secrets/.*\\.yaml$' et teste chaque fichier avec git show :fichier | grep -q '^sops:'"
+    cours: |
+      Un secret committé est **compromis**, même si on le supprime dans le commit suivant : il reste dans
+      l'historique, dans tous les clones et peut-être dans des forks ou des caches. La seule réponse sûre
+      est la **rotation** : changer le secret et révoquer l'ancien. Réécrire l'historique (`git
+      filter-repo`, BFG) vient ensuite, pour limiter l'exposition, mais ne remplace jamais la rotation.
+
+      Mieux vaut prévenir : un **hook `pre-commit`** examine les fichiers indexés (`git diff --cached
+      --name-only`, et leur contenu indexé avec `git show :chemin`) et refuse le commit si un fichier de
+      secrets n'est pas chiffré. Des outils spécialisés détectent les motifs de secrets (gitleaks,
+      detect-secrets, trufflehog) ; on les lance aussi **en CI** et côté serveur, car un hook local se
+      contourne avec `--no-verify`.
+
+      Le `.gitignore` empêche d'ajouter par mégarde les fichiers `.env` locaux.
+    checks:
+      - desc: ancien/.env n'est plus dans le dernier commit et .env est ignoré
+        run: |
+          cd /home/eleve/infra && ! git cat-file -e HEAD:ancien/.env 2>/dev/null && git check-ignore -q ancien/.env && git check-ignore -q prod.env
+      - desc: Le hook refuse un fichier de secrets en clair
+        run: |
+          d=$(mktemp -d) && cp -a /home/eleve/infra "$d/i" && cd "$d/i" && test -x .git/hooks/pre-commit && printf 'DB_PASSWORD: en-clair\n' > secrets/test.yaml && git add secrets/test.yaml && ! git commit -q -m "test" >/dev/null 2>&1; r=$?; cd /; rm -rf "$d"; exit $r
+      - desc: Le hook laisse passer un fichier chiffré
+        run: |
+          d=$(mktemp -d) && cp -a /home/eleve/infra "$d/i" && cd "$d/i" && cp secrets/staging.yaml secrets/copie.yaml && git add secrets/copie.yaml && git commit -q -m "test" >/dev/null 2>&1; r=$?; cd /; rm -rf "$d"; exit $r

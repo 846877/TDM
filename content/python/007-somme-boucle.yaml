@@ -1,0 +1,85 @@
+title: Somme avec une boucle
+level: debutant
+order: 7
+tags: [boucles]
+summary: Additionner les entiers de 1 à n avec for.
+description: |
+  Écris `somme_jusqua(n)` qui renvoie `1 + 2 + ... + n` en utilisant une boucle `for`.
+
+  Si `n` vaut 0 ou est négatif, renvoie `0`.
+starter: |
+  def somme_jusqua(n):
+      total = 0
+      # ta boucle ici
+      return total
+tests: |
+  def test_cinq():
+      "somme_jusqua(5) vaut 15"
+      assert solution.somme_jusqua(5) == 15
+
+  def test_un():
+      "somme_jusqua(1) vaut 1"
+      assert solution.somme_jusqua(1) == 1
+
+  def test_zero():
+      "somme_jusqua(0) vaut 0"
+      assert solution.somme_jusqua(0) == 0
+
+  def test_grand():
+      "somme_jusqua(1000) vaut 500500"
+      assert solution.somme_jusqua(1000) == 500500
+solution: |
+  def somme_jusqua(n):
+      total = 0
+      for i in range(1, n + 1):
+          total += i
+      return total
+cours: |
+  ## La boucle `for`
+
+  `for` parcourt les éléments d'une séquence un par un :
+
+  ```python
+  for fruit in ["pomme", "kiwi"]:
+      print(fruit)
+  ```
+
+  Pour répéter sur des entiers, on utilise `range` :
+
+  - `range(5)` → 0, 1, 2, 3, 4 (la borne de fin est **exclue**) ;
+  - `range(2, 6)` → 2, 3, 4, 5 ;
+  - `range(0, 10, 3)` → 0, 3, 6, 9.
+
+  Si la plage est vide (par exemple `range(1, 1)` ou `range(5, 2)`), le corps de la boucle
+  n'est simplement jamais exécuté : aucune erreur.
+
+  ## Le motif de l'accumulateur
+
+  Pour calculer un total, on prépare une variable **avant** la boucle et on la met à jour à
+  chaque tour :
+
+  ```python
+  produit = 1               # élément neutre de la multiplication
+  for k in range(1, 5):
+      produit = produit * k # ou : produit *= k
+  print(produit)            # 24
+  ```
+
+  Points d'attention :
+
+  - initialise l'accumulateur **hors** de la boucle, sinon il est remis à zéro à chaque tour ;
+  - le `return` se place **après** la boucle (désindenté), sinon la fonction s'arrête dès le
+    premier tour ;
+  - attention à la borne : pour inclure `n`, il faut aller jusqu'à `n + 1`.
+
+  ## Pour aller plus loin
+
+  Il existe une formule directe pour la somme des `n` premiers entiers
+  (`n × (n + 1) / 2`, attribuée à Gauss) : elle calcule en temps constant ce que la boucle
+  fait en `n` étapes. Ici l'objectif est de pratiquer la boucle, mais garde en tête qu'un
+  peu de mathématiques peut remplacer beaucoup de calcul.
+docs:
+  - title: Tutoriel — l'instruction for
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html#for-statements
+  - title: Documentation Python — range()
+    url: https://docs.python.org/fr/3/library/stdtypes.html#ranges

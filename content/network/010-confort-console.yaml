@@ -1,0 +1,90 @@
+title: Une console agréable à utiliser
+level: debutant
+order: 10
+device: switch
+hostname: SW-RDC
+tags: [console, line, dns]
+summary: Fini les recherches DNS sur une faute de frappe et les messages qui coupent la saisie.
+description: |
+  Trois réglages que tout administrateur applique dès la première connexion :
+
+  1. `no ip domain-lookup` : sans cela, une commande mal tapée (`sow run`) est prise pour un
+     nom d'hôte et le switch tente une **résolution DNS** pendant de longues secondes ;
+  2. sur la **ligne console** (`line console 0`), `logging synchronous` : les messages système
+     ne coupent plus la commande en cours de saisie ;
+  3. toujours sur la console, `exec-timeout 15 0` : la session se ferme après **15 minutes**
+     d'inactivité (minutes puis secondes).
+checks:
+  - desc: Résolution DNS désactivée
+    expr: not d.domain_lookup
+    hint: "En mode configuration : no ip domain-lookup"
+  - desc: logging synchronous sur la console
+    expr: line("console").logging_synchronous
+  - desc: Déconnexion après 15 minutes d'inactivité sur la console
+    expr: line("console").exec_timeout in ("15", "15 0")
+    hint: "Dans line console 0 : exec-timeout 15 0"
+solution: |
+  configure terminal
+  no ip domain-lookup
+  line console 0
+  logging synchronous
+  exec-timeout 15 0
+  end
+cours: |
+  ## Trois réglages qui changent la vie
+
+  ### 1. Ne plus chercher les fautes de frappe dans le DNS
+
+  En mode privilégié, un mot inconnu est interprété comme un **nom d'hôte** à joindre en Telnet.
+  IOS tente alors de le résoudre par DNS (diffusion vers `255.255.255.255`) et la console reste
+  bloquée une trentaine de secondes :
+
+  ```
+  R1# shwo run
+  Translating "shwo"...domain server (255.255.255.255)
+  % Unknown command or computer name, or unable to find computer address
+  ```
+
+  `no ip domain-lookup` désactive cette résolution. Si l'équipement doit résoudre des noms
+  (`ping srv-backup`), on configure plutôt un vrai serveur avec `ip name-server`.
+
+  ### 2. Des messages qui ne coupent plus la saisie
+
+  Les messages système (`%LINK-3-UPDOWN`...) s'affichent au milieu de la ligne qu'on est en train
+  de taper. `logging synchronous` sur la ligne réaffiche la saisie en cours après le message.
+
+  ### 3. Déconnexion automatique
+
+  `exec-timeout <minutes> <secondes>` ferme la session après une inactivité. La valeur par défaut
+  est 10 minutes. `exec-timeout 0 0` désactive la déconnexion : pratique en labo, **dangereux en
+  production** (une console restée ouverte est un accès privilégié offert).
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# no ip domain-lookup
+  SW1(config)# line console 0
+  SW1(config-line)# logging synchronous
+  SW1(config-line)# exec-timeout 5 30
+  SW1(config-line)# line vty 0 15
+  SW1(config-line)# logging synchronous
+  SW1(config-line)# exec-timeout 10 0
+  SW1# show running-config | section line
+  ```
+
+  Ces réglages se font **par ligne** : la console et les VTY se configurent séparément.
+
+  ### Pièges fréquents
+
+  - Désactiver le DNS sur un équipement qui doit vraiment résoudre des noms.
+  - Laisser `exec-timeout 0 0` après un dépannage.
+  - Configurer la console en oubliant les VTY (ou l'inverse).
+
+  ### Pour le CCNA
+
+  Ces commandes figurent dans la plupart des configurations de base attendues à l'examen.
+docs:
+  - title: "Wikipédia — Cisco IOS"
+    url: https://fr.wikipedia.org/wiki/Cisco_IOS
+  - title: "Wikipédia — Domain Name System"
+    url: https://fr.wikipedia.org/wiki/Domain_Name_System

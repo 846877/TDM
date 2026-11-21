@@ -1,0 +1,6 @@
+$TTL 3600
+@       IN SOA  ns.fournisseur.example. admin.fournisseur.example. (
+                2026101801 3600 900 604800 300 )
+        IN NS   ns.fournisseur.example.
+ns      IN A    10.30.0.60
+extranet IN A   172.20.5.15

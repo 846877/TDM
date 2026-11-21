@@ -1,0 +1,102 @@
+title: Routage dynamique RIPv2
+level: avance
+order: 5
+device: router
+hostname: R-ANNEXE
+tags: [rip, routage dynamique]
+summary: Configurer RIP version 2 sans résumé automatique.
+description: |
+  L'annexe utilise encore **RIP** avec un vieux routeur partenaire. Configure `R-ANNEXE` :
+
+  1. `router rip` puis `version 2` (RIPv1 ne transporte pas les masques : pas de VLSM) ;
+  2. annonce le LAN `192.168.50.0/24` et le lien WAN `10.1.1.0/30`.
+     Attention : `network` de RIP est **par classe** : `network 10.1.1.0` est enregistré
+     comme `10.0.0.0` (vérifie avec `show running-config | section rip`) ;
+  3. `no auto-summary` : sinon les sous-réseaux de `10.0.0.0` seraient résumés en `/8` ;
+  4. `G0/0` (LAN) **passive** : inutile d'envoyer des mises à jour RIP aux PC.
+
+  Contrôle avec `show ip protocols`.
+initial: |
+  interface g0/0
+  ip address 192.168.50.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.1.1.1 255.255.255.252
+  no shutdown
+checks:
+  - desc: RIP version 2
+    expr: d.rip is not None and d.rip.version == 2
+    hint: "router rip puis version 2"
+  - desc: LAN 192.168.50.0 annoncé
+    expr: rip_net("192.168.50.0")
+  - desc: Réseau 10.0.0.0 (lien WAN) annoncé
+    expr: rip_net("10.1.1.0")
+  - desc: Résumé automatique désactivé
+    expr: d.rip is not None and not d.rip.auto_summary
+  - desc: G0/0 passive
+    expr: d.rip is not None and d.rip.is_passive("g0/0") and not d.rip.is_passive("g0/1")
+solution: |
+  configure terminal
+  router rip
+  version 2
+  network 192.168.50.0
+  network 10.1.1.0
+  no auto-summary
+  passive-interface g0/0
+  end
+cours: |
+  ## RIP, le protocole historique
+
+  **RIP** (*Routing Information Protocol*) est un protocole à **vecteur de distance** : chaque
+  routeur envoie toutes les 30 secondes sa table de routage à ses voisins, et la métrique est le
+  **nombre de sauts** (16 = injoignable, donc 15 sauts au maximum). Simple, mais lent à
+  converger et limité ; on le rencontre encore dans de petits réseaux et des équipements
+  industriels.
+
+  | RIPv1                         | RIPv2                                  |
+  |-------------------------------|----------------------------------------|
+  | par classe (pas de masque)    | **sans classe** : masque dans les mises à jour (VLSM) |
+  | broadcast                     | multicast `224.0.0.9`                  |
+  | pas d'authentification        | authentification possible              |
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# router rip
+  R1(config-router)# version 2
+  R1(config-router)# network 172.16.0.0
+  R1(config-router)# network 10.0.0.0
+  R1(config-router)# no auto-summary
+  R1(config-router)# passive-interface gi0/0
+  R1# show ip route rip
+  R    172.17.8.0/24 [120/1] via 10.0.0.6, 00:00:12, GigabitEthernet0/1
+  R1# show ip protocols
+  ```
+
+  - `network` attend un réseau **par classe** : `172.16.0.0` active RIP sur toutes les
+    interfaces en 172.16.x.x ;
+  - `no auto-summary` : sans lui, RIP résume à la frontière de classe et des réseaux discontinus
+    deviennent injoignables ;
+  - `passive-interface` : le LAN est annoncé, mais aucune mise à jour n'y est émise.
+
+  ### Les mécanismes anti-boucle
+
+  *Split horizon* (ne pas réannoncer une route sur l'interface d'où elle vient), *route
+  poisoning* (annoncer la route morte avec la métrique 16) et les temporisateurs *holddown*
+  limitent le « comptage à l'infini » typique des vecteurs de distance.
+
+  ### Pièges fréquents
+
+  - Oublier `version 2`.
+  - Oublier `no auto-summary` avec des réseaux discontinus.
+  - Saisir un sous-réseau dans `network` : IOS le convertit en réseau de classe.
+
+  ### Pour le CCNA
+
+  RIP n'est plus au cœur du programme, mais il illustre les protocoles à vecteur de distance et
+  la distance administrative (120).
+docs:
+  - title: "RFC 2453 — RIP Version 2"
+    url: https://www.rfc-editor.org/rfc/rfc2453
+  - title: "Wikipédia — Routing Information Protocol"
+    url: https://fr.wikipedia.org/wiki/Routing_Information_Protocol

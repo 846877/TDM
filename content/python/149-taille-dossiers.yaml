@@ -1,0 +1,202 @@
+title: La taille des dossiers (du)
+level: intermediaire
+order: 49
+tags: [récursivité, dictionnaires, arbres, sysadmin]
+summary: Parcourir récursivement une arborescence pour calculer des tailles.
+description: |
+  Une arborescence est représentée par des dictionnaires imbriqués : une clé est un nom ;
+  sa valeur est un **entier** (un fichier et sa taille en octets) ou un **dictionnaire**
+  (un dossier).
+
+  ```python
+  ARBRE = {
+      "etc": {"hosts": 220, "ssh": {"sshd_config": 3300, "moduli": 550000}},
+      "var": {"log": {"syslog": 1200000, "auth.log": 80000}, "tmp": {}},
+      "README": 500,
+  }
+  ```
+
+  Écris ces fonctions **récursives** :
+
+  1. `taille(arbre)` : taille totale (octets) de tous les fichiers. Un fichier seul (un
+     entier) a sa propre taille.
+  2. `nb_fichiers(arbre)` : nombre de fichiers.
+  3. `chemins(arbre, prefixe="")` : liste **triée** des chemins complets de tous les fichiers,
+     séparés par `/` (par exemple `"etc/ssh/moduli"`).
+  4. `du(arbre)` : liste de couples `(chemin_du_dossier, taille)` pour **chaque dossier** (y
+     compris les dossiers vides), triée par taille décroissante puis chemin croissant.
+  5. `profondeur(arbre)` : nombre maximal de niveaux de dossiers (un dictionnaire sans
+     sous-dossier a une profondeur de 1 ; ici `ARBRE` a une profondeur de 3).
+
+  ```python
+  taille(ARBRE)          # 1834020
+  nb_fichiers(ARBRE)     # 6
+  du(ARBRE)[:2]          # [("var", 1280000), ("var/log", 1280000)]
+  ```
+starter: |
+  def taille(arbre):
+      pass
+
+
+  def nb_fichiers(arbre):
+      pass
+
+
+  def chemins(arbre, prefixe=""):
+      pass
+
+
+  def du(arbre):
+      pass
+
+
+  def profondeur(arbre):
+      pass
+tests: |
+  ARBRE = {
+      "etc": {"hosts": 220, "ssh": {"sshd_config": 3300, "moduli": 550000}},
+      "var": {"log": {"syslog": 1200000, "auth.log": 80000}, "tmp": {}},
+      "README": 500,
+  }
+
+  def test_taille():
+      "taille"
+      assert solution.taille(ARBRE) == 1834020, solution.taille(ARBRE)
+      assert solution.taille({}) == 0
+      assert solution.taille(42) == 42
+
+  def test_nb_fichiers():
+      "nb_fichiers"
+      assert solution.nb_fichiers(ARBRE) == 6
+      assert solution.nb_fichiers({"vide": {}}) == 0
+
+  def test_chemins():
+      "chemins"
+      att = ["README", "etc/hosts", "etc/ssh/moduli", "etc/ssh/sshd_config", "var/log/auth.log", "var/log/syslog"]
+      r = solution.chemins(ARBRE)
+      assert r == att, f"obtenu {r!r}"
+
+  def test_du():
+      "du"
+      att = [("var", 1280000), ("var/log", 1280000), ("etc", 553520), ("etc/ssh", 553300), ("var/tmp", 0)]
+      r = solution.du(ARBRE)
+      assert r == att, f"obtenu {r!r}"
+
+  def test_profondeur():
+      "profondeur"
+      assert solution.profondeur(ARBRE) == 3
+      assert solution.profondeur({"a": 1}) == 1
+      assert solution.profondeur({}) == 1
+      assert solution.profondeur({"a": {"b": {"c": {"d": {}}}}}) == 5
+
+  def test_profond():
+      "Arborescence profonde (200 niveaux)"
+      arbre = {"f": 1}
+      for i in range(200):
+          arbre = {f"d{i}": arbre}
+      assert solution.taille(arbre) == 1
+      assert solution.profondeur(arbre) == 201
+solution: |
+  def taille(arbre):
+      if isinstance(arbre, int):
+          return arbre
+      return sum(taille(contenu) for contenu in arbre.values())
+
+
+  def nb_fichiers(arbre):
+      if isinstance(arbre, int):
+          return 1
+      return sum(nb_fichiers(contenu) for contenu in arbre.values())
+
+
+  def chemins(arbre, prefixe=""):
+      resultat = []
+      for nom, contenu in arbre.items():
+          chemin = prefixe + nom
+          if isinstance(contenu, dict):
+              resultat.extend(chemins(contenu, chemin + "/"))
+          else:
+              resultat.append(chemin)
+      return sorted(resultat)
+
+
+  def du(arbre):
+      resultat = []
+
+      def explorer(dossier, chemin):
+          for nom, contenu in dossier.items():
+              if isinstance(contenu, dict):
+                  sous_chemin = f"{chemin}/{nom}" if chemin else nom
+                  resultat.append((sous_chemin, taille(contenu)))
+                  explorer(contenu, sous_chemin)
+
+      explorer(arbre, "")
+      return sorted(resultat, key=lambda c: (-c[1], c[0]))
+
+
+  def profondeur(arbre):
+      sous = [profondeur(c) for c in arbre.values() if isinstance(c, dict)]
+      return 1 + max(sous, default=0)
+cours: |
+  ## Les arborescences sont récursives
+
+  Un dossier contient des fichiers **et des dossiers**, qui contiennent eux-mêmes des
+  fichiers et des dossiers… Une structure définie en fonction d'elle-même se traite
+  naturellement avec une fonction **récursive** :
+
+  - **cas de base** : un fichier, dont la taille est connue ;
+  - **cas récursif** : un dossier, dont la taille est la somme des tailles de son contenu,
+    calculées par… la même fonction.
+
+  ```python
+  def compter_dossiers(arbre):
+      total = 0
+      for contenu in arbre.values():
+          if isinstance(contenu, dict):
+              total += 1 + compter_dossiers(contenu)
+      return total
+  ```
+
+  Inutile de savoir à l'avance combien de niveaux il y a : la récursion descend aussi loin que
+  nécessaire.
+
+  ## Distinguer les cas
+
+  `isinstance(valeur, dict)` décide si l'on descend ou non. Une fonction qui accepte
+  indifféremment un fichier ou un dossier rend souvent le code plus simple : le cas de base
+  devient « si c'est un entier, renvoyer l'entier ».
+
+  ## Transmettre le chemin
+
+  Pour construire des chemins complets, on passe le **préfixe** courant en paramètre ; chaque
+  appel récursif l'allonge d'un niveau. Le résultat d'un appel récursif (une liste) est
+  fusionné avec `extend` (et non `append`, qui imbriquerait la liste).
+
+  ## Fonction interne et accumulateur
+
+  Une fonction définie **à l'intérieur** d'une autre peut ajouter des éléments à une liste de
+  la fonction englobante : pratique pour collecter des résultats pendant une exploration,
+  sans les renvoyer à chaque niveau.
+
+  ## Profondeur et `max`
+
+  `max(liste, default=0)` évite l'erreur sur une liste vide (dossier sans sous-dossier).
+
+  ## Complexité et limites
+
+  Recalculer la taille d'un sous-dossier pour chacun de ses ancêtres coûte O(n × profondeur).
+  Pour de grandes arborescences, on calcule toutes les tailles en **un seul** parcours
+  « remontant » (chaque appel renvoie la taille de son dossier après l'avoir enregistrée).
+  La récursion Python est limitée à environ 1000 niveaux, largement assez pour un système de
+  fichiers réel.
+
+  ## Dans la vraie vie
+
+  `du -sh *` (Linux) ou TreeSize (Windows) font exactement ce calcul pour trouver ce qui
+  remplit un disque. En Python, `os.walk()` ou `Path.rglob()` parcourent une vraie
+  arborescence.
+docs:
+  - title: Module os (os.walk)
+    url: https://docs.python.org/fr/3/library/os.html#os.walk
+  - title: Documentation Python — max() (paramètre default)
+    url: https://docs.python.org/fr/3/library/functions.html#max

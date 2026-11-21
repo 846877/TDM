@@ -1,0 +1,130 @@
+title: OSPF en production
+level: avance
+order: 7
+device: router
+hostname: R-CORE
+tags: [ospf, passive-interface, coût, route par défaut]
+summary: Interfaces passives par défaut, coûts et propagation de la route par défaut.
+description: |
+  OSPF fonctionne déjà sur `R-CORE`, mais avec les réglages d'usine. Mets-le aux normes de l'entreprise :
+
+  1. router-id fixe `1.1.1.1` ;
+  2. **toutes** les interfaces passives par défaut (`passive-interface default`), puis réactive
+     uniquement les liens vers les autres routeurs : `no passive-interface g0/1` et `g0/2` ;
+  3. `auto-cost reference-bandwidth 10000` : avec la référence d'usine (100 Mbit/s), un lien
+     Fast Ethernet et un lien 10 Gbit/s ont le même coût ;
+  4. le lien `G0/2` est un lien de secours : donne-lui un coût OSPF de `100` (`ip ospf cost 100`) ;
+  5. `R-CORE` a une route par défaut vers Internet : propage-la aux autres routeurs
+     (`default-information originate`).
+initial: |
+  interface g0/0
+  ip address 192.168.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.0.0.1 255.255.255.252
+  no shutdown
+  interface g0/2
+  ip address 10.0.0.5 255.255.255.252
+  no shutdown
+  interface s0/0/0
+  ip address 203.0.113.2 255.255.255.252
+  no shutdown
+  ip route 0.0.0.0 0.0.0.0 203.0.113.1
+  router ospf 1
+  network 192.168.1.0 0.0.0.255 area 0
+  network 10.0.0.0 0.0.0.3 area 0
+  network 10.0.0.4 0.0.0.3 area 0
+checks:
+  - desc: Router-id 1.1.1.1
+    expr: d.ospf[1].router_id == "1.1.1.1"
+  - desc: Interfaces passives par défaut
+    expr: d.ospf[1].passive_default and d.ospf[1].is_passive("g0/0")
+    hint: "passive-interface default dans router ospf 1"
+  - desc: G0/1 et G0/2 restent actives en OSPF
+    expr: not d.ospf[1].is_passive("g0/1") and not d.ospf[1].is_passive("g0/2")
+    hint: "no passive-interface g0/1 (et g0/2)"
+  - desc: Bande passante de référence 10000 Mbit/s
+    expr: d.ospf[1].reference_bandwidth == 10000
+  - desc: Coût OSPF 100 sur G0/2 uniquement
+    expr: intf("g0/2").ospf_cost == 100 and intf("g0/1").ospf_cost is None
+  - desc: Route par défaut propagée
+    expr: d.ospf[1].default_originate
+solution: |
+  configure terminal
+  router ospf 1
+  router-id 1.1.1.1
+  passive-interface default
+  no passive-interface g0/1
+  no passive-interface g0/2
+  auto-cost reference-bandwidth 10000
+  default-information originate
+  exit
+  interface g0/2
+  ip ospf cost 100
+  end
+cours: |
+  ## Trois réglages de production
+
+  ### 1. Passif par défaut
+
+  Plutôt que de lister chaque interface d'utilisateurs en passive, on rend **tout** passif puis
+  on réactive les liens vers les voisins :
+
+  ```
+  R1(config)# router ospf 10
+  R1(config-router)# passive-interface default
+  R1(config-router)# no passive-interface gi0/3
+  ```
+
+  Toute nouvelle interface est ainsi passive par défaut : pas de voisinage accidentel sur un
+  réseau d'utilisateurs.
+
+  ### 2. Une référence de bande passante adaptée
+
+  Le coût OSPF vaut `bande passante de référence / bande passante de l'interface`, avec une
+  référence de **100 Mbit/s** par défaut. Conséquence : FastEthernet, Gigabit et 10 Gigabit ont
+  tous un coût de **1**, et OSPF ne sait plus les distinguer.
+
+  ```
+  R1(config-router)# auto-cost reference-bandwidth 100000   ! 100 Gbit/s, en Mbit/s
+  R1(config)# interface gi0/3
+  R1(config-if)# ip ospf cost 250        ! valeur imposée, prioritaire sur le calcul
+  R1# show ip ospf interface brief
+  ```
+
+  La référence doit être **identique sur tous les routeurs**, sinon les chemins choisis sont
+  incohérents.
+
+  ### 3. Propager la route par défaut
+
+  Le routeur qui possède l'accès Internet annonce une route par défaut aux autres :
+
+  ```
+  R1(config)# ip route 0.0.0.0 0.0.0.0 198.51.100.1
+  R1(config)# router ospf 10
+  R1(config-router)# default-information originate
+  ```
+
+  Elle n'est annoncée que si le routeur a lui-même une route par défaut (sauf avec `always`).
+  Chez les voisins : `O*E2 0.0.0.0/0 [110/1]`.
+
+  ### Le coût pour orienter le trafic
+
+  Augmenter le coût d'un lien (`ip ospf cost`) le rend moins attractif : c'est l'outil simple
+  pour faire d'un lien un lien de **secours**.
+
+  ### Pièges fréquents
+
+  - Oublier `no passive-interface` sur les liens : les voisinages tombent.
+  - Changer la référence sur un seul routeur.
+  - `default-information originate always` sans route par défaut réelle : trou noir.
+
+  ### Pour le CCNA
+
+  Interfaces passives, coût, référence de bande passante et propagation de la route par défaut
+  font partie des réglages OSPF attendus.
+docs:
+  - title: "Cisco — OSPF Design Guide"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/7039-1.html
+  - title: "RFC 2328 — OSPF Version 2"
+    url: https://www.rfc-editor.org/rfc/rfc2328

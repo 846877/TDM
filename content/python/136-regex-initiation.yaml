@@ -1,0 +1,171 @@
+title: Premières expressions régulières
+level: intermediaire
+order: 36
+tags: [regex, re, chaînes]
+summary: Chercher, valider et remplacer du texte avec le module re.
+description: |
+  Utilise le module `re`.
+
+  1. `extraire_nombres(texte)` : la liste des entiers (positifs, sans signe) présents dans le
+     texte, convertis en `int`.
+  2. `est_mac(texte)` : `True` si le texte **entier** est une adresse MAC de la forme
+     `aa:bb:cc:dd:ee:ff` (6 paires de chiffres hexadécimaux, majuscules ou minuscules,
+     séparées par `:` **ou** toutes par `-`, sans mélange).
+  3. `normaliser_espaces(texte)` : remplace toute suite d'espaces/tabulations/retours à la
+     ligne par **une** espace et retire les espaces au début et à la fin.
+  4. `masquer_mots_de_passe(ligne)` : remplace la valeur après `password=` ou `pwd=` (jusqu'à
+     la prochaine espace ou `&`, ou la fin) par `***`. La casse du mot-clé est ignorée et
+     conservée.
+  5. `codes_erreur(texte)` : la liste des codes HTTP d'erreur (nombres de 3 chiffres
+     commençant par 4 ou 5, isolés : pas au milieu d'un nombre plus long), en chaînes.
+
+  ```python
+  extraire_nombres("3 serveurs, 12 VM et 256 Go")    # [3, 12, 256]
+  est_mac("00:1A:2b:3C:4d:5E")                        # True
+  est_mac("00:1A-2b:3C:4d:5E")                        # False
+  normaliser_espaces("  trop   d'\t espaces \n")      # "trop d' espaces"
+  masquer_mots_de_passe("user=bob&password=s3cr3t&x=1")   # "user=bob&password=***&x=1"
+  codes_erreur("200 404 500 1404 301 503")            # ["404", "500", "503"]
+  ```
+starter: |
+  import re
+
+
+  def extraire_nombres(texte):
+      pass
+
+
+  def est_mac(texte):
+      pass
+
+
+  def normaliser_espaces(texte):
+      pass
+
+
+  def masquer_mots_de_passe(ligne):
+      pass
+
+
+  def codes_erreur(texte):
+      pass
+tests: |
+  def test_nombres():
+      "extraire_nombres"
+      assert solution.extraire_nombres("3 serveurs, 12 VM et 256 Go") == [3, 12, 256]
+      assert solution.extraire_nombres("aucun") == []
+      assert solution.extraire_nombres("v2.10") == [2, 10]
+
+  def test_mac():
+      "est_mac"
+      for m in ["00:1A:2b:3C:4d:5E", "aa-bb-cc-dd-ee-ff", "FF:FF:FF:FF:FF:FF"]:
+          assert solution.est_mac(m) is True, f"{m} est valide"
+      for m in ["00:1A-2b:3C:4d:5E", "00:1A:2b:3C:4d", "00:1A:2b:3C:4d:5E:66", "GG:1A:2b:3C:4d:5E",
+                "001A2b3C4d5E", " 00:1A:2b:3C:4d:5E", "00:1A:2b:3C:4d:5E\n"]:
+          assert solution.est_mac(m) is False, f"{m!r} est invalide"
+
+  def test_espaces():
+      "normaliser_espaces"
+      assert solution.normaliser_espaces("  trop   d'\t espaces \n") == "trop d' espaces"
+      assert solution.normaliser_espaces("ok") == "ok"
+      assert solution.normaliser_espaces("   ") == ""
+
+  def test_masquer():
+      "masquer_mots_de_passe"
+      assert solution.masquer_mots_de_passe("user=bob&password=s3cr3t&x=1") == "user=bob&password=***&x=1"
+      assert solution.masquer_mots_de_passe("connexion PWD=abc depuis 10.0.0.1") == "connexion PWD=*** depuis 10.0.0.1"
+      assert solution.masquer_mots_de_passe("pwd=a password=b") == "pwd=*** password=***"
+      assert solution.masquer_mots_de_passe("rien a cacher") == "rien a cacher"
+
+  def test_codes():
+      "codes_erreur"
+      assert solution.codes_erreur("200 404 500 1404 301 503") == ["404", "500", "503"]
+      assert solution.codes_erreur("GET /a 404, GET /b 418;") == ["404", "418"]
+      assert solution.codes_erreur("4040 50") == []
+solution: |
+  import re
+
+
+  def extraire_nombres(texte):
+      return [int(n) for n in re.findall(r"\d+", texte)]
+
+
+  def est_mac(texte):
+      return bool(re.fullmatch(r"[0-9A-Fa-f]{2}([:-])[0-9A-Fa-f]{2}(?:\1[0-9A-Fa-f]{2}){4}", texte))
+
+
+  def normaliser_espaces(texte):
+      return re.sub(r"\s+", " ", texte).strip()
+
+
+  def masquer_mots_de_passe(ligne):
+      return re.sub(r"(?i)\b(password|pwd)=[^ &]*", r"\1=***", ligne)
+
+
+  def codes_erreur(texte):
+      return re.findall(r"(?<!\d)[45]\d\d(?!\d)", texte)
+cours: |
+  ## À quoi servent les regex ?
+
+  Une **expression régulière** décrit un motif de texte. Elle permet de chercher (« tous les
+  nombres »), valider (« est-ce une adresse MAC ? ») et remplacer (« masquer les mots de
+  passe »). Les outils `grep`, `sed`, `awk` et la plupart des éditeurs les utilisent.
+
+  ## Les briques de base
+
+  | Motif | Correspond à |
+  |-------|--------------|
+  | `a`, `abc` | le texte exact |
+  | `.` | n'importe quel caractère (sauf retour à la ligne) |
+  | `\d`, `\s`, `\w` | un chiffre, un espace (ou tab, `\n`…), un caractère de mot |
+  | `[abc]`, `[0-9A-F]`, `[^ &]` | un caractère de la liste, d'une plage, **hors** liste |
+  | `x*`, `x+`, `x?` | 0 ou plus, 1 ou plus, 0 ou 1 |
+  | `x{2}`, `x{2,4}` | exactement 2, de 2 à 4 |
+  | `^`, `$`, `\b` | début, fin, frontière de mot |
+  | `(...)` | groupe (capture une partie) |
+  | `a\|b` | a ou b |
+
+  Écris toujours les motifs en **chaîne brute** `r"..."`, sinon Python interprète lui-même
+  les `\` (par exemple `"\b"` est un caractère de contrôle).
+
+  ## Les fonctions principales
+
+  ```python
+  import re
+  re.findall(r"\d+", "eth0: 3 erreurs, 12 paquets")   # ['3', '12'] (toujours des chaînes)
+  re.search(r"\d+", "port 8080")                      # objet Match ou None
+  re.fullmatch(r"\d{4}", "2026")                      # le texte ENTIER doit correspondre
+  re.sub(r"\s+", " ", "a    b")                       # 'a b'
+  ```
+
+  `search` trouve un motif n'importe où ; `fullmatch` sert à **valider** un format. Avec
+  `match` ou `search`, un texte comme `"2026abc"` passerait.
+
+  ## Groupes et références
+
+  Dans un remplacement, `\1` réinsère le texte du groupe 1. Dans le motif lui-même, `\1`
+  exige de retrouver **le même texte** que le groupe 1 : pratique pour imposer un séparateur
+  identique partout.
+
+  Attention : si le motif contient un groupe, `findall` renvoie le contenu des **groupes**,
+  pas la correspondance entière. `(?:...)` groupe sans capturer.
+
+  ## Options
+
+  `(?i)` en tête du motif (ou `flags=re.IGNORECASE`) ignore la casse.
+
+  ## Ne pas couper un nombre
+
+  Pour trouver « un nombre de 3 chiffres » qui n'est pas un morceau d'un nombre plus long,
+  `\b` ne suffit pas toujours ; les assertions `(?<!\d)` (« pas précédé d'un chiffre ») et
+  `(?!\d)` (« pas suivi d'un chiffre ») sont plus précises.
+
+  ## Conseil
+
+  Teste tes motifs sur des exemples variés, y compris des cas qui **ne** doivent **pas**
+  correspondre. Le site regex101.com (mode Python) explique chaque partie d'un motif.
+docs:
+  - title: HOWTO — expressions régulières
+    url: https://docs.python.org/fr/3/howto/regex.html
+  - title: Module re
+    url: https://docs.python.org/fr/3/library/re.html

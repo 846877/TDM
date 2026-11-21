@@ -1,0 +1,132 @@
+name: Application Windows
+
+# Uniquement sur push (et à la main) : un pull_request depuis la même branche referait exactement le même
+# travail, et les minutes Windows comptent double.
+on:
+  push:
+    branches: [main, claude/training-platform-prasza]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tests sous Windows
+        run: |
+          python -m pip install -r backend/requirements-dev.txt pywinpty
+          cd backend
+          python -m pytest -q
+      - name: Construction de TDM.exe
+        run: powershell -ExecutionPolicy Bypass -File desktop\build.ps1
+      - name: Essai de TDM.exe (serveur, moulinette Python, terminal)
+        run: python desktop\smoke_test.py dist\TDM.exe
+      - name: Essai de la fenêtre
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $p = Start-Process dist\TDM.exe -ArgumentList '--window-test','--port','8767' -Wait -PassThru
+          Get-Content "$env:LOCALAPPDATA\TDM\tdm.log" -ErrorAction SilentlyContinue | Select-Object -Last 30
+          if ($p.ExitCode -ne 0) { exit 1 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TDM-windows
+          path: dist/TDM.exe
+      - name: Publication de la préversion
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release delete windows-preview --yes --cleanup-tag || true
+          gh release create windows-preview dist/TDM.exe --prerelease --target "$GITHUB_SHA" \
+            --title "TDM pour Windows (préversion)" \
+            --notes "Télécharge TDM.exe et double-clique dessus. Construit depuis ${GITHUB_SHA::7}."
+
+  # Labs Windows (labs/systemes-windows) : analyse de tous les scripts PowerShell, puis chaque lab qui a
+  # des exercices « ci: true » est rejoué sur un runner neuf (Windows Server 2022) : vérifications qui
+  # échouent, solution, vérifications qui réussissent. Voir labs/systemes-windows/README.md.
+  # Seuls les labs modifiés depuis le push précédent sont rejoués (tous si un fichier commun change).
+  changements:
+    runs-on: ubuntu-latest
+    outputs:
+      windows: ${{ steps.diff.outputs.windows }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        shell: bash
+        env:
+          AVANT: ${{ github.event.before }}
+        run: |
+          if [ "${{ github.event_name }}" != push ] || ! git diff --name-only "$AVANT" "$GITHUB_SHA" > changements.txt 2>/dev/null; then
+            echo TOUT > changements.txt
+          fi
+          cat changements.txt
+          if grep -qE '^(TOUT$|labs/systemes-windows/|scripts/windows_labs_ci\.py|backend/app/devops/windows\.py|\.github/workflows/windows\.yml)' changements.txt; then
+            echo "windows=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "windows=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: changements
+          path: changements.txt
+
+  labs-windows-statique:
+    needs: changements
+    if: needs.changements.outputs.windows == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    outputs:
+      labs: ${{ steps.liste.outputs.labs }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: changements
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pyyaml
+      - name: Outils d'administration (modules AD, DNS, DHCP, GPO, DFS, FSRM, sauvegarde, AD CS, RRAS, IIS)
+        shell: powershell
+        run: |
+          $features = 'RSAT-AD-PowerShell', 'RSAT-ADDS-Tools', 'AD-Domain-Services', 'RSAT-DNS-Server', 'RSAT-DHCP',
+                      'GPMC', 'RSAT-DFS-Mgmt-Con', 'RSAT-FSRM-Mgmt', 'Windows-Server-Backup',
+                      'FS-Resource-Manager',   # le module FileServerResourceManager vient avec le service de rôle
+                      'ADCS-Cert-Authority', 'RSAT-ADCS-Mgmt',   # ADCSDeployment et ADCSAdministration (rôle non configuré)
+                      'RSAT-RemoteAccess-PowerShell',            # module RemoteAccess
+                      'Web-Scripting-Tools'                      # module WebAdministration
+          Install-WindowsFeature $features | Format-Table -AutoSize
+      - name: Syntaxe des scripts et existence des commandes
+        run: python scripts/windows_labs_ci.py static --commands
+      - id: liste
+        shell: bash
+        run: echo "labs=$(python scripts/windows_labs_ci.py list --changed changements.txt)" >> "$GITHUB_OUTPUT"
+
+  labs-windows:
+    needs: labs-windows-statique
+    if: needs.labs-windows-statique.outputs.labs != '[]'
+    name: Lab Windows ${{ matrix.lab }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        lab: ${{ fromJSON(needs.labs-windows-statique.outputs.labs) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pyyaml
+      - name: Exercices rejoués (échec, solution, réussite)
+        run: python scripts/windows_labs_ci.py run --lab ${{ matrix.lab }}

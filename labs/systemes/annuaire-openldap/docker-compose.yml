@@ -1,0 +1,28 @@
+# Annuaire d'« Ateliers Durand » : srv-ldap (OpenLDAP préinstallé pour dc=durand,dc=lan, non démarré),
+# poste (client Linux à brancher sur l'annuaire) et admin (outils LDAP).
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.175.0.5}
+  srv-ldap:
+    build: {context: ., dockerfile: srv-ldap/Dockerfile}
+    hostname: srv-ldap
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.175.0.10}
+  poste:
+    build: {context: ., dockerfile: poste/Dockerfile}
+    hostname: poste
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.175.0.20}
+volumes:
+  cles:
+networks:
+  lan:
+    internal: true
+    ipam:
+      config: [{subnet: 10.175.0.0/24, ip_range: 10.175.0.128/28}]

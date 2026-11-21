@@ -1,0 +1,241 @@
+title: Filtrage par motif avec match/case
+level: avance
+order: 32
+tags: [match, pattern matching, récursivité, dataclasses]
+summary: Décomposer des structures de données avec match/case.
+description: |
+  Utilise l'instruction `match` (Python 3.10+).
+
+  **1. `evaluer(expr)`** évalue une expression représentée par des tuples imbriqués :
+
+  | Forme | Valeur |
+  |-------|--------|
+  | un nombre (`int` ou `float`, mais pas `bool`) | le nombre |
+  | `("+", a, b)`, `("-", a, b)`, `("*", a, b)`, `("/", a, b)` | l'opération |
+  | `("-", a)` | l'opposé |
+  | `("max", a, b, c, ...)` | le maximum d'au moins un argument |
+  | autre chose | `ValueError` |
+
+  `evaluer(("+", 1, ("*", 2, 3)))` vaut `7`.
+
+  **2. `traiter(commande)`** reçoit un dictionnaire (comme un message JSON) et renvoie une
+  chaîne :
+
+  | Commande | Résultat |
+  |----------|----------|
+  | `{"action": "ping", "hote": h}` | `"ping <h>"` |
+  | `{"action": "scan", "hote": h, "ports": [p1, p2, ...]}` (liste d'entiers, au moins un) | `"scan <h> : <n> ports"` |
+  | `{"action": "scan", "hote": h}` | `"scan <h> : ports par défaut"` |
+  | `{"action": "redemarrer", "service": s, "force": True}` | `"redémarrage forcé de <s>"` |
+  | `{"action": "redemarrer", "service": s}` (sans `force` vrai) | `"redémarrage de <s>"` |
+  | toute autre forme | `"commande inconnue"` |
+
+  Les clés en trop sont ignorées. `hote` et `service` doivent être des chaînes.
+
+  **3. `decrire(forme)`** reçoit une instance des dataclasses `Point(x, y)`,
+  `Cercle(centre, rayon)` ou `Rectangle(coin, largeur, hauteur)` (à définir) et renvoie :
+  `"origine"` pour `Point(0, 0)`, `"point sur l'axe X"` si `y == 0`, `"point"` sinon ;
+  `"cercle unité"` pour un cercle de rayon 1 centré à l'origine, `"cercle"` sinon ;
+  `"carré"` si largeur == hauteur, `"rectangle"` sinon.
+starter: |
+  from dataclasses import dataclass
+
+
+  def evaluer(expr):
+      pass
+
+
+  def traiter(commande):
+      pass
+
+
+  def decrire(forme):
+      pass
+tests: |
+  def test_evaluer():
+      "evaluer"
+      assert solution.evaluer(("+", 1, ("*", 2, 3))) == 7
+      assert solution.evaluer(("-", 10, 4)) == 6
+      assert solution.evaluer(("-", ("/", 9, 2))) == -4.5
+      assert solution.evaluer(("max", 3, ("+", 4, 4), 1)) == 8
+      assert solution.evaluer(("max", 5)) == 5
+      assert solution.evaluer(2.5) == 2.5
+
+  def test_evaluer_invalide():
+      "evaluer refuse les formes inconnues"
+      for e in [("%", 1, 2), ("max",), ("+", 1), True, "3", ("+", 1, "2"), [1]]:
+          try:
+              solution.evaluer(e)
+          except ValueError:
+              continue
+          raise AssertionError(f"evaluer({e!r}) devrait lever ValueError")
+
+  def test_traiter():
+      "traiter"
+      t = solution.traiter
+      assert t({"action": "ping", "hote": "10.0.0.1"}) == "ping 10.0.0.1"
+      assert t({"action": "scan", "hote": "srv", "ports": [22, 80, 443]}) == "scan srv : 3 ports"
+      assert t({"action": "scan", "hote": "srv"}) == "scan srv : ports par défaut"
+      assert t({"action": "redemarrer", "service": "nginx", "force": True}) == "redémarrage forcé de nginx"
+      assert t({"action": "redemarrer", "service": "nginx"}) == "redémarrage de nginx"
+      assert t({"action": "redemarrer", "service": "nginx", "force": False}) == "redémarrage de nginx"
+      assert t({"action": "ping", "hote": "a", "ttl": 3}) == "ping a", "les clés en trop sont ignorées"
+
+  def test_traiter_inconnu():
+      "traiter : commandes inconnues"
+      t = solution.traiter
+      for c in [{"action": "ping"}, {"action": "ping", "hote": 42}, {"action": "scan", "hote": "a", "ports": []},
+                {"action": "scan", "hote": "a", "ports": ["22"]}, {"action": "formater"}, {}, ["ping", "a"]]:
+          assert t(c) == "commande inconnue", f"{c!r} -> {t(c)!r}"
+
+  def test_decrire():
+      "decrire"
+      P, C, R = solution.Point, solution.Cercle, solution.Rectangle
+      assert solution.decrire(P(0, 0)) == "origine"
+      assert solution.decrire(P(5, 0)) == "point sur l'axe X"
+      assert solution.decrire(P(1, 2)) == "point"
+      assert solution.decrire(C(P(0, 0), 1)) == "cercle unité"
+      assert solution.decrire(C(P(1, 0), 1)) == "cercle"
+      assert solution.decrire(R(P(0, 0), 3, 3)) == "carré"
+      assert solution.decrire(R(P(0, 0), 3, 4)) == "rectangle"
+solution: |
+  from dataclasses import dataclass
+
+
+  def evaluer(expr):
+      match expr:
+          case bool():
+              raise ValueError("un booléen n'est pas un nombre")
+          case int() | float():
+              return expr
+          case ("+", a, b):
+              return evaluer(a) + evaluer(b)
+          case ("-", a, b):
+              return evaluer(a) - evaluer(b)
+          case ("*", a, b):
+              return evaluer(a) * evaluer(b)
+          case ("/", a, b):
+              return evaluer(a) / evaluer(b)
+          case ("-", a):
+              return -evaluer(a)
+          case ("max", premier, *reste):
+              return max(evaluer(x) for x in (premier, *reste))
+          case _:
+              raise ValueError(f"expression invalide : {expr!r}")
+
+
+  def traiter(commande):
+      match commande:
+          case {"action": "ping", "hote": str(hote)}:
+              return f"ping {hote}"
+          case {"action": "scan", "hote": str(hote), "ports": [int(), *_] as ports} if all(
+              isinstance(p, int) for p in ports
+          ):
+              return f"scan {hote} : {len(ports)} ports"
+          case {"action": "scan", "hote": str(hote)} if "ports" not in commande:
+              return f"scan {hote} : ports par défaut"
+          case {"action": "redemarrer", "service": str(service), "force": True}:
+              return f"redémarrage forcé de {service}"
+          case {"action": "redemarrer", "service": str(service)}:
+              return f"redémarrage de {service}"
+          case _:
+              return "commande inconnue"
+
+
+  @dataclass
+  class Point:
+      x: float
+      y: float
+
+
+  @dataclass
+  class Cercle:
+      centre: Point
+      rayon: float
+
+
+  @dataclass
+  class Rectangle:
+      coin: Point
+      largeur: float
+      hauteur: float
+
+
+  def decrire(forme):
+      match forme:
+          case Point(x=0, y=0):
+              return "origine"
+          case Point(y=0):
+              return "point sur l'axe X"
+          case Point():
+              return "point"
+          case Cercle(centre=Point(x=0, y=0), rayon=1):
+              return "cercle unité"
+          case Cercle():
+              return "cercle"
+          case Rectangle(largeur=l, hauteur=h) if l == h:
+              return "carré"
+          case Rectangle():
+              return "rectangle"
+          case _:
+              raise TypeError("forme inconnue")
+cours: |
+  ## Plus qu'un `switch`
+
+  `match` compare une valeur à une suite de **motifs** et exécute le premier qui
+  correspond. Contrairement au `switch` d'autres langages, il **décompose** la structure et
+  capture des variables au passage.
+
+  ```python
+  match commande.split():
+      case ["quit"]:
+          ...
+      case ["go", direction]:            # capture direction
+          ...
+      case ["drop", *objets]:            # capture le reste dans une liste
+          ...
+      case _:                            # motif joker : tout le reste
+          ...
+  ```
+
+  ## Les familles de motifs
+
+  | Motif | Correspond à |
+  |-------|--------------|
+  | `42`, `"ping"`, `None`, `True` | une valeur littérale |
+  | `nom` | n'importe quoi, capturé dans `nom` |
+  | `_` | n'importe quoi, sans capture |
+  | `(a, b)` ou `[a, b]` | une **séquence** de longueur 2 (tuple ou liste, pas une chaîne) |
+  | `[premier, *reste]` | une séquence d'au moins un élément |
+  | `{"cle": motif}` | un **mapping** contenant au moins cette clé (les autres sont ignorées) |
+  | `int()`, `str(x)` | une instance de la classe (et capture) |
+  | `Point(x=0, y=yy)` | une instance dont les attributs correspondent |
+  | `motif1 \| motif2` | l'un ou l'autre |
+  | `motif as nom` | capture l'ensemble |
+  | `case motif if condition:` | une **garde** supplémentaire |
+
+  ## Pièges
+
+  - Un nom seul **capture** toujours : `case ROUGE:` ne compare pas à une constante `ROUGE`,
+    il affecte la valeur à une variable nommée `ROUGE` ! Pour comparer à une constante, il
+    faut un nom pointé (`Couleur.ROUGE`).
+  - L'ordre des `case` compte : le premier qui correspond gagne. Place les cas particuliers
+    avant les cas généraux.
+  - `bool` est une sous-classe d'`int` : `case int()` accepte `True`.
+  - Un motif de mapping n'exige pas l'**absence** des autres clés : pour exclure une clé,
+    utilise une garde.
+
+  ## Pourquoi c'est utile
+
+  `match` brille pour les données **structurées et hétérogènes** : messages JSON d'une API,
+  arbres syntaxiques (un interpréteur s'écrit très naturellement avec `match`), événements,
+  commandes. Il remplace des cascades de `isinstance`, de `len()` et d'accès par clé par une
+  description déclarative de la forme attendue.
+
+  Les dataclasses définissent automatiquement `__match_args__`, ce qui permet aussi les motifs
+  positionnels : `case Point(0, 0)`.
+docs:
+  - title: Tutoriel — l'instruction match
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html
+  - title: PEP 636 — tutoriel du filtrage par motif (anglais)
+    url: https://peps.python.org/pep-0636/

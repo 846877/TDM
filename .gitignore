@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+.workspaces/
+.pytest_cache/
+.env
+build/
+dist/
+*.spec
+.data/
+.claude/
+.vagrant/
+labs/systemes-windows/*/.tdm/

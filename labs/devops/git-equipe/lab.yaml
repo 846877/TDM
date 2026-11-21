@@ -1,0 +1,352 @@
+title: Git en équipe
+level: debutant
+order: 9
+tags: [git, collaboration, branches, rebase, tags, hooks]
+summary: Travailler à plusieurs sur un dépôt partagé - clones, branches suivies, relecture, pull --rebase, force-with-lease, fusion, release, miroir et hook serveur.
+build: .
+shell: bash
+user: eleve
+workdir: /home/eleve
+description: |
+  Un poste Ubuntu (utilisateur `eleve`) avec Git. Le **dépôt partagé** de l'équipe est
+  **`/srv/git/boutique.git`** (un dépôt nu, comme sur un serveur GitLab ou GitHub) ; il contient déjà
+  quelques commits de **Charlie**, un collègue.
+
+  Tu vas jouer tour à tour **Alice** et **Bob**, chacun avec son propre clone :
+  `~/alice/boutique` et `~/bob/boutique`. Le script **`~/outils/charlie-pousse.sh`** simule Charlie qui
+  pousse une correction pendant que tu travailles.
+
+  Ce lab suppose les bases de Git (lab « Git au quotidien ») : commit, branche, fusion. Il se concentre
+  sur ce qui change quand on n'est plus seul : synchronisation, historique partagé, relecture, versions
+  publiées et règles imposées par le serveur. Les messages de commit suivent la convention
+  **Conventional Commits** (`feat: ...`, `fix: ...`, `docs: ...`, `test: ...`, `chore: ...`).
+cours: |
+  ## Git à plusieurs : un historique partagé
+
+  Git est **distribué** : chaque clone contient tout l'historique. Pour travailler en équipe, on désigne
+  un dépôt de référence, souvent un dépôt **nu** (*bare*, sans copie de travail) hébergé sur un serveur,
+  que tout le monde clone et vers lequel chacun pousse.
+
+  ```
+                  /srv/git/boutique.git  (dépôt nu « origin »)
+                 ▲  push     │ fetch / pull     ▲
+                 │           ▼                  │
+     ~/alice/boutique   ~/bob/boutique   /srv/charlie/boutique
+     main, feature/…    main, feature/…  main
+     origin/main …      origin/main …    origin/main …
+  ```
+
+  Dans chaque clone, les **branches de suivi** (`origin/main`, `origin/feature/panier`) sont la photo du
+  serveur au dernier `fetch`. Elles ne bougent que quand tu interroges le serveur.
+
+  ### Les commandes de synchronisation
+
+  | Commande | Effet |
+  |---|---|
+  | `git fetch` | met à jour les `origin/*`, sans toucher à tes branches |
+  | `git pull` | `fetch` puis fusion (ou rebase) de la branche suivie |
+  | `git pull --rebase` | rejoue tes commits locaux au-dessus de ceux du serveur |
+  | `git push -u origin br` | publie `br` et en fait la branche suivie |
+  | `git push --force-with-lease` | réécrit une branche distante **si** personne n'a poussé entre-temps |
+  | `git push --delete origin br` | supprime une branche distante |
+  | `git push origin --tags` | publie les tags |
+
+  ### Le refus « non-fast-forward »
+
+  Si quelqu'un a poussé depuis ton dernier `fetch`, ton `push` est refusé : le serveur n'accepte qu'une
+  avance rapide (*fast-forward*), c'est-à-dire un historique qui prolonge le sien. Il faut d'abord
+  intégrer son travail : `git pull --rebase` (historique linéaire) ou `git pull` (commit de fusion).
+
+  ```
+  serveur : A─B─C (Charlie)        toi : A─B─D        après pull --rebase : A─B─C─D'
+  ```
+
+  ### Un flux de travail courant
+
+  1. Partir de `main` à jour, créer une branche `feature/...`.
+  2. Committer par petites étapes, pousser la branche (`push -u`).
+  3. Ouvrir une demande de fusion (*merge request*, *pull request*) : relecture, tests de la CI.
+  4. Fusionner dans `main`, supprimer la branche.
+  5. Taguer les versions publiées (`v1.0.0`, versionnage sémantique).
+
+  ### Pièges
+
+  - `git push --force` sur une branche partagée écrase le travail des autres : préfère
+    `--force-with-lease`, et ne réécris jamais `main`.
+  - Rebaser des commits déjà récupérés par d'autres les oblige à tout réaligner : on rebase son travail
+    **local** ou sa propre branche.
+  - Oublier `git fetch` : `origin/main` est alors périmé, et tes comparaisons sont fausses.
+  - Une configuration `user.name` globale partagée : chaque clone peut avoir sa configuration locale.
+
+  ### Bonnes pratiques
+
+  Des commits petits et bien nommés, une branche par sujet, `main` toujours déployable, des tags
+  annotés pour les versions, et des règles appliquées **par le serveur** (branches protégées, hooks,
+  CI obligatoire) plutôt que par la bonne volonté de chacun. Synchronise-toi souvent (`git fetch`,
+  `git pull --rebase`) : plus on attend, plus les conflits sont gros et difficiles à résoudre.
+
+  ### Pour réviser
+
+  1. Quelle différence entre `git fetch` et `git pull` ?
+  2. Pourquoi un `push` est-il refusé en « non-fast-forward » ?
+  3. Que vérifie `--force-with-lease` de plus que `--force` ?
+  4. Où s'exécute un hook `pre-receive` ?
+docs:
+  - title: Pro Git - Travailler avec des dépôts distants
+    url: https://git-scm.com/book/fr/v2/Les-bases-de-Git-Travailler-avec-des-d%C3%A9p%C3%B4ts-distants
+  - title: Pro Git - Git distribué
+    url: https://git-scm.com/book/fr/v2/Git-distribu%C3%A9-D%C3%A9veloppements-distribu%C3%A9s
+  - title: Référence de git push
+    url: https://git-scm.com/docs/git-push
+  - title: Conventional Commits (en français)
+    url: https://www.conventionalcommits.org/fr/v1.0.0/
+exercises:
+  - id: gc-clones
+    title: Deux clones, deux identités
+    description: |
+      Clone le dépôt partagé deux fois :
+      - dans **`~/alice/boutique`**, avec une configuration **locale** au dépôt : `user.name` = `Alice`,
+        `user.email` = `alice@exemple.fr` ;
+      - dans **`~/bob/boutique`**, avec `user.name` = `Bob`, `user.email` = `bob@exemple.fr`.
+    hint: "git clone /srv/git/boutique.git ~/alice/boutique puis git -C ~/alice/boutique config user.name Alice (sans --global)"
+    cours: |
+      `git clone URL dossier` copie tout l'historique, crée la branche locale `main` et enregistre le dépôt
+      d'origine sous le nom **`origin`** (`git remote -v`). L'URL peut être un chemin local, comme ici, ou une
+      adresse SSH (`git@serveur:groupe/projet.git`) ou HTTPS.
+
+      La configuration de Git a trois niveaux : **système** (`/etc/gitconfig`), **global** (`~/.gitconfig`,
+      option `--global`) et **local** (`.git/config` du dépôt, par défaut). Le niveau le plus proche gagne.
+      Une configuration locale permet d'utiliser une identité différente selon le projet, par exemple
+      professionnelle et personnelle.
+
+      `git config --list --show-origin` affiche chaque valeur et le fichier d'où elle vient. Le nom et
+      l'e-mail sont inscrits dans chaque commit : ils identifient l'auteur dans tout l'historique.
+    checks:
+      - desc: Les deux clones pointent vers le dépôt partagé
+        run: |
+          test "$(git -C /home/eleve/alice/boutique remote get-url origin 2>/dev/null)" = /srv/git/boutique.git && test "$(git -C /home/eleve/bob/boutique remote get-url origin 2>/dev/null)" = /srv/git/boutique.git
+      - desc: Alice et Bob ont leur identité locale
+        run: |
+          test "$(git -C /home/eleve/alice/boutique config --local user.name)" = Alice && test "$(git -C /home/eleve/alice/boutique config --local user.email)" = alice@exemple.fr && test "$(git -C /home/eleve/bob/boutique config --local user.name)" = Bob && test "$(git -C /home/eleve/bob/boutique config --local user.email)" = bob@exemple.fr
+  - id: gc-push-branche
+    title: Publier une branche
+    description: |
+      En tant qu'**Alice** : crée la branche **`feature/panier`** à partir de `main`, ajoute un fichier
+      **`panier.py`** (contenu libre), committe-le avec le message `feat: ajout du panier`, puis publie la
+      branche sur `origin` **en la faisant suivre** (upstream).
+    hint: "git switch -c feature/panier, git add, git commit, puis git push -u origin feature/panier"
+    cours: |
+      Une branche créée localement n'existe que dans ton clone. `git push origin feature/panier` la crée
+      sur le serveur ; avec **`-u`** (`--set-upstream`), Git retient en plus le lien entre ta branche et
+      `origin/feature/panier`. Ensuite, `git push` et `git pull` sans argument savent où aller, et `git
+      status` t'indique si tu es en avance ou en retard (« ahead 1 », « behind 2 »).
+
+      `git branch -vv` montre la branche suivie de chaque branche locale, et `git branch -r` les branches de
+      suivi distantes.
+
+      Nommer les branches par type (`feature/`, `fix/`, `docs/`) facilite la lecture et permet aux outils
+      de CI d'appliquer des règles différentes. Publier tôt sa branche sert de sauvegarde et rend le travail
+      visible à l'équipe.
+    checks:
+      - desc: La branche feature/panier existe sur le serveur avec panier.py
+        run: git -C /srv/git/boutique.git cat-file -e feature/panier:panier.py 2>/dev/null
+      - desc: Le commit est d'Alice avec le bon message
+        run: |
+          git -C /srv/git/boutique.git log feature/panier --format='%an|%s' | grep -qx 'Alice|feat: ajout du panier'
+      - desc: La branche locale d'Alice suit origin/feature/panier
+        run: test "$(git -C /home/eleve/alice/boutique rev-parse --abbrev-ref feature/panier@{upstream} 2>/dev/null)" = origin/feature/panier
+  - id: gc-revue
+    title: Relire et compléter la branche d'un collègue
+    description: |
+      En tant que **Bob** : récupère les nouveautés du serveur, crée une branche locale `feature/panier` qui
+      **suit** celle d'Alice, ajoute un fichier **`test_panier.py`** avec le message
+      `test: tests du panier`, et pousse.
+    hint: "git fetch, puis git switch feature/panier (Git crée la branche suivie automatiquement), commit, git push"
+    cours: |
+      Avant de travailler sur une branche publiée par quelqu'un d'autre, on met à jour sa vision du
+      serveur avec **`git fetch`**. La branche de suivi `origin/feature/panier` apparaît, mais aucune
+      branche locale n'est créée.
+
+      `git switch feature/panier` (ou `git checkout feature/panier`) détecte qu'une seule branche distante
+      porte ce nom et crée une branche **locale** qui la suit. La forme explicite est `git switch -c
+      feature/panier --track origin/feature/panier`.
+
+      Pour relire, `git log -p main..origin/feature/panier` montre les commits de la branche absents de
+      `main`, et `git diff main...origin/feature/panier` (trois points) les changements depuis le point de
+      divergence. Ajouter des tests sur la branche d'un collègue est une façon concrète de relire.
+    checks:
+      - desc: Bob a ajouté test_panier.py sur la branche du serveur
+        run: |
+          git -C /srv/git/boutique.git cat-file -e feature/panier:test_panier.py 2>/dev/null && git -C /srv/git/boutique.git log feature/panier --format='%an|%s' | grep -qx 'Bob|test: tests du panier'
+      - desc: Le commit de Bob prolonge celui d'Alice
+        run: |
+          a=$(git -C /srv/git/boutique.git log feature/panier --format='%H' --author=Alice --grep='^feat: ajout du panier$' | head -1); test -n "$a" && git -C /srv/git/boutique.git merge-base --is-ancestor "$a" feature/panier
+      - desc: La branche locale de Bob suit origin/feature/panier
+        run: test "$(git -C /home/eleve/bob/boutique rev-parse --abbrev-ref feature/panier@{upstream} 2>/dev/null)" = origin/feature/panier
+  - id: gc-pull-rebase
+    title: Push refusé - intégrer le travail de Charlie
+    description: |
+      1. Lance **`~/outils/charlie-pousse.sh`** : Charlie pousse une correction sur `main`.
+      2. En tant qu'**Alice**, sur **`main`**, ajoute à `README.md` une section `## Installation` et
+         committe avec le message `docs: ajout de la section installation`.
+      3. Pousse : le serveur refuse. Intègre le travail de Charlie **en gardant un historique linéaire**
+         (pas de commit de fusion), puis pousse.
+    hint: "git pull --rebase (ou git fetch puis git rebase origin/main), puis git push"
+    cours: |
+      Ton commit et celui de Charlie partent du même parent : les historiques ont **divergé**. Le serveur
+      refuse ton push (*rejected, non-fast-forward*) pour ne pas perdre le commit de Charlie.
+
+      Deux façons d'intégrer :
+      - `git pull` (fusion) crée un **commit de fusion** qui réunit les deux lignes ; l'historique garde la
+        trace de la divergence, mais se remplit de fusions sans intérêt ;
+      - `git pull --rebase` met tes commits locaux de côté, avance jusqu'à `origin/main`, puis les
+        **rejoue** par-dessus. Ils reçoivent de nouveaux identifiants, et l'historique reste linéaire.
+
+      Le rebase ne pose pas de problème ici car ton commit n'était pas encore publié. En cas de conflit,
+      Git s'arrête : on corrige, `git add`, puis `git rebase --continue` (ou `--abort`). `git config
+      pull.rebase true` en fait le comportement par défaut.
+    checks:
+      - desc: La correction de Charlie est sur main
+        run: |
+          git -C /srv/git/boutique.git log main --format=%s | grep -qx 'fix: calcul de la TVA'
+      - desc: Le commit d'Alice est sur main, après celui de Charlie, sans fusion
+        run: |
+          B=/srv/git/boutique.git; c=$(git -C $B log main --format=%H --grep='^fix: calcul de la TVA$' | head -1); a=$(git -C $B log main --format=%H --author=Alice --grep='^docs: ajout de la section installation$' | head -1); test -n "$c" && test -n "$a" && git -C $B merge-base --is-ancestor "$c" "$a" && test -z "$(git -C $B rev-list --merges "$c..$a")"
+      - desc: README.md contient la section Installation
+        run: git -C /srv/git/boutique.git show main:README.md | grep -q '^## Installation'
+  - id: gc-squash-lease
+    title: Réécrire sa branche avec --force-with-lease
+    description: |
+      En tant qu'**Alice** : crée la branche **`wip/essai`** à partir de `main`, fais **deux** commits
+      (ajout de `essai1.txt`, puis de `essai2.txt`) et pousse la branche.
+
+      Ensuite, regroupe ces deux commits en **un seul**, avec le message `feat: essai`, et republie la branche
+      **sans utiliser `--force`** tout court.
+    hint: "git reset --soft HEAD~2 && git commit -m 'feat: essai' puis git push --force-with-lease"
+    cours: |
+      Avant une relecture, on nettoie souvent l'historique de sa branche : regrouper les commits « wip »,
+      corriger un message. Les outils : `git commit --amend` (dernier commit), `git reset --soft HEAD~N`
+      (défait N commits en gardant les changements indexés), et `git rebase -i` (réordonner, fusionner
+      avec `squash`/`fixup`).
+
+      La branche publiée et ta branche locale ont alors divergé : un push normal est refusé. Il faut
+      forcer, mais `--force` écrase la branche distante quoi qu'elle contienne, y compris des commits
+      poussés entre-temps par un collègue.
+
+      **`--force-with-lease`** n'écrase que si la branche distante est toujours à la position que tu
+      connais (`origin/wip/essai`). Si quelqu'un a poussé depuis, le push est refusé et rien n'est perdu.
+      On ne réécrit ainsi que ses **propres** branches de travail, jamais `main`.
+    checks:
+      - desc: wip/essai contient un seul commit « feat - essai » avec les deux fichiers
+        run: |
+          B=/srv/git/boutique.git; m=$(git -C $B merge-base main wip/essai 2>/dev/null) && test "$(git -C $B rev-list --count "$m..wip/essai")" = 1 && test "$(git -C $B log -1 --format=%s wip/essai)" = "feat: essai" && git -C $B cat-file -e wip/essai:essai1.txt && git -C $B cat-file -e wip/essai:essai2.txt
+      - desc: La branche a bien été publiée puis réécrite
+        run: test "$(git -C /srv/git/boutique.git reflog show refs/heads/wip/essai 2>/dev/null | wc -l)" -ge 2
+  - id: gc-fusion
+    title: Fusionner la branche et faire le ménage
+    description: |
+      La relecture de `feature/panier` est terminée. En tant qu'**Alice** :
+      1. récupère le commit de Bob sur ta branche ;
+      2. fusionne `feature/panier` dans `main` **avec un commit de fusion** (comme le bouton « Merge » d'une
+         merge request) et pousse `main` ;
+      3. supprime la branche `feature/panier` **sur le serveur**.
+    hint: "git switch feature/panier && git pull ; git switch main && git pull ; git merge --no-ff feature/panier ; git push ; git push origin --delete feature/panier"
+    cours: |
+      Quand `main` n'a pas bougé depuis la création de la branche, `git merge` fait une simple **avance
+      rapide** : aucun commit de fusion, et rien dans l'historique ne montre qu'une branche a existé.
+      **`--no-ff`** force un commit de fusion, qui regroupe visuellement les commits de la fonctionnalité :
+      c'est ce que font par défaut GitLab et GitHub.
+
+      Avant de fusionner, mets à jour les deux branches (`git pull` sur chacune) pour fusionner ce qui est
+      réellement sur le serveur. `git log --graph --oneline --all` montre le résultat.
+
+      Une branche fusionnée ne sert plus : `git push origin --delete feature/panier` la supprime sur le
+      serveur, `git branch -d feature/panier` en local (`-d` refuse si elle n'est pas fusionnée). Chez les
+      autres, `git fetch --prune` retire les branches de suivi devenues orphelines.
+    checks:
+      - desc: main contient le panier et ses tests via un commit de fusion
+        run: |
+          B=/srv/git/boutique.git; git -C $B cat-file -e main:panier.py && git -C $B cat-file -e main:test_panier.py && test -n "$(git -C $B rev-list --merges main)"
+      - desc: La branche feature/panier n'existe plus sur le serveur
+        run: |
+          git -C /srv/git/boutique.git cat-file -e main:panier.py 2>/dev/null && ! git -C /srv/git/boutique.git show-ref --verify --quiet refs/heads/feature/panier
+  - id: gc-release
+    title: Publier une version taguée
+    description: |
+      Crée sur `main` (qui contient maintenant le panier) un **tag annoté** **`v1.0.0`** avec un message, et
+      publie-le sur le serveur.
+    hint: "git tag -a v1.0.0 -m 'Version 1.0.0' puis git push origin v1.0.0"
+    cours: |
+      Un **tag** marque un commit précis, en général une version publiée. Un tag **léger** n'est qu'un nom ;
+      un tag **annoté** (`git tag -a`) est un objet complet avec auteur, date et message, et peut être signé
+      (`-s`). Pour une version, on utilise un tag annoté : `git describe` et beaucoup d'outils l'exigent.
+
+      Les tags ne sont **pas** poussés par un simple `git push` : on pousse un tag (`git push origin v1.0.0`)
+      ou tous (`git push origin --tags`). Ne déplace jamais un tag publié : ceux qui l'ont récupéré
+      garderaient l'ancien.
+
+      Le **versionnage sémantique** (`MAJEUR.MINEUR.CORRECTIF`) signale la nature des changements : une
+      rupture de compatibilité, une fonctionnalité, une correction. En CI, un tag `v*` déclenche souvent la
+      construction et la publication des artefacts.
+    checks:
+      - desc: Le tag v1.0.0 annoté existe sur le serveur
+        run: test "$(git -C /srv/git/boutique.git cat-file -t v1.0.0 2>/dev/null)" = tag
+      - desc: Il pointe sur un commit de main qui contient le panier
+        run: |
+          B=/srv/git/boutique.git; git -C $B merge-base --is-ancestor 'v1.0.0^{commit}' main && git -C $B cat-file -e 'v1.0.0^{commit}:panier.py'
+  - id: gc-miroir
+    title: Un second dépôt distant
+    description: |
+      L'équipe veut une copie de secours du projet dans **`/srv/git/miroir.git`** (dépôt nu vide). Dans le
+      clone d'**Alice**, ajoute ce dépôt comme distant nommé **`miroir`** et pousses-y la branche `main` et
+      le tag `v1.0.0`.
+    hint: "git remote add miroir /srv/git/miroir.git ; git push miroir main ; git push miroir --tags"
+    cours: |
+      Un dépôt peut avoir **plusieurs distants** : `origin` (le dépôt de référence), `upstream` (le projet
+      d'origine d'un fork), un miroir de sauvegarde, un serveur de déploiement… `git remote add nom URL`
+      en ajoute un, `git remote -v` les liste, `git remote rename` et `git remote remove` les gèrent.
+
+      Chaque distant a ses propres branches de suivi (`miroir/main`), et chaque commande réseau précise le
+      distant visé : `git fetch upstream`, `git push miroir main`.
+
+      Pour une copie complète, `git push --mirror` pousse toutes les références, branches et tags compris,
+      et supprime côté miroir ce qui n'existe plus localement : puissant, à utiliser en connaissance de
+      cause. Les forges proposent aussi des miroirs automatiques entre serveurs.
+    checks:
+      - desc: Le distant miroir est configuré chez Alice
+        run: test "$(git -C /home/eleve/alice/boutique remote get-url miroir 2>/dev/null)" = /srv/git/miroir.git
+      - desc: Le miroir contient main et le tag v1.0.0
+        run: |
+          M=/srv/git/miroir.git; git -C $M show-ref --verify --quiet refs/heads/main && git -C $M show-ref --verify --quiet refs/tags/v1.0.0 && git -C $M merge-base --is-ancestor 'v1.0.0^{commit}' main
+  - id: gc-hook-serveur
+    title: Imposer une règle avec un hook serveur
+    description: |
+      Installe sur le dépôt partagé un hook **`/srv/git/boutique.git/hooks/pre-receive`** (exécutable) qui
+      **refuse** tout push contenant un nouveau commit dont le message ne commence pas par `feat:`, `fix:`,
+      `docs:`, `test:` ou `chore:` (une portée entre parenthèses est permise : `fix(api): ...`).
+
+      Teste-le depuis un clone : un commit `mauvais message` doit être refusé, un commit `chore: essai`
+      accepté. Une suppression de branche doit rester possible.
+    hint: "Le hook lit des lignes « ancien nouveau ref » sur son entrée ; ignore nouveau=000…0 (suppression) ; liste les nouveaux commits avec git rev-list \"$nouveau\" --not --all ; teste chaque message avec grep -Eq"
+    cours: |
+      Les hooks **côté serveur** s'exécutent dans le dépôt qui **reçoit** le push, et personne ne peut les
+      contourner, contrairement aux hooks côté client comme `pre-commit`. `pre-receive` est appelé une fois
+      par push, avant toute mise à jour ; s'il se termine avec un code non nul, **tout** le push est refusé,
+      et ce qu'il écrit sur la sortie d'erreur s'affiche chez le développeur (`remote: ...`).
+
+      Il lit sur son entrée standard une ligne par référence : `ancien_sha nouveau_sha nom_de_ref`. Un
+      `ancien_sha` fait de zéros signale une création, un `nouveau_sha` de zéros une suppression. Pour lister
+      les commits vraiment nouveaux, `git rev-list nouveau --not --all` exclut tout ce que le serveur connaît
+      déjà, et `git log -1 --format=%s sha` donne la première ligne d'un message.
+
+      Sur GitLab ou GitHub, on obtient le même résultat avec les règles de push, les branches protégées et
+      les vérifications obligatoires de la CI.
+    checks:
+      - desc: Le hook pre-receive est installé et exécutable
+        run: test -x /srv/git/boutique.git/hooks/pre-receive
+      - desc: Un commit au message non conforme est refusé
+        run: |
+          d=$(mktemp -d) && git clone -q /srv/git/boutique.git "$d/c" && cd "$d/c" && git -c user.name=Verif -c user.email=v@exemple.fr commit -q --allow-empty -m "mauvais message" || exit 1; r=0; if git push -q origin HEAD:refs/heads/tdm-verif-refus 2>/dev/null; then r=1; git push -q origin --delete tdm-verif-refus 2>/dev/null; fi; cd /; rm -rf "$d"; exit $r
+      - desc: Un commit conforme est accepté et la branche peut être supprimée
+        run: |
+          d=$(mktemp -d) && git clone -q /srv/git/boutique.git "$d/c" && cd "$d/c" && git -c user.name=Verif -c user.email=v@exemple.fr commit -q --allow-empty -m "chore: verification" && git push -q origin HEAD:refs/heads/tdm-verif-ok 2>/dev/null && git push -q origin --delete tdm-verif-ok 2>/dev/null; r=$?; cd /; rm -rf "$d"; exit $r

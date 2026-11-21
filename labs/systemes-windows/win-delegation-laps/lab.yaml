@@ -1,0 +1,482 @@
+title: Délégation Active Directory et Windows LAPS
+level: avance
+order: 8
+tags: [active directory, délégation, acl, dsacls, adminsdholder, laps, mots de passe administrateur local, moindre privilège]
+summary: Appliquer le moindre privilège dans AD - déléguer réinitialisations, créations et gestion des groupes, tester et auditer les délégations, nettoyer adminCount, puis déployer Windows LAPS de bout en bout.
+vagrant: bundled
+machine: dc01
+description: |
+  **Contexte.** Aux *Ateliers Durand*, le technicien Julien Roux et la responsable RH Agnès Perrin sont...
+  administrateurs du domaine, « pour pouvoir réinitialiser les mots de passe ». Et tous les postes ont le
+  même mot de passe administrateur local, connu de la moitié de l'entreprise. Deux chantiers : **déléguer**
+  exactement ce dont chacun a besoin, et donner à chaque poste un mot de passe local **unique et tournant**
+  avec **Windows LAPS**.
+
+  **Machines** (prévoir **8 Go de RAM libres**) :
+
+  | VM | Système | Adresse LAN | Rôle |
+  |----|---------|-------------|------|
+  | `SRV-DC01` (terminal) | Windows Server 2022 (2 Go) | 192.168.10.10 | contrôleur de `durand.lan` (niveau fonctionnel 2016) |
+  | `PC01` | Windows 11 (3 Go) | 192.168.10.101 | poste joint, dans l'OU `Postes` |
+
+  L'annuaire contient `Ateliers Durand` (`Utilisateurs\Direction|Compta|Atelier|Informatique|RH`, `Groupes`,
+  `Postes`), les groupes `GG_Support` (jroux), `GG_RH` (aperrin), `GG_Compta`, `GG_Atelier` ; mot de passe des
+  comptes : `Bienvenue2024!`. Windows LAPS est intégré à Windows Server 2022 et Windows 11 à jour (module
+  PowerShell `LAPS`). Pour agir sur PC01 : `Invoke-Command -ComputerName PC01 { ... }`.
+cours: |
+  ## Le moindre privilège dans Active Directory
+
+  Chaque objet de l'annuaire a une **ACL**, comme un fichier NTFS, mais avec des droits plus fins : lire ou
+  écrire **une propriété** précise (`WriteProperty` sur `member`, sur `pwdLastSet`...), **créer ou
+  supprimer** des objets enfants d'une classe donnée (`CreateChild` user), exercer un **droit étendu**
+  (*Reset Password*, *Change Password*, lecture des mots de passe LAPS...). Une entrée peut s'appliquer à
+  l'OU elle-même ou aux **descendants** d'une classe (seulement aux objets *user*, seulement aux *group*).
+  La **délégation** consiste à poser ces entrées sur une OU pour un **groupe** : l'assistant *Délégation de
+  contrôle* de `dsa.msc`, `dsacls` ou PowerShell (`Get-Acl`/`Set-Acl` sur le lecteur `AD:`) font la même
+  chose. Personne n'a besoin d'être *Admins du domaine* pour réinitialiser un mot de passe ou gérer les
+  membres d'un groupe.
+
+  ## Ce qu'il faut savoir avant de déléguer
+
+  - Déléguer à des **groupes** (`GG_Support`), jamais à des personnes : l'arrivée ou le départ d'un
+    technicien se gère par l'appartenance au groupe.
+  - Les comptes **protégés** (membres présents ou passés des groupes d'administration) échappent aux
+    délégations : le processus **SDProp** recopie toutes les 60 minutes l'ACL de l'objet `AdminSDHolder`
+    sur eux, coupe l'héritage et pose `adminCount = 1`. Quand un compte quitte ces groupes, rien n'est
+    défait automatiquement : un nettoyage s'impose.
+  - Les délégations s'accumulent et s'oublient : on les **documente** et on les **audite** (export des
+    entrées explicites de chaque OU).
+
+  ## Windows LAPS
+
+  Un mot de passe administrateur local identique sur tous les postes est un cadeau pour un attaquant : un
+  seul poste compromis, et la technique *pass-the-hash* ouvre tous les autres. **Windows LAPS** (*Local
+  Administrator Password Solution*, intégré à Windows depuis avril 2023, successeur de l'ancien « LAPS
+  hérité ») fait générer à chaque machine un mot de passe **aléatoire**, le **sauvegarde** dans son propre
+  objet ordinateur de l'annuaire (ou dans Entra ID), **chiffré** si le niveau fonctionnel est 2016, et le
+  **change** à intervalle régulier ou après usage. La mise en place :
+
+  1. **étendre le schéma** (`Update-LapsADSchema`) : nouveaux attributs `msLAPS-*` ;
+  2. donner aux ordinateurs le droit d'**écrire** leur propre mot de passe sur leur OU
+     (`Set-LapsADComputerSelfPermission`) ;
+  3. décider **qui peut lire** les mots de passe (`Set-LapsADReadPasswordPermission`) ;
+  4. activer la **stratégie** par GPO (répertoire de sauvegarde, complexité, longueur, âge) ;
+  5. vérifier, lire (`Get-LapsADPassword`), faire tourner (`Reset-LapsPassword`).
+
+  Le droit de lire les mots de passe LAPS d'une OU équivaut au droit d'administrer ses machines : il se
+  donne avec la même prudence que l'appartenance aux administrateurs.
+docs:
+  - title: Délégation de l'administration Active Directory
+    url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/plan/security-best-practices/implementing-least-privilege-administrative-models
+  - title: Vue d'ensemble de Windows LAPS
+    url: https://learn.microsoft.com/fr-fr/windows-server/identity/laps/laps-overview
+  - title: Module LAPS (PowerShell)
+    url: https://learn.microsoft.com/fr-fr/powershell/module/laps/
+extra_commands: [Update-LapsADSchema, Set-LapsADComputerSelfPermission, Set-LapsADReadPasswordPermission,
+                 Find-LapsADExtendedRights, Get-LapsADPassword, Invoke-LapsPolicyProcessing, Reset-LapsPassword]
+exercises:
+  - id: win-dlg-support
+    title: Le support réinitialise les mots de passe
+    description: |
+      Délègue à **GG_Support**, sur l'OU `OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan` et pour les
+      objets **utilisateur** qu'elle contient : la **réinitialisation du mot de passe**, l'écriture de
+      `pwdLastSet` (forcer le changement à la prochaine ouverture) et de `lockoutTime` (déverrouiller).
+    hint: dsacls "OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan" /I:S /G "DURAND\GG_Support:CA;Reset Password;user" "DURAND\GG_Support:RPWP;pwdLastSet;user" "DURAND\GG_Support:RPWP;lockoutTime;user"
+    cours: |
+      ```powershell
+      $ou = 'OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan'
+      dsacls $ou /I:S /G 'DURAND\GG_Support:CA;Reset Password;user' 'DURAND\GG_Support:RPWP;pwdLastSet;user' 'DURAND\GG_Support:RPWP;lockoutTime;user'
+      ```
+
+      `/I:S` : héritage aux **sous-objets** seulement ; `CA` : droit étendu (*control access*) ; `RPWP` :
+      lire et écrire une propriété ; le dernier champ restreint l'entrée aux objets de classe `user`.
+      L'équivalent PowerShell utilise `ActiveDirectoryAccessRule` avec les GUID du droit
+      (*Reset Password* = `00299570-246d-11d0-a768-00aa006e0529`) et de la classe (`user` =
+      `bf967aba-0de6-11d0-a285-00aa003049e2`). C'est exactement ce que produit la tâche « Réinitialiser les
+      mots de passe et forcer le changement » de l'assistant de délégation, plus le déverrouillage.
+    docs:
+      - title: dsacls
+        url: https://learn.microsoft.com/fr-fr/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/cc771151(v=ws.11)
+    checks:
+      - desc: GG_Support a le droit étendu « Reset Password » sur les utilisateurs de l'OU
+        run: |
+          $acl = (Get-Acl 'AD:OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan').Access
+          [bool]($acl | Where-Object { $_.IdentityReference -like '*\GG_Support' -and $_.ObjectType -eq [guid]'00299570-246d-11d0-a768-00aa006e0529' -and $_.InheritedObjectType -eq [guid]'bf967aba-0de6-11d0-a285-00aa003049e2' })
+      - desc: GG_Support peut écrire pwdLastSet et lockoutTime des utilisateurs
+        run: |
+          $acl = (Get-Acl 'AD:OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan').Access | Where-Object { $_.IdentityReference -like '*\GG_Support' -and $_.ActiveDirectoryRights -match 'WriteProperty' }
+          ($acl.ObjectType -contains [guid]'bf967a0a-0de6-11d0-a285-00aa003049e2') -and ($acl.ObjectType -contains [guid]'28630ebf-41d5-11d1-a9c1-0000f80367c1')
+    solution: |
+      $ou = 'OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan'
+      dsacls $ou /I:S /G 'DURAND\GG_Support:CA;Reset Password;user' 'DURAND\GG_Support:RPWP;pwdLastSet;user' 'DURAND\GG_Support:RPWP;lockoutTime;user' | Out-Null
+
+  - id: win-dlg-rh
+    title: Les RH créent et suppriment les comptes
+    description: |
+      Délègue à **GG_RH** la **création** et la **suppression** d'objets **utilisateur** dans l'OU
+      `Utilisateurs` et ses sous-OU (et rien d'autre : pas de groupes, pas d'ordinateurs).
+    hint: ActiveDirectoryAccessRule $sid, 'CreateChild, DeleteChild', 'Allow', [guid]'bf967aba-0de6-11d0-a285-00aa003049e2', 'All'
+    cours: |
+      ```powershell
+      $dn = 'AD:OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan'
+      $sid = (Get-ADGroup GG_RH).SID
+      $user = [guid]'bf967aba-0de6-11d0-a285-00aa003049e2'
+      $acl = Get-Acl $dn
+      $acl.AddAccessRule((New-Object DirectoryServices.ActiveDirectoryAccessRule $sid, 'CreateChild, DeleteChild', 'Allow', $user, 'All'))
+      Set-Acl $dn $acl
+      ```
+
+      `CreateChild` avec un `ObjectType` limite la création à une **classe** ; l'héritage `All` couvre l'OU et
+      toutes ses sous-OU. Le créateur d'un objet en devient **propriétaire** et peut ensuite renseigner ses
+      attributs. Pour un processus RH plus abouti, on délègue aussi l'écriture de quelques attributs
+      (service, fonction, responsable) et on laisse l'activation du compte au support : séparer les rôles
+      limite les erreurs et les abus.
+    docs:
+      - title: Classe ActiveDirectoryAccessRule
+        url: https://learn.microsoft.com/fr-fr/dotnet/api/system.directoryservices.activedirectoryaccessrule
+    checks:
+      - desc: GG_RH peut créer et supprimer des utilisateurs dans l'OU Utilisateurs
+        run: |
+          $acl = (Get-Acl 'AD:OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan').Access
+          $r = $acl | Where-Object { $_.IdentityReference -like '*\GG_RH' -and $_.ObjectType -eq [guid]'bf967aba-0de6-11d0-a285-00aa003049e2' }
+          [bool]$r -and ($r.ActiveDirectoryRights -match 'CreateChild') -and ($r.ActiveDirectoryRights -match 'DeleteChild')
+      - desc: GG_RH n'a pas de contrôle total sur l'OU
+        run: |
+          -not ((Get-Acl 'AD:OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan').Access | Where-Object { $_.IdentityReference -like '*\GG_RH' -and $_.ActiveDirectoryRights -match 'GenericAll' })
+    solution: |
+      $dn = 'AD:OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan'
+      $sid = (Get-ADGroup GG_RH).SID
+      $acl = Get-Acl $dn
+      $acl.AddAccessRule((New-Object DirectoryServices.ActiveDirectoryAccessRule $sid, 'CreateChild, DeleteChild', 'Allow', ([guid]'bf967aba-0de6-11d0-a285-00aa003049e2'), 'All'))
+      Set-Acl $dn $acl
+
+  - id: win-dlg-groupes
+    title: Le support gère les membres des groupes
+    description: |
+      Délègue à **GG_Support** la modification de l'attribut **`member`** des objets **groupe** de l'OU
+      `OU=Groupes,OU=Ateliers Durand,DC=durand,DC=lan`.
+    hint: ActiveDirectoryAccessRule $sid, 'ReadProperty, WriteProperty', 'Allow', [guid]'bf9679c0-0de6-11d0-a285-00aa003049e2' (member), 'Descendents', [guid]'bf967a9c-0de6-11d0-a285-00aa003049e2' (group)
+    cours: |
+      ```powershell
+      $dn = 'AD:OU=Groupes,OU=Ateliers Durand,DC=durand,DC=lan'
+      $sid = (Get-ADGroup GG_Support).SID
+      $member = [guid]'bf9679c0-0de6-11d0-a285-00aa003049e2'
+      $group = [guid]'bf967a9c-0de6-11d0-a285-00aa003049e2'
+      $acl = Get-Acl $dn
+      $acl.AddAccessRule((New-Object DirectoryServices.ActiveDirectoryAccessRule $sid, 'ReadProperty, WriteProperty', 'Allow', $member, 'Descendents', $group))
+      Set-Acl $dn $acl
+      ```
+
+      Les GUID des attributs et classes sont leur `schemaIDGUID` dans le schéma
+      (`Get-ADObject -SearchBase (Get-ADRootDSE).schemaNamingContext -LDAPFilter '(lDAPDisplayName=member)' -Properties schemaIDGUID`).
+      Les groupes d'administration (*Admins du domaine*, *Opérateurs de compte*...) ne sont pas dans cette OU
+      et sont protégés par AdminSDHolder : le support ne pourra pas s'y ajouter. C'est le résultat voulu.
+    docs:
+      - title: Délégation de contrôle dans Active Directory
+        url: https://learn.microsoft.com/fr-fr/troubleshoot/windows-server/active-directory/delegate-authority-to-user-to-manage-groups
+    checks:
+      - desc: GG_Support peut écrire member sur les groupes de l'OU Groupes
+        run: |
+          $acl = (Get-Acl 'AD:OU=Groupes,OU=Ateliers Durand,DC=durand,DC=lan').Access
+          [bool]($acl | Where-Object { $_.IdentityReference -like '*\GG_Support' -and $_.ActiveDirectoryRights -match 'WriteProperty' -and $_.ObjectType -eq [guid]'bf9679c0-0de6-11d0-a285-00aa003049e2' -and $_.InheritedObjectType -eq [guid]'bf967a9c-0de6-11d0-a285-00aa003049e2' })
+    solution: |
+      $dn = 'AD:OU=Groupes,OU=Ateliers Durand,DC=durand,DC=lan'
+      $sid = (Get-ADGroup GG_Support).SID
+      $acl = Get-Acl $dn
+      $acl.AddAccessRule((New-Object DirectoryServices.ActiveDirectoryAccessRule $sid, 'ReadProperty, WriteProperty', 'Allow', ([guid]'bf9679c0-0de6-11d0-a285-00aa003049e2'), 'Descendents', ([guid]'bf967a9c-0de6-11d0-a285-00aa003049e2')))
+      Set-Acl $dn $acl
+
+  - id: win-dlg-test
+    title: Tester avec le compte du technicien
+    description: |
+      **En t'authentifiant comme `DURAND\jroux`** (qui n'est pas administrateur), réinitialise le mot de passe
+      de `mdupont` à `Reinit-Compta-2024!` et force son changement à la prochaine ouverture de session.
+    hint: $cred = Get-Credential DURAND\jroux ; Set-ADAccountPassword mdupont -Reset -NewPassword (Read-Host -AsSecureString) -Credential $cred ; Set-ADUser mdupont -ChangePasswordAtLogon $true -Credential $cred
+    cours: |
+      ```powershell
+      $cred = Get-Credential DURAND\jroux
+      Set-ADAccountPassword mdupont -Reset -NewPassword (ConvertTo-SecureString 'Reinit-Compta-2024!' -AsPlainText -Force) -Credential $cred
+      Set-ADUser mdupont -ChangePasswordAtLogon $true -Credential $cred
+      Set-ADUser hgirard -Description 'test' -Credential $cred     # doit échouer : accès refusé
+      ```
+
+      Une délégation non testée n'est qu'une hypothèse. Tester avec le compte réel (ou `runas /user:`)
+      vérifie à la fois ce qui doit marcher et ce qui doit **échouer**. `-ChangePasswordAtLogon` met
+      `pwdLastSet` à 0 : c'est pour cela qu'il fallait déléguer l'écriture de cet attribut. Le support
+      transmet le mot de passe provisoire par un canal séparé (téléphone), jamais par le même courriel que
+      l'identifiant.
+    docs:
+      - title: Set-ADAccountPassword
+        url: https://learn.microsoft.com/fr-fr/powershell/module/activedirectory/set-adaccountpassword
+    checks:
+      - desc: jroux n'est pas membre des Admins du domaine
+        run: |
+          (Get-ADGroupMember -Identity "$((Get-ADDomain).DomainSID)-512" -Recursive).SamAccountName -notcontains 'jroux'
+      - desc: mdupont a le mot de passe provisoire et doit le changer
+        run: |
+          Add-Type -Namespace TDM -Name AuthDom -MemberDefinition '[DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool LogonUser(string u, string d, string p, int t, int f, out IntPtr h); [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h); public static int Code(string u, string d, string p) { IntPtr h; if (LogonUser(u, d, p, 3, 0, out h)) { CloseHandle(h); return 0; } return Marshal.GetLastWin32Error(); }'
+          ((Get-ADUser mdupont -Properties pwdLastSet).pwdLastSet -eq 0) -and ([TDM.AuthDom]::Code('mdupont', 'DURAND', 'Reinit-Compta-2024!') -in 1907, 1938)
+    solution: |
+      $cred = New-Object PSCredential 'DURAND\jroux', (ConvertTo-SecureString 'Bienvenue2024!' -AsPlainText -Force)
+      Set-ADAccountPassword mdupont -Reset -NewPassword (ConvertTo-SecureString 'Reinit-Compta-2024!' -AsPlainText -Force) -Credential $cred
+      Set-ADUser mdupont -ChangePasswordAtLogon $true -Credential $cred
+
+  - id: win-dlg-audit
+    title: Auditer les délégations
+    description: |
+      Exporte dans `C:\Admin\delegations.csv` (séparateur `;`) les entrées **explicites** (non héritées)
+      accordées à des groupes `GG_*` sur les OU `Utilisateurs` et `Groupes`, avec les colonnes `OU`,
+      `Identite`, `Droits`, `ObjectType` et `InheritedObjectType`.
+    hint: (Get-Acl "AD:$ou").Access | Where-Object { -not $_.IsInherited -and $_.IdentityReference -like '*\GG_*' } | Select-Object @{n='OU';e={$ou}}, @{n='Identite';e={$_.IdentityReference}}, ...
+    cours: |
+      ```powershell
+      $lignes = foreach ($ou in 'OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan', 'OU=Groupes,OU=Ateliers Durand,DC=durand,DC=lan') {
+          (Get-Acl "AD:$ou").Access | Where-Object { -not $_.IsInherited -and $_.IdentityReference -like '*\GG_*' } |
+              Select-Object @{ n = 'OU'; e = { $ou } }, @{ n = 'Identite'; e = { $_.IdentityReference } },
+                  @{ n = 'Droits'; e = { $_.ActiveDirectoryRights } }, ObjectType, InheritedObjectType
+      }
+      $lignes | Export-Csv C:\Admin\delegations.csv -Delimiter ';' -NoTypeInformation -Encoding UTF8
+      ```
+
+      Un export régulier, comparé au précédent, révèle les délégations ajoutées en douce ou oubliées après
+      un projet. Pour rendre les GUID lisibles, on les traduit avec le schéma et les droits étendus
+      (`CN=Extended-Rights,CN=Configuration`). Des outils d'audit spécialisés (PingCastle, Purple Knight,
+      BloodHound côté défense) font ce travail sur toute la forêt et repèrent les chemins d'attaque créés
+      par des délégations trop larges.
+    docs:
+      - title: Get-Acl
+        url: https://learn.microsoft.com/fr-fr/powershell/module/microsoft.powershell.security/get-acl
+    checks:
+      - desc: delegations.csv liste au moins 5 entrées, pour GG_Support et GG_RH
+        run: |
+          $l = Import-Csv C:\Admin\delegations.csv -Delimiter ';' -ErrorAction Stop
+          @($l).Count -ge 5 -and [bool]($l.Identite -like '*GG_Support') -and [bool]($l.Identite -like '*GG_RH')
+      - desc: Les colonnes demandées sont présentes
+        run: |
+          $n = (Import-Csv C:\Admin\delegations.csv -Delimiter ';' | Select-Object -First 1).PSObject.Properties.Name
+          @('OU', 'Identite', 'Droits', 'ObjectType', 'InheritedObjectType' | Where-Object { $n -notcontains $_ }).Count -eq 0
+    solution: |
+      $lignes = foreach ($ou in 'OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan', 'OU=Groupes,OU=Ateliers Durand,DC=durand,DC=lan') {
+          (Get-Acl "AD:$ou").Access | Where-Object { -not $_.IsInherited -and $_.IdentityReference -like '*\GG_*' } | Select-Object @{ n = 'OU'; e = { $ou } }, @{ n = 'Identite'; e = { $_.IdentityReference } }, @{ n = 'Droits'; e = { $_.ActiveDirectoryRights } }, ObjectType, InheritedObjectType
+      }
+      $lignes | Export-Csv C:\Admin\delegations.csv -Delimiter ';' -NoTypeInformation -Encoding UTF8
+
+  - id: win-dlg-admincount
+    title: Les traces d'AdminSDHolder
+    description: |
+      Liste dans `C:\Admin\comptes-proteges.txt` (un `SamAccountName` par ligne) les utilisateurs marqués
+      `adminCount = 1`. `ancien.admin` a quitté les Admins du domaine depuis longtemps : **efface** son
+      `adminCount` et **réactive l'héritage** des permissions sur son objet.
+    hint: Get-ADUser -LDAPFilter '(adminCount=1)' | Select-Object -ExpandProperty SamAccountName | Set-Content ... ; Set-ADUser ancien.admin -Clear adminCount ; $acl.SetAccessRuleProtection($false, $true)
+    cours: |
+      ```powershell
+      Get-ADUser -LDAPFilter '(adminCount=1)' | Select-Object -ExpandProperty SamAccountName | Set-Content C:\Admin\comptes-proteges.txt
+      $u = Get-ADUser ancien.admin
+      Set-ADUser $u -Clear adminCount
+      $acl = Get-Acl "AD:$($u.DistinguishedName)"
+      $acl.SetAccessRuleProtection($false, $true)       # héritage réactivé
+      Set-Acl "AD:$($u.DistinguishedName)" $acl
+      ```
+
+      SDProp protège les membres des groupes sensibles en leur imposant l'ACL d'`AdminSDHolder` ; mais quand
+      un compte sort de ces groupes, il garde `adminCount = 1` et son héritage coupé : les délégations du
+      support ne s'y appliquent pas, et les outils d'audit le signalent comme « ancien administrateur ».
+      Avant de nettoyer, vérifie qu'il n'est plus membre (même indirectement) d'aucun groupe protégé, sinon
+      SDProp remettra tout en place dans l'heure.
+    docs:
+      - title: AdminSDHolder, SDProp et comptes protégés
+        url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/plan/security-best-practices/appendix-c--protected-accounts-and-groups-in-active-directory
+    checks:
+      - desc: comptes-proteges.txt cite ancien.admin
+        run: |
+          (Get-Content C:\Admin\comptes-proteges.txt -ErrorAction Stop) -contains 'ancien.admin'
+      - desc: ancien.admin n'a plus adminCount et hérite de nouveau des permissions
+        run: |
+          $u = Get-ADUser ancien.admin -Properties adminCount
+          $u.adminCount -ne 1 -and -not (Get-Acl "AD:$($u.DistinguishedName)").AreAccessRulesProtected
+    solution: |
+      Get-ADUser -LDAPFilter '(adminCount=1)' | Select-Object -ExpandProperty SamAccountName | Set-Content C:\Admin\comptes-proteges.txt
+      $u = Get-ADUser ancien.admin
+      Set-ADUser $u -Clear adminCount
+      $acl = Get-Acl "AD:$($u.DistinguishedName)"
+      $acl.SetAccessRuleProtection($false, $true)
+      Set-Acl "AD:$($u.DistinguishedName)" $acl
+
+  - id: win-laps-schema
+    title: LAPS - schéma et permission des postes
+    description: |
+      Étends le **schéma** pour Windows LAPS, puis donne aux ordinateurs de l'OU `Postes` le droit de mettre
+      à jour **leur propre** mot de passe LAPS.
+    hint: Update-LapsADSchema ; Set-LapsADComputerSelfPermission -Identity 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+    cours: |
+      ```powershell
+      Update-LapsADSchema -Verbose
+      Set-LapsADComputerSelfPermission -Identity 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+      ```
+
+      `Update-LapsADSchema` ajoute les attributs `msLAPS-Password`, `msLAPS-EncryptedPassword`,
+      `msLAPS-PasswordExpirationTime`... à la classe *computer*. Il exige un compte **Administrateurs du
+      schéma** et s'exécute une fois pour toute la forêt (une extension de schéma est irréversible : en
+      production, elle se planifie). La permission « soi-même » (SID `S-1-5-10`, *SELF*) est posée sur l'OU
+      et héritée par les objets ordinateurs : chaque machine écrit son mot de passe dans son propre objet,
+      et seulement dans le sien.
+    docs:
+      - title: Démarrer avec Windows LAPS et Active Directory
+        url: https://learn.microsoft.com/fr-fr/windows-server/identity/laps/laps-scenarios-windows-server-active-directory
+      - title: Update-LapsADSchema
+        url: https://learn.microsoft.com/fr-fr/powershell/module/laps/update-lapsadschema
+    checks:
+      - desc: Le schéma contient les attributs Windows LAPS
+        run: |
+          [bool](Get-ADObject -SearchBase (Get-ADRootDSE).schemaNamingContext -LDAPFilter '(lDAPDisplayName=msLAPS-PasswordExpirationTime)')
+      - desc: SELF peut écrire msLAPS-PasswordExpirationTime sur l'OU Postes
+        run: |
+          $g = [guid](Get-ADObject -SearchBase (Get-ADRootDSE).schemaNamingContext -LDAPFilter '(lDAPDisplayName=msLAPS-PasswordExpirationTime)' -Properties schemaIDGUID).schemaIDGUID
+          $acl = (Get-Acl 'AD:OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan').Access
+          [bool]($acl | Where-Object { $_.ObjectType -eq $g -and $_.ActiveDirectoryRights -match 'WriteProperty' -and $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq 'S-1-5-10' })
+    solution: |
+      Update-LapsADSchema -Confirm:$false
+      Set-LapsADComputerSelfPermission -Identity 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' | Out-Null
+
+  - id: win-laps-lecture
+    title: LAPS - qui peut lire les mots de passe
+    description: |
+      Autorise **GG_Support** à lire les mots de passe LAPS des ordinateurs de l'OU `Postes`, puis vérifie la
+      liste des détenteurs de ce droit.
+    hint: Set-LapsADReadPasswordPermission -Identity 'OU=Postes,...' -AllowedPrincipals 'DURAND\GG_Support' ; Find-LapsADExtendedRights -Identity 'OU=Postes,...'
+    cours: |
+      ```powershell
+      $postes = 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+      Set-LapsADReadPasswordPermission -Identity $postes -AllowedPrincipals 'DURAND\GG_Support'
+      Find-LapsADExtendedRights -Identity $postes | Format-List
+      ```
+
+      Les *Admins du domaine* peuvent toujours lire les mots de passe ; on ajoute les groupes qui en ont
+      besoin, OU par OU : le support pour les postes, jamais pour les serveurs. Avec le chiffrement
+      (niveau fonctionnel 2016), un second contrôle s'ajoute : seul le groupe désigné comme
+      **déchiffreur** dans la stratégie (`ADPasswordEncryptionPrincipal`, par défaut les *Admins du
+      domaine*) peut déchiffrer. `Find-LapsADExtendedRights` est l'outil d'audit : il liste qui détient le
+      droit étendu de lecture sur chaque OU.
+    docs:
+      - title: Set-LapsADReadPasswordPermission
+        url: https://learn.microsoft.com/fr-fr/powershell/module/laps/set-lapsadreadpasswordpermission
+      - title: Find-LapsADExtendedRights
+        url: https://learn.microsoft.com/fr-fr/powershell/module/laps/find-lapsadextendedrights
+    checks:
+      - desc: GG_Support détient le droit de lecture LAPS sur l'OU Postes
+        run: |
+          $r = Find-LapsADExtendedRights -Identity 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+          [bool]($r.ExtendedRightHolders -like '*\GG_Support')
+    solution: |
+      Set-LapsADReadPasswordPermission -Identity 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' -AllowedPrincipals 'DURAND\GG_Support' | Out-Null
+
+  - id: win-laps-gpo
+    title: LAPS - la stratégie
+    description: |
+      Crée la GPO `C - LAPS postes`, liée à l'OU `Postes`, qui active Windows LAPS avec sauvegarde dans
+      **Active Directory**, mots de passe de **16** caractères, complexité **maximale** (majuscules,
+      minuscules, chiffres, caractères spéciaux), changement tous les **30** jours.
+    hint: Set-GPRegistryValue -Name 'C - LAPS postes' -Key 'HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\LAPS' -ValueName BackupDirectory -Type DWord -Value 2 ; PasswordLength 16 ; PasswordComplexity 4 ; PasswordAgeDays 30
+    cours: |
+      ```powershell
+      $gpo = 'C - LAPS postes'
+      New-GPO -Name $gpo | New-GPLink -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+      $cle = 'HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\LAPS'
+      @{ BackupDirectory = 2; PasswordLength = 16; PasswordComplexity = 4; PasswordAgeDays = 30 }.GetEnumerator() |
+          ForEach-Object { Set-GPRegistryValue -Name $gpo -Key $cle -ValueName $_.Key -Type DWord -Value $_.Value }
+      ```
+
+      Les réglages sont dans *Configuration ordinateur* › *Modèles d'administration* › *Système* › *LAPS*.
+      `BackupDirectory` : 0 désactivé, 1 Entra ID, **2 Active Directory**. `PasswordComplexity` 4 = les quatre
+      familles de caractères. D'autres réglages utiles : `PostAuthenticationActions` (changer le mot de
+      passe, voire fermer la session, après une utilisation du compte), `AdministratorAccountName` (gérer un
+      compte local autre que l'administrateur intégré), `ADPasswordEncryptionEnabled`.
+    docs:
+      - title: Paramètres de stratégie Windows LAPS
+        url: https://learn.microsoft.com/fr-fr/windows-server/identity/laps/laps-management-policy-settings
+    checks:
+      - desc: C - LAPS postes est liée à l'OU Postes avec sauvegarde dans AD
+        run: |
+          $lien = (Get-GPInheritance -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan').GpoLinks | Where-Object DisplayName -eq 'C - LAPS postes'
+          [bool]$lien -and (Get-GPRegistryValue -Name 'C - LAPS postes' -Key 'HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\LAPS' -ValueName BackupDirectory).Value -eq 2
+      - desc: Longueur 16, complexité 4, âge 30 jours
+        run: |
+          $cle = 'HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\LAPS'
+          $v = @{}; foreach ($n in 'PasswordLength', 'PasswordComplexity', 'PasswordAgeDays') { $v[$n] = (Get-GPRegistryValue -Name 'C - LAPS postes' -Key $cle -ValueName $n).Value }
+          $v.PasswordLength -eq 16 -and $v.PasswordComplexity -eq 4 -and $v.PasswordAgeDays -eq 30
+    solution: |
+      $gpo = 'C - LAPS postes'
+      New-GPO -Name $gpo | New-GPLink -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' | Out-Null
+      $cle = 'HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\LAPS'
+      foreach ($p in @(@('BackupDirectory', 2), @('PasswordLength', 16), @('PasswordComplexity', 4), @('PasswordAgeDays', 30))) {
+          Set-GPRegistryValue -Name $gpo -Key $cle -ValueName $p[0] -Type DWord -Value $p[1] | Out-Null
+      }
+
+  - id: win-laps-poste
+    title: LAPS - le premier mot de passe de PC01
+    description: |
+      Applique la stratégie sur PC01 et déclenche le traitement LAPS. Sur SRV-DC01, lis ensuite le mot de
+      passe LAPS de PC01 et écris dans `C:\Admin\laps-pc01.txt` la **date de sa dernière mise à jour** au
+      format ISO 8601 (`.ToString('o')`).
+    hint: Invoke-Command -ComputerName PC01 { gpupdate /target:computer /force ; Invoke-LapsPolicyProcessing } ; (Get-LapsADPassword -Identity PC01 -AsPlainText).PasswordUpdateTime.ToString('o') | Set-Content C:\Admin\laps-pc01.txt
+    cours: |
+      ```powershell
+      Invoke-Command -ComputerName PC01 { gpupdate /target:computer /force; Invoke-LapsPolicyProcessing }
+      $p = Get-LapsADPassword -Identity PC01 -AsPlainText
+      $p | Format-List ComputerName, Account, Password, PasswordUpdateTime, ExpirationTimestamp, Source
+      $p.PasswordUpdateTime.ToString('o') | Set-Content C:\Admin\laps-pc01.txt
+      ```
+
+      Le poste traite la stratégie LAPS toutes les heures (et à chaque `gpupdate`) ; `Invoke-LapsPolicyProcessing`
+      le force. Le journal *Microsoft-Windows-LAPS/Operational* du poste explique chaque étape (10018 :
+      mot de passe mis à jour dans AD). `Get-LapsADPassword` lit l'objet ordinateur et déchiffre si on en a
+      le droit ; sans `-AsPlainText`, le mot de passe reste une `SecureString`. Chaque lecture d'un mot de
+      passe devrait être tracée : c'est un accès administrateur.
+    docs:
+      - title: Get-LapsADPassword
+        url: https://learn.microsoft.com/fr-fr/powershell/module/laps/get-lapsadpassword
+      - title: Invoke-LapsPolicyProcessing
+        url: https://learn.microsoft.com/fr-fr/powershell/module/laps/invoke-lapspolicyprocessing
+    checks:
+      - desc: Le mot de passe LAPS de PC01 est sauvegardé dans l'annuaire
+        run: |
+          $p = Get-LapsADPassword -Identity PC01 -ErrorAction Stop
+          [bool]$p.Password -and [bool]$p.Account
+      - desc: C:\Admin\laps-pc01.txt contient une date de mise à jour valide
+        run: |
+          $d = [datetime]::Parse((Get-Content C:\Admin\laps-pc01.txt -Raw).Trim(), $null, 'RoundtripKind')
+          $d -le (Get-LapsADPassword -Identity PC01).PasswordUpdateTime.AddSeconds(1) -and $d -gt (Get-Date).AddDays(-31)
+    solution: |
+      Invoke-Command -ComputerName PC01 { gpupdate /target:computer /force | Out-Null; Invoke-LapsPolicyProcessing } | Out-Null
+      Start-Sleep 10
+      (Get-LapsADPassword -Identity PC01 -AsPlainText).PasswordUpdateTime.ToString('o') | Set-Content C:\Admin\laps-pc01.txt
+
+  - id: win-laps-rotation
+    title: LAPS - faire tourner après usage
+    description: |
+      Le mot de passe de PC01 vient d'être communiqué à un prestataire. Fais-le **changer immédiatement**
+      par le poste : sa date de mise à jour dans l'annuaire doit devenir postérieure à celle notée dans
+      `C:\Admin\laps-pc01.txt`.
+    hint: Invoke-Command -ComputerName PC01 { Reset-LapsPassword } ; Get-LapsADPassword -Identity PC01
+    cours: |
+      ```powershell
+      Invoke-Command -ComputerName PC01 { Reset-LapsPassword }
+      Get-LapsADPassword -Identity PC01 | Select-Object PasswordUpdateTime, ExpirationTimestamp
+      ```
+
+      `Reset-LapsPassword`, lancé **sur le poste**, génère et sauvegarde un nouveau mot de passe tout de suite.
+      Depuis l'annuaire, `Set-LapsADPasswordExpirationTime -Identity PC01` avance seulement la date
+      d'expiration : le changement aura lieu au prochain traitement de la stratégie (dans l'heure). La
+      stratégie *Actions après authentification* automatise cette rotation : quelques heures après chaque
+      utilisation du compte LAPS, le mot de passe change et les sessions ouvertes peuvent être fermées.
+    docs:
+      - title: Reset-LapsPassword
+        url: https://learn.microsoft.com/fr-fr/powershell/module/laps/reset-lapspassword
+    checks:
+      - desc: Le mot de passe de PC01 a été changé après la date notée
+        run: |
+          $d = [datetime]::Parse((Get-Content C:\Admin\laps-pc01.txt -Raw).Trim(), $null, 'RoundtripKind')
+          (Get-LapsADPassword -Identity PC01).PasswordUpdateTime -gt $d.AddSeconds(1)
+    solution: |
+      Invoke-Command -ComputerName PC01 { Reset-LapsPassword } | Out-Null
+      Start-Sleep 10

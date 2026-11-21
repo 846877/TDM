@@ -1,0 +1,114 @@
+title: Authentification centralisée par RADIUS
+level: avance
+order: 22
+device: router
+hostname: R-SIEGE
+tags: [aaa, radius, authentification, sécurité]
+summary: Authentifier les administrateurs sur un serveur RADIUS, avec un compte local de secours.
+description: |
+  Les administrateurs doivent se connecter avec leur compte de l'annuaire, vérifié par le serveur
+  RADIUS `ISE-1` (`10.0.0.20`). Si le serveur ne répond pas, un compte local de secours doit
+  rester utilisable.
+
+  1. compte local `secours`, privilège `15`, secret `S3cours!2026` ;
+  2. active AAA (`aaa new-model`) ;
+  3. serveur RADIUS `ISE-1` : adresse `10.0.0.20`, ports `1812` (authentification) et `1813`
+     (comptabilité), clé `R4dius-Cl3` ;
+  4. groupe de serveurs `ISE` contenant `ISE-1` ;
+  5. listes par défaut : authentification `login` et autorisation `exec` par le groupe `ISE` puis
+     `local` ; comptabilité `exec` en `start-stop` vers `ISE` ;
+  6. les requêtes RADIUS partent de `Loopback0`.
+initial: |
+  interface loopback 0
+  ip address 10.255.0.1 255.255.255.255
+  interface g0/0
+  ip address 10.0.0.1 255.255.255.0
+  no shutdown
+checks:
+  - desc: AAA actif et compte local secours niveau 15
+    expr: d.aaa_new_model and d.users.get("secours", {}).get("privilege") == 15 and d.users["secours"].get("secret") == "S3cours!2026"
+  - desc: Serveur ISE-1 (10.0.0.20, 1812/1813, clé R4dius-Cl3) dans le groupe ISE
+    expr: 'd.radius_servers.get("ISE-1") == {"address": "10.0.0.20", "auth_port": 1812, "acct_port": 1813, "key": "R4dius-Cl3"} and d.aaa_groups.get("ISE") == {"type": "radius", "servers": ["ISE-1"]}'
+  - desc: Authentification login et autorisation exec par ISE puis local
+    expr: d.aaa_authentication.get("login default") == "group ISE local" and d.aaa_authorization.get("exec default") == "group ISE local"
+  - desc: Comptabilité exec start-stop vers ISE
+    expr: d.aaa_accounting.get("exec default") == "start-stop group ISE"
+  - desc: RADIUS sourcé depuis Loopback0
+    expr: d.radius_source == "Loopback0"
+solution: |
+  configure terminal
+  username secours privilege 15 secret S3cours!2026
+  aaa new-model
+  radius server ISE-1
+  address ipv4 10.0.0.20 auth-port 1812 acct-port 1813
+  key R4dius-Cl3
+  exit
+  aaa group server radius ISE
+  server name ISE-1
+  exit
+  aaa authentication login default group ISE local
+  aaa authorization exec default group ISE local
+  aaa accounting exec default start-stop group ISE
+  ip radius source-interface loopback 0
+  end
+cours: |
+  ## AAA : trois questions
+
+  - **Authentication** — qui es-tu ? (identifiant et mot de passe, certificat...)
+  - **Authorization** — qu'as-tu le droit de faire ? (niveau de privilège, commandes autorisées)
+  - **Accounting** — qu'as-tu fait ? (début et fin de session, commandes tapées)
+
+  Avec des comptes locaux sur chaque équipement, le départ d'un administrateur oblige à modifier
+  des dizaines de configurations. Un serveur central (Cisco ISE, FreeRADIUS, NPS de Windows)
+  s'appuie sur l'annuaire : un compte désactivé ne peut plus se connecter nulle part.
+
+  ### RADIUS ou TACACS+ ?
+
+  | RADIUS                                   | TACACS+                                    |
+  |------------------------------------------|--------------------------------------------|
+  | standard (RFC 2865), UDP 1812/1813       | origine Cisco, TCP 49                      |
+  | chiffre seulement le mot de passe        | chiffre tout le paquet                     |
+  | authentification et autorisation liées   | les trois fonctions séparées, autorisation commande par commande |
+  | idéal pour l'accès réseau (802.1X, VPN, Wi-Fi) | idéal pour l'administration des équipements |
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# username urgence privilege 15 secret Urg3nce#
+  R1(config)# aaa new-model
+  R1(config)# radius server NPS-A
+  R1(config-radius-server)# address ipv4 172.16.5.10 auth-port 1812 acct-port 1813
+  R1(config-radius-server)# key Partag3
+  R1(config)# aaa group server radius ANNUAIRE
+  R1(config-sg-radius)# server name NPS-A
+  R1(config)# aaa authentication login default group ANNUAIRE local
+  R1(config)# aaa authorization exec default group ANNUAIRE local
+  R1(config)# aaa accounting exec default start-stop group ANNUAIRE
+  R1(config)# ip radius source-interface loopback 1
+  R1# test aaa group ANNUAIRE jdupont MotDePasse new-code
+  R1# show aaa servers
+  ```
+
+  ### La liste de méthodes et le secours local
+
+  `group ISE local` signifie : essayer les serveurs du groupe ; **seulement s'ils ne répondent
+  pas**, utiliser les comptes locaux. Si le serveur répond « refusé », on ne passe pas à `local`.
+  Le compte local de secours doit donc exister **avant** d'activer AAA, sinon on risque de
+  s'enfermer dehors.
+
+  ### Pièges fréquents
+
+  - Taper `aaa new-model` sans compte local : la console demande soudain un identifiant.
+  - Clé partagée différente sur le serveur (`show aaa servers` montre des échecs).
+  - Oublier de déclarer le routeur (par son adresse **source**) comme client sur le serveur
+    RADIUS : d'où l'intérêt de fixer `ip radius source-interface`.
+
+  ### Pour le CCNA / CCNP ENCOR
+
+  Le CCNA demande de différencier RADIUS et TACACS+ et de connaître le rôle d'AAA ; ENCOR ajoute
+  la configuration complète des listes de méthodes.
+docs:
+  - title: RFC 2865 — Remote Authentication Dial In User Service (RADIUS)
+    url: https://www.rfc-editor.org/rfc/rfc2865
+  - title: Wikipédia — Remote Authentication Dial-In User Service
+    url: https://fr.wikipedia.org/wiki/Remote_Authentication_Dial-In_User_Service

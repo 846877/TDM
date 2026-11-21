@@ -1,0 +1,177 @@
+title: Décorateur paramétré « réessayer »
+level: avance
+order: 11
+tags: [décorateurs, exceptions, functools]
+summary: Un décorateur qui accepte des arguments… ou pas.
+description: |
+  Écris un décorateur **paramétré** `reessayer(tentatives=3, exceptions=(Exception,))` qui relance
+  la fonction décorée tant qu'elle lève une des `exceptions` données, au plus `tentatives` fois au total.
+
+  - si un appel réussit, sa valeur est renvoyée immédiatement ;
+  - si toutes les tentatives échouent, la **dernière** exception est relancée telle quelle ;
+  - une exception qui ne fait **pas** partie de `exceptions` remonte tout de suite, sans nouvel essai ;
+  - `reessayer(0)` (ou toute valeur `< 1`) lève `ValueError` dès la décoration ;
+  - le nom et la docstring de la fonction sont conservés (`functools.wraps`).
+
+  Difficulté supplémentaire : le décorateur doit aussi fonctionner **sans parenthèses**.
+
+  ```python
+  @reessayer(tentatives=5, exceptions=(ConnectionError,))
+  def telecharger(url): ...
+
+  @reessayer              # équivaut à @reessayer()
+  def lire_capteur(): ...
+  ```
+
+  Rappel : un décorateur paramétré est une fonction qui **renvoie** un décorateur.
+starter: |
+  import functools
+
+
+  def reessayer(tentatives=3, exceptions=(Exception,)):
+      pass
+tests: |
+  def capricieuse(echecs, erreur=ConnectionError):
+      etat = {"appels": 0}
+      def f(x=1):
+          "doc de f"
+          etat["appels"] += 1
+          if etat["appels"] <= echecs:
+              raise erreur(f"échec {etat['appels']}")
+          return x * 10
+      return f, etat
+
+  def test_succes_apres_echecs():
+      "Réussit après 2 échecs avec 3 tentatives"
+      f, etat = capricieuse(2)
+      g = solution.reessayer(tentatives=3)(f)
+      assert g(4) == 40, "la valeur de l'appel réussi doit être renvoyée"
+      assert etat["appels"] == 3, f"{etat['appels']} appels (attendu 3)"
+
+  def test_epuise():
+      "Relance la dernière exception quand tout échoue"
+      f, etat = capricieuse(10)
+      g = solution.reessayer(tentatives=4, exceptions=(ConnectionError,))(f)
+      try:
+          g()
+      except ConnectionError as exc:
+          assert str(exc) == "échec 4", f"exception relancée : {exc!r} (attendu la 4e)"
+      else:
+          raise AssertionError("aucune exception levée")
+      assert etat["appels"] == 4
+
+  def test_autre_exception():
+      "Une exception non listée remonte sans nouvel essai"
+      f, etat = capricieuse(5, erreur=KeyError)
+      g = solution.reessayer(tentatives=5, exceptions=(ConnectionError,))(f)
+      try:
+          g()
+      except KeyError:
+          pass
+      else:
+          raise AssertionError("KeyError aurait dû remonter")
+      assert etat["appels"] == 1, f"{etat['appels']} appels : il ne fallait pas réessayer"
+
+  def test_sans_parentheses():
+      "Fonctionne aussi sans parenthèses (@reessayer)"
+      f, etat = capricieuse(2)
+      g = solution.reessayer(f)
+      assert g() == 10 and etat["appels"] == 3, "par défaut : 3 tentatives"
+
+  def test_wraps():
+      "Nom et docstring conservés"
+      f, _ = capricieuse(0)
+      g = solution.reessayer(tentatives=2)(f)
+      assert g.__name__ == "f" and g.__doc__ == "doc de f"
+
+  def test_tentatives_invalides():
+      "reessayer(0) lève ValueError"
+      try:
+          solution.reessayer(0)
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("ValueError attendue pour tentatives=0")
+
+  def test_arguments_nommes():
+      "Les arguments nommés sont transmis"
+      f, _ = capricieuse(0)
+      assert solution.reessayer()(f)(x=7) == 70
+solution: |
+  import functools
+
+
+  def reessayer(tentatives=3, exceptions=(Exception,)):
+      if callable(tentatives):          # utilisé sans parenthèses : @reessayer
+          return reessayer()(tentatives)
+      if tentatives < 1:
+          raise ValueError("tentatives doit valoir au moins 1")
+
+      def decorateur(fonction):
+          @functools.wraps(fonction)
+          def enveloppe(*args, **kwargs):
+              for essai in range(1, tentatives + 1):
+                  try:
+                      return fonction(*args, **kwargs)
+                  except exceptions:
+                      if essai == tentatives:
+                          raise
+          return enveloppe
+
+      return decorateur
+cours: |
+  ## Trois étages
+
+  Un décorateur **paramétré** est une fonction qui *renvoie un décorateur* :
+
+  ```python
+  @journaliser(niveau="INFO")
+  def f(): ...
+  # équivaut à : f = journaliser(niveau="INFO")(f)
+  ```
+
+  D'où trois fonctions imbriquées :
+
+  ```python
+  def journaliser(niveau="INFO"):          # 1. reçoit les paramètres
+      def decorateur(fonction):             # 2. reçoit la fonction
+          @functools.wraps(fonction)
+          def enveloppe(*args, **kwargs):   # 3. remplace la fonction
+              print(f"[{niveau}] appel de {fonction.__name__}")
+              return fonction(*args, **kwargs)
+          return enveloppe
+      return decorateur
+  ```
+
+  ## Valider tôt
+
+  Les paramètres sont connus dès la **décoration** (à l'import du module) : un paramètre
+  absurde doit lever une erreur à ce moment-là (dans l'étage 1), pas au premier appel.
+
+  ## Avec ou sans parenthèses
+
+  `@reessayer` (sans parenthèses) passe directement la **fonction** au premier étage, alors
+  que `@reessayer()` passe zéro argument. On distingue les deux cas en regardant si le
+  premier argument positionnel est appelable (`callable(x)`) et s'il est le seul argument.
+  Une signature comme `def deco(fonction=None, *, param=...)` rend l'intention plus claire.
+
+  ## Boucle de tentatives
+
+  Pour réessayer, une boucle `for` sur le nombre de tentatives, avec `try / except` à
+  l'intérieur : `return` en cas de succès, mémorisation de l'exception sinon. Après la
+  boucle, on relance la dernière exception (`raise derniere`). Un `except` ne doit attraper
+  **que** les types configurés : `except exceptions as e` accepte un tuple de classes ; les
+  autres exceptions remontent naturellement.
+
+  ## En production
+
+  On ajoute généralement une attente croissante entre les essais (*backoff* exponentiel,
+  avec un peu d'aléatoire, le *jitter*) pour ne pas marteler un service en panne. Des
+  bibliothèques comme `tenacity` le font. Et on ne réessaie que des opérations
+  **idempotentes** (qu'on peut répéter sans effet indésirable) : relancer un paiement est
+  dangereux.
+docs:
+  - title: functools.wraps
+    url: https://docs.python.org/fr/3/library/functools.html#functools.wraps
+  - title: Référence — définitions de fonctions et décorateurs
+    url: https://docs.python.org/fr/3/reference/compound_stmts.html#function-definitions

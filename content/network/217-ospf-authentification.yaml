@@ -1,0 +1,121 @@
+title: Authentifier OSPF et régler les liens point à point
+level: avance
+order: 17
+device: router
+hostname: R-COEUR2
+tags: [ospf, authentification, md5, timers, point-to-point]
+summary: Empêcher un routeur pirate d'injecter des routes et accélérer la détection de panne.
+description: |
+  OSPF tourne déjà sur `R-COEUR2` (zone 0). Un test d'intrusion a montré qu'un portable branché
+  sur un lien de cœur devenait voisin OSPF et pouvait annoncer n'importe quelle route.
+
+  1. authentification **MD5** pour toute la zone `0` (`area 0 authentication message-digest`) ;
+  2. clé `1` avec le secret `C0eur-Ospf!` sur `G0/1` et `G0/2` (les liens vers `R-COEUR1` et
+     `R-COEUR3`) ;
+  3. `G0/1` est un câble direct entre deux routeurs : type de réseau **point-to-point** (pas
+     d'élection DR/BDR) ;
+  4. sur `G0/1`, hello toutes les `5` s et voisin déclaré mort après `20` s.
+initial: |
+  interface g0/0
+  ip address 192.168.2.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.0.12.2 255.255.255.252
+  no shutdown
+  interface g0/2
+  ip address 10.0.23.2 255.255.255.252
+  no shutdown
+  router ospf 1
+  router-id 2.2.2.2
+  network 10.0.12.0 0.0.0.3 area 0
+  network 10.0.23.0 0.0.0.3 area 0
+  network 192.168.2.0 0.0.0.255 area 0
+  passive-interface g0/0
+checks:
+  - desc: Zone 0 authentifiée en MD5
+    expr: d.ospf[1].area_auth.get("0") == "message-digest"
+  - desc: Clé MD5 1 = C0eur-Ospf! sur G0/1 et G0/2
+    expr: 'intf("g0/1").ospf_md5_keys == {1: "C0eur-Ospf!"} and intf("g0/2").ospf_md5_keys == {1: "C0eur-Ospf!"}'
+  - desc: G0/1 en point-to-point
+    expr: intf("g0/1").ospf_network == "point-to-point"
+  - desc: Hello 5 s et dead 20 s sur G0/1
+    expr: intf("g0/1").ospf_hello == 5 and intf("g0/1").ospf_dead == 20
+solution: |
+  configure terminal
+  router ospf 1
+  area 0 authentication message-digest
+  exit
+  interface g0/1
+  ip ospf message-digest-key 1 md5 C0eur-Ospf!
+  ip ospf network point-to-point
+  ip ospf hello-interval 5
+  ip ospf dead-interval 20
+  interface g0/2
+  ip ospf message-digest-key 1 md5 C0eur-Ospf!
+  end
+cours: |
+  ## Pourquoi authentifier un protocole de routage ?
+
+  Par défaut, un routeur OSPF accepte comme voisin **n'importe quel** équipement qui envoie des
+  hellos compatibles sur une interface active. Un attaquant (ou un équipement de labo oublié) peut
+  alors annoncer une route par défaut ou un préfixe plus précis et **détourner** le trafic.
+  L'authentification ajoute à chaque paquet OSPF un condensé calculé avec une clé partagée : sans
+  la clé, pas d'adjacence.
+
+  ### Les deux façons d'activer l'authentification
+
+  ```
+  ! pour toute une zone, sous le processus
+  R1(config)# router ospf 10
+  R1(config-router)# area 0 authentication message-digest
+  ! ou interface par interface
+  R1(config)# interface gi0/3
+  R1(config-if)# ip ospf authentication message-digest
+  ```
+
+  Dans les deux cas, la **clé** se configure sur chaque interface :
+
+  ```
+  R1(config-if)# ip ospf message-digest-key 3 md5 Lab-K3y
+  R1# show ip ospf interface gi0/3
+    Message digest authentication enabled
+      Youngest key id is 3
+  ```
+
+  Le numéro de clé et le secret doivent être identiques des deux côtés. Plusieurs numéros de clé
+  permettent de changer de secret sans coupure. Les versions récentes d'IOS proposent aussi
+  `key chain` avec HMAC-SHA (RFC 5709), plus robuste que MD5.
+
+  ### Type de réseau et timers
+
+  Sur Ethernet, OSPF suppose un réseau **broadcast** et élit un DR/BDR, ce qui ajoute ~40 s
+  (temps *wait*) et des LSA de type 2 inutiles entre deux routeurs seulement.
+  `ip ospf network point-to-point` supprime l'élection : l'adjacence monte plus vite.
+
+  `hello-interval` et `dead-interval` (par défaut 10 et 40 s sur Ethernet) règlent la vitesse de
+  détection d'un voisin disparu. Ils doivent être **identiques** des deux côtés, sinon pas
+  d'adjacence. Pour une détection en millisecondes, on préfère **BFD**.
+
+  ### Diagnostic
+
+  - `show ip ospf neighbor` vide → `debug ip ospf adj` montre *Mismatched authentication type*
+    ou *Mismatched hello parameters* ;
+  - `show ip ospf interface brief` donne le type de réseau, l'état et le coût.
+
+  ### Pièges fréquents
+
+  - Activer l'authentification sur la zone sans mettre la clé sur **chaque** interface : tous les
+    voisins de la zone tombent.
+  - Une erreur de frappe dans le secret (le mot de passe n'est pas affiché en clair avec
+    `service password-encryption`).
+  - Timers ou type de réseau différents entre les deux extrémités.
+
+  ### Pour le CCNP ENCOR
+
+  ENCOR attend la configuration de l'authentification OSPF, des types de réseau et des timers, et
+  le dépannage des adjacences.
+docs:
+  - title: RFC 2328 — OSPF Version 2
+    url: https://www.rfc-editor.org/rfc/rfc2328
+  - title: Cisco — OSPF Design Guide
+    url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/7039-1.html

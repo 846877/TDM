@@ -1,0 +1,21 @@
+---
+# Inventaire des serveurs (format proche d'un inventaire Ansible)
+serveurs_web:
+  hosts:
+    web1:
+      ip: 10.0.1.11
+      cpu: 2
+    web2:
+      ip: 10.0.1.12
+      cpu: 4
+  vars:
+    http_port: 80
+    tls: true
+serveurs_bdd:
+  hosts:
+    bdd1:
+      ip: 10.0.2.21
+      cpu: 8
+  vars:
+    moteur: postgresql
+    sauvegarde: null

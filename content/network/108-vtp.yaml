@@ -1,0 +1,95 @@
+title: Rejoindre un domaine VTP
+level: intermediaire
+order: 8
+device: switch
+hostname: SW-ACCES3
+tags: [vtp, vlan]
+summary: Recevoir automatiquement les VLAN du serveur VTP.
+description: |
+  Sur le site de Lyon, les VLAN sont créés une seule fois sur le switch de distribution
+  (serveur **VTP**) et propagés aux switchs d'accès.
+
+  Fais entrer le nouveau switch d'accès dans le domaine :
+
+  1. domaine `TDM-LYON` (`vtp domain TDM-LYON`) ;
+  2. version `2` ;
+  3. mot de passe `Vtp2024!` (il doit être identique sur tout le domaine) ;
+  4. mode **client** : le switch apprend les VLAN mais ne peut plus en créer.
+
+  Contrôle avec `show vtp status`. Essaie ensuite `vlan 50` : que répond le switch ?
+checks:
+  - desc: Domaine VTP TDM-LYON
+    expr: d.vtp_domain == "TDM-LYON"
+    hint: "Le nom de domaine est sensible à la casse."
+  - desc: VTP version 2
+    expr: d.vtp_version == 2
+  - desc: Mot de passe VTP configuré
+    expr: d.vtp_password == "Vtp2024!"
+  - desc: Mode client
+    expr: d.vtp_mode == "client"
+solution: |
+  configure terminal
+  vtp domain TDM-LYON
+  vtp version 2
+  vtp password Vtp2024!
+  vtp mode client
+  end
+cours: |
+  ## Propager les VLAN automatiquement
+
+  Créer les mêmes VLAN sur 40 switchs est fastidieux et source d'erreurs. **VTP** (*VLAN
+  Trunking Protocol*, propriétaire Cisco) diffuse la liste des VLAN sur les trunks : on la
+  modifie sur un **serveur**, les **clients** la reçoivent.
+
+  | Mode         | Créer/modifier des VLAN | Synchronise sa base | Relaie les annonces |
+  |--------------|-------------------------|---------------------|---------------------|
+  | server       | oui                     | oui                 | oui                 |
+  | client       | non                     | oui                 | oui                 |
+  | transparent  | oui (localement)        | non                 | oui (v2)            |
+  | off (v3)     | oui (localement)        | non                 | non                 |
+
+  Pour échanger, les switchs doivent partager le même **nom de domaine**, le même **mot de
+  passe** et une version compatible.
+
+  ### Configuration d'un client (autres valeurs)
+
+  ```
+  SW5(config)# vtp domain ENTREPRISE-NANTES
+  SW5(config)# vtp version 2
+  SW5(config)# vtp password Vtp#Nantes
+  SW5(config)# vtp mode client
+  SW5# show vtp status
+  VTP Version capable             : 1 to 3
+  VTP version running             : 2
+  VTP Domain Name                 : ENTREPRISE-NANTES
+  VTP Operating Mode              : Client
+  Configuration Revision          : 18
+  SW5# show vtp password
+  ```
+
+  ### Le danger du numéro de révision
+
+  Chaque modification incrémente le **numéro de révision**. Un switch qui annonce une révision
+  plus élevée **écrase** la base de tous les autres. Brancher un switch de labo (mode serveur,
+  même domaine, révision 50) peut **effacer** les VLAN de toute l'entreprise. Avant
+  d'introduire un switch, on remet sa révision à 0 (passer en transparent puis revenir, ou
+  changer de domaine).
+
+  VTP version 3 protège contre ce risque (un seul serveur *primaire*). Beaucoup d'entreprises
+  préfèrent tout simplement le mode **transparent** partout.
+
+  ### Pièges fréquents
+
+  - Nom de domaine sensible à la casse.
+  - Mot de passe différent : les mises à jour sont ignorées sans message clair.
+  - VTP ne transporte que la base des VLAN, pas l'affectation des ports.
+
+  ### Pour le CCNA
+
+  Le CCNA actuel mentionne VTP surtout pour ses risques ; ENCOR détaille les versions et les
+  modes.
+docs:
+  - title: "Cisco — Understand VLAN Trunk Protocol (VTP)"
+    url: https://www.cisco.com/c/en/us/support/docs/lan-switching/vtp/10558-21.html
+  - title: "Wikipédia — VLAN Trunking Protocol"
+    url: https://fr.wikipedia.org/wiki/VLAN_Trunking_Protocol

@@ -1,0 +1,408 @@
+title: PKI d'entreprise avec AD CS
+level: avance
+order: 5
+tags: [pki, ad cs, certificats, autorité de certification, crl, révocation, modèles, inscription automatique]
+summary: Déployer une autorité de certification d'entreprise - installation, durées et CRL, modèles et droits, inscription automatique des postes par GPO, certificat de serveur web et révocation.
+vagrant: bundled
+machine: dc01
+description: |
+  **Contexte.** Les *Ateliers Durand* veulent un intranet en HTTPS, une authentification des postes par
+  certificat pour le Wi-Fi et, à terme, la signature des scripts. Acheter des certificats publics pour des
+  noms internes est impossible : il faut une **PKI interne**, approuvée par toutes les machines du domaine.
+
+  **Machines** (prévoir **8 Go de RAM libres**) :
+
+  | VM | Système | Adresse LAN | Rôle |
+  |----|---------|-------------|------|
+  | `SRV-DC01` (terminal) | Windows Server 2022 (2 Go) | 192.168.10.10 | contrôleur de `durand.lan`, future autorité de certification |
+  | `PC01` | Windows 11 (3 Go) | 192.168.10.101 | poste joint, dans l'OU `Postes` |
+
+  Pour simplifier le lab, l'autorité est installée sur le contrôleur de domaine : **à ne jamais faire en
+  production** (voir le cours). Pour agir sur PC01 : `Invoke-Command -ComputerName PC01 { ... }`.
+cours: |
+  ## À quoi sert une PKI ?
+
+  Un **certificat** lie une clé publique à une identité (nom DNS, utilisateur, machine), le tout **signé**
+  par une **autorité de certification** (AC). Une machine fait confiance à un certificat si elle peut
+  remonter la **chaîne** jusqu'à une AC racine présente dans son magasin *Autorités de certification
+  racines de confiance*, si le certificat est dans sa **période de validité**, si son **usage**
+  (EKU : authentification serveur, client, signature de code...) convient, et s'il n'est **pas révoqué**.
+
+  ## AD CS : autonome ou d'entreprise
+
+  Le rôle **Services de certificats Active Directory** propose deux types d'AC :
+
+  - **autonome** : indépendante de l'annuaire, les demandes sont validées à la main ; c'est le type des
+    **racines hors ligne** ;
+  - **d'entreprise** : intégrée à AD, elle publie son certificat dans l'annuaire (toutes les machines du
+    domaine l'approuvent automatiquement par GPO), utilise des **modèles** de certificats et permet
+    l'**inscription automatique**.
+
+  L'architecture recommandée a **deux niveaux** : une racine autonome **éteinte** (sa clé ne sert qu'à
+  signer les AC subordonnées et sa CRL, quelques fois par an) et une ou plusieurs AC **émettrices**
+  d'entreprise, sur des serveurs membres dédiés. Une AC sur un contrôleur de domaine complique
+  la restauration et le renommage, et une compromission de l'AC permet de forger des certificats
+  d'authentification pour n'importe quel compte : l'AC est un actif de **niveau 0**, au même titre
+  que les DC.
+
+  ## Modèles et inscription automatique
+
+  Un **modèle** définit le type de certificat : usage, durée, longueur de clé, mode de construction du
+  sujet (depuis l'annuaire ou fourni dans la demande) et **droits** (*Inscrire*, *Inscription
+  automatique*). Une AC d'entreprise n'émet que les modèles qu'on lui a **publiés**. Avec le droit
+  *Inscription automatique* et la GPO correspondante, les postes demandent, renouvellent et remplacent
+  eux-mêmes leurs certificats : plus de certificat expiré oublié.
+
+  ## Révocation
+
+  Quand une clé est compromise ou une machine retirée, on **révoque** le certificat. L'AC publie
+  périodiquement une **liste de révocation** (CRL) complète, plus des **delta CRL** plus fréquentes ; les
+  emplacements de publication (CDP) sont inscrits dans chaque certificat émis. Une CRL expirée ou
+  injoignable fait échouer la vérification de **tous** les certificats : sa période et sa publication
+  doivent être surveillées. OCSP (répondeur en ligne) est l'alternative aux CRL pour les gros volumes.
+
+  ## Outils
+
+  `certsrv.msc` (l'AC), `certtmpl.msc` (les modèles), `pkiview.msc` (santé de la PKI), `certlm.msc`
+  (certificats de l'ordinateur), `certutil` (le couteau suisse : configuration de l'AC, CRL, vérification
+  de chaîne avec `certutil -verify -urlfetch`), les modules PowerShell `ADCSDeployment`,
+  `ADCSAdministration` et `PKI` (`Get-Certificate`, `Export-Certificate`).
+docs:
+  - title: Vue d'ensemble des services de certificats AD
+    url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-cs/active-directory-certificate-services-overview
+  - title: Module ADCSDeployment (PowerShell)
+    url: https://learn.microsoft.com/fr-fr/powershell/module/adcsdeployment/
+  - title: certutil
+    url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/certutil
+exercises:
+  - id: win-pki-role
+    title: Installer le rôle AD CS
+    description: |
+      Installe le service de rôle **Autorité de certification** avec ses outils de gestion sur SRV-DC01.
+    hint: Install-WindowsFeature ADCS-Cert-Authority -IncludeManagementTools
+    cours: |
+      ```powershell
+      Install-WindowsFeature ADCS-Cert-Authority -IncludeManagementTools
+      ```
+
+      Le rôle AD CS contient plusieurs services : **Autorité de certification**, **Inscription via le Web**
+      (pages `/certsrv`, à éviter : elles ont servi à des attaques par relais NTLM), **Répondeur en ligne**
+      (OCSP), **Service d'inscription de périphérique réseau** (NDES, pour les équipements). On n'installe que
+      ce dont on a besoin. `-IncludeManagementTools` ajoute les consoles et le module `ADCSAdministration`.
+      Comme pour AD DS, l'installation du binaire et la **configuration** de l'AC sont deux étapes distinctes.
+    docs:
+      - title: Installer l'autorité de certification
+        url: https://learn.microsoft.com/fr-fr/windows-server/networking/core-network-guide/cncg/server-certs/install-the-certification-authority
+    checks:
+      - desc: Le service de rôle Autorité de certification est installé
+        run: |
+          (Get-WindowsFeature ADCS-Cert-Authority).Installed
+      - desc: Les outils de gestion AD CS sont installés
+        run: |
+          (Get-WindowsFeature RSAT-ADCS-Mgmt).Installed
+    solution: |
+      Install-WindowsFeature ADCS-Cert-Authority -IncludeManagementTools | Out-Null
+
+  - id: win-pki-ac
+    title: Créer l'AC racine d'entreprise
+    description: |
+      Configure une **AC racine d'entreprise** nommée **`Ateliers Durand Root CA`**, clé RSA **4096** bits,
+      **SHA256**, valable **10 ans**.
+    hint: Install-AdcsCertificationAuthority -CAType EnterpriseRootCA -CACommonName 'Ateliers Durand Root CA' -KeyLength 4096 -HashAlgorithmName SHA256 -ValidityPeriod Years -ValidityPeriodUnits 10 -Force
+    cours: |
+      ```powershell
+      Install-AdcsCertificationAuthority -CAType EnterpriseRootCA -CACommonName 'Ateliers Durand Root CA' `
+          -KeyLength 4096 -HashAlgorithmName SHA256 -ValidityPeriod Years -ValidityPeriodUnits 10 -Force
+      certutil -cainfo name
+      Get-ChildItem Cert:\LocalMachine\Root | Where-Object Subject -like '*Ateliers Durand*'
+      ```
+
+      Le **nom** de l'AC est définitif (il figure dans tous les certificats émis) : pas de nom de serveur,
+      pas de date. La durée de la racine doit dépasser largement celle des certificats qu'elle signe. Une AC
+      d'entreprise publie son certificat dans `CN=Certification Authorities` et `CN=NTAuthCertificates`
+      (configuration de la forêt) : toutes les machines du domaine l'ajoutent à leurs racines de confiance
+      au prochain rafraîchissement des stratégies. Sauvegarde ensuite la clé de l'AC (`Backup-CARoleService`),
+      à conserver hors ligne.
+    docs:
+      - title: Install-AdcsCertificationAuthority
+        url: https://learn.microsoft.com/fr-fr/powershell/module/adcsdeployment/install-adcscertificationauthority
+    checks:
+      - desc: Le service CertSvc fonctionne et l'AC est publiée dans l'annuaire
+        run: |
+          $es = Get-ADObject -SearchBase 'CN=Enrollment Services,CN=Public Key Services,CN=Services,CN=Configuration,DC=durand,DC=lan' -Filter *
+          (Get-Service CertSvc).Status -eq 'Running' -and ($es.Name -contains 'Ateliers Durand Root CA')
+      - desc: Le certificat de l'AC est en RSA 4096 / SHA256
+        run: |
+          $c = Get-ChildItem Cert:\LocalMachine\Root | Where-Object Subject -eq 'CN=Ateliers Durand Root CA, DC=durand, DC=lan' | Select-Object -First 1
+          if (-not $c) { $c = Get-ChildItem Cert:\LocalMachine\Root | Where-Object Subject -like 'CN=Ateliers Durand Root CA*' | Select-Object -First 1 }
+          [bool]$c -and [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey($c).KeySize -eq 4096 -and $c.SignatureAlgorithm.FriendlyName -match 'sha256'
+    solution: |
+      Install-AdcsCertificationAuthority -CAType EnterpriseRootCA -CACommonName 'Ateliers Durand Root CA' -KeyLength 4096 -HashAlgorithmName SHA256 -ValidityPeriod Years -ValidityPeriodUnits 10 -Force | Out-Null
+
+  - id: win-pki-crl
+    title: Durées et listes de révocation
+    description: |
+      Règle l'AC : certificats émis valables **au plus 2 ans**, CRL complète publiée **chaque semaine**,
+      delta CRL **chaque jour**. Redémarre le service puis publie une nouvelle CRL.
+    hint: certutil -setreg CA\ValidityPeriodUnits 2 ; CA\ValidityPeriod Years ; CA\CRLPeriodUnits 1 ; CA\CRLPeriod Weeks ; CA\CRLDeltaPeriodUnits 1 ; CA\CRLDeltaPeriod Days ; Restart-Service CertSvc ; certutil -crl
+    cours: |
+      ```powershell
+      certutil -setreg CA\ValidityPeriodUnits 2
+      certutil -setreg CA\ValidityPeriod Years
+      certutil -setreg CA\CRLPeriodUnits 1
+      certutil -setreg CA\CRLPeriod Weeks
+      certutil -setreg CA\CRLDeltaPeriodUnits 1
+      certutil -setreg CA\CRLDeltaPeriod Days
+      Restart-Service CertSvc
+      certutil -crl
+      ```
+
+      `ValidityPeriod` plafonne la durée de **tous** les certificats émis, quel que soit le modèle. La
+      période de CRL est un compromis : courte, une révocation est vite connue mais la CRL doit être publiée
+      souvent et rester joignable ; longue, un certificat révoqué reste accepté plus longtemps. La delta
+      CRL ne contient que les révocations depuis la dernière CRL complète. Ces valeurs sont stockées dans
+      `HKLM\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\<nom de l'AC>`.
+    docs:
+      - title: Configurer les points de distribution CRL
+        url: https://learn.microsoft.com/fr-fr/windows-server/networking/core-network-guide/cncg/server-certs/configure-the-cdp-and-aia-extensions-on-ca1
+      - title: certutil
+        url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/certutil
+    checks:
+      - desc: Certificats émis limités à 2 ans
+        run: |
+          $r = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\Ateliers Durand Root CA'
+          $r.ValidityPeriod -eq 'Years' -and $r.ValidityPeriodUnits -eq 2
+      - desc: CRL hebdomadaire et delta CRL quotidienne
+        run: |
+          $r = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\Ateliers Durand Root CA'
+          $r.CRLPeriod -eq 'Weeks' -and $r.CRLPeriodUnits -eq 1 -and $r.CRLDeltaPeriod -eq 'Days' -and $r.CRLDeltaPeriodUnits -eq 1
+    solution: |
+      certutil -setreg CA\ValidityPeriodUnits 2 | Out-Null
+      certutil -setreg CA\ValidityPeriod Years | Out-Null
+      certutil -setreg CA\CRLPeriodUnits 1 | Out-Null
+      certutil -setreg CA\CRLPeriod Weeks | Out-Null
+      certutil -setreg CA\CRLDeltaPeriodUnits 1 | Out-Null
+      certutil -setreg CA\CRLDeltaPeriod Days | Out-Null
+      Restart-Service CertSvc
+      Start-Sleep 5
+      certutil -crl | Out-Null
+
+  - id: win-pki-modele
+    title: Publier le modèle des postes
+    description: |
+      Publie sur l'AC le modèle **Authentification de station de travail** (nom court `Workstation`) :
+      il fournit aux ordinateurs un certificat d'authentification **client**.
+    hint: Add-CATemplate -Name Workstation -Force ; Get-CATemplate
+    cours: |
+      ```powershell
+      Get-CATemplate | Format-Table Name, Oid
+      Add-CATemplate -Name Workstation -Force
+      ```
+
+      Les modèles sont stockés dans la configuration de la forêt
+      (`CN=Certificate Templates,CN=Public Key Services,CN=Services,CN=Configuration`) ; les publier sur une
+      AC revient à les ajouter à son attribut `certificateTemplates`. En production, on ne modifie pas les
+      modèles intégrés : on les **duplique** dans `certtmpl.msc` (version 2 ou plus), on ajuste la durée, la
+      clé et les droits, puis on publie la copie. Chaque modèle publié inutilement augmente la surface
+      d'attaque : des modèles mal configurés (sujet fourni par le demandeur + authentification client +
+      inscription ouverte, dit « ESC1 ») permettent de devenir administrateur du domaine.
+    docs:
+      - title: Add-CATemplate
+        url: https://learn.microsoft.com/fr-fr/powershell/module/adcsadministration/add-catemplate
+      - title: Modèles de certificats
+        url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-cs/certificate-template-concepts
+    checks:
+      - desc: Le modèle Workstation est publié sur l'AC
+        run: |
+          (Get-CATemplate).Name -contains 'Workstation'
+    solution: |
+      Add-CATemplate -Name Workstation -Force
+
+  - id: win-pki-droits
+    title: Les droits d'inscription automatique
+    description: |
+      Donne au groupe **Ordinateurs du domaine** les droits **Inscrire** et **Inscription automatique** sur
+      le modèle `Workstation`.
+    hint: ACL de 'AD:CN=Workstation,CN=Certificate Templates,CN=Public Key Services,CN=Services,CN=Configuration,DC=durand,DC=lan' ; droits étendus 0e10c968-78fb-11d2-90d4-00c04f79dc55 (Enroll) et a05b8cc2-17bc-4802-a710-e7c15ab866a2 (AutoEnroll)
+    cours: |
+      Dans `certtmpl.msc` : *Authentification de station de travail* › *Propriétés* › *Sécurité*. En
+      PowerShell, ce sont deux **droits étendus** sur l'objet du modèle :
+
+      ```powershell
+      $dn = 'AD:CN=Workstation,CN=Certificate Templates,CN=Public Key Services,CN=Services,CN=Configuration,DC=durand,DC=lan'
+      $sid = (Get-ADGroup -Identity "$((Get-ADDomain).DomainSID)-515").SID      # Ordinateurs du domaine
+      $acl = Get-Acl $dn
+      foreach ($g in '0e10c968-78fb-11d2-90d4-00c04f79dc55', 'a05b8cc2-17bc-4802-a710-e7c15ab866a2') {
+          $acl.AddAccessRule((New-Object DirectoryServices.ActiveDirectoryAccessRule $sid, 'ExtendedRight', 'Allow', ([guid]$g)))
+      }
+      Set-Acl $dn $acl
+      ```
+
+      *Inscrire* permet de demander le certificat, *Inscription automatique* permet au client de le faire
+      tout seul. Les droits se donnent à des **groupes** : pour limiter aux postes d'un service, on crée un
+      groupe d'ordinateurs dédié plutôt que *Ordinateurs du domaine*.
+    docs:
+      - title: Configurer l'inscription automatique des certificats
+        url: https://learn.microsoft.com/fr-fr/windows-server/networking/core-network-guide/cncg/server-certs/configure-server-certificate-autoenrollment
+    checks:
+      - desc: Ordinateurs du domaine a « Inscription automatique » sur Workstation
+        run: |
+          $acl = (Get-Acl 'AD:CN=Workstation,CN=Certificate Templates,CN=Public Key Services,CN=Services,CN=Configuration,DC=durand,DC=lan').Access
+          $sid = (Get-ADGroup -Identity "$((Get-ADDomain).DomainSID)-515").SID
+          [bool]($acl | Where-Object { $_.AccessControlType -eq 'Allow' -and $_.ObjectType -eq [guid]'a05b8cc2-17bc-4802-a710-e7c15ab866a2' -and $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]) -eq $sid })
+      - desc: Ordinateurs du domaine a « Inscrire » sur Workstation
+        run: |
+          $acl = (Get-Acl 'AD:CN=Workstation,CN=Certificate Templates,CN=Public Key Services,CN=Services,CN=Configuration,DC=durand,DC=lan').Access
+          $sid = (Get-ADGroup -Identity "$((Get-ADDomain).DomainSID)-515").SID
+          [bool]($acl | Where-Object { $_.AccessControlType -eq 'Allow' -and $_.ObjectType -eq [guid]'0e10c968-78fb-11d2-90d4-00c04f79dc55' -and $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]) -eq $sid })
+    solution: |
+      $dn = 'AD:CN=Workstation,CN=Certificate Templates,CN=Public Key Services,CN=Services,CN=Configuration,DC=durand,DC=lan'
+      $sid = (Get-ADGroup -Identity "$((Get-ADDomain).DomainSID)-515").SID
+      $acl = Get-Acl $dn
+      foreach ($g in '0e10c968-78fb-11d2-90d4-00c04f79dc55', 'a05b8cc2-17bc-4802-a710-e7c15ab866a2') {
+          $acl.AddAccessRule((New-Object DirectoryServices.ActiveDirectoryAccessRule $sid, 'ExtendedRight', 'Allow', ([guid]$g)))
+      }
+      Set-Acl $dn $acl
+
+  - id: win-pki-gpo
+    title: La GPO d'inscription automatique
+    description: |
+      Crée la GPO `C - Inscription automatique`, liée à l'OU `Postes`, qui active côté ordinateur
+      l'**inscription automatique** avec renouvellement des certificats expirés et mise à jour des
+      certificats utilisant des modèles (valeur `AEPolicy` = **7**).
+    hint: Set-GPRegistryValue -Name 'C - Inscription automatique' -Key 'HKLM\Software\Policies\Microsoft\Cryptography\AutoEnrollment' -ValueName AEPolicy -Type DWord -Value 7
+    cours: |
+      ```powershell
+      $gpo = 'C - Inscription automatique'
+      New-GPO -Name $gpo | New-GPLink -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+      Set-GPRegistryValue -Name $gpo -Key 'HKLM\Software\Policies\Microsoft\Cryptography\AutoEnrollment' `
+          -ValueName AEPolicy -Type DWord -Value 7
+      ```
+
+      Réglage : *Configuration ordinateur* › *Stratégies* › *Paramètres Windows* › *Paramètres de sécurité* ›
+      *Stratégies de clé publique* › « Client des services de certificats - Inscription automatique ».
+      `AEPolicy` est un masque : 1 = activé, 2 = renouveler les expirés et traiter les en attente, 4 = mettre
+      à jour les certificats dont le modèle a changé ; 7 = tout. Le même réglage existe côté utilisateur
+      (`HKCU`) pour les certificats des personnes (messagerie S/MIME, chiffrement EFS).
+    docs:
+      - title: Configurer l'inscription automatique des certificats
+        url: https://learn.microsoft.com/fr-fr/windows-server/networking/core-network-guide/cncg/server-certs/configure-server-certificate-autoenrollment
+    checks:
+      - desc: C - Inscription automatique est liée à Postes avec AEPolicy = 7
+        run: |
+          $lien = (Get-GPInheritance -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan').GpoLinks | Where-Object DisplayName -eq 'C - Inscription automatique'
+          [bool]$lien -and (Get-GPRegistryValue -Name 'C - Inscription automatique' -Key 'HKLM\Software\Policies\Microsoft\Cryptography\AutoEnrollment' -ValueName AEPolicy).Value -eq 7
+    solution: |
+      $gpo = 'C - Inscription automatique'
+      New-GPO -Name $gpo | New-GPLink -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' | Out-Null
+      Set-GPRegistryValue -Name $gpo -Key 'HKLM\Software\Policies\Microsoft\Cryptography\AutoEnrollment' -ValueName AEPolicy -Type DWord -Value 7 | Out-Null
+
+  - id: win-pki-poste
+    title: PC01 reçoit son certificat
+    description: |
+      Applique les stratégies sur PC01 et déclenche l'inscription automatique : PC01 doit approuver
+      l'AC racine et posséder dans son magasin **Ordinateur › Personnel** un certificat émis par
+      `Ateliers Durand Root CA` pour l'authentification client.
+    hint: Invoke-Command -ComputerName PC01 { gpupdate /target:computer /force ; certutil -pulse ; Get-ChildItem Cert:\LocalMachine\My }
+    cours: |
+      ```powershell
+      Invoke-Command -ComputerName PC01 {
+          gpupdate /target:computer /force
+          certutil -pulse                       # déclenche l'inscription automatique tout de suite
+          Get-ChildItem Cert:\LocalMachine\My | Format-List Subject, Issuer, NotAfter, EnhancedKeyUsageList }
+      ```
+
+      L'inscription automatique tourne à l'ouverture de session, au rafraîchissement des stratégies et
+      toutes les 8 heures ; `certutil -pulse` (ou la tâche planifiée *SystemTask* sous
+      `\Microsoft\Windows\CertificateServicesClient`) la force. En cas d'échec, le journal *Application*
+      (source *CertificateServicesClient-AutoEnrollment*, événements 13 et 82) donne la raison : droits
+      du modèle, modèle non publié, AC injoignable (RPC/DCOM bloqué par le pare-feu).
+    docs:
+      - title: Configurer l'inscription automatique des certificats
+        url: https://learn.microsoft.com/fr-fr/windows-server/networking/core-network-guide/cncg/server-certs/configure-server-certificate-autoenrollment
+      - title: certutil
+        url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/certutil
+    checks:
+      - desc: PC01 approuve Ateliers Durand Root CA
+        machine: pc01
+        run: |
+          [bool](Get-ChildItem Cert:\LocalMachine\Root | Where-Object Subject -like 'CN=Ateliers Durand Root CA*')
+      - desc: PC01 a un certificat d'authentification client émis par l'AC
+        machine: pc01
+        run: |
+          [bool](Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Issuer -like 'CN=Ateliers Durand Root CA*' -and $_.EnhancedKeyUsageList.ObjectId -contains '1.3.6.1.5.5.7.3.2' })
+    solution: |
+      Invoke-Command -ComputerName PC01 { gpupdate /target:computer /force | Out-Null; certutil -pulse | Out-Null; Start-Sleep 20 } | Out-Null
+
+  - id: win-pki-web
+    title: Un certificat pour l'intranet
+    description: |
+      Demande à l'AC, avec le modèle **WebServer** (*Serveur Web*), un certificat pour
+      **`intranet.durand.lan`** (sujet `CN=intranet.durand.lan`, nom DNS dans le SAN), rangé dans le magasin
+      **Ordinateur › Personnel** de SRV-DC01. Exporte sa partie publique dans `C:\Admin\intranet.cer`.
+    hint: Get-Certificate -Template WebServer -SubjectName 'CN=intranet.durand.lan' -DnsName intranet.durand.lan -CertStoreLocation Cert:\LocalMachine\My ; Export-Certificate -Cert $c -FilePath C:\Admin\intranet.cer
+    cours: |
+      ```powershell
+      $r = Get-Certificate -Template WebServer -SubjectName 'CN=intranet.durand.lan' -DnsName intranet.durand.lan `
+          -CertStoreLocation Cert:\LocalMachine\My
+      Export-Certificate -Cert $r.Certificate -FilePath C:\Admin\intranet.cer
+      certutil -verify -urlfetch C:\Admin\intranet.cer
+      ```
+
+      Le modèle *Serveur Web* a un sujet **fourni dans la demande** : c'est pourquoi il n'est ouvert qu'aux
+      administrateurs, qui contrôlent les noms demandés. Les navigateurs ignorent le champ CN et exigent le
+      nom dans le **SAN** (*Subject Alternative Name*) : `-DnsName` le remplit. `certutil -verify -urlfetch`
+      vérifie la chaîne et télécharge réellement les CRL : c'est la commande à lancer quand un certificat
+      « n'est pas approuvé ». Le fichier `.cer` ne contient que la clé publique : on peut le diffuser.
+    docs:
+      - title: Get-Certificate
+        url: https://learn.microsoft.com/fr-fr/powershell/module/pki/get-certificate
+      - title: Export-Certificate
+        url: https://learn.microsoft.com/fr-fr/powershell/module/pki/export-certificate
+    checks:
+      - desc: Un certificat intranet.durand.lan émis par l'AC est dans Ordinateur › Personnel
+        run: |
+          [bool](Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Issuer -like 'CN=Ateliers Durand Root CA*' -and $_.DnsNameList.Unicode -contains 'intranet.durand.lan' -and $_.HasPrivateKey })
+      - desc: C:\Admin\intranet.cer contient ce certificat
+        run: |
+          $c = New-Object Security.Cryptography.X509Certificates.X509Certificate2 'C:\Admin\intranet.cer'
+          $c.Subject -eq 'CN=intranet.durand.lan' -and $c.Issuer -like 'CN=Ateliers Durand Root CA*'
+    solution: |
+      $r = Get-Certificate -Template WebServer -SubjectName 'CN=intranet.durand.lan' -DnsName intranet.durand.lan -CertStoreLocation Cert:\LocalMachine\My
+      Export-Certificate -Cert $r.Certificate -FilePath C:\Admin\intranet.cer | Out-Null
+
+  - id: win-pki-revocation
+    title: Révoquer un certificat compromis
+    description: |
+      La clé privée du certificat de l'intranet a été copiée sur une clé USB perdue. **Révoque**-le (motif
+      *Compromission de la clé*) et publie une nouvelle CRL : son numéro de série doit y apparaître.
+    hint: $s = (New-Object Security.Cryptography.X509Certificates.X509Certificate2 C:\Admin\intranet.cer).SerialNumber ; certutil -revoke $s 1 ; certutil -crl
+    cours: |
+      ```powershell
+      $serie = (New-Object Security.Cryptography.X509Certificates.X509Certificate2 C:\Admin\intranet.cer).SerialNumber
+      certutil -revoke $serie 1           # 1 = compromission de la clé
+      certutil -crl
+      Get-ChildItem C:\Windows\System32\CertSrv\CertEnroll\*.crl | ForEach-Object { certutil -dump $_.FullName }
+      ```
+
+      Les motifs les plus courants : 0 non spécifié, 1 compromission de la clé, 3 changement d'affiliation,
+      4 remplacé, 5 cessation d'activité, 6 suspension (*certificate hold*, seul motif réversible avec
+      `certutil -revoke <série> unrevoke`). La révocation n'est effective pour les clients qu'une fois la
+      nouvelle CRL **publiée** et leur cache expiré : une révocation urgente impose de publier tout de suite
+      et, sur les serveurs concernés, de vider le cache (`certutil -urlcache * delete`).
+    docs:
+      - title: Révoquer des certificats
+        url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/certutil#-revoke
+    checks:
+      - desc: Le certificat de l'intranet figure dans une CRL publiée
+        run: |
+          $serie = (New-Object Security.Cryptography.X509Certificates.X509Certificate2 'C:\Admin\intranet.cer').SerialNumber
+          $trouve = $false
+          foreach ($crl in Get-ChildItem C:\Windows\System32\CertSrv\CertEnroll\*.crl) {
+              if ((certutil -dump $crl.FullName) -match $serie) { $trouve = $true }
+          }
+          $trouve
+    solution: |
+      $serie = (New-Object Security.Cryptography.X509Certificates.X509Certificate2 C:\Admin\intranet.cer).SerialNumber
+      certutil -revoke $serie 1 | Out-Null
+      certutil -crl | Out-Null

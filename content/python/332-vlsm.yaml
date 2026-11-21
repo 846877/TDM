@@ -1,0 +1,208 @@
+title: Plan d'adressage VLSM
+level: expert
+order: 32
+tags: [réseau, ipaddress, subnetting, vlsm]
+summary: Allouer automatiquement des sous-réseaux de tailles variables sans gaspillage.
+description: |
+  Le VLSM (*Variable Length Subnet Mask*) découpe un bloc d'adresses IPv4 en sous-réseaux de
+  tailles différentes selon les besoins. Utilise `ipaddress`.
+
+  1. `prefixe_pour(n)` : plus grand préfixe (donc plus petit réseau) offrant au moins `n`
+     hôtes utilisables, avec `2^(32 - p) - 2` hôtes pour un préfixe `p` ; jamais plus de
+     `/30`. `n ≤ 0` lève `ValueError`. `prefixe_pour(100)` → `25`, `prefixe_pour(2)` → `30`.
+  2. `allouer(reseau, besoins)` : `besoins` est un dictionnaire `{nom: nombre_d_hotes}`.
+     Traite les besoins du **plus grand au plus petit** (à égalité, par ordre alphabétique du
+     nom) et donne à chacun le **premier** sous-réseau libre de la bonne taille, en partant du
+     début de `reseau`. Renvoie un dictionnaire `{nom: infos}` où `infos` contient
+     `"reseau"` (CIDR), `"passerelle"` (première adresse utilisable), `"broadcast"` et
+     `"hotes"` (nombre d'hôtes utilisables), en chaînes sauf `"hotes"`. Si un besoin ne tient
+     plus, lève `ValueError` (avec le nom du besoin dans le message).
+  3. `restant(reseau, allocations)` : `allocations` est le résultat de `allouer` ; renvoie la
+     liste triée (chaînes CIDR) des blocs **libres**, agrégés au maximum.
+
+  ```python
+  plan = allouer("192.168.1.0/24", {"LAN": 100, "WIFI": 50, "lien": 2})
+  plan["WIFI"]   # {"reseau": "192.168.1.128/26", "passerelle": "192.168.1.129",
+                 #  "broadcast": "192.168.1.191", "hotes": 62}
+  restant("192.168.1.0/24", plan)   # ["192.168.1.196/30", "192.168.1.200/29", "192.168.1.208/28", "192.168.1.224/27"]
+  ```
+starter: |
+  import ipaddress
+
+
+  def prefixe_pour(n):
+      pass
+
+
+  def allouer(reseau, besoins):
+      pass
+
+
+  def restant(reseau, allocations):
+      pass
+tests: |
+  def test_prefixe_pour():
+      "prefixe_pour"
+      p = solution.prefixe_pour
+      assert [p(1), p(2), p(3), p(6), p(7), p(14), p(30), p(62), p(100), p(126), p(127), p(500)] == \
+             [30, 30, 29, 29, 28, 28, 27, 26, 25, 25, 24, 23]
+      for n in (0, -5):
+          try:
+              p(n)
+          except ValueError:
+              continue
+          raise AssertionError("ValueError attendue")
+
+  def test_allouer():
+      "allouer : plan complet"
+      plan = solution.allouer("192.168.1.0/24", {"lien": 2, "DMZ": 20, "LAN": 100, "ADMIN": 10, "WIFI": 50})
+      att = {
+          "LAN": ("192.168.1.0/25", "192.168.1.1", "192.168.1.127", 126),
+          "WIFI": ("192.168.1.128/26", "192.168.1.129", "192.168.1.191", 62),
+          "DMZ": ("192.168.1.192/27", "192.168.1.193", "192.168.1.223", 30),
+          "ADMIN": ("192.168.1.224/28", "192.168.1.225", "192.168.1.239", 14),
+          "lien": ("192.168.1.240/30", "192.168.1.241", "192.168.1.243", 2),
+      }
+      assert set(plan) == set(att)
+      for nom, (r, gw, bc, h) in att.items():
+          assert plan[nom] == {"reseau": r, "passerelle": gw, "broadcast": bc, "hotes": h}, (nom, plan[nom])
+
+  def test_egalites():
+      "allouer : égalités départagées par le nom"
+      plan = solution.allouer("10.0.0.0/24", {"b": 60, "a": 60, "c": 2})
+      assert plan["a"]["reseau"] == "10.0.0.0/26"
+      assert plan["b"]["reseau"] == "10.0.0.64/26"
+      assert plan["c"]["reseau"] == "10.0.0.128/30"
+
+  def test_plein():
+      "allouer : plus de place"
+      try:
+          solution.allouer("10.0.0.0/26", {"gros": 40, "moyen": 20})
+      except ValueError as e:
+          assert "moyen" in str(e), str(e)
+      else:
+          raise AssertionError("ValueError attendue")
+      try:
+          solution.allouer("10.0.0.0/28", {"trop": 20})
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("ValueError attendue")
+
+  def test_restant():
+      "restant"
+      plan = solution.allouer("192.168.1.0/24", {"LAN": 100, "WIFI": 50, "lien": 2})
+      assert solution.restant("192.168.1.0/24", plan) == \
+          ["192.168.1.196/30", "192.168.1.200/29", "192.168.1.208/28", "192.168.1.224/27"]
+      assert solution.restant("10.0.0.0/16", {}) == ["10.0.0.0/16"]
+      plein = solution.allouer("10.0.0.0/24", {"x": 126, "y": 126})
+      assert solution.restant("10.0.0.0/24", plein) == []
+
+  def test_grand_plan():
+      "allouer : sous-réseaux disjoints dans un /16"
+      import ipaddress
+      besoins = {f"site{i:02d}": (i * 37) % 900 + 1 for i in range(40)}
+      plan = solution.allouer("172.16.0.0/16", besoins)
+      nets = [ipaddress.ip_network(v["reseau"]) for v in plan.values()]
+      for i, a in enumerate(nets):
+          assert a.subnet_of(ipaddress.ip_network("172.16.0.0/16"))
+          for b in nets[i + 1:]:
+              assert not a.overlaps(b), (a, b)
+      for nom, n in besoins.items():
+          assert plan[nom]["hotes"] >= n
+solution: |
+  import ipaddress
+
+
+  def prefixe_pour(n):
+      if n <= 0:
+          raise ValueError("il faut au moins un hôte")
+      p = 30
+      while 2 ** (32 - p) - 2 < n:
+          p -= 1
+      return p
+
+
+  def allouer(reseau, besoins):
+      net = ipaddress.ip_network(reseau, strict=False)
+      libres = [net]
+      plan = {}
+      for nom, n in sorted(besoins.items(), key=lambda kv: (-kv[1], kv[0])):
+          p = prefixe_pour(n)
+          bloc = next((b for b in sorted(libres) if b.prefixlen <= p), None)
+          if bloc is None:
+              raise ValueError(f"plus de place pour {nom} ({n} hôtes)")
+          sous = next(bloc.subnets(new_prefix=p))
+          libres.remove(bloc)
+          libres.extend(bloc.address_exclude(sous))
+          plan[nom] = {
+              "reseau": str(sous),
+              "passerelle": str(sous[1]),
+              "broadcast": str(sous.broadcast_address),
+              "hotes": sous.num_addresses - 2,
+          }
+      return plan
+
+
+  def restant(reseau, allocations):
+      libres = [ipaddress.ip_network(reseau, strict=False)]
+      for infos in allocations.values():
+          pris = ipaddress.ip_network(infos["reseau"])
+          nouveaux = []
+          for bloc in libres:
+              if pris.subnet_of(bloc):
+                  nouveaux.extend(bloc.address_exclude(pris))
+              elif not bloc.subnet_of(pris):
+                  nouveaux.append(bloc)
+          libres = nouveaux
+      return [str(b) for b in ipaddress.collapse_addresses(sorted(libres))]
+cours: |
+  ## Pourquoi le VLSM ?
+
+  Découper un /24 en sous-réseaux tous identiques gaspille des adresses : un lien
+  point-à-point entre deux routeurs n'a besoin que de 2 adresses, un réseau utilisateurs de
+  100. Le VLSM attribue à chaque besoin **la plus petite taille suffisante**.
+
+  ## Taille d'un sous-réseau
+
+  Un préfixe `/p` contient `2^(32-p)` adresses, dont deux réservées (adresse réseau et
+  broadcast) : `/30` → 2 hôtes, `/29` → 6, `/28` → 14, `/27` → 30, `/26` → 62, `/25` → 126.
+  Pour un besoin `n`, on cherche le plus grand `p` tel que `2^(32-p) - 2 ≥ n`. Attention aux
+  frontières : 126 tient dans un /25, 127 exige un /24. (Les /31 point-à-point de la RFC 3021
+  sont volontairement exclus ici.)
+
+  ## Pourquoi du plus grand au plus petit ?
+
+  Un sous-réseau doit être **aligné** : un /26 commence forcément à une adresse multiple de 64.
+  En plaçant d'abord les grands blocs, les suivants tombent naturellement sur des frontières
+  valides, sans trous. Dans l'ordre inverse, un petit bloc placé au début empêcherait de
+  loger un gros bloc juste après.
+
+  ## Gérer l'espace libre
+
+  On maintient une liste de **blocs libres**. Pour allouer un /p :
+
+  1. choisir le premier bloc libre (par adresse) assez grand, c'est-à-dire de préfixe ≤ p ;
+  2. en prendre le premier sous-réseau `/p` (`next(bloc.subnets(new_prefix=p))`) ;
+  3. remplacer le bloc par ce qui reste : `bloc.address_exclude(sous)` renvoie les morceaux
+     complémentaires, de tailles décroissantes (le principe du *buddy allocator*).
+
+  C'est exactement ce que fait un outil IPAM (NetBox, phpIPAM) quand on demande « le prochain
+  /27 disponible ».
+
+  ## Agréger l'espace restant
+
+  Après plusieurs exclusions, l'espace libre est morcelé. `collapse_addresses` refusionne les
+  blocs contigus et alignés pour présenter la liste la plus courte, celle qu'on documenterait
+  dans un plan d'adressage.
+
+  ## La passerelle
+
+  La convention la plus répandue donne au routeur la **première** adresse utilisable
+  (`sous[1]`), certaines entreprises préfèrent la dernière. L'essentiel est d'être cohérent
+  sur tout le réseau.
+docs:
+  - title: Module ipaddress
+    url: https://docs.python.org/fr/3/library/ipaddress.html
+  - title: HOWTO — introduction au module ipaddress
+    url: https://docs.python.org/fr/3/howto/ipaddress.html

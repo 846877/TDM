@@ -1,0 +1,181 @@
+title: lambda, sorted, min et max
+level: intermediaire
+order: 33
+tags: [lambda, tri, fonctions, key]
+summary: Trier et sélectionner avec une fonction clé.
+description: |
+  Des fichiers sont décrits par des dictionnaires :
+
+  ```python
+  FICHIERS = [
+      {"nom": "app.log", "taille": 5200, "modifie": "2026-10-18"},
+      {"nom": "backup.tar.gz", "taille": 980000, "modifie": "2026-10-01"},
+      {"nom": "README", "taille": 1200, "modifie": "2026-09-30"},
+      {"nom": "db.sqlite", "taille": 980000, "modifie": "2026-10-19"},
+  ]
+  ```
+
+  Écris, en utilisant `sorted`, `min`, `max` et le paramètre `key` (pas de boucle de tri) :
+
+  1. `par_taille(fichiers)` : la liste des **noms**, du plus gros au plus petit ; à taille
+     égale, par nom croissant.
+  2. `plus_recent(fichiers)` : le **nom** du fichier modifié le plus récemment (les dates
+     `AAAA-MM-JJ` se comparent comme des chaînes). `None` si la liste est vide.
+  3. `extension(nom)` : l'extension après le **dernier** point, en minuscules (`""` s'il n'y
+     en a pas ; `"backup.tar.gz"` → `"gz"`).
+  4. `trier_par_extension(noms)` : les noms triés par extension, puis par nom **sans tenir
+     compte de la casse**.
+  5. `top(fichiers, n)` : les `n` plus gros fichiers (les dictionnaires complets), dans
+     l'ordre décroissant de taille.
+
+  ```python
+  par_taille(FICHIERS)    # ["backup.tar.gz", "db.sqlite", "app.log", "README"]
+  plus_recent(FICHIERS)   # "db.sqlite"
+  trier_par_extension(["b.txt", "A.txt", "notes", "x.csv"])   # ["notes", "x.csv", "A.txt", "b.txt"]
+  ```
+starter: |
+  def par_taille(fichiers):
+      pass
+
+
+  def plus_recent(fichiers):
+      pass
+
+
+  def extension(nom):
+      pass
+
+
+  def trier_par_extension(noms):
+      pass
+
+
+  def top(fichiers, n):
+      pass
+tests: |
+  FICHIERS = [
+      {"nom": "app.log", "taille": 5200, "modifie": "2026-10-18"},
+      {"nom": "backup.tar.gz", "taille": 980000, "modifie": "2026-10-01"},
+      {"nom": "README", "taille": 1200, "modifie": "2026-09-30"},
+      {"nom": "db.sqlite", "taille": 980000, "modifie": "2026-10-19"},
+  ]
+
+  def test_par_taille():
+      "par_taille : décroissant puis par nom"
+      r = solution.par_taille(FICHIERS)
+      assert r == ["backup.tar.gz", "db.sqlite", "app.log", "README"], f"obtenu {r!r}"
+
+  def test_plus_recent():
+      "plus_recent"
+      assert solution.plus_recent(FICHIERS) == "db.sqlite"
+      assert solution.plus_recent([]) is None
+
+  def test_extension():
+      "extension"
+      assert solution.extension("backup.tar.gz") == "gz"
+      assert solution.extension("Photo.JPG") == "jpg"
+      assert solution.extension("README") == ""
+
+  def test_trier_par_extension():
+      "trier_par_extension"
+      r = solution.trier_par_extension(["b.txt", "A.txt", "notes", "x.csv"])
+      assert r == ["notes", "x.csv", "A.txt", "b.txt"], f"obtenu {r!r}"
+
+  def test_top():
+      "top"
+      r = solution.top(FICHIERS, 3)
+      assert [f["nom"] for f in r] == ["backup.tar.gz", "db.sqlite", "app.log"], r
+      assert solution.top(FICHIERS, 0) == []
+
+  def test_pas_de_modification():
+      "La liste d'origine n'est pas modifiée"
+      copie = [dict(f) for f in FICHIERS]
+      solution.par_taille(FICHIERS)
+      solution.top(FICHIERS, 2)
+      assert FICHIERS == copie
+solution: |
+  def par_taille(fichiers):
+      tries = sorted(fichiers, key=lambda f: (-f["taille"], f["nom"]))
+      return [f["nom"] for f in tries]
+
+
+  def plus_recent(fichiers):
+      if not fichiers:
+          return None
+      return max(fichiers, key=lambda f: f["modifie"])["nom"]
+
+
+  def extension(nom):
+      if "." not in nom:
+          return ""
+      return nom.rsplit(".", 1)[1].lower()
+
+
+  def trier_par_extension(noms):
+      return sorted(noms, key=lambda n: (extension(n), n.lower()))
+
+
+  def top(fichiers, n):
+      return sorted(fichiers, key=lambda f: f["taille"], reverse=True)[:n]
+cours: |
+  ## Les fonctions anonymes `lambda`
+
+  `lambda paramètres: expression` crée une petite fonction sans nom, limitée à **une seule
+  expression** (pas d'instruction, pas de `return`) :
+
+  ```python
+  carre = lambda x: x * x      # équivaut à : def carre(x): return x * x
+  carre(5)                     # 25
+  ```
+
+  On ne les affecte presque jamais à un nom ; on les passe directement en argument.
+
+  ## Le paramètre `key`
+
+  `sorted`, `min`, `max` (et `list.sort`) acceptent une fonction `key`, appelée **une fois
+  par élément** ; c'est son résultat qui est comparé, mais ce sont les éléments d'origine qui
+  sont renvoyés :
+
+  ```python
+  serveurs = [("web", 75), ("db", 92), ("cache", 40)]
+  sorted(serveurs, key=lambda s: s[1])          # par charge croissante
+  max(serveurs, key=lambda s: s[1])             # ("db", 92)
+  sorted(["Bob", "alice"], key=str.lower)       # ["alice", "Bob"]
+  ```
+
+  N'importe quelle fonction convient : une `lambda`, une méthode (`str.lower`), une fonction
+  intégrée (`len`), ou ta propre fonction.
+
+  ## Plusieurs critères : une clé tuple
+
+  Les tuples se comparent élément par élément. Une clé `(critère1, critère2)` trie d'abord
+  sur le premier, puis départage avec le second. Pour inverser **un seul** critère numérique,
+  on prend son opposé (`-taille`). Pour inverser tout le tri : `reverse=True`.
+
+  ## `sorted` ou `list.sort` ?
+
+  - `sorted(iterable)` renvoie une **nouvelle** liste et accepte n'importe quel itérable ;
+  - `liste.sort()` trie **sur place** et renvoie `None`.
+
+  Le tri de Python (Timsort) est **stable** et en O(n log n).
+
+  ## Top n
+
+  Trier puis prendre une tranche `[:n]` est simple et suffisant pour des listes moyennes.
+  Pour un très grand volume et un petit `n`, `heapq.nlargest(n, data, key=...)` est plus
+  efficace.
+
+  ## Couper au dernier séparateur
+
+  `str.rsplit(".", 1)` découpe en partant de la droite, une seule fois : idéal pour une
+  extension. `os.path.splitext` et `pathlib.Path(nom).suffix` le font aussi (avec le point).
+
+  ## `operator.itemgetter`
+
+  `key=operator.itemgetter("taille")` équivaut à `key=lambda f: f["taille"]`, un peu plus
+  rapide et souvent plus lisible.
+docs:
+  - title: HOWTO — trier avec Python
+    url: https://docs.python.org/fr/3/howto/sorting.html
+  - title: Tutoriel — expressions lambda
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html#lambda-expressions

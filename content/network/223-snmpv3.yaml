@@ -1,0 +1,115 @@
+title: Passer la supervision en SNMPv3
+level: avance
+order: 23
+device: router
+hostname: R-SUPERVISE
+tags: [snmp, snmpv3, supervision, sécurité]
+summary: Remplacer les communautés SNMPv2c par un utilisateur SNMPv3 authentifié et chiffré.
+description: |
+  `R-SUPERVISE` utilise encore les communautés `public` (RO) et `private` (RW) : elles
+  circulent en clair et `private` permet de **modifier** la configuration. Le serveur de
+  supervision Zabbix (`10.0.0.50`) sait parler SNMPv3.
+
+  1. supprime les deux communautés ;
+  2. ACL standard `20` qui n'autorise que `10.0.0.50` ;
+  3. vue `SUPERVISION` qui inclut l'arbre `iso` ;
+  4. groupe `NOC` en SNMPv3 niveau `priv`, lecture de la vue `SUPERVISION`, restreint par
+     l'ACL `20` ;
+  5. utilisateur `zabbix` dans `NOC` : authentification `sha` (`Auth-Zbx-2026`), chiffrement
+     `aes 128` (`Priv-Zbx-2026`) ;
+  6. notifications vers `10.0.0.50` en version 3 `priv` avec l'utilisateur `zabbix`, et active
+     les traps.
+initial: |
+  interface g0/0
+  ip address 10.0.0.1 255.255.255.0
+  no shutdown
+  snmp-server community public RO
+  snmp-server community private RW
+checks:
+  - desc: Plus aucune communauté SNMPv1/v2c
+    expr: not d.snmp_communities
+  - desc: ACL 20 réservée à 10.0.0.50
+    expr: acl(20) in (["permit 10.0.0.50"], ["permit host 10.0.0.50"])
+  - desc: Vue SUPERVISION et groupe NOC (v3 priv, lecture SUPERVISION, ACL 20)
+    expr: 'd.snmp_views.get("SUPERVISION") == [("iso", "included")] and d.snmp_groups.get("NOC") == {"level": "priv", "read": "SUPERVISION", "access": "20"}'
+  - desc: Utilisateur zabbix (sha + aes 128) dans NOC
+    expr: d.snmp_users["zabbix"]["group"] == "NOC" and d.snmp_users["zabbix"]["auth"] == "sha" and d.snmp_users["zabbix"]["priv"] == "aes 128"
+  - desc: Traps v3 priv vers 10.0.0.50 et traps activés
+    expr: '"10.0.0.50 version 3 priv zabbix" in d.snmp_hosts and len(d.snmp_traps) > 0'
+solution: |
+  configure terminal
+  no snmp-server community public
+  no snmp-server community private
+  access-list 20 permit 10.0.0.50
+  snmp-server view SUPERVISION iso included
+  snmp-server group NOC v3 priv read SUPERVISION access 20
+  snmp-server user zabbix NOC v3 auth sha Auth-Zbx-2026 priv aes 128 Priv-Zbx-2026
+  snmp-server host 10.0.0.50 version 3 priv zabbix
+  snmp-server enable traps
+  end
+cours: |
+  ## Les versions de SNMP
+
+  | Version | Sécurité                                                        |
+  |---------|-----------------------------------------------------------------|
+  | v1, v2c | une **communauté** (mot de passe partagé) transmise **en clair** |
+  | v3      | utilisateurs, **authentification** (HMAC SHA/MD5) et **chiffrement** (AES/DES) |
+
+  Quiconque capture un paquet SNMPv2c connaît la communauté ; une communauté RW permet de modifier
+  la configuration, voire de télécharger le fichier de configuration complet. SNMPv3 corrige ces
+  défauts avec le modèle **USM** (*User-based Security Model*) et le contrôle d'accès **VACM**
+  (vues).
+
+  ### Les niveaux de sécurité v3
+
+  - `noauth` : nom d'utilisateur seul (équivalent d'une communauté) ;
+  - `auth` : messages authentifiés, mais lisibles ;
+  - `priv` : authentifiés **et** chiffrés — le seul niveau recommandé.
+
+  ### Construction en quatre étages
+
+  ```
+  R1(config)# access-list 30 permit 192.0.2.80
+  R1(config)# snmp-server view LECTURE iso included
+  R1(config)# snmp-server view LECTURE 1.3.6.1.6.3 excluded
+  R1(config)# snmp-server group SUPERV v3 priv read LECTURE access 30
+  R1(config)# snmp-server user prtg SUPERV v3 auth sha Auth#Prtg priv aes 256 Priv#Prtg
+  R1(config)# snmp-server host 192.0.2.80 version 3 priv prtg
+  R1(config)# snmp-server enable traps
+  R1# show snmp user
+  User name: prtg
+  Authentication Protocol: SHA
+  Privacy Protocol: AES256
+  Group-name: SUPERV
+  R1# show snmp group
+  ```
+
+  1. une **vue** : quelles branches de la MIB sont visibles ;
+  2. un **groupe** : niveau de sécurité, vues en lecture/écriture, ACL des clients autorisés ;
+  3. un **utilisateur** rattaché au groupe, avec ses secrets (8 caractères minimum) ;
+  4. une **destination** de notifications (traps ou informs).
+
+  Particularité : les utilisateurs SNMPv3 **n'apparaissent pas** dans `show running-config` (les
+  clés sont dérivées et stockées à part) : on les vérifie avec `show snmp user`.
+
+  ### Traps et informs
+
+  Un **trap** est une notification envoyée sans accusé de réception (UDP 162) ; un **inform** est
+  acquitté et renvoyé en cas de perte. `snmp-server enable traps` active toutes les notifications
+  disponibles ; on peut les choisir (`snmp-server enable traps config`, `... snmp linkdown`).
+
+  ### Pièges fréquents
+
+  - Laisser une communauté par défaut à côté de SNMPv3 : la faille reste ouverte.
+  - Un secret de moins de 8 caractères : l'utilisateur est refusé.
+  - Paramètres différents dans l'outil de supervision (SHA vs SHA-256, AES-128 vs AES-256).
+
+  ### Pour le CCNA / CCNP ENCOR
+
+  Le CCNA décrit SNMP (gestionnaire, agent, MIB, traps) ; ENCOR attend la configuration de
+  SNMPv3 sécurisé.
+docs:
+  - title: RFC 3414 — User-based Security Model (USM) for SNMPv3
+    url: https://www.rfc-editor.org/rfc/rfc3414
+  - title: Wikipédia — Simple Network Management Protocol
+    url: https://fr.wikipedia.org/wiki/Simple_Network_Management_Protocol

@@ -1,0 +1,9 @@
+# Lab « Disques et stockage » : un Windows Server 2022 (SRV01, 2 Go de RAM) ; les disques de données sont
+# des VHDX créés dans la VM par scenario.ps1 (aucune manipulation VirtualBox nécessaire).
+require_relative "../_commun/tdm"
+
+Vagrant.configure("2") do |config|
+  TDM.lab(config, __dir__) do |lab|
+    lab.server "srv01", hostname: "SRV01", ip: "192.168.10.10", primary: true, scenario: "scenario.ps1"
+  end
+end

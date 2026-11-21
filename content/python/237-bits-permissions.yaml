@@ -1,0 +1,240 @@
+title: Opérations bit à bit et droits Unix
+level: avance
+order: 37
+tags: [bits, sysadmin, permissions, octal]
+summary: Manipuler des bits avec & | ^ ~ << >> pour décoder et modifier des droits chmod.
+description: |
+  Utilise les opérateurs bit à bit (`&`, `|`, `^`, `~`, `<<`, `>>`). `bin(...).count` et le
+  module `stat` sont interdits pour les deux premières fonctions.
+
+  1. `compter_bits(n)` : nombre de bits à 1 d'un entier `n ≥ 0`.
+  2. `est_puissance_de_deux(n)` : `True` si `n` est une puissance de deux (1, 2, 4, …),
+     `False` pour 0 et les négatifs. En temps constant.
+  3. `mode_vers_texte(mode)` : convertit un mode (entier, par exemple `0o755`) en chaîne de 9
+     caractères à la `ls -l` : `"rwxr-xr-x"`. Bits spéciaux : setuid (`0o4000`) remplace le
+     `x` du propriétaire par `s` (ou `S` si `x` est absent), setgid (`0o2000`) fait de même
+     pour le groupe, le sticky bit (`0o1000`) remplace le `x` des autres par `t` (ou `T`).
+  4. `texte_vers_mode(texte)` : l'inverse (`"rwsr-x--T"` → `0o5750`). Un caractère invalide
+     ou une longueur différente de 9 lève `ValueError`.
+  5. `chmod(mode, expression)` applique une expression symbolique et renvoie le nouveau mode :
+     - clauses séparées par des virgules : `"u+x,go-w"` ;
+     - chaque clause : qui (`u`, `g`, `o`, `a`, combinables ; **vide** = `a`), un opérateur
+       (`+` ajoute, `-` retire, `=` remplace exactement les droits des catégories citées) et
+       des droits parmi `r`, `w`, `x` (éventuellement aucun : `"o="` retire tout aux autres) ;
+     - les bits spéciaux du mode sont conservés ; une clause invalide lève `ValueError`.
+
+  ```python
+  mode_vers_texte(0o640)           # "rw-r-----"
+  oct(chmod(0o644, "u+x,go-r"))    # "0o700"
+  oct(chmod(0o777, "go=r"))        # "0o744"
+  ```
+starter: |
+  def compter_bits(n):
+      pass
+
+
+  def est_puissance_de_deux(n):
+      pass
+
+
+  def mode_vers_texte(mode):
+      pass
+
+
+  def texte_vers_mode(texte):
+      pass
+
+
+  def chmod(mode, expression):
+      pass
+tests: |
+  def test_compter_bits():
+      "compter_bits"
+      for n in [0, 1, 2, 3, 255, 256, 0o777, 2**64 - 1, 123456789]:
+          assert solution.compter_bits(n) == bin(n).count("1"), n
+
+  def test_puissance_de_deux():
+      "est_puissance_de_deux"
+      puissances = {2**k for k in range(70)}
+      for n in list(range(-4, 1100)) + [2**69, 2**69 + 1]:
+          assert solution.est_puissance_de_deux(n) == (n in puissances), n
+
+  def test_mode_vers_texte():
+      "mode_vers_texte"
+      m = solution.mode_vers_texte
+      assert m(0o755) == "rwxr-xr-x"
+      assert m(0o640) == "rw-r-----"
+      assert m(0o000) == "---------"
+      assert m(0o4755) == "rwsr-xr-x"
+      assert m(0o4644) == "rwSr--r--"
+      assert m(0o2750) == "rwxr-s---"
+      assert m(0o1777) == "rwxrwxrwt"
+      assert m(0o1770) == "rwxrwx--T"
+
+  def test_texte_vers_mode():
+      "texte_vers_mode"
+      t = solution.texte_vers_mode
+      assert t("rwxr-xr-x") == 0o755
+      assert t("rwsr-x--T") == 0o5750
+      assert t("rwxrwxrwt") == 0o1777
+      for mode in range(0o10000):
+          assert t(solution.mode_vers_texte(mode)) == mode, oct(mode)
+
+  def test_texte_invalide():
+      "texte_vers_mode : erreurs"
+      for mauvais in ["rwxr-xr-", "rwxr-xr-xx", "wrxr-xr-x", "rwxr-xr-s", "rwtr-xr-x", "abcdefghi"]:
+          try:
+              solution.texte_vers_mode(mauvais)
+          except ValueError:
+              continue
+          raise AssertionError(f"{mauvais!r} devrait lever ValueError")
+
+  def test_chmod():
+      "chmod symbolique"
+      c = solution.chmod
+      assert c(0o644, "u+x") == 0o744
+      assert c(0o644, "u+x,go-r") == 0o700
+      assert c(0o777, "go=r") == 0o744
+      assert c(0o600, "+x") == 0o711
+      assert c(0o777, "a-w") == 0o555
+      assert c(0o750, "o=") == 0o750
+      assert c(0o755, "o=") == 0o750
+      assert c(0o4755, "g-x") == 0o4745, "les bits spéciaux sont conservés"
+      assert c(0o000, "ug=rw,o=r") == 0o664
+
+  def test_chmod_invalide():
+      "chmod : clauses invalides"
+      for mauvais in ["u", "u*x", "z+x", "u+q", "u+x,,g+w", ""]:
+          try:
+              solution.chmod(0o644, mauvais)
+          except ValueError:
+              continue
+          raise AssertionError(f"{mauvais!r} devrait lever ValueError")
+solution: |
+  import re
+
+  _DROITS = "rwx"
+  _SPECIAUX = [(0o4000, 2, "s"), (0o2000, 5, "s"), (0o1000, 8, "t")]
+
+
+  def compter_bits(n):
+      total = 0
+      while n:
+          n &= n - 1          # efface le bit à 1 le plus faible
+          total += 1
+      return total
+
+
+  def est_puissance_de_deux(n):
+      return n > 0 and n & (n - 1) == 0
+
+
+  def mode_vers_texte(mode):
+      caracteres = []
+      for i in range(9):
+          bit = 1 << (8 - i)
+          caracteres.append(_DROITS[i % 3] if mode & bit else "-")
+      for masque, position, lettre in _SPECIAUX:
+          if mode & masque:
+              caracteres[position] = lettre if caracteres[position] == "x" else lettre.upper()
+      return "".join(caracteres)
+
+
+  def texte_vers_mode(texte):
+      if len(texte) != 9:
+          raise ValueError("9 caractères attendus")
+      mode = 0
+      for i, c in enumerate(texte):
+          attendu = _DROITS[i % 3]
+          bit = 1 << (8 - i)
+          special = next((s for s in _SPECIAUX if s[1] == i), None)
+          if c == attendu:
+              mode |= bit
+          elif c == "-":
+              pass
+          elif special and c == special[2]:
+              mode |= bit | special[0]
+          elif special and c == special[2].upper():
+              mode |= special[0]
+          else:
+              raise ValueError(f"caractère invalide {c!r} en position {i}")
+      return mode
+
+
+  _CLAUSE = re.compile(r"([ugoa]*)([+=-])([rwx]*)")
+  _DECALAGE = {"u": 6, "g": 3, "o": 0}
+
+
+  def chmod(mode, expression):
+      for clause in expression.split(","):
+          m = _CLAUSE.fullmatch(clause)
+          if not m or (m.group(2) != "=" and not m.group(3)):
+              raise ValueError(f"clause invalide : {clause!r}")
+          qui, op, droits = m.groups()
+          if not qui or "a" in qui:
+              qui = "ugo"
+          valeur = sum(4 >> "rwx".index(d) for d in set(droits))
+          for categorie in set(qui):
+              d = _DECALAGE[categorie]
+              if op == "+":
+                  mode |= valeur << d
+              elif op == "-":
+                  mode &= ~(valeur << d)
+              else:
+                  mode = (mode & ~(0o7 << d)) | (valeur << d)
+      return mode
+cours: |
+  ## Les opérateurs bit à bit
+
+  Un entier est une suite de bits ; ces opérateurs agissent bit par bit :
+
+  | Opérateur | Effet | Usage typique |
+  |-----------|-------|---------------|
+  | `a & b` | ET | **tester** ou **effacer** des bits (masque) |
+  | `a \| b` | OU | **allumer** des bits |
+  | `a ^ b` | OU exclusif | **inverser** des bits |
+  | `~a` | NON (`-a - 1` en Python) | construire un masque d'effacement |
+  | `a << n`, `a >> n` | décalages | multiplier / diviser par 2ⁿ, placer un bit |
+
+  Les trois gestes de base sur un drapeau `F` :
+
+  ```python
+  etat |= F        # allumer
+  etat &= ~F       # éteindre
+  if etat & F:     # tester
+  ```
+
+  ## Astuces classiques
+
+  - `n & (n - 1)` éteint le bit à 1 le plus faible : c'est la base de l'algorithme de
+    Kernighan pour compter les bits (une itération par bit allumé) et d'un test de puissance
+    de deux en temps constant (une puissance de deux n'a qu'un seul bit à 1).
+  - `n & -n` isole le bit le plus faible (utilisé par l'arbre de Fenwick).
+  - `int.bit_count()` (3.10+) et `int.bit_length()` existent pour la production.
+
+  ## Les droits Unix sont des bits
+
+  `rwxr-x---` = `111 101 000` = `0o750`. Chaque chiffre octal code 3 bits (r=4, w=2, x=1) pour
+  le propriétaire, le groupe et les autres. Au-dessus, trois bits spéciaux :
+
+  - **setuid** (`0o4000`) : un exécutable tourne avec les droits de son propriétaire
+    (`/usr/bin/passwd`) ;
+  - **setgid** (`0o2000`) : sur un dossier, les fichiers créés héritent du groupe ;
+  - **sticky** (`0o1000`) : dans `/tmp`, seul le propriétaire peut supprimer ses fichiers.
+
+  `ls -l` les affiche à la place du `x` correspondant, en minuscule si `x` est présent, en
+  majuscule sinon (souvent le signe d'une erreur de configuration).
+
+  ## Mode symbolique
+
+  `chmod g+w` modifie seulement un bit, alors que `chmod 664` remplace tout. Pour l'implanter :
+  construire la valeur `rwx` (0 à 7), la **décaler** vers la bonne catégorie (6 pour u, 3
+  pour g, 0 pour o), puis l'appliquer avec `|`, `& ~` ou un effacement suivi d'un OU pour `=`.
+
+  En Python, `os.chmod(chemin, 0o640)` applique un mode et `stat.filemode()` produit la chaîne
+  de `ls -l`, utile pour vérifier ton travail.
+docs:
+  - title: Opérations bit à bit sur les entiers
+    url: https://docs.python.org/fr/3/library/stdtypes.html
+  - title: Module stat
+    url: https://docs.python.org/fr/3/library/stat.html

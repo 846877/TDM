@@ -1,0 +1,9 @@
+#!/bin/sh
+# Journal de débogage de l'application : ouvre son fichier, l'écrit... et le garde ouvert indéfiniment.
+mkdir -p /var/log/appli
+exec 3>>/var/log/appli/debug.log
+dd if=/dev/zero bs=1M count=120 status=none >&3
+while true; do
+  echo "$(date '+%F %T') DEBUG boucle de traitement" >&3
+  sleep 30
+done

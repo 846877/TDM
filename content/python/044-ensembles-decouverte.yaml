@@ -1,0 +1,141 @@
+title: Découvrir les ensembles
+level: debutant
+order: 44
+tags: [ensembles, set, chaînes]
+summary: Utiliser set pour éliminer les doublons et comparer des collections.
+description: |
+  Les ensembles (`set`) ne contiennent jamais de doublon et testent l'appartenance très
+  rapidement.
+
+  1. `nb_distincts(elements)` renvoie le nombre de valeurs différentes.
+  2. `a_des_doublons(elements)` renvoie `True` si une valeur apparaît plusieurs fois.
+  3. `lettres_communes(mot1, mot2)` renvoie la **chaîne** des lettres présentes dans les deux
+     mots, sans doublon, **triées** par ordre alphabétique (en minuscules).
+  4. `machines_a_installer(inventaire, installees)` reçoit deux listes de noms de machines et
+     renvoie la liste **triée** des machines de l'inventaire qui ne sont pas encore
+     installées.
+
+  ```python
+  nb_distincts([3, 1, 3, 2, 1])                 # 3
+  a_des_doublons(["a", "b", "a"])               # True
+  lettres_communes("Réseau", "serveur")         # "ersu"
+  machines_a_installer(["pc1", "pc2", "pc3"], ["pc2"])   # ["pc1", "pc3"]
+  ```
+starter: |
+  def nb_distincts(elements):
+      pass
+
+
+  def a_des_doublons(elements):
+      pass
+
+
+  def lettres_communes(mot1, mot2):
+      pass
+
+
+  def machines_a_installer(inventaire, installees):
+      pass
+tests: |
+  def test_distincts():
+      "nb_distincts"
+      assert solution.nb_distincts([3, 1, 3, 2, 1]) == 3
+      assert solution.nb_distincts([]) == 0
+      assert solution.nb_distincts(["a", "A"]) == 2
+
+  def test_doublons():
+      "a_des_doublons"
+      assert solution.a_des_doublons(["a", "b", "a"]) is True
+      assert solution.a_des_doublons([1, 2, 3]) is False
+      assert solution.a_des_doublons([]) is False
+
+  def test_lettres():
+      "lettres_communes"
+      r = solution.lettres_communes("Réseau", "serveur")
+      assert r == "ersu", f"obtenu {r!r}"
+      assert solution.lettres_communes("abc", "xyz") == ""
+      assert solution.lettres_communes("Python", "TYPHON") == "hnopty"
+
+  def test_installer():
+      "machines_a_installer"
+      r = solution.machines_a_installer(["pc3", "pc1", "pc2", "pc1"], ["pc2", "srv9"])
+      assert r == ["pc1", "pc3"], f"obtenu {r!r}"
+      assert solution.machines_a_installer([], ["a"]) == []
+solution: |
+  def nb_distincts(elements):
+      return len(set(elements))
+
+
+  def a_des_doublons(elements):
+      return len(set(elements)) != len(elements)
+
+
+  def lettres_communes(mot1, mot2):
+      communes = set(mot1.lower()) & set(mot2.lower())
+      return "".join(sorted(communes))
+
+
+  def machines_a_installer(inventaire, installees):
+      return sorted(set(inventaire) - set(installees))
+cours: |
+  ## Un ensemble, c'est quoi ?
+
+  Un `set` est une collection **sans doublon** et **sans ordre** :
+
+  ```python
+  vlans = {10, 20, 10, 30}
+  print(vlans)          # {10, 20, 30}
+  vlans.add(40)
+  vlans.discard(99)     # retire si présent, sans erreur
+  20 in vlans           # True
+  len(vlans)            # 4
+  ```
+
+  - `set(liste)` convertit n'importe quelle séquence en ensemble (et élimine les doublons) ;
+  - `set("abca")` donne l'ensemble des caractères `{'a', 'b', 'c'}` ;
+  - l'ensemble vide s'écrit `set()` : `{}` est un **dictionnaire** vide !
+
+  ## Pas d'ordre, pas d'indice
+
+  `vlans[0]` lève une `TypeError` : un ensemble n'a pas de positions. Pour un résultat
+  ordonné (affichage, comparaison dans un test), on le trie : `sorted(ensemble)` renvoie une
+  **liste**.
+
+  ## Les opérations ensemblistes
+
+  ```python
+  a = {"pc1", "pc2", "pc3"}
+  b = {"pc2", "pc4"}
+  a & b      # {'pc2'}                    intersection : dans les deux
+  a | b      # {'pc1', 'pc2', 'pc3', 'pc4'} union : dans au moins un
+  a - b      # {'pc1', 'pc3'}             différence : dans a mais pas dans b
+  a ^ b      # {'pc1', 'pc3', 'pc4'}      dans un seul des deux
+  ```
+
+  Ces opérations remplacent des boucles imbriquées par une seule expression, lisible et
+  rapide.
+
+  ## Pourquoi c'est rapide
+
+  Tester `x in liste` oblige Python à parcourir la liste (O(n)). Tester `x in ensemble` est
+  quasi instantané (O(1)) grâce au **hachage** : Python calcule où l'élément devrait se
+  trouver. Pour 1 million d'éléments, la différence est énorme.
+
+  Contrepartie : les éléments doivent être **immuables** (nombres, chaînes, tuples). Une
+  liste ne peut pas être mise dans un ensemble.
+
+  ## Compter les doublons
+
+  Comparer la taille d'une liste avec celle de l'ensemble correspondant indique s'il y avait
+  des doublons. Astuce simple et efficace.
+
+  ## Cas d'usage d'administration
+
+  Comparer un inventaire théorique et les machines réellement vues sur le réseau, les
+  utilisateurs d'un groupe AD et ceux d'une application, les paquets installés sur deux
+  serveurs… À chaque fois : deux ensembles et une différence.
+docs:
+  - title: Tutoriel — les ensembles
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#sets
+  - title: Types d'ensembles (set, frozenset)
+    url: https://docs.python.org/fr/3/library/stdtypes.html#set-types-set-frozenset

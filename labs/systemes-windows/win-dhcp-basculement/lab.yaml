@@ -1,0 +1,358 @@
+title: Basculement DHCP - deux serveurs pour une étendue
+level: avance
+order: 7
+tags: [dhcp, basculement, failover, haute disponibilité, répartition de charge, réplication, supervision]
+summary: Rendre le DHCP hautement disponible - second serveur autorisé, relation de basculement en répartition de charge, réglages MCLT, réplication des options, ajout d'une étendue, simulation de panne, export et supervision.
+vagrant: bundled
+machine: dc01
+description: |
+  **Contexte.** Aux *Ateliers Durand*, le contrôleur de domaine est aussi le seul serveur DHCP. Lors de sa
+  dernière mise à jour mensuelle, il a redémarré deux fois et les postes arrivés à ce moment-là n'ont pas
+  obtenu d'adresse. La direction veut que le DHCP **survive à la perte d'un serveur**, sans doubler les
+  adresses ni configurer deux fois chaque réglage.
+
+  **Machines** (prévoir **6 Go de RAM libres**) :
+
+  | VM | Système | Adresse LAN | Rôle |
+  |----|---------|-------------|------|
+  | `SRV-DC01` (terminal) | Windows Server 2022 (2 Go) | 192.168.10.10 | contrôleur de `durand.lan`, DHCP en service (étendue `LAN` 192.168.10.100-200) |
+  | `SRV-DHCP02` | Windows Server 2022 (2 Go) | 192.168.10.12 | serveur membre, futur partenaire DHCP |
+
+  Tout se fait depuis SRV-DC01 : les cmdlets du module `DhcpServer` acceptent `-ComputerName`, et
+  `Invoke-Command -ComputerName SRV-DHCP02 { ... }` sert pour le reste.
+cours: |
+  ## Pourquoi le DHCP doit être redondant
+
+  Un poste qui ne peut pas renouveler son bail le garde jusqu'à expiration : une courte panne passe
+  inaperçue pour les postes déjà configurés. Mais un poste qui **démarre**, un téléphone IP, un
+  portable qui arrive, n'obtiendra rien et prendra une adresse APIPA (169.254.x.x). Historiquement, on
+  partageait la plage entre deux serveurs (règle **80/20**, étendue fractionnée) : chaque serveur ignorait
+  les baux de l'autre, et il fallait tout configurer deux fois.
+
+  ## Le basculement DHCP (DHCP failover)
+
+  Depuis Windows Server 2012, deux serveurs (et deux seulement) peuvent partager une ou plusieurs
+  étendues IPv4 dans une **relation de basculement**. Ils se répliquent les **baux** en continu (TCP 647)
+  et se répliquent la **configuration** de l'étendue à la demande. Deux modes :
+
+  - **répartition de charge** (*load balance*, par défaut 50/50) : les deux serveurs répondent, chacun
+    pour une partie des clients (choisie par un hachage de l'adresse MAC) ;
+  - **serveur de secours** (*hot standby*) : un serveur actif, l'autre ne répond qu'en cas de panne avec
+    une **réserve** d'adresses (5 % par défaut). Adapté à une agence qui dépend d'un serveur central.
+
+  ## MCLT et états
+
+  Quand un serveur ne joint plus son partenaire, il passe en **communication interrompue** : il continue
+  de servir ses clients, mais ne peut prolonger un bail que de la **MCLT** (*Maximum Client Lead Time*, 1 heure
+  par défaut) au-delà de ce que le partenaire connaît. Si le partenaire est réellement en panne, l'état
+  **partenaire arrêté** (*partner down*) lui permet, après la MCLT, de distribuer **toute** la plage.
+  Ce passage peut être automatique après un délai (`AutoStateTransition` et `StateSwitchInterval`) : sans
+  lui, il faut une intervention manuelle. Les serveurs doivent avoir l'heure synchronisée (à une minute
+  près), et un **secret partagé** authentifie leurs messages.
+
+  ## Ce qui est répliqué... et ce qui ne l'est pas
+
+  Les **baux** sont répliqués automatiquement. La **configuration** (options, réservations, exclusions)
+  ne l'est que lorsqu'on le demande : `Invoke-DhcpServerv4FailoverReplication`, ou *Répliquer
+  l'étendue* dans la console. Oublier cette étape crée deux serveurs aux options différentes : le client
+  reçoit des réglages qui dépendent du serveur qui lui a répondu. Les options **serveur** (hors étendue)
+  ne sont jamais répliquées : on les règle sur les deux, ou on les place au niveau de l'étendue.
+
+  ## Superviser
+
+  `Get-DhcpServerv4Failover` (état de la relation), `Get-DhcpServerv4ScopeStatistics` (taux d'occupation de
+  chaque étendue, par serveur) et le journal *Microsoft-Windows-DHCP Server Events/Operational*
+  (événements 20250 et suivants) sont les indicateurs à surveiller. `Export-DhcpServer` sauvegarde la
+  configuration et les baux dans un XML, réimportable avec `Import-DhcpServer`.
+docs:
+  - title: Basculement DHCP - vue d'ensemble
+    url: https://learn.microsoft.com/fr-fr/windows-server/networking/technologies/dhcp/dhcp-failover
+  - title: Module DhcpServer (PowerShell)
+    url: https://learn.microsoft.com/fr-fr/powershell/module/dhcpserver/
+exercises:
+  - id: win-dhcpf-partenaire
+    title: Préparer le second serveur
+    description: |
+      Installe le rôle **DHCP** sur SRV-DHCP02, crée ses groupes de sécurité locaux et **autorise**-le dans
+      l'annuaire (`srv-dhcp02.durand.lan`, 192.168.10.12). Ne crée **aucune** étendue dessus : elle viendra
+      de la relation de basculement.
+    hint: Invoke-Command -ComputerName SRV-DHCP02 { Install-WindowsFeature DHCP -IncludeManagementTools ; netsh dhcp add securitygroups ; Restart-Service DHCPServer } ; Add-DhcpServerInDC -DnsName srv-dhcp02.durand.lan -IPAddress 192.168.10.12
+    cours: |
+      ```powershell
+      Invoke-Command -ComputerName SRV-DHCP02 {
+          Install-WindowsFeature DHCP -IncludeManagementTools
+          netsh dhcp add securitygroups
+          Restart-Service DHCPServer }
+      Add-DhcpServerInDC -DnsName srv-dhcp02.durand.lan -IPAddress 192.168.10.12
+      Get-DhcpServerInDC
+      ```
+
+      Dans un domaine, un serveur DHCP Windows **non autorisé** refuse de démarrer la distribution :
+      c'est la protection contre les serveurs pirates ou installés par erreur. L'autorisation est un objet
+      dans `CN=NetServices,CN=Services,CN=Configuration`, elle exige un compte *Administrateurs de
+      l'entreprise*. Les groupes locaux *Administrateurs DHCP* et *Utilisateurs DHCP* permettent de déléguer
+      la gestion sans droits d'administrateur sur le serveur.
+    docs:
+      - title: Add-DhcpServerInDC
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dhcpserver/add-dhcpserverindc
+    checks:
+      - desc: Le rôle DHCP est installé et démarré sur SRV-DHCP02
+        machine: dhcp02
+        run: |
+          (Get-WindowsFeature DHCP).Installed -and (Get-Service DHCPServer).Status -eq 'Running'
+      - desc: SRV-DHCP02 est autorisé dans l'annuaire
+        run: |
+          [bool](Get-DhcpServerInDC | Where-Object IPAddress -eq '192.168.10.12')
+    solution: |
+      Invoke-Command -ComputerName SRV-DHCP02 {
+          Install-WindowsFeature DHCP -IncludeManagementTools | Out-Null
+          netsh dhcp add securitygroups | Out-Null
+          Restart-Service DHCPServer
+          Set-ItemProperty HKLM:\SOFTWARE\Microsoft\ServerManager\Roles\12 -Name ConfigurationState -Value 2
+      }
+      Add-DhcpServerInDC -DnsName srv-dhcp02.durand.lan -IPAddress 192.168.10.12
+
+  - id: win-dhcpf-relation
+    title: La relation de basculement
+    description: |
+      Crée sur SRV-DC01 la relation de basculement **`DC01-DHCP02`** avec `srv-dhcp02.durand.lan` pour
+      l'étendue `192.168.10.0`, en **répartition de charge 50/50**, avec le secret partagé `Basculement-2024!`.
+    hint: Add-DhcpServerv4Failover -Name DC01-DHCP02 -PartnerServer srv-dhcp02.durand.lan -ScopeId 192.168.10.0 -LoadBalancePercent 50 -SharedSecret 'Basculement-2024!'
+    cours: |
+      ```powershell
+      Add-DhcpServerv4Failover -Name DC01-DHCP02 -PartnerServer srv-dhcp02.durand.lan -ScopeId 192.168.10.0 `
+          -LoadBalancePercent 50 -SharedSecret 'Basculement-2024!'
+      Get-DhcpServerv4Failover
+      Get-DhcpServerv4Scope -ComputerName srv-dhcp02.durand.lan
+      ```
+
+      La création copie l'étendue (plage, exclusions, réservations, options) sur le partenaire puis lance
+      la synchronisation des baux. Sans `-ServerRole`, le mode est la répartition de charge ; avec
+      `-ServerRole Active -ReservePercent 5`, c'est le serveur de secours. Le secret partagé chiffre
+      l'authentification des messages de basculement : sans lui, n'importe quelle machine pourrait se faire
+      passer pour le partenaire. Les deux serveurs doivent avoir des heures proches : un écart de plus
+      d'une minute fait échouer la relation.
+    docs:
+      - title: Add-DhcpServerv4Failover
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dhcpserver/add-dhcpserverv4failover
+    checks:
+      - desc: La relation DC01-DHCP02 existe en répartition de charge 50 %
+        run: |
+          $f = Get-DhcpServerv4Failover -Name DC01-DHCP02 -ErrorAction SilentlyContinue
+          [bool]$f -and $f.Mode -eq 'LoadBalance' -and $f.LoadBalancePercent -eq 50 -and $f.ScopeId.IPAddressToString -contains '192.168.10.0'
+      - desc: L'étendue 192.168.10.0 existe sur SRV-DHCP02 et la relation est à l'état normal
+        run: |
+          [bool](Get-DhcpServerv4Scope -ComputerName srv-dhcp02.durand.lan -ScopeId 192.168.10.0 -ErrorAction SilentlyContinue) -and (Get-DhcpServerv4Failover -Name DC01-DHCP02).State -eq 'Normal'
+    solution: |
+      Add-DhcpServerv4Failover -Name DC01-DHCP02 -PartnerServer srv-dhcp02.durand.lan -ScopeId 192.168.10.0 -LoadBalancePercent 50 -SharedSecret 'Basculement-2024!' | Out-Null
+      Start-Sleep 15
+
+  - id: win-dhcpf-mclt
+    title: MCLT et bascule automatique
+    description: |
+      Ajuste la relation `DC01-DHCP02` : **MCLT de 30 minutes**, passage **automatique** à l'état
+      *partenaire arrêté* après **45 minutes** de communication interrompue.
+    hint: Set-DhcpServerv4Failover -Name DC01-DHCP02 -MaxClientLeadTime 00:30:00 -AutoStateTransition $true -StateSwitchInterval 00:45:00
+    cours: |
+      ```powershell
+      Set-DhcpServerv4Failover -Name DC01-DHCP02 -MaxClientLeadTime 00:30:00 -AutoStateTransition $true -StateSwitchInterval 00:45:00
+      Get-DhcpServerv4Failover -Name DC01-DHCP02 | Format-List Mode, State, MaxClientLeadTime, AutoStateTransition, StateSwitchInterval
+      ```
+
+      Une MCLT courte permet au survivant de récupérer plus vite toute la plage, mais rallonge moins les
+      baux en mode dégradé : les clients renouvellent plus souvent. Le passage automatique en *partner
+      down* évite qu'une panne la nuit bloque les postes au matin ; il présente un risque si les serveurs
+      sont seulement **isolés** (coupure réseau entre eux) mais tous deux joignables par des clients : ils
+      pourraient attribuer les mêmes adresses. Le délai choisi doit dépasser la durée d'une coupure réseau
+      ordinaire.
+    docs:
+      - title: Set-DhcpServerv4Failover
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dhcpserver/set-dhcpserverv4failover
+    checks:
+      - desc: MCLT = 30 minutes
+        run: |
+          (Get-DhcpServerv4Failover -Name DC01-DHCP02).MaxClientLeadTime -eq [TimeSpan]'00:30:00'
+      - desc: Bascule automatique après 45 minutes
+        run: |
+          $f = Get-DhcpServerv4Failover -Name DC01-DHCP02
+          $f.AutoStateTransition -and $f.StateSwitchInterval -eq [TimeSpan]'00:45:00'
+    solution: |
+      Set-DhcpServerv4Failover -Name DC01-DHCP02 -MaxClientLeadTime 00:30:00 -AutoStateTransition $true -StateSwitchInterval 00:45:00 -Force | Out-Null
+
+  - id: win-dhcpf-replication
+    title: Répliquer une modification d'options
+    description: |
+      Ajoute à l'étendue `192.168.10.0` de SRV-DC01 l'option **042** (serveurs NTP) = `192.168.10.10`, puis
+      **réplique** la configuration de la relation : SRV-DHCP02 doit avoir la même option.
+    hint: Set-DhcpServerv4OptionValue -ScopeId 192.168.10.0 -OptionId 42 -Value 192.168.10.10 ; Invoke-DhcpServerv4FailoverReplication -Name DC01-DHCP02 -Force
+    cours: |
+      ```powershell
+      Set-DhcpServerv4OptionValue -ScopeId 192.168.10.0 -OptionId 42 -Value 192.168.10.10
+      Get-DhcpServerv4OptionValue -ComputerName srv-dhcp02.durand.lan -ScopeId 192.168.10.0   # pas encore là
+      Invoke-DhcpServerv4FailoverReplication -Name DC01-DHCP02 -Force
+      Get-DhcpServerv4OptionValue -ComputerName srv-dhcp02.durand.lan -ScopeId 192.168.10.0
+      ```
+
+      C'est **la** discipline du basculement DHCP : toute modification de configuration (option,
+      réservation, exclusion, durée de bail) se fait sur un serveur puis se réplique. Le serveur sur lequel
+      on lance la réplication fait autorité : sa configuration écrase celle du partenaire. On peut répliquer
+      une étendue (`-ScopeId`) ou toute la relation (`-Name`). Certaines équipes planifient la réplication
+      chaque nuit, en plus de la faire à chaque changement.
+    docs:
+      - title: Invoke-DhcpServerv4FailoverReplication
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dhcpserver/invoke-dhcpserverv4failoverreplication
+    checks:
+      - desc: L'option 042 est réglée sur l'étendue de SRV-DC01
+        run: |
+          (Get-DhcpServerv4OptionValue -ScopeId 192.168.10.0 -OptionId 42 -ErrorAction SilentlyContinue).Value -contains '192.168.10.10'
+      - desc: SRV-DHCP02 a reçu la même option
+        run: |
+          (Get-DhcpServerv4OptionValue -ComputerName srv-dhcp02.durand.lan -ScopeId 192.168.10.0 -OptionId 42 -ErrorAction SilentlyContinue).Value -contains '192.168.10.10'
+    solution: |
+      Set-DhcpServerv4OptionValue -ScopeId 192.168.10.0 -OptionId 42 -Value 192.168.10.10
+      Invoke-DhcpServerv4FailoverReplication -Name DC01-DHCP02 -Force | Out-Null
+
+  - id: win-dhcpf-etendue
+    title: Une nouvelle étendue dans la relation
+    description: |
+      Les téléphones IP arrivent sur le sous-réseau `192.168.20.0/24`. Crée sur SRV-DC01 l'étendue **`VoIP`**
+      (192.168.20.20 à 192.168.20.200, bail de 1 jour, option routeur `192.168.20.254`) et ajoute-la à la
+      relation `DC01-DHCP02`.
+    hint: Add-DhcpServerv4Scope -Name VoIP -StartRange 192.168.20.20 -EndRange 192.168.20.200 -SubnetMask 255.255.255.0 -LeaseDuration 1.00:00:00 ; Set-DhcpServerv4OptionValue -ScopeId 192.168.20.0 -Router 192.168.20.254 ; Add-DhcpServerv4FailoverScope -Name DC01-DHCP02 -ScopeId 192.168.20.0
+    cours: |
+      ```powershell
+      Add-DhcpServerv4Scope -Name VoIP -StartRange 192.168.20.20 -EndRange 192.168.20.200 -SubnetMask 255.255.255.0 -LeaseDuration 1.00:00:00
+      Set-DhcpServerv4OptionValue -ScopeId 192.168.20.0 -Router 192.168.20.254
+      Add-DhcpServerv4FailoverScope -Name DC01-DHCP02 -ScopeId 192.168.20.0
+      ```
+
+      Une relation peut porter plusieurs étendues : on évite ainsi de multiplier les relations (et les
+      secrets) entre les deux mêmes serveurs. Une étendue ne peut appartenir qu'à **une** relation. Les
+      postes de ce sous-réseau atteindront les serveurs par un **relais DHCP** (*IP helper*) configuré sur le
+      routeur du VLAN, qui pointera vers les **deux** serveurs : c'est indispensable, sinon le partenaire ne
+      voit jamais les demandes et le basculement ne sert à rien.
+    docs:
+      - title: Add-DhcpServerv4FailoverScope
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dhcpserver/add-dhcpserverv4failoverscope
+    checks:
+      - desc: L'étendue VoIP 192.168.20.0 existe avec l'option routeur
+        run: |
+          [bool](Get-DhcpServerv4Scope -ScopeId 192.168.20.0 -ErrorAction SilentlyContinue) -and (Get-DhcpServerv4OptionValue -ScopeId 192.168.20.0 -OptionId 3 -ErrorAction SilentlyContinue).Value -contains '192.168.20.254'
+      - desc: Elle fait partie de la relation et existe sur SRV-DHCP02
+        run: |
+          (Get-DhcpServerv4Failover -Name DC01-DHCP02).ScopeId.IPAddressToString -contains '192.168.20.0' -and [bool](Get-DhcpServerv4Scope -ComputerName srv-dhcp02.durand.lan -ScopeId 192.168.20.0 -ErrorAction SilentlyContinue)
+    solution: |
+      Add-DhcpServerv4Scope -Name VoIP -StartRange 192.168.20.20 -EndRange 192.168.20.200 -SubnetMask 255.255.255.0 -LeaseDuration 1.00:00:00
+      Set-DhcpServerv4OptionValue -ScopeId 192.168.20.0 -Router 192.168.20.254
+      Add-DhcpServerv4FailoverScope -Name DC01-DHCP02 -ScopeId 192.168.20.0 | Out-Null
+
+  - id: win-dhcpf-panne
+    title: Simuler une panne
+    description: |
+      Arrête le service DHCP de SRV-DC01 et observe l'état de la relation **vu de SRV-DHCP02** : enregistre
+      cet état dans `C:\Admin\etat-panne.txt` (sur SRV-DC01). Redémarre ensuite le service et attends le
+      retour à l'état **Normal**.
+    hint: Stop-Service DHCPServer ; (Get-DhcpServerv4Failover -ComputerName srv-dhcp02.durand.lan -Name DC01-DHCP02).State | Set-Content C:\Admin\etat-panne.txt ; Start-Service DHCPServer
+    cours: |
+      ```powershell
+      Stop-Service DHCPServer
+      Start-Sleep 30
+      (Get-DhcpServerv4Failover -ComputerName srv-dhcp02.durand.lan -Name DC01-DHCP02).State | Set-Content C:\Admin\etat-panne.txt
+      Start-Service DHCPServer
+      Get-DhcpServerv4Failover -Name DC01-DHCP02 | Select-Object State
+      ```
+
+      Le partenaire passe en **CommunicationInterrupted** : il sert tous les clients qui le sollicitent,
+      dans la limite de la MCLT. Au retour, les deux serveurs passent par une phase de **resynchronisation**
+      (*Recover*, *RecoverWait*) avant de revenir à **Normal**. Une telle répétition, planifiée et documentée,
+      est la seule façon de savoir que le basculement fonctionne vraiment : pare-feu (TCP 647), heure,
+      secret partagé et relais DHCP se vérifient ainsi avant la vraie panne.
+    docs:
+      - title: Get-DhcpServerv4Failover
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dhcpserver/get-dhcpserverv4failover
+    checks:
+      - desc: C:\Admin\etat-panne.txt montre la communication interrompue
+        run: |
+          (Get-Content C:\Admin\etat-panne.txt -Raw -ErrorAction SilentlyContinue) -match 'CommunicationInterrupted|PartnerDown'
+      - desc: Le service DHCP de SRV-DC01 tourne et la relation est revenue à Normal
+        run: |
+          (Get-Service DHCPServer).Status -eq 'Running' -and (Get-DhcpServerv4Failover -Name DC01-DHCP02).State -eq 'Normal'
+    solution: |
+      Stop-Service DHCPServer
+      $limite = (Get-Date).AddMinutes(3)
+      do { Start-Sleep 10; $etat = (Get-DhcpServerv4Failover -ComputerName srv-dhcp02.durand.lan -Name DC01-DHCP02).State }
+      while ($etat -eq 'Normal' -and (Get-Date) -lt $limite)
+      Set-Content C:\Admin\etat-panne.txt $etat
+      Start-Service DHCPServer
+      $limite = (Get-Date).AddMinutes(5)
+      do { Start-Sleep 10 } while ((Get-DhcpServerv4Failover -Name DC01-DHCP02).State -ne 'Normal' -and (Get-Date) -lt $limite)
+
+  - id: win-dhcpf-export
+    title: Sauvegarder la configuration DHCP
+    description: |
+      Exporte la configuration **et les baux** du serveur DHCP de SRV-DC01 dans `C:\Admin\dhcp-dc01.xml`.
+    hint: Export-DhcpServer -File C:\Admin\dhcp-dc01.xml -Leases
+    cours: |
+      ```powershell
+      Export-DhcpServer -File C:\Admin\dhcp-dc01.xml -Leases
+      Import-DhcpServer -File C:\Admin\dhcp-dc01.xml -BackupPath C:\Admin\dhcp-avant-import -Leases   # restauration
+      ```
+
+      Le basculement protège contre la panne d'un serveur, pas contre une **erreur de configuration**
+      (répliquée aussitôt sur le partenaire !). L'export XML, lisible et comparable d'une fois sur l'autre,
+      complète la sauvegarde automatique du service (`C:\Windows\System32\dhcp\backup`, toutes les
+      60 minutes). C'est aussi l'outil de **migration** vers un nouveau serveur : export sur l'ancien,
+      import sur le nouveau, puis autorisation et désautorisation dans l'annuaire.
+    docs:
+      - title: Export-DhcpServer
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dhcpserver/export-dhcpserver
+    checks:
+      - desc: L'export contient les deux étendues
+        run: |
+          [xml]$x = Get-Content C:\Admin\dhcp-dc01.xml -ErrorAction Stop
+          $ids = $x.DHCPServer.IPv4.Scopes.Scope.ScopeId
+          ($ids -contains '192.168.10.0') -and ($ids -contains '192.168.20.0')
+      - desc: L'export contient la relation de basculement
+        run: |
+          [bool](Select-String -Path C:\Admin\dhcp-dc01.xml -Pattern 'DC01-DHCP02' -SimpleMatch -Quiet)
+    solution: |
+      Export-DhcpServer -File C:\Admin\dhcp-dc01.xml -Leases -Force
+
+  - id: win-dhcpf-supervision
+    title: Un tableau de bord d'occupation
+    description: |
+      Produis `C:\Admin\occupation-dhcp.csv` (séparateur `;`) avec, pour **chaque serveur** et **chaque
+      étendue**, les colonnes `Serveur`, `ScopeId`, `Free`, `InUse` et `PercentageInUse`.
+    hint: foreach ($s in 'srv-dc01.durand.lan', 'srv-dhcp02.durand.lan') { Get-DhcpServerv4ScopeStatistics -ComputerName $s | Select-Object @{n='Serveur';e={$s}}, ScopeId, Free, InUse, PercentageInUse } | Export-Csv ... -Delimiter ';'
+    cours: |
+      ```powershell
+      $lignes = foreach ($s in 'srv-dc01.durand.lan', 'srv-dhcp02.durand.lan') {
+          Get-DhcpServerv4ScopeStatistics -ComputerName $s |
+              Select-Object @{ n = 'Serveur'; e = { $s } }, @{ n = 'ScopeId'; e = { $_.ScopeId.IPAddressToString } }, Free, InUse, PercentageInUse
+      }
+      $lignes | Export-Csv C:\Admin\occupation-dhcp.csv -Delimiter ';' -NoTypeInformation -Encoding UTF8
+      ```
+
+      En répartition de charge, chaque serveur gère **la moitié** des adresses libres : les statistiques
+      d'un seul serveur sont donc trompeuses. Une étendue à plus de 80 % d'occupation mérite une alerte
+      (agrandir la plage, raccourcir les baux pour les invités). La même requête, planifiée chaque jour et
+      ajoutée à un fichier, donne un historique simple. La propriété calculée `ScopeId` convertit l'objet
+      adresse en texte lisible dans le CSV.
+    docs:
+      - title: Get-DhcpServerv4ScopeStatistics
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dhcpserver/get-dhcpserverv4scopestatistics
+    checks:
+      - desc: Le CSV contient une ligne par serveur et par étendue (au moins 4)
+        run: |
+          $l = Import-Csv C:\Admin\occupation-dhcp.csv -Delimiter ';' -ErrorAction Stop
+          @($l).Count -ge 4 -and @($l.Serveur | Sort-Object -Unique).Count -ge 2 -and ($l.ScopeId -contains '192.168.20.0')
+      - desc: Les colonnes demandées sont présentes
+        run: |
+          $l = Import-Csv C:\Admin\occupation-dhcp.csv -Delimiter ';' | Select-Object -First 1
+          $n = $l.PSObject.Properties.Name
+          @('Serveur', 'ScopeId', 'Free', 'InUse', 'PercentageInUse' | Where-Object { $n -notcontains $_ }).Count -eq 0
+    solution: |
+      $lignes = foreach ($s in 'srv-dc01.durand.lan', 'srv-dhcp02.durand.lan') {
+          Get-DhcpServerv4ScopeStatistics -ComputerName $s | Select-Object @{ n = 'Serveur'; e = { $s } }, @{ n = 'ScopeId'; e = { $_.ScopeId.IPAddressToString } }, Free, InUse, PercentageInUse
+      }
+      $lignes | Export-Csv C:\Admin\occupation-dhcp.csv -Delimiter ';' -NoTypeInformation -Encoding UTF8

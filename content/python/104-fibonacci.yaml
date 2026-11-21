@@ -1,0 +1,84 @@
+title: Suite de Fibonacci
+level: intermediaire
+order: 4
+tags: [boucles, listes]
+summary: Générer les n premiers termes.
+description: |
+  Écris `fibonacci(n)` qui renvoie la liste des `n` premiers termes de la suite de Fibonacci,
+  qui commence par `0, 1` et où chaque terme est la somme des deux précédents.
+
+  ```python
+  fibonacci(7)  # [0, 1, 1, 2, 3, 5, 8]
+  ```
+starter: |
+  def fibonacci(n):
+      pass
+tests: |
+  def test_sept():
+      "fibonacci(7)"
+      assert solution.fibonacci(7) == [0, 1, 1, 2, 3, 5, 8]
+
+  def test_bords():
+      "fibonacci(0) et fibonacci(1)"
+      assert solution.fibonacci(0) == []
+      assert solution.fibonacci(1) == [0]
+
+  def test_grand():
+      "Le 100e terme"
+      assert solution.fibonacci(100)[-1] == 218922995834555169026
+solution: |
+  def fibonacci(n):
+      suite = []
+      a, b = 0, 1
+      for _ in range(n):
+          suite.append(a)
+          a, b = b, a + b
+      return suite
+cours: |
+  ## Une suite définie par récurrence
+
+  Chaque terme dépend des **deux** précédents. Pour la calculer de façon itérative, il suffit
+  de mémoriser ces deux derniers termes et de les faire « avancer » :
+
+  ```python
+  a, b = 0, 1
+  a, b = b, a + b    # a = 1, b = 1
+  a, b = b, a + b    # a = 1, b = 2
+  ```
+
+  L'affectation multiple est essentielle ici : le côté droit est calculé **entièrement**
+  avec les anciennes valeurs avant d'être affecté. Écrire `a = b` puis `b = a + b` sur deux
+  lignes serait faux, car `a` aurait déjà changé.
+
+  ## Construire la liste
+
+  On peut aussi s'appuyer sur la liste elle-même : `termes[-1]` et `termes[-2]` sont les
+  deux derniers éléments.
+
+  ## Cas limites
+
+  Que doit renvoyer la fonction pour `n = 0` ? `n = 1` ? `n = 2` ? Une solution qui
+  commence par la liste `[0, 1]` doit faire attention à ne pas renvoyer trop d'éléments pour
+  les petits `n` (une tranche `[:n]` peut aider).
+
+  ## Pourquoi pas la récursivité naïve ?
+
+  ```python
+  def fib(n):
+      return n if n < 2 else fib(n - 1) + fib(n - 2)
+  ```
+
+  Élégant, mais catastrophique : `fib(n - 2)` est recalculé dans `fib(n - 1)`, et ainsi de
+  suite. Le nombre d'appels croît **exponentiellement** (environ 1,6ⁿ) : `fib(40)` fait des
+  centaines de millions d'appels. La version itérative est en **O(n)**. Au niveau avancé, tu
+  verras la **mémoïsation** (`functools.cache`), qui rend la version récursive linéaire.
+
+  ## Le saviez-vous ?
+
+  Le rapport de deux termes consécutifs tend vers le nombre d'or φ ≈ 1,618. Et les entiers
+  Python n'ont pas de limite de taille : `fibonacci(300)` fonctionne sans débordement.
+docs:
+  - title: Tutoriel — premiers pas vers la programmation (Fibonacci)
+    url: https://docs.python.org/fr/3/tutorial/introduction.html#first-steps-towards-programming
+  - title: Wikipédia — Suite de Fibonacci
+    url: https://fr.wikipedia.org/wiki/Suite_de_Fibonacci

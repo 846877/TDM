@@ -1,0 +1,104 @@
+title: Recopie de ports (SPAN) pour une capture
+level: intermediaire
+order: 21
+device: switch
+hostname: SW-COMPTA
+tags: [span, capture, wireshark, dépannage]
+summary: Envoyer une copie du trafic vers le PC d'analyse.
+description: |
+  Les utilisateurs de la comptabilité se plaignent de lenteurs. Tu branches ton portable avec
+  Wireshark sur `Fa0/24`, mais un switch n'envoie à un port que le trafic qui lui est destiné.
+  Il faut une **session SPAN** qui recopie le trafic voulu vers ce port.
+
+  1. session `1` : copie du trafic **dans les deux sens** de `Fa0/1` et `Fa0/2` (les postes qui se
+     plaignent) vers `Fa0/24` ;
+  2. session `2` : copie du trafic **reçu** dans le VLAN `20` (`source vlan 20 rx`) vers `Fa0/23`
+     (une sonde de détection d'intrusion).
+
+  ```
+  monitor session 1 source interface fa0/1 - 2 both
+  monitor session 1 destination interface fa0/24
+  ```
+
+  Contrôle avec `show monitor`.
+initial: |
+  vlan 20
+  name COMPTA
+  interface range fa0/1 - 12
+  switchport mode access
+  switchport access vlan 20
+checks:
+  - desc: Session 1 copie Fa0/1 et Fa0/2 dans les deux sens
+    expr: sorted(d.monitor_sessions[1]["sources"]) == [(ifname("fa0/1"), "both"), (ifname("fa0/2"), "both")]
+  - desc: Session 1 envoie la copie vers Fa0/24
+    expr: d.monitor_sessions[1]["dest"] == ifname("fa0/24")
+  - desc: Session 2 copie le trafic reçu du VLAN 20 vers Fa0/23
+    expr: d.monitor_sessions[2]["vlans"] == ["20"] and d.monitor_sessions[2]["dest"] == ifname("fa0/23")
+solution: |
+  configure terminal
+  monitor session 1 source interface fa0/1 - 2 both
+  monitor session 1 destination interface fa0/24
+  monitor session 2 source vlan 20 rx
+  monitor session 2 destination interface fa0/23
+  end
+cours: |
+  ## Pourquoi on ne « voit » rien en branchant Wireshark
+
+  Un switch apprend les adresses MAC et n'envoie une trame qu'au port de son destinataire. Ton PC
+  d'analyse ne reçoit donc que son propre trafic et les broadcasts. Pour observer les échanges
+  d'autres machines, le switch doit **recopier** leur trafic vers ton port : c'est le
+  **port mirroring**, appelé **SPAN** (*Switched Port Analyzer*) chez Cisco.
+
+  ### Les éléments d'une session
+
+  - une ou plusieurs **sources** : des ports (avec le sens `rx`, `tx` ou `both`) ou des VLAN entiers ;
+  - une **destination** : le port où est branché l'analyseur.
+
+  ```
+  SW1(config)# monitor session 1 source interface gi0/1 both
+  SW1(config)# monitor session 1 source vlan 30 rx
+  SW1(config)# monitor session 1 destination interface fa0/48 encapsulation replicate
+  SW1# show monitor session 1
+  Session 1
+  Type              : Local Session
+  Source Ports      : Both : Gi0/1
+  Source VLANs      : RX Only : 30
+  Destination Ports : Fa0/48
+  SW1(config)# no monitor session 1
+  ```
+
+  - `encapsulation replicate` conserve les étiquettes 802.1Q et les trames CDP/STP dans la copie ;
+  - un port **destination** ne fait plus de commutation normale : le PC qui y est branché ne peut
+    plus utiliser le réseau (prévoir une seconde carte réseau) ;
+  - un port ne peut pas être à la fois source et destination.
+
+  ### Variantes
+
+  | Variante | Destination                                     |
+  |----------|-------------------------------------------------|
+  | SPAN     | port du même switch                             |
+  | RSPAN    | VLAN dédié (`remote-span`) traversant plusieurs switchs |
+  | ERSPAN   | encapsulation GRE vers une IP lointaine (routeurs, gammes haut de gamme) |
+
+  ### Limites
+
+  - nombre de sessions limité (2 sessions locales sur un Catalyst 2960) ;
+  - la copie de plusieurs ports gigabit vers un seul port peut **dépasser** sa capacité : des trames
+    sont perdues dans la capture, pas sur le réseau ;
+  - les trames en erreur (CRC) ne sont généralement pas recopiées.
+
+  ### Pièges fréquents
+
+  - Oublier de supprimer la session après le dépannage : un port reste « mort » sans raison
+    apparente pour le technicien suivant.
+  - Choisir `rx` seul et ne voir que la moitié de la conversation.
+  - Copier un VLAN très chargé vers un port 100 Mbit/s.
+
+  ### Pour le CCNP ENCOR
+
+  SPAN, RSPAN et ERSPAN sont au programme d'ENCOR (outils de supervision du réseau).
+docs:
+  - title: Cisco — Catalyst Switched Port Analyzer (SPAN) Configuration Example
+    url: https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/10570-41.html
+  - title: Wikipédia (EN) — Port mirroring
+    url: https://en.wikipedia.org/wiki/Port_mirroring

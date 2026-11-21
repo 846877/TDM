@@ -1,0 +1,10 @@
+# Lab « Routage et NAT » : SRV-RTR01 (Windows Server 2022, 2 Go, futur routeur NAT entre le LAN et la carte
+# NAT de VirtualBox) et PC01 (Windows 11, 3 Go, privé de sa route par défaut). Prévoir 6 Go de RAM libres.
+require_relative "../_commun/tdm"
+
+Vagrant.configure("2") do |config|
+  TDM.lab(config, __dir__) do |lab|
+    lab.server "rtr01", hostname: "SRV-RTR01", ip: "192.168.10.254", primary: true, scenario: "scenario-rtr01.ps1"
+    lab.client "pc01", hostname: "PC01", ip: "192.168.10.101", scenario: "scenario-pc01.ps1"
+  end
+end

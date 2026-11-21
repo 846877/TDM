@@ -1,0 +1,105 @@
+title: DHCP snooping
+level: avance
+order: 11
+device: switch
+hostname: SW-ACCES
+tags: [dhcp snooping, sécurité, couche 2]
+summary: Bloquer les serveurs DHCP pirates.
+description: |
+  Un employé a branché une box Wi-Fi personnelle : elle distribue des adresses et les PC de
+  son étage perdent l'accès au réseau. Le **DHCP snooping** n'accepte les réponses DHCP que sur
+  les ports de **confiance**.
+
+  1. active le DHCP snooping globalement et pour les VLAN `10` et `20` ;
+  2. le serveur DHCP est derrière l'uplink : `Gi0/1` est le seul port de confiance
+     (`ip dhcp snooping trust`) ;
+  3. limite les requêtes DHCP à `15` paquets/s sur les ports utilisateurs `Fa0/1` à `Fa0/24`
+     (`ip dhcp snooping limit rate 15`) pour contrer l'épuisement du pool ;
+  4. le serveur de l'entreprise ne gère pas l'option 82 : `no ip dhcp snooping information option`.
+
+  Contrôle avec `show ip dhcp snooping`.
+initial: |
+  vlan 10
+  vlan 20
+  interface range fa0/1 - 12
+  switchport mode access
+  switchport access vlan 10
+  interface range fa0/13 - 24
+  switchport mode access
+  switchport access vlan 20
+  interface g0/1
+  switchport mode trunk
+checks:
+  - desc: DHCP snooping activé globalement
+    expr: d.dhcp_snooping
+    hint: "ip dhcp snooping (la commande globale est indispensable)"
+  - desc: DHCP snooping sur les VLAN 10 et 20
+    expr: "{10, 20} <= d.dhcp_snooping_vlans"
+  - desc: Gi0/1 seul port de confiance
+    expr: intf("g0/1").dhcp_snooping_trust and not any(i.dhcp_snooping_trust for i in ports("fa0/1-24"))
+  - desc: Débit limité à 15 paquets/s sur Fa0/1-24
+    expr: all(i.dhcp_snooping_rate == 15 for i in ports("fa0/1-24"))
+  - desc: Option 82 désactivée
+    expr: not d.dhcp_snooping_option82
+solution: |
+  configure terminal
+  ip dhcp snooping
+  ip dhcp snooping vlan 10,20
+  no ip dhcp snooping information option
+  interface g0/1
+  ip dhcp snooping trust
+  interface range fa0/1 - 24
+  ip dhcp snooping limit rate 15
+  end
+cours: |
+  ## Les serveurs DHCP pirates
+
+  N'importe quel équipement peut répondre aux requêtes DHCP : une box branchée par erreur, ou un
+  attaquant qui distribue sa propre passerelle pour intercepter le trafic (homme du milieu). Les
+  clients acceptent la **première** offre reçue.
+
+  Le **DHCP snooping** classe les ports du switch :
+
+  - **trusted** (de confiance) : uplinks vers le vrai serveur ou le routeur ; les réponses DHCP
+    (Offer, Ack) y sont acceptées ;
+  - **untrusted** (par défaut) : ports des utilisateurs ; une réponse de serveur DHCP y est
+    **jetée**.
+
+  Le switch construit aussi une **table de liaisons** (MAC, IP, VLAN, port) réutilisée par DAI
+  et IP Source Guard.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# ip dhcp snooping
+  SW1(config)# ip dhcp snooping vlan 40,50
+  SW1(config)# no ip dhcp snooping information option
+  SW1(config)# interface gi0/2
+  SW1(config-if)# ip dhcp snooping trust
+  SW1(config)# interface range fa0/1 - 24
+  SW1(config-if-range)# ip dhcp snooping limit rate 10
+  SW1# show ip dhcp snooping
+  SW1# show ip dhcp snooping binding
+  ```
+
+  - activer **globalement** et **par VLAN** ;
+  - `limit rate` limite le nombre de paquets DHCP par seconde sur un port (contre l'épuisement
+    du pool par *DHCP starvation*) ; dépassement → port err-disabled ;
+  - l'**option 82** est ajoutée par défaut par le switch ; beaucoup de serveurs DHCP (dont IOS)
+    rejettent alors les requêtes venant de ports non fiables : on la désactive si le serveur ne
+    la gère pas.
+
+  ### Pièges fréquents
+
+  - Oublier de déclarer l'uplink en trusted : plus aucun client n'obtient d'adresse.
+  - Activer le snooping globalement sans l'activer sur les VLAN : aucun effet.
+  - Option 82 et serveur qui la refuse : échec silencieux.
+
+  ### Pour le CCNA
+
+  DHCP snooping fait partie des protections de couche 2 au programme, avec DAI et port-security.
+docs:
+  - title: "Wikipédia (EN) — DHCP snooping"
+    url: https://en.wikipedia.org/wiki/DHCP_snooping
+  - title: "Cisco Catalyst 2960-X — guides de configuration"
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html

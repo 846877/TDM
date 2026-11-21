@@ -1,0 +1,418 @@
+title: Multisite - sites AD et second contrôleur de domaine
+level: expert
+order: 4
+tags: [active directory, sites, sous-réseaux, réplication, contrôleur de domaine, fsmo, w32time, dns, repadmin]
+summary: Ouvrir une agence - sites et sous-réseaux, lien de sites, promotion d'un second contrôleur dans son site, nettoyage DNS, test de réplication, transfert du rôle PDC et de l'heure, DNS croisé et bilan de réplication.
+vagrant: bundled
+machine: dc01
+description: |
+  **Contexte.** Les *Ateliers Durand* ouvrent une agence à **Grenoble**, reliée au siège de **Lyon** par un
+  VPN. Si le lien tombe, les Grenoblois doivent continuer à ouvrir leur session : il faut un **contrôleur
+  de domaine sur place**, et un annuaire qui sache que les deux sites existent pour que chacun utilise son DC
+  local et que la réplication soit maîtrisée.
+
+  **Machines** (prévoir **6 Go de RAM libres**) :
+
+  | VM | Système | Adresse LAN | Rôle |
+  |----|---------|-------------|------|
+  | `SRV-DC01` (terminal) | Windows Server 2022 (2 Go) | 192.168.10.10/16 | contrôleur de `durand.lan`, siège de Lyon |
+  | `SRV-DC02` | Windows Server 2022 (2 Go) | 192.168.20.10/16 | serveur membre, futur DC de Grenoble |
+
+  Dans le lab, les deux machines sont sur le même réseau virtuel (masque /16) : la séparation en sites est
+  **logique**, par les objets sous-réseau 192.168.10.0/24 et 192.168.20.0/24. Mot de passe du mode
+  restauration (DSRM) à utiliser : `Azerty123!`. Pour agir sur SRV-DC02 :
+  `Invoke-Command -ComputerName SRV-DC02 { ... }` (après sa promotion, le compte `vagrant` de la machine
+  devient `DURAND\vagrant`).
+cours: |
+  ## Pourquoi des sites ?
+
+  Un **site** Active Directory représente un ensemble de réseaux bien connectés entre eux (un bâtiment, une
+  agence). Il sert à trois choses :
+
+  - le **localisateur** : un poste cherche d'abord un DC de **son** site (déterminé par son adresse IP et
+    les objets **sous-réseau**), pour ne pas ouvrir sa session à travers le VPN ;
+  - la **réplication** : à l'intérieur d'un site, elle est quasi immédiate (notification après 15 s) ;
+    entre sites, elle suit un **lien de sites** avec un **coût**, un **intervalle** (180 min par défaut)
+    et éventuellement une plage horaire, et elle est compressée ;
+  - les services qui suivent la topologie : DFS (références par site), Exchange, SCCM...
+
+  Le générateur de topologie (**KCC**) de chaque DC crée automatiquement les connexions ; entre sites, un
+  DC par site joue le rôle de **tête de pont** (*bridgehead*). Un sous-réseau oublié laisse ses clients
+  « sans site » : ils prennent n'importe quel DC du domaine (événement 5807 dans le journal *System* des DC).
+
+  ## Promouvoir un DC supplémentaire
+
+  `Install-ADDSDomainController` ajoute un DC à un domaine existant : il réplique toute la partition du
+  domaine (ou part d'un support IFM pour les gros annuaires sur un lien lent), devient serveur DNS
+  (zones intégrées à AD) et **catalogue global** par défaut. On le place directement dans son site
+  (`-SiteName`). Dans un lab VirtualBox, la carte NAT commune à toutes les VM (10.0.2.15) doit être
+  exclue de l'enregistrement DNS et de l'écoute du serveur DNS, sinon chaque DC croit joindre l'autre...
+  en se parlant à lui-même.
+
+  ## Les rôles FSMO et l'heure
+
+  Cinq **rôles d'opérations** sont uniques : maître de schéma et d'attribution de noms (forêt), **émulateur
+  PDC**, maître RID et maître d'infrastructure (domaine). L'émulateur PDC est la référence pour les
+  changements de mot de passe, le verrouillage, l'édition des GPO et surtout **l'heure** : il se synchronise
+  sur une source externe (NTP), tous les autres DC et membres suivent la hiérarchie. Quand on transfère le
+  rôle PDC, on déplace aussi la configuration NTP, sinon le domaine perd sa référence de temps.
+
+  ## DNS des contrôleurs
+
+  Chaque DC est aussi serveur DNS. Bonne pratique : interroger d'abord un **autre** DC, puis lui-même
+  (`127.0.0.1`) en second, pour éviter qu'un DC isolé au démarrage ne trouve plus ses propres
+  enregistrements (« îlot DNS »).
+
+  ## Vérifier la réplication
+
+  `repadmin /replsummary` (vue d'ensemble : plus grand délai et échecs par DC), `repadmin /showrepl`
+  (détail par partition et par partenaire), `repadmin /syncall /AdeP` (forcer), `Get-ADReplicationFailure`,
+  `Get-ADReplicationPartnerMetadata`. Un DC qui n'a pas répliqué depuis plus que la **durée de vie des
+  objets supprimés** (180 jours) ne doit plus être reconnecté : il réintroduirait des objets fantômes.
+docs:
+  - title: Concevoir la topologie des sites
+    url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/plan/designing-the-site-topology
+  - title: Install-ADDSDomainController
+    url: https://learn.microsoft.com/fr-fr/powershell/module/addsdeployment/install-addsdomaincontroller
+  - title: Rôles FSMO
+    url: https://learn.microsoft.com/fr-fr/troubleshoot/windows-server/active-directory/fsmo-roles
+  - title: repadmin
+    url: https://learn.microsoft.com/fr-fr/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/cc770963(v=ws.11)
+exercises:
+  - id: win-ms-sites
+    title: Sites et sous-réseaux
+    description: |
+      Renomme le site `Default-First-Site-Name` en **`LYON`**, crée le site **`GRENOBLE`**, puis déclare les
+      sous-réseaux `192.168.10.0/24` (site LYON, lieu `Lyon`) et `192.168.20.0/24` (site GRENOBLE, lieu
+      `Grenoble`).
+    hint: Get-ADReplicationSite Default-First-Site-Name | Rename-ADObject -NewName LYON ; New-ADReplicationSite GRENOBLE ; New-ADReplicationSubnet -Name 192.168.10.0/24 -Site LYON -Location Lyon
+    cours: |
+      ```powershell
+      Get-ADObject -SearchBase (Get-ADRootDSE).configurationNamingContext -LDAPFilter '(&(objectClass=site)(cn=Default-First-Site-Name))' |
+          Rename-ADObject -NewName LYON
+      New-ADReplicationSite -Name GRENOBLE
+      New-ADReplicationSubnet -Name 192.168.10.0/24 -Site LYON -Location Lyon
+      New-ADReplicationSubnet -Name 192.168.20.0/24 -Site GRENOBLE -Location Grenoble
+      Get-ADReplicationSubnet -Filter * | Format-Table Name, Site
+      ```
+
+      Renommer le site par défaut est plus propre que d'en créer un nouveau : SRV-DC01 y est déjà, avec ses
+      objets serveur. Les sous-réseaux sont la pièce maîtresse : sans eux, le localisateur ne peut pas
+      rattacher un client à un site. On déclare **tous** les sous-réseaux de l'entreprise, VPN et Wi-Fi
+      compris. Les objets vivent dans la partition de **configuration**, répliquée dans toute la forêt.
+    docs:
+      - title: New-ADReplicationSubnet
+        url: https://learn.microsoft.com/fr-fr/powershell/module/activedirectory/new-adreplicationsubnet
+      - title: New-ADReplicationSite
+        url: https://learn.microsoft.com/fr-fr/powershell/module/activedirectory/new-adreplicationsite
+    checks:
+      - desc: Les sites LYON et GRENOBLE existent, plus de Default-First-Site-Name
+        run: |
+          $s = (Get-ADReplicationSite -Filter *).Name
+          ($s -contains 'LYON') -and ($s -contains 'GRENOBLE') -and ($s -notcontains 'Default-First-Site-Name')
+      - desc: Les deux sous-réseaux sont rattachés au bon site
+        run: |
+          $n = Get-ADReplicationSubnet -Filter *
+          [bool]($n | Where-Object { $_.Name -eq '192.168.10.0/24' -and $_.Site -like 'CN=LYON,*' }) -and [bool]($n | Where-Object { $_.Name -eq '192.168.20.0/24' -and $_.Site -like 'CN=GRENOBLE,*' })
+    solution: |
+      Get-ADObject -SearchBase (Get-ADRootDSE).configurationNamingContext -LDAPFilter '(&(objectClass=site)(cn=Default-First-Site-Name))' | Rename-ADObject -NewName LYON
+      New-ADReplicationSite -Name GRENOBLE
+      New-ADReplicationSubnet -Name 192.168.10.0/24 -Site LYON -Location Lyon
+      New-ADReplicationSubnet -Name 192.168.20.0/24 -Site GRENOBLE -Location Grenoble
+
+  - id: win-ms-lien
+    title: Le lien de sites
+    description: |
+      Crée le lien de sites **`LYON-GRENOBLE`** (transport IP) entre les deux sites, **coût 50**, réplication
+      toutes les **15 minutes**. Retire `GRENOBLE` de tout autre lien éventuel.
+    hint: New-ADReplicationSiteLink -Name LYON-GRENOBLE -SitesIncluded LYON, GRENOBLE -Cost 50 -ReplicationFrequencyInMinutes 15 -InterSiteTransportProtocol IP
+    cours: |
+      ```powershell
+      New-ADReplicationSiteLink -Name LYON-GRENOBLE -SitesIncluded LYON, GRENOBLE -Cost 50 `
+          -ReplicationFrequencyInMinutes 15 -InterSiteTransportProtocol IP
+      Get-ADReplicationSiteLink -Filter * | Format-Table Name, SitesIncluded, Cost, ReplicationFrequencyInMinutes
+      ```
+
+      Le lien `DEFAULTIPSITELINK` (coût 100, 180 minutes) contient le site par défaut, devenu LYON. Un lien
+      dédié, nommé d'après ses extrémités, rend la topologie lisible. Le **coût** sert quand plusieurs
+      chemins existent (le KCC prend le moins cher) ; l'**intervalle** de 15 minutes est le minimum, adapté
+      à un VPN correct. Les changements urgents (verrouillage de compte, changement de mot de passe sur le
+      PDC) sont de toute façon transmis immédiatement.
+    docs:
+      - title: New-ADReplicationSiteLink
+        url: https://learn.microsoft.com/fr-fr/powershell/module/activedirectory/new-adreplicationsitelink
+    checks:
+      - desc: LYON-GRENOBLE relie les deux sites, coût 50, 15 minutes
+        run: |
+          $l = Get-ADReplicationSiteLink -Filter "Name -eq 'LYON-GRENOBLE'"
+          [bool]$l -and $l.Cost -eq 50 -and $l.ReplicationFrequencyInMinutes -eq 15 -and @($l.SitesIncluded | Where-Object { $_ -like 'CN=LYON,*' -or $_ -like 'CN=GRENOBLE,*' }).Count -eq 2
+    solution: |
+      New-ADReplicationSiteLink -Name LYON-GRENOBLE -SitesIncluded LYON, GRENOBLE -Cost 50 -ReplicationFrequencyInMinutes 15 -InterSiteTransportProtocol IP
+
+  - id: win-ms-preparer
+    title: Préparer SRV-DC02
+    description: |
+      Sur SRV-DC02 : installe le rôle **AD DS** (avec les outils), et empêche sa carte `NAT` de s'enregistrer
+      dans le DNS (`RegisterThisConnectionsAddress` à faux), pour que le futur DC ne s'annonce qu'avec son
+      adresse LAN.
+    hint: Invoke-Command -ComputerName SRV-DC02 { Install-WindowsFeature AD-Domain-Services -IncludeManagementTools ; Set-DnsClient -InterfaceAlias NAT -RegisterThisConnectionsAddress $false }
+    cours: |
+      ```powershell
+      Invoke-Command -ComputerName SRV-DC02 {
+          Install-WindowsFeature AD-Domain-Services -IncludeManagementTools
+          Set-DnsClient -InterfaceAlias NAT -RegisterThisConnectionsAddress $false
+          Get-DnsClientServerAddress -InterfaceAlias LAN -AddressFamily IPv4 }
+      ```
+
+      Un futur DC doit avoir une adresse **fixe**, un DNS qui pointe vers un DC existant (ici SRV-DC01) et
+      l'heure correcte. Une seconde carte réseau sur un DC est généralement déconseillée (enregistrements
+      DNS parasites, réplication par la mauvaise interface). Dans ce lab, la carte NAT de Vagrant est
+      indispensable à la gestion de la VM : on la neutralise côté DNS. Dans la vraie vie, un DC n'a
+      qu'une carte, sur le réseau des serveurs.
+    docs:
+      - title: Set-DnsClient
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dnsclient/set-dnsclient
+    checks:
+      - desc: Le rôle AD DS est installé sur SRV-DC02
+        machine: dc02
+        run: |
+          (Get-WindowsFeature AD-Domain-Services).Installed
+      - desc: La carte NAT de SRV-DC02 ne s'enregistre pas dans le DNS
+        machine: dc02
+        run: |
+          -not (Get-DnsClient -InterfaceAlias NAT).RegisterThisConnectionsAddress
+    solution: |
+      Invoke-Command -ComputerName SRV-DC02 {
+          Install-WindowsFeature AD-Domain-Services -IncludeManagementTools | Out-Null
+          Set-DnsClient -InterfaceAlias NAT -RegisterThisConnectionsAddress $false
+      }
+
+  - id: win-ms-promotion
+    title: Promouvoir le DC de Grenoble
+    description: |
+      Promeus SRV-DC02 en **contrôleur de domaine supplémentaire** de `durand.lan`, dans le site
+      **GRENOBLE**, avec le **DNS** et le **catalogue global** (mot de passe DSRM `Azerty123!`). Redémarre-le et
+      attends qu'il réponde.
+    hint: Invoke-Command -ComputerName SRV-DC02 { Install-ADDSDomainController -DomainName durand.lan -SiteName GRENOBLE -InstallDns -Credential $cred -SafeModeAdministratorPassword ... -NoRebootOnCompletion -Force } ; Restart-Computer SRV-DC02 -Wait -For PowerShell
+    cours: |
+      ```powershell
+      $cred = Get-Credential DURAND\vagrant
+      Invoke-Command -ComputerName SRV-DC02 -ArgumentList $cred {
+          param($cred)
+          Install-ADDSDomainController -DomainName durand.lan -SiteName GRENOBLE -InstallDns -Credential $cred `
+              -SafeModeAdministratorPassword (ConvertTo-SecureString 'Azerty123!' -AsPlainText -Force) -NoRebootOnCompletion -Force }
+      Restart-Computer -ComputerName SRV-DC02 -Wait -For PowerShell -Timeout 1800 -Force
+      Get-ADDomainController -Filter * | Format-Table Name, Site, IsGlobalCatalog, IPv4Address
+      ```
+
+      `-Credential` est obligatoire ici : dans une session distante, le compte ne peut pas « rebondir » vers
+      le DC existant (double saut Kerberos). La promotion réplique toute la partition du domaine, crée
+      l'objet serveur dans le site choisi et partage `SYSVOL` et `NETLOGON` une fois la réplication initiale
+      du SYSVOL terminée. `Test-ADDSDomainControllerInstallation` vérifie les prérequis sans rien modifier.
+    docs:
+      - title: Install-ADDSDomainController
+        url: https://learn.microsoft.com/fr-fr/powershell/module/addsdeployment/install-addsdomaincontroller
+      - title: Installer un contrôleur de domaine supplémentaire
+        url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/deploy/install-a-replica-windows-server-2012-domain-controller-in-an-existing-domain--level-200-
+    checks:
+      - desc: SRV-DC02 est contrôleur de domaine dans le site GRENOBLE, catalogue global
+        run: |
+          $dc = Get-ADDomainController -Identity SRV-DC02 -ErrorAction Stop
+          $dc.Site -eq 'GRENOBLE' -and $dc.IsGlobalCatalog
+      - desc: SRV-DC02 partage SYSVOL et NETLOGON
+        machine: dc02
+        run: |
+          [bool](Get-SmbShare -Name SYSVOL -ErrorAction SilentlyContinue) -and [bool](Get-SmbShare -Name NETLOGON -ErrorAction SilentlyContinue)
+    solution: |
+      $cred = New-Object PSCredential 'DURAND\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force)
+      Invoke-Command -ComputerName SRV-DC02 -ArgumentList $cred -ScriptBlock {
+          param($cred)
+          Install-ADDSDomainController -DomainName durand.lan -SiteName GRENOBLE -InstallDns -Credential $cred -SafeModeAdministratorPassword (ConvertTo-SecureString 'Azerty123!' -AsPlainText -Force) -NoRebootOnCompletion -Force -WarningAction SilentlyContinue
+      } | Out-Null
+      Restart-Computer -ComputerName SRV-DC02 -Wait -For PowerShell -Timeout 1800 -Force
+      Start-Sleep 60
+
+  - id: win-ms-dns
+    title: Nettoyer le DNS du lab
+    description: |
+      Le serveur DNS de SRV-DC02 ne doit écouter que sur son adresse LAN (`192.168.20.10`). Supprime ensuite de
+      la zone `durand.lan` tout enregistrement A pointant vers une adresse `10.0.2.*` (carte NAT de VirtualBox).
+    hint: Invoke-Command -ComputerName SRV-DC02 { dnscmd /ResetListenAddresses 192.168.20.10 ; Restart-Service DNS } ; Get-DnsServerResourceRecord -ZoneName durand.lan -RRType A | Where-Object { $_.RecordData.IPv4Address -like '10.0.2.*' } | Remove-DnsServerResourceRecord -ZoneName durand.lan -Force
+    cours: |
+      ```powershell
+      Invoke-Command -ComputerName SRV-DC02 { dnscmd /ResetListenAddresses 192.168.20.10; Restart-Service DNS }
+      Get-DnsServerResourceRecord -ZoneName durand.lan -RRType A |
+          Where-Object { $_.RecordData.IPv4Address.IPAddressToString -like '10.0.2.*' } |
+          Remove-DnsServerResourceRecord -ZoneName durand.lan -Force
+      Resolve-DnsName srv-dc02.durand.lan
+      ```
+
+      Pendant sa promotion, SRV-DC02 a pu enregistrer son adresse NAT (identique sur toutes les VM du lab)
+      pour son nom et pour le nom du domaine. Un client qui obtiendrait cette adresse s'adresserait à
+      lui-même : échecs de réplication aléatoires, GPO introuvables. C'est le même nettoyage que le
+      provisionnement du lab a fait pour SRV-DC01. La zone étant intégrée à AD, la suppression sur un DC se
+      réplique vers l'autre.
+    docs:
+      - title: Remove-DnsServerResourceRecord
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dnsserver/remove-dnsserverresourcerecord
+    checks:
+      - desc: La zone durand.lan n'a plus d'enregistrement A en 10.0.2.*
+        run: |
+          -not (Get-DnsServerResourceRecord -ZoneName durand.lan -RRType A | Where-Object { $_.RecordData.IPv4Address.IPAddressToString -like '10.0.2.*' })
+      - desc: Le DNS de SRV-DC02 n'écoute que sur 192.168.20.10
+        machine: dc02
+        run: |
+          $e = (Get-DnsServerSetting -All).ListeningIPAddress | ForEach-Object { "$_" }
+          @($e).Count -ge 1 -and @($e | Where-Object { $_ -ne '192.168.20.10' }).Count -eq 0
+    solution: |
+      Invoke-Command -ComputerName SRV-DC02 { dnscmd /ResetListenAddresses 192.168.20.10 | Out-Null; Restart-Service DNS }
+      foreach ($dc in 'SRV-DC01', 'SRV-DC02') {
+          Get-DnsServerResourceRecord -ComputerName $dc -ZoneName durand.lan -RRType A | Where-Object { $_.RecordData.IPv4Address.IPAddressToString -like '10.0.2.*' } | Remove-DnsServerResourceRecord -ComputerName $dc -ZoneName durand.lan -Force
+      }
+
+  - id: win-ms-replication
+    title: Tester la réplication
+    description: |
+      Crée **sur SRV-DC02** l'utilisateur `test.grenoble` (OU `Utilisateurs` des Ateliers Durand), force la
+      réplication entre les deux DC, et vérifie qu'il est visible **sur SRV-DC01**.
+    hint: New-ADUser test.grenoble -Server SRV-DC02 -Path 'OU=Utilisateurs,...' ; repadmin /syncall SRV-DC02 /AdeP ; Get-ADUser test.grenoble -Server SRV-DC01
+    cours: |
+      ```powershell
+      New-ADUser -Name 'Test Grenoble' -SamAccountName test.grenoble -Server SRV-DC02 -Path 'OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan'
+      repadmin /syncall SRV-DC02 /AdeP          # A : toutes partitions, d : noms complets, e : inter-sites, P : pousser
+      Get-ADUser test.grenoble -Server SRV-DC01
+      ```
+
+      `-Server` choisit le DC qui reçoit l'écriture : c'est la base de tout test de réplication. Sans
+      forçage, l'objet arriverait au prochain intervalle du lien de sites (15 minutes). `/e` est
+      indispensable entre sites. `Get-ADReplicationAttributeMetadata` montre ensuite, attribut par attribut,
+      sur quel DC et à quelle heure la dernière modification a eu lieu : précieux pour comprendre un
+      conflit.
+    docs:
+      - title: Sync-ADObject
+        url: https://learn.microsoft.com/fr-fr/powershell/module/activedirectory/sync-adobject
+    checks:
+      - desc: test.grenoble existe sur SRV-DC01 et sur SRV-DC02
+        run: |
+          [bool](Get-ADUser -Filter "SamAccountName -eq 'test.grenoble'" -Server SRV-DC01) -and [bool](Get-ADUser -Filter "SamAccountName -eq 'test.grenoble'" -Server SRV-DC02)
+      - desc: L'objet a été créé sur SRV-DC02 (origine de la réplication)
+        run: |
+          $u = Get-ADUser test.grenoble -Server SRV-DC01
+          $m = Get-ADReplicationAttributeMetadata -Object $u.DistinguishedName -Server SRV-DC01 -Properties objectClass
+          [bool]($m | Where-Object { $_.LastOriginatingChangeDirectoryServerIdentity -match 'SRV-DC02' })
+    solution: |
+      New-ADUser -Name 'Test Grenoble' -SamAccountName test.grenoble -Server SRV-DC02 -Path 'OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan'
+      repadmin /syncall SRV-DC02 /AdeP | Out-Null
+      Start-Sleep 10
+
+  - id: win-ms-pdc
+    title: Le rôle PDC et l'heure
+    description: |
+      Le siège de Lyon va déménager : transfère le rôle d'**émulateur PDC** à SRV-DC02. Configure ensuite
+      SRV-DC02 pour se synchroniser sur `0.fr.pool.ntp.org` et `1.fr.pool.ntp.org` (source **fiable**), et
+      remets SRV-DC01 sur la **hiérarchie du domaine**.
+    hint: Move-ADDirectoryServerOperationMasterRole -Identity SRV-DC02 -OperationMasterRole PDCEmulator ; w32tm /config /manualpeerlist:"0.fr.pool.ntp.org,0x8 1.fr.pool.ntp.org,0x8" /syncfromflags:manual /reliable:yes /update ; w32tm /config /syncfromflags:domhier /reliable:no /update
+    cours: |
+      ```powershell
+      Move-ADDirectoryServerOperationMasterRole -Identity SRV-DC02 -OperationMasterRole PDCEmulator -Confirm:$false
+      Invoke-Command -ComputerName SRV-DC02 {
+          w32tm /config /manualpeerlist:"0.fr.pool.ntp.org,0x8 1.fr.pool.ntp.org,0x8" /syncfromflags:manual /reliable:yes /update
+          w32tm /resync /rediscover }
+      w32tm /config /syncfromflags:domhier /reliable:no /update
+      netdom query fsmo
+      ```
+
+      **Transférer** un rôle (les deux DC sont en ligne) est sans risque ; **saisir** un rôle (`-Force`,
+      quand l'ancien titulaire est mort) impose de ne jamais remettre l'ancien en ligne avec ce rôle. Le
+      PDC est la racine de temps de la forêt : un PDC mal configuré qui suit le BIOS de sa machine virtuelle
+      dérive toute l'entreprise. Sur un hyperviseur, on désactive aussi la synchronisation de l'heure par les
+      services d'intégration pour les DC.
+    docs:
+      - title: Transférer ou saisir des rôles FSMO
+        url: https://learn.microsoft.com/fr-fr/troubleshoot/windows-server/active-directory/transfer-or-seize-operation-master-roles-in-ad-ds
+      - title: Configurer une source de temps faisant autorité
+        url: https://learn.microsoft.com/fr-fr/windows-server/networking/windows-time-service/configuring-systems-for-high-accuracy
+    checks:
+      - desc: SRV-DC02 est émulateur PDC
+        run: |
+          (Get-ADDomain).PDCEmulator -like 'SRV-DC02*'
+      - desc: SRV-DC02 se synchronise en NTP sur le pool français et s'annonce fiable
+        machine: dc02
+        run: |
+          $p = Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Parameters
+          $c = Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Config
+          $p.Type -eq 'NTP' -and $p.NtpServer -match 'fr\.pool\.ntp\.org' -and (($c.AnnounceFlags -band 8) -ne 0)
+      - desc: SRV-DC01 suit la hiérarchie du domaine
+        run: |
+          (Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Parameters).Type -eq 'NT5DS'
+    solution: |
+      Move-ADDirectoryServerOperationMasterRole -Identity SRV-DC02 -OperationMasterRole PDCEmulator -Confirm:$false
+      Invoke-Command -ComputerName SRV-DC02 { w32tm /config /manualpeerlist:"0.fr.pool.ntp.org,0x8 1.fr.pool.ntp.org,0x8" /syncfromflags:manual /reliable:yes /update | Out-Null }
+      w32tm /config /syncfromflags:domhier /reliable:no /update | Out-Null
+
+  - id: win-ms-dns-croise
+    title: Le DNS croisé des contrôleurs
+    description: |
+      Configure la carte `LAN` de chaque DC pour interroger **d'abord l'autre DC**, puis **lui-même**
+      (`127.0.0.1`) : SRV-DC01 → `192.168.20.10, 127.0.0.1` ; SRV-DC02 → `192.168.10.10, 127.0.0.1`.
+    hint: Set-DnsClientServerAddress -InterfaceAlias LAN -ServerAddresses 192.168.20.10, 127.0.0.1 ; idem sur SRV-DC02 avec 192.168.10.10
+    cours: |
+      ```powershell
+      Set-DnsClientServerAddress -InterfaceAlias LAN -ServerAddresses 192.168.20.10, 127.0.0.1
+      Invoke-Command -ComputerName SRV-DC02 { Set-DnsClientServerAddress -InterfaceAlias LAN -ServerAddresses 192.168.10.10, 127.0.0.1 }
+      ```
+
+      Au démarrage, le service DNS d'un DC attend que AD DS soit prêt pour charger ses zones intégrées. Si le
+      DC s'interrogeait d'abord lui-même, il pourrait ne pas trouver ses partenaires de réplication pendant
+      ce temps ; s'il n'interrogeait **que** l'autre, il dépendrait entièrement du VPN. Partenaire d'abord,
+      boucle locale ensuite : c'est la recommandation de Microsoft. Après chaque changement, `dcdiag /test:dns`
+      confirme la cohérence.
+    docs:
+      - title: Bonnes pratiques DNS pour les contrôleurs de domaine
+        url: https://learn.microsoft.com/fr-fr/troubleshoot/windows-server/networking/best-practices-dns-client-settings
+    checks:
+      - desc: SRV-DC01 interroge 192.168.20.10 puis 127.0.0.1
+        run: |
+          ((Get-DnsClientServerAddress -InterfaceAlias LAN -AddressFamily IPv4).ServerAddresses -join ',') -eq '192.168.20.10,127.0.0.1'
+      - desc: SRV-DC02 interroge 192.168.10.10 puis 127.0.0.1
+        machine: dc02
+        run: |
+          ((Get-DnsClientServerAddress -InterfaceAlias LAN -AddressFamily IPv4).ServerAddresses -join ',') -eq '192.168.10.10,127.0.0.1'
+    solution: |
+      Set-DnsClientServerAddress -InterfaceAlias LAN -ServerAddresses 192.168.20.10, 127.0.0.1
+      Invoke-Command -ComputerName SRV-DC02 { Set-DnsClientServerAddress -InterfaceAlias LAN -ServerAddresses 192.168.10.10, 127.0.0.1 }
+
+  - id: win-ms-bilan
+    title: Bilan de réplication
+    description: |
+      Force une réplication complète puis enregistre `repadmin /replsummary` dans `C:\Admin\replsummary.txt` :
+      aucun échec ne doit apparaître, ni dans le fichier ni dans `Get-ADReplicationFailure`.
+    hint: repadmin /syncall /AdeP ; repadmin /replsummary > C:\Admin\replsummary.txt ; Get-ADReplicationFailure -Target SRV-DC01, SRV-DC02
+    cours: |
+      ```powershell
+      repadmin /syncall /AdeP
+      repadmin /replsummary | Out-File C:\Admin\replsummary.txt
+      Get-ADReplicationFailure -Target SRV-DC01, SRV-DC02
+      Get-ADReplicationPartnerMetadata -Target durand.lan -Scope Domain | Format-Table Server, Partner, LastReplicationSuccess, LastReplicationResult
+      ```
+
+      Dans `/replsummary`, la colonne *fails/total* doit être à 0 pour chaque DC source et destination, et le
+      *largest delta* rester inférieur à l'intervalle du lien de sites. Une erreur 1722 (serveur RPC
+      indisponible) pointe le réseau ou le pare-feu, 8524 le DNS, 1256 un partenaire injoignable. Ce
+      contrôle, planifié chaque jour, est la base de la supervision d'un annuaire multisite.
+    docs:
+      - title: Get-ADReplicationFailure
+        url: https://learn.microsoft.com/fr-fr/powershell/module/activedirectory/get-adreplicationfailure
+    checks:
+      - desc: replsummary.txt cite les deux DC sans échec
+        run: |
+          $t = Get-Content C:\Admin\replsummary.txt -ErrorAction Stop
+          $lignes = $t | Select-String '^\s*SRV-DC0[12]\s.*?\s(\d+)\s*/\s*\d+\s'
+          @($lignes).Count -ge 2 -and @($lignes | Where-Object { $_.Matches[0].Groups[1].Value -ne '0' }).Count -eq 0
+      - desc: Aucun échec de réplication en cours
+        run: |
+          @(Get-ADReplicationFailure -Target SRV-DC01, SRV-DC02 -ErrorAction Stop | Where-Object FailureCount -gt 0).Count -eq 0
+    solution: |
+      repadmin /syncall /AdeP | Out-Null
+      Start-Sleep 15
+      repadmin /replsummary | Out-File C:\Admin\replsummary.txt

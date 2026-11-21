@@ -1,0 +1,5 @@
+/srv/ps/donnees/facture-001.pdf
+/srv/ps/donnees/facture-002.pdf
+/srv/ps/donnees/contrat-a.docx
+/srv/ps/donnees/contrat-b.docx
+/srv/ps/donnees/planning.xlsx

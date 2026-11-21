@@ -1,0 +1,96 @@
+title: Premières adresses IPv6
+level: debutant
+order: 23
+device: router
+hostname: R-LABO
+tags: [ipv6, link-local, adressage]
+summary: Une adresse globale sur une interface, une simple adresse link-local sur l'autre.
+description: |
+  Premiers pas en IPv6 sur `R-LABO` :
+
+  1. `G0/0` (LAN) reçoit l'adresse globale `2001:db8:cafe:1::1/64` ;
+  2. `G0/1` (lien vers le routeur voisin) n'a besoin que d'une adresse **link-local** :
+     active simplement IPv6 avec `ipv6 enable` ;
+  3. active les deux interfaces.
+
+  Observe ensuite `show ipv6 interface brief` : chaque interface IPv6 possède une adresse en
+  `FE80::`, même sans adresse globale.
+checks:
+  - desc: G0/0 en 2001:db8:cafe:1::1/64
+    expr: ipv6("g0/0", "2001:db8:cafe:1::1/64")
+  - desc: IPv6 activé sur G0/1 (link-local seule)
+    expr: intf("g0/1").ipv6_enabled and not intf("g0/1").ipv6_addresses
+    hint: "interface g0/1 puis ipv6 enable"
+  - desc: Les deux interfaces sont activées
+    expr: not intf("g0/0").shutdown and not intf("g0/1").shutdown
+solution: |
+  configure terminal
+  interface g0/0
+  ipv6 address 2001:db8:cafe:1::1/64
+  no shutdown
+  interface g0/1
+  ipv6 enable
+  no shutdown
+  end
+cours: |
+  ## Lire une adresse IPv6
+
+  Une adresse IPv6 fait **128 bits**, écrite en 8 groupes de 4 chiffres hexadécimaux :
+  `2001:0db8:0000:0042:0000:0000:0000:0001`. Deux règles de simplification :
+
+  1. supprimer les **zéros en tête** de chaque groupe : `2001:db8:0:42:0:0:0:1` ;
+  2. remplacer **une seule** suite de groupes nuls par `::` : `2001:db8:0:42::1`.
+
+  Le préfixe s'écrit comme en IPv4 CIDR : `/64` est la taille standard d'un réseau local
+  (64 bits de réseau, 64 bits d'identifiant d'interface).
+
+  ### Les types d'adresses à connaître
+
+  | Préfixe       | Type                  | Usage                                     |
+  |---------------|-----------------------|-------------------------------------------|
+  | `2000::/3`    | globale (GUA)         | routable sur Internet                     |
+  | `fe80::/10`   | link-local            | limitée au lien, obligatoire sur chaque interface |
+  | `fc00::/7`    | unique locale (ULA)   | équivalent des adresses privées           |
+  | `ff00::/8`    | multicast             | remplace le broadcast (qui n'existe plus) |
+  | `::1/128`     | bouclage              | équivalent de 127.0.0.1                   |
+  | `2001:db8::/32` | documentation       | exemples et formations                    |
+
+  ### Sur IOS
+
+  ```
+  R1(config)# interface g0/2
+  R1(config-if)# ipv6 address 2001:db8:aaaa:7::1/64
+  R1(config-if)# no shutdown
+  R1(config-if)# interface g0/3
+  R1(config-if)# ipv6 enable
+  R1# show ipv6 interface brief
+  GigabitEthernet0/2     [up/up]
+      FE80::2E0:F7FF:FE12:3401
+      2001:DB8:AAAA:7::1
+  GigabitEthernet0/3     [up/up]
+      FE80::2E0:F7FF:FE12:3402
+  ```
+
+  Dès qu'une adresse globale est configurée, IOS crée automatiquement l'adresse **link-local**
+  (dérivée de l'adresse MAC, méthode EUI-64). `ipv6 enable` crée la link-local seule : c'est
+  suffisant sur un lien entre routeurs, car les protocoles de routage IPv6 (OSPFv3, EIGRP pour
+  IPv6) utilisent les adresses link-local comme saut suivant.
+
+  ### Pièges fréquents
+
+  - Utiliser deux fois `::` dans une adresse : c'est ambigu, donc invalide.
+  - Oublier le préfixe : `ipv6 address 2001:db8::1` sans `/64` est refusé.
+  - Croire que configurer des adresses suffit à **router** : il faut aussi
+    `ipv6 unicast-routing` (niveau intermédiaire).
+
+  ### Pour le CCNA
+
+  Abréger et développer une adresse, reconnaître les types d'adresses et savoir qu'une interface
+  IPv6 a toujours une link-local font partie des bases attendues.
+docs:
+  - title: Wikipédia — Adresse IPv6
+    url: https://fr.wikipedia.org/wiki/Adresse_IPv6
+  - title: RFC 4291 — IP Version 6 Addressing Architecture
+    url: https://www.rfc-editor.org/rfc/rfc4291
+  - title: RFC 5952 — Recommandation pour l'écriture des adresses IPv6
+    url: https://www.rfc-editor.org/rfc/rfc5952

@@ -1,0 +1,406 @@
+title: Disques, volumes et stockage
+level: debutant
+order: 6
+tags: [windows, windows server, disques, partitions, volumes, ntfs, diskpart, quotas, stockage]
+summary: Installer de nouveaux disques sur un serveur - initialisation GPT/MBR, volumes NTFS, extension, points de montage, compression, quotas et vérification.
+vagrant: bundled
+description: |
+  **Contexte.** Le serveur `SRV01` d'*Ateliers Durand* manque de place. Le prestataire a ajouté trois
+  disques : un de **2 Go** pour les données, un de **1,5 Go** pour les archives, et le disque des
+  journaux (**1 Go**) dont le volume `L:` est plein alors que la moitié du disque est libre. À toi de
+  les mettre en service proprement.
+
+  **Machine.** Une VM Windows Server 2022 (2 Go de RAM). Les trois disques sont des **disques virtuels
+  VHDX** (`C:\VHD`) branchés dans Windows : pour lui, ce sont des disques comme les autres (*Msft
+  Virtual Disk*). Ne les détache pas.
+
+  Outils : *Gestion des disques* (`diskmgmt.msc`), `diskpart`, et les cmdlets `Get-Disk`,
+  `Initialize-Disk`, `New-Partition`, `Format-Volume`, `Resize-Partition`, `Get-Volume`.
+
+  ⚠️ Identifie toujours un disque **par sa taille ou son numéro vérifié** avant d'agir : sur un vrai
+  serveur, initialiser le mauvais disque efface des données.
+cours: |
+  ## Du disque au volume
+
+  ```
+  Disque physique (ou virtuel)   Get-Disk          diskmgmt.msc : « Disque 1 »
+   └─ table de partitions         GPT ou MBR        Initialize-Disk
+       └─ partition               New-Partition     taille, lettre, chemin d'accès
+           └─ volume formaté      Format-Volume     NTFS / ReFS, nom, taille d'unité d'allocation
+               └─ lettre (F:) ou dossier de montage (C:\Partages\Archives)
+  ```
+
+  Un disque neuf est **RAW** (non initialisé) : Windows ne peut rien y écrire. On l'**initialise** en
+  choisissant le style de partitionnement :
+
+  | | MBR | GPT |
+  |---|---|---|
+  | Taille maximale | 2 To | 18 Eo (en pratique, illimitée) |
+  | Partitions | 4 principales (ou étendue + logiques) | 128 |
+  | Démarrage | BIOS | UEFI |
+  | Robustesse | une seule table | table en double + CRC |
+
+  **GPT** est le choix par défaut aujourd'hui ; MBR reste pour la compatibilité (vieux systèmes, clés USB).
+
+  ## PowerShell, diskpart et graphique
+
+  ```powershell
+  Get-Disk | Format-Table Number, FriendlyName, Size, PartitionStyle, OperationalStatus
+  Initialize-Disk -Number 1 -PartitionStyle GPT
+  New-Partition -DiskNumber 1 -UseMaximumSize -DriveLetter F |
+    Format-Volume -FileSystem NTFS -NewFileSystemLabel DONNEES -Confirm:$false
+  Resize-Partition -DriveLetter L -Size (Get-PartitionSupportedSize -DriveLetter L).SizeMax
+  ```
+
+  `diskpart` (interactif : `list disk`, `select disk 1`, `create partition primary`, `format fs=ntfs
+  quick label=DONNEES`, `assign letter=F`, `extend`) reste indispensable en WinPE ou sur Server Core.
+  Dans `diskmgmt.msc`, tout se fait au clic droit (Initialiser, Nouveau volume simple, Étendre...).
+
+  ## Systèmes de fichiers
+
+  - **NTFS** : droits (ACL), compression, chiffrement EFS, quotas, clichés instantanés. Le standard.
+  - **ReFS** : résilient, pour les gros volumes de données (Hyper-V, sauvegardes) ; pas de compression
+    NTFS ni de quotas NTFS, et pas de démarrage dessus.
+  - **FAT32 / exFAT** : supports amovibles.
+
+  La **taille d'unité d'allocation** (cluster) : 4 Ko par défaut ; 64 Ko pour les gros fichiers (bases
+  SQL, vidéos, sauvegardes) — mais la compression NTFS n'est possible qu'avec des clusters ≤ 4 Ko.
+
+  ## Étendre, monter, compresser, limiter
+
+  - **Étendre** un volume n'est possible que vers de l'espace libre **contigu** situé **après** lui
+    (sinon : déplacer des partitions avec un outil tiers, ou ajouter un disque).
+  - Un **point de montage** (dossier vide NTFS) donne accès à un volume sans lettre :
+    `Add-PartitionAccessPath -DriveLetter G -AccessPath C:\Partages\Archives`.
+  - La **compression NTFS** (`compact /c /s`) économise de la place pour des données rarement lues, au prix
+    d'un peu de CPU.
+  - Les **quotas NTFS** limitent l'espace occupé **par utilisateur** sur un volume (`fsutil quota`,
+    onglet *Quota* des propriétés). Sur un serveur de fichiers, on préfère les quotas **FSRM** par dossier
+    (lab intermédiaire).
+
+  ## Santé des volumes
+
+  `Repair-Volume -DriveLetter F -Scan` (ou `chkdsk F:`) vérifie le système de fichiers en ligne ;
+  `-SpotFix` corrige en quelques secondes ce que le scan a trouvé. `Get-PhysicalDisk` et
+  `Get-StorageReliabilityCounter` donnent l'état SMART des vrais disques.
+
+  ## Pièges courants
+
+  - Initialiser ou formater le mauvais disque : vérifie `Number`, `Size` et `FriendlyName`.
+  - Un disque *Offline* (stratégie SAN de Windows Server) : `Set-Disk -Number 1 -IsOffline $false`.
+  - Oublier `-Confirm:$false` dans un script : `Format-Volume` attend une réponse.
+  - Vouloir étendre `C:` alors qu'une partition de récupération est placée juste après.
+docs:
+  - title: Module Storage (Get-Disk, New-Partition, Format-Volume...)
+    url: https://learn.microsoft.com/fr-fr/powershell/module/storage/
+  - title: diskpart (commandes Windows)
+    url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/diskpart
+  - title: Vue d'ensemble de ReFS (Resilient File System)
+    url: https://learn.microsoft.com/fr-fr/windows-server/storage/refs/refs-overview
+exercises:
+  - id: win-dsk-inventaire
+    title: Inventaire des disques
+    description: |
+      Avant toute chose, fais l'inventaire. Enregistre dans `C:\Admin\disques.csv` (séparateur `;`) la liste
+      de **tous** les disques avec les colonnes `Numero`, `Modele` (FriendlyName), `TailleGo` (taille en Go,
+      arrondie à 1 décimale), `Style` (PartitionStyle) et `Etat` (OperationalStatus).
+    hint: Get-Disk | Select-Object @{n='Numero';e={$_.Number}}, @{n='Modele';e={$_.FriendlyName}}, @{n='TailleGo';e={[math]::Round($_.Size/1GB,1)}}, @{n='Style';e={$_.PartitionStyle}}, @{n='Etat';e={$_.OperationalStatus}} | Export-Csv ...
+    cours: |
+      `Get-Disk` liste les disques vus par Windows : numéro (celui de `diskpart` et de `diskmgmt.msc`),
+      modèle, taille, style de partitionnement (`RAW` = non initialisé, `MBR`, `GPT`), état
+      (`Online`/`Offline`), `IsBoot`, `IsSystem`.
+
+      ```powershell
+      Get-Disk | Format-Table Number, FriendlyName, @{ n = 'Go'; e = { [math]::Round($_.Size / 1GB, 1) } }, PartitionStyle, OperationalStatus
+      Get-Partition ; Get-Volume
+      ```
+
+      Les trois disques ajoutés apparaissent en *Msft Virtual Disk*. Repère le disque système (`IsSystem`)
+      pour ne jamais le toucher par erreur, et les deux disques `RAW`. Dans `diskmgmt.msc`, un disque RAW
+      déclenche d'ailleurs l'assistant d'initialisation dès l'ouverture.
+    ci: true
+    checks:
+      - desc: Le CSV a les colonnes Numero, Modele, TailleGo, Style, Etat
+        run: |
+          $c = @(Import-Csv C:\Admin\disques.csv -Delimiter ';')
+          ($c[0].PSObject.Properties.Name -join ',') -eq 'Numero,Modele,TailleGo,Style,Etat'
+      - desc: Il liste tous les disques, dont celui de 2 Go en RAW
+        run: |
+          $c = @(Import-Csv C:\Admin\disques.csv -Delimiter ';')
+          $d = Get-Disk | Where-Object Size -eq 2GB
+          $c.Count -eq @(Get-Disk).Count -and [bool]($c | Where-Object { $_.Numero -eq "$($d.Number)" -and ($_.TailleGo -replace ',', '.') -eq '2' })
+    solution: |
+      Get-Disk | Select-Object @{ n = 'Numero'; e = { $_.Number } }, @{ n = 'Modele'; e = { $_.FriendlyName } },
+        @{ n = 'TailleGo'; e = { [math]::Round($_.Size / 1GB, 1) } }, @{ n = 'Style'; e = { $_.PartitionStyle } },
+        @{ n = 'Etat'; e = { $_.OperationalStatus } } | Export-Csv C:\Admin\disques.csv -Delimiter ';' -NoTypeInformation
+
+  - id: win-dsk-initialiser
+    title: Initialiser le disque de données
+    description: |
+      Initialise le disque de **2 Go** (et lui seul) en **GPT**.
+    hint: $d = Get-Disk | Where-Object Size -eq 2GB ; Initialize-Disk -Number $d.Number -PartitionStyle GPT
+    cours: |
+      L'initialisation écrit la table de partitions. Avec GPT, Windows crée aussi une petite partition
+      réservée (MSR, 16 Mo) invisible dans l'explorateur.
+
+      ```powershell
+      $d = Get-Disk | Where-Object { $_.Size -eq 2GB -and $_.PartitionStyle -eq 'RAW' }
+      $d          # toujours vérifier avant d'agir !
+      Initialize-Disk -Number $d.Number -PartitionStyle GPT
+      ```
+
+      Sélectionner le disque par une propriété sûre (taille, numéro de série, `UniqueId`) plutôt que par
+      son numéro « de mémoire » évite la catastrophe : les numéros peuvent changer d'un démarrage à l'autre.
+      Si le disque est hors ligne : `Set-Disk -Number $d.Number -IsOffline $false`. Avec diskpart :
+      `select disk 2`, `online disk`, `convert gpt`.
+    ci: true
+    checks:
+      - desc: Le disque de 2 Go est en GPT
+        run: |
+          (Get-Disk | Where-Object Size -eq 2GB).PartitionStyle -eq 'GPT'
+      - desc: Le disque de 1,5 Go n'a pas été touché (toujours RAW)
+        run: |
+          (Get-Disk | Where-Object Size -eq 2GB).PartitionStyle -eq 'GPT' -and (Get-Disk | Where-Object Size -eq 1536MB).PartitionStyle -eq 'RAW'
+    solution: |
+      $d = Get-Disk | Where-Object Size -eq 2GB
+      Initialize-Disk -Number $d.Number -PartitionStyle GPT
+
+  - id: win-dsk-volume-donnees
+    title: Volume DONNEES
+    description: |
+      Sur le disque de 2 Go, crée une partition qui occupe **tout l'espace**, avec la lettre **F:**, formatée
+      en **NTFS** avec le nom de volume **DONNEES**.
+    hint: New-Partition -DiskNumber $d.Number -UseMaximumSize -DriveLetter F | Format-Volume -FileSystem NTFS -NewFileSystemLabel DONNEES -Confirm:$false
+    cours: |
+      `New-Partition` crée la partition (taille fixe avec `-Size 10GB`, ou `-UseMaximumSize`) et lui donne
+      une lettre (`-DriveLetter F` ou `-AssignDriveLetter` pour la première libre). On enchaîne
+      `Format-Volume` par le pipeline :
+
+      ```powershell
+      New-Partition -DiskNumber 2 -UseMaximumSize -DriveLetter F |
+        Format-Volume -FileSystem NTFS -NewFileSystemLabel DONNEES -Confirm:$false
+      ```
+
+      Le formatage est **rapide** par défaut (seule la structure est écrite) ; `-Full` vérifie chaque
+      secteur (long, utile sur un disque douteux). Les noms de volume en majuscules sans espace restent
+      lisibles partout. Le résultat se contrôle avec `Get-Volume F`.
+    ci: true
+    checks:
+      - desc: 'F: est un volume NTFS nommé DONNEES'
+        run: |
+          $v = Get-Volume -DriveLetter F
+          $v.FileSystem -eq 'NTFS' -and $v.FileSystemLabel -eq 'DONNEES'
+      - desc: 'F: est sur le disque de 2 Go et en occupe la quasi-totalité'
+        run: |
+          $p = Get-Partition -DriveLetter F
+          $d = Get-Disk -Number $p.DiskNumber
+          $d.Size -eq 2GB -and $p.Size -gt 1.9GB
+    solution: |
+      $d = Get-Disk | Where-Object Size -eq 2GB
+      New-Partition -DiskNumber $d.Number -UseMaximumSize -DriveLetter F |
+        Format-Volume -FileSystem NTFS -NewFileSystemLabel DONNEES -Confirm:$false | Out-Null
+
+  - id: win-dsk-archives
+    title: Disque des archives en MBR et clusters de 64 Ko
+    description: |
+      Le disque de **1,5 Go** recevra de gros fichiers d'archives. Initialise-le en **MBR** (il pourra être
+      relu par le vieux serveur de secours), crée une partition sur tout l'espace avec la lettre **G:**,
+      formatée en **NTFS**, nom **ARCHIVES**, avec une **taille d'unité d'allocation de 64 Ko**.
+    hint: Initialize-Disk -Number $d.Number -PartitionStyle MBR ; New-Partition ... -DriveLetter G | Format-Volume -FileSystem NTFS -NewFileSystemLabel ARCHIVES -AllocationUnitSize 65536 -Confirm:$false
+    cours: |
+      La **taille d'unité d'allocation** (cluster) est la plus petite quantité de disque attribuée à un
+      fichier. Avec 64 Ko, un fichier de 1 Ko occupe 64 Ko sur le disque, mais les gros fichiers sont moins
+      fragmentés et les lectures séquentielles plus rapides : c'est la recommandation pour les données de
+      SQL Server, d'Hyper-V ou des sauvegardes.
+
+      ```powershell
+      Format-Volume -DriveLetter G -FileSystem NTFS -NewFileSystemLabel ARCHIVES -AllocationUnitSize 65536 -Confirm:$false
+      fsutil fsinfo ntfsinfo G:          # « Bytes Per Cluster »
+      ```
+
+      Contrepartie : la compression NTFS est impossible avec des clusters de plus de 4 Ko. Et la taille de
+      cluster ne se change qu'en reformatant.
+    ci: true
+    checks:
+      - desc: Le disque de 1,5 Go est en MBR
+        run: |
+          (Get-Disk | Where-Object Size -eq 1536MB).PartitionStyle -eq 'MBR'
+      - desc: 'G: est un volume NTFS ARCHIVES avec des clusters de 64 Ko'
+        run: |
+          $v = Get-Volume -DriveLetter G
+          $v.FileSystem -eq 'NTFS' -and $v.FileSystemLabel -eq 'ARCHIVES' -and $v.AllocationUnitSize -eq 65536
+    solution: |
+      $d = Get-Disk | Where-Object Size -eq 1536MB
+      Initialize-Disk -Number $d.Number -PartitionStyle MBR
+      New-Partition -DiskNumber $d.Number -UseMaximumSize -DriveLetter G |
+        Format-Volume -FileSystem NTFS -NewFileSystemLabel ARCHIVES -AllocationUnitSize 65536 -Confirm:$false | Out-Null
+
+  - id: win-dsk-etendre
+    title: Le volume des journaux est plein
+    description: |
+      Alerte de supervision : `L:` (LOGS) est plein à plus de 90 %. Pourtant son disque de 1 Go est à moitié
+      vide. **Étends** le volume `L:` à **tout l'espace disponible** sur son disque, sans perdre les données.
+    hint: Resize-Partition -DriveLetter L -Size (Get-PartitionSupportedSize -DriveLetter L).SizeMax
+    cours: |
+      Un volume NTFS s'étend **à chaud**, sans démontage ni perte de données, à condition que l'espace libre
+      soit **contigu** et **après** la partition :
+
+      ```powershell
+      Get-PartitionSupportedSize -DriveLetter L          # SizeMin / SizeMax possibles
+      Resize-Partition -DriveLetter L -Size (Get-PartitionSupportedSize -DriveLetter L).SizeMax
+      ```
+
+      Avec diskpart : `select volume L` puis `extend`. Graphique : clic droit › *Étendre le volume*.
+      L'opération inverse (`Resize-Partition` plus petit, *Réduire le volume*) est possible aussi, dans la
+      limite des fichiers non déplaçables.
+
+      Dans une VM, on agrandit d'abord le disque virtuel (VirtualBox, Hyper-V, VMware), puis on étend la
+      partition dans Windows : c'est le ticket le plus fréquent sur les serveurs virtualisés.
+    ci: true
+    checks:
+      - desc: 'L: occupe tout l''espace possible de son disque'
+        run: |
+          $max = (Get-PartitionSupportedSize -DriveLetter L).SizeMax
+          (Get-Partition -DriveLetter L).Size -ge ($max - 1MB) -and (Get-Partition -DriveLetter L).Size -gt 900MB
+      - desc: Les données sont toujours là
+        run: |
+          (Get-Item L:\journaux-applicatifs.bak).Length -eq 450000000 -and (Get-Volume -DriveLetter L).FileSystemLabel -eq 'LOGS'
+    solution: |
+      Resize-Partition -DriveLetter L -Size (Get-PartitionSupportedSize -DriveLetter L).SizeMax
+
+  - id: win-dsk-montage
+    title: Point de montage pour les archives
+    description: |
+      Les utilisateurs du partage `C:\Partages` doivent retrouver les archives dans le dossier
+      `C:\Partages\Archives`. Monte le volume **ARCHIVES** (G:) **aussi** dans ce dossier (point de montage
+      NTFS), en gardant la lettre G:.
+    hint: New-Item C:\Partages\Archives -ItemType Directory ; Add-PartitionAccessPath -DriveLetter G -AccessPath C:\Partages\Archives
+    cours: |
+      Un volume peut être accessible par une lettre **et/ou** par un ou plusieurs **dossiers vides** d'un
+      volume NTFS. C'est pratique pour dépasser les 26 lettres, ou pour agrandir une arborescence existante
+      sans changer les chemins utilisés par les utilisateurs et les applications.
+
+      ```powershell
+      New-Item C:\Partages\Archives -ItemType Directory
+      Add-PartitionAccessPath -DriveLetter G -AccessPath C:\Partages\Archives
+      (Get-Partition -DriveLetter G).AccessPaths
+      ```
+
+      Dans l'explorateur, le dossier apparaît avec une icône de disque. Attention aux sauvegardes et aux
+      scripts récursifs : un `robocopy` ou un `Get-ChildItem -Recurse` sur `C:\` traverse aussi le volume
+      monté. Avec diskpart : `select volume G` puis `assign mount=C:\Partages\Archives`.
+    ci: true
+    checks:
+      - desc: 'Le volume G: est monté dans C:\Partages\Archives'
+        run: |
+          (Get-Partition -DriveLetter G).AccessPaths -contains 'C:\Partages\Archives\'
+    solution: |
+      New-Item C:\Partages\Archives -ItemType Directory -Force | Out-Null
+      Add-PartitionAccessPath -DriveLetter G -AccessPath C:\Partages\Archives
+
+  - id: win-dsk-compression
+    title: Compresser les vieux scans
+    description: |
+      Crée le dossier `F:\Scans-2019` et active la **compression NTFS** sur ce dossier et tout ce qu'il
+      contiendra (les fichiers ajoutés ensuite doivent être compressés automatiquement). Vérifie avec un
+      fichier test.
+    hint: New-Item F:\Scans-2019 -ItemType Directory ; compact.exe /c /s:F:\Scans-2019
+    cours: |
+      La compression NTFS est transparente : les applications lisent et écrivent normalement, Windows
+      compresse et décompresse à la volée. Activée sur un **dossier**, elle s'applique aux fichiers créés
+      ensuite dans ce dossier.
+
+      ```
+      compact /c /s:F:\Scans-2019        # compresse le dossier et son contenu, marque le dossier
+      compact /q /s:F:\Scans-2019        # résumé du taux de compression
+      compact /u /s:F:\Scans-2019        # décompresser
+      ```
+
+      Graphique : propriétés du dossier › *Avancé* › « Compresser le contenu pour libérer de l'espace
+      disque » (le nom s'affiche en bleu). À réserver aux données peu consultées et compressibles (texte,
+      bureautique, images non compressées) : les PDF, ZIP ou JPEG ne gagnent presque rien. Impossible sur un
+      volume en clusters de plus de 4 Ko, comme G:.
+    ci: true
+    checks:
+      - desc: Le dossier F:\Scans-2019 a l'attribut Compressé
+        run: |
+          (Get-Item F:\Scans-2019).Attributes.HasFlag([IO.FileAttributes]::Compressed)
+      - desc: Un nouveau fichier y est compressé automatiquement
+        run: |
+          Set-Content F:\Scans-2019\test-tdm.txt ('scan ' * 2000)
+          $ok = (Get-Item F:\Scans-2019\test-tdm.txt).Attributes.HasFlag([IO.FileAttributes]::Compressed)
+          Remove-Item F:\Scans-2019\test-tdm.txt
+          $ok
+    solution: |
+      New-Item F:\Scans-2019 -ItemType Directory -Force | Out-Null
+      compact.exe /c /s:F:\Scans-2019 | Out-Null
+
+  - id: win-dsk-quota
+    title: Quotas de disque sur DONNEES
+    description: |
+      Sur `F:`, active les **quotas NTFS** en mode **appliqué** (refuser l'espace au-delà de la limite), puis
+      fixe pour `mdupont` un **seuil d'avertissement de 400 Mo** (419430400 octets) et une **limite de
+      500 Mo** (524288000 octets).
+    hint: 'fsutil quota enforce F: ; fsutil quota modify F: 419430400 524288000 SRV01\mdupont   (le nom de la machine : $env:COMPUTERNAME)'
+    cours: |
+      Les **quotas NTFS** comptent l'espace occupé par chaque **propriétaire** de fichiers sur un volume.
+      Deux modes : *suivi* (on journalise les dépassements) ou *appliqué* (Windows refuse d'écrire au-delà
+      de la limite, « espace disque insuffisant »).
+
+      ```
+      fsutil quota enforce F:
+      fsutil quota modify F: 419430400 524288000 SRV01\mdupont     (seuil puis limite, en octets)
+      fsutil quota query F:
+      ```
+
+      Graphique : propriétés de F: › onglet *Quota* › *Entrées de quota*. Limites : les quotas NTFS portent
+      sur **tout le volume** et sur le **propriétaire** des fichiers (un fichier copié par un administrateur
+      pour quelqu'un compte pour l'administrateur). Les quotas **FSRM** (par dossier, avec modèles et alertes
+      par courriel) sont plus souples : c'est ce qu'on utilise sur un serveur de fichiers moderne.
+    ci: true
+    checks:
+      - desc: 'Les quotas de F: sont suivis et appliqués'
+        run: |
+          $q = (fsutil.exe quota query F:) -join "`n"
+          $LASTEXITCODE -eq 0 -and $q -match 'enforced'
+      - desc: mdupont a un seuil de 400 Mo et une limite de 500 Mo
+        run: |
+          $q = (fsutil.exe quota query F:) -join "`n"
+          $bloc = ($q -split '(?=SID Name)') | Where-Object { $_ -match '\\mdupont' }
+          [bool]$bloc -and $bloc -match 'Quota Threshold\s*=\s*(419430400|0x0*19000000)\b' -and $bloc -match 'Quota Limit\s*=\s*(524288000|0x0*1f400000)\b'
+    solution: |
+      fsutil.exe quota enforce F:
+      fsutil.exe quota modify F: 419430400 524288000 "$env:COMPUTERNAME\mdupont"
+
+  - id: win-dsk-verifier
+    title: Vérifier les volumes
+    description: |
+      Avant de livrer, vérifie le système de fichiers des volumes **F:**, **G:** et **L:** avec
+      `Repair-Volume -Scan` et enregistre le résultat dans `C:\Admin\verification.txt`, une ligne par volume
+      au format `F=NoErrorsFound`.
+    hint: foreach ($l in 'F','G','L') { "$l=$(Repair-Volume -DriveLetter $l -Scan)" } | Set-Content C:\Admin\verification.txt
+    cours: |
+      `Repair-Volume` est le successeur de `chkdsk` :
+
+      ```powershell
+      Repair-Volume -DriveLetter F -Scan       # analyse en ligne, sans démonter : NoErrorsFound, ScanNeeded...
+      Repair-Volume -DriveLetter F -SpotFix    # corrige les erreurs trouvées (démontage de quelques secondes)
+      chkdsk F: /scan                          # équivalent historique
+      ```
+
+      NTFS se surveille lui-même : quand il détecte une corruption, il l'inscrit dans le journal et
+      `Get-Volume` passe `HealthStatus` à `Warning`. Sur `C:`, une réparation complète se planifie au
+      prochain démarrage (`chkdsk C: /f`).
+
+      Pour les disques physiques : `Get-PhysicalDisk | Select-Object FriendlyName, HealthStatus` et les
+      compteurs SMART (`Get-StorageReliabilityCounter`). Un disque qui accumule les secteurs réalloués se
+      remplace avant qu'il ne lâche.
+    ci: true
+    checks:
+      - desc: Le fichier donne le résultat des trois volumes
+        run: |
+          $l = Get-Content C:\Admin\verification.txt | ForEach-Object { $_.Trim() }
+          $l -contains 'F=NoErrorsFound' -and $l -contains 'G=NoErrorsFound' -and $l -contains 'L=NoErrorsFound'
+    solution: |
+      $r = foreach ($l in 'F', 'G', 'L') { "$l=$(Repair-Volume -DriveLetter $l -Scan)" }
+      Set-Content C:\Admin\verification.txt $r

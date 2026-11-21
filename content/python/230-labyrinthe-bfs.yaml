@@ -1,0 +1,213 @@
+title: Sortir du labyrinthe
+level: avance
+order: 30
+tags: [graphes, bfs, grilles, stdin]
+summary: Parcours en largeur sur une grille lue au clavier.
+mode: stdio
+description: |
+  Ton programme lit un labyrinthe sur l'entrée standard :
+
+  - première ligne : le nombre de lignes `L` et de colonnes `C` ;
+  - puis `L` lignes de `C` caractères : `S` (départ, toujours présent), `E` (sortie, éventuellement
+    absente), `#` (mur) et `.` (case libre).
+
+  On se déplace d'une case à la fois, en haut, en bas, à gauche ou à droite, sans traverser les murs
+  ni sortir de la grille. Affiche :
+
+  ```
+  distance: <nombre minimal de déplacements de S à E, ou impossible>
+  accessibles: <nombre de cases atteignables depuis S, S compris>
+  ```
+
+  Exemple :
+
+  ```
+  5 7
+  S.#....
+  ..#.##.
+  .##..#.
+  ....#E.
+  #......
+  ```
+
+  donne `distance: 10` et `accessibles: 26`.
+
+  Un parcours en **largeur** (BFS, avec `collections.deque`) trouve toujours le plus court chemin dans
+  une grille où chaque déplacement coûte 1. La moulinette teste aussi une grille de 60 × 80.
+starter: |
+  from collections import deque
+
+  lignes, colonnes = map(int, input().split())
+  grille = [input() for _ in range(lignes)]
+cases:
+  - name: Exemple de l'énoncé
+    input: |
+      5 7
+      S.#....
+      ..#.##.
+      .##..#.
+      ....#E.
+      #......
+    output: |
+      distance: 10
+      accessibles: 26
+  - name: Sortie inaccessible
+    input: |
+      3 5
+      S.#..
+      ..#.E
+      ..#..
+    output: |
+      distance: impossible
+      accessibles: 6
+  - name: Sortie juste à côté
+    input: |
+      1 2
+      SE
+    output: |
+      distance: 1
+      accessibles: 2
+  - name: Sans sortie
+    input: |
+      2 3
+      .S#
+      ##.
+    output: |
+      distance: impossible
+      accessibles: 2
+  - name: Grande grille 60 x 80
+    input: |
+      60 80
+      S...##........#.#.....##.....#.......#......#.....#....####..#...#..............
+      ..##......#.........#........##.#...##..#.#.....#......##....#........###.#...#.
+      ...#...#.....#.#.#....#..#....#....#..#......#....#.........#...#...#.#.##.#...#
+      ..#...##....####..........#............#....#.......#.##...#...#.##.....####.#..
+      ......#....#..........#..#......#.#.......#..#..##........#.#..##..#....#.#.....
+      ..#.#.#....#..##.#.........#.....#.#...#.......#.#......#..##....#.#..#...#.....
+      .....#....#.#.......###.###.#.#..##.#..#.....##.#........#..#.#.#.##..##.#......
+      #.....#..##....#.#.#....#.........#...#..#.#..##...####...##....#..###...#.##...
+      .##.##..........#..##..##.#..#......#....#.........#......###.#.......#.###.#..#
+      .#...................#..#.##.#..#...#.###.##..###...##.#.....#...........##.##.#
+      .#......#...##.#.##...#.##..#.........##..........#.#...........#.....##...#..#.
+      #.#..#.#...#....#.##......##...........#.#.##.....#.#................#..........
+      ###....######.......##.#.##.....#.#..#....#....#.....#....#...#...............#.
+      #.....#........#...........#..........#........#.#...####....#....#.#...#...#..#
+      ........#..#.#..........#..#...##.#.#...##.#.#.....##.....#................#....
+      ##..#...........#.#..#.....#.....#..#...........#....#...####...#..............#
+      ..#....#......#####.#...##...##.........#.##.#...#.#...#......#..#....#.#..#.###
+      #..#....#.#.....#.....####..#..####.#.#.#..#..#.....#.....#.#.#....#...#........
+      .#.#...#......#.##....##.....##...#..#.##.###......##.#...###.###..#..........#.
+      #..##..####.....##....#..#..##..#....#..#.#........#.#..#.#.#..#.#.......##..##.
+      ..###..........#.#....#...#.....#..#...##......#..###...#..#...#...###.......#..
+      ....#.#...##....#...##....#..##.....#.##.#...###....###....##.........#.#..####.
+      ....#.##.#....#.#..##.#...##.#.....##.#...#.......#......#.#..#............##...
+      ....##...#.##...............##.#.#........#.#.#.........#....#...#..#....#...#.#
+      #...###...........#.#...#....#.#...#.......#..#..##..#..#..##.....#...#...#.....
+      .#...........#...#.#..#....#.######..#........##...#...#......#.#.#.......#.###.
+      ......##.#.###.#.......#.....#......#...#.##.#.....#...#.......#.#........#..#..
+      ......##...#.#...#.##.#....#..#..#..##.................#....##...#..#.#..#...##.
+      ........###.#.####.#..##....#.#.#..........#..#....###.#...##.#..#....#.........
+      .#..#....#.....#...#.......#..##.#..#.##....###.........##.............#.#.#.#.#
+      .#....#...##.#.#...........#..###....#.#............#.....##.#.......#.......#.#
+      .#.............#.#..###....####........#..#.###.#..###..........##.#.#..#.#...##
+      .#.....##.#.##.#..#..####....##....###.#..#..#...##..#....##..........#..#.#....
+      ..#....#..........#..#..##.....#.##..#..#...........##.#.##........#.###..#..#..
+      ...#.....##..##..####.......#.#..#.#..#.#.#.#....#..#.#.....#..####.#.###.#..##.
+      ..#............#..##..#......#.#..###......#...##.#.###..##.......#.....#.....##
+      ........#.#.#.......#......#...#..#..#.#.....#.....#..#..#...#.......#..##....##
+      ...#.###.#.#.............#.....###..............##..#......#.##......#..#..#..##
+      ..##..#..#..#...............#.##..###...##...#.####...#.##.........#............
+      .##.....##.........#.####......#...#..#.#....#....#....#....###...###...#.......
+      .#.#.#..#.......#.#.#..#.#.....#..##..#.#..##.#...#..##......#....#.#....###.###
+      ....#...#.......#.#..##...#.#...#.#..#...#..#.#.......#.#.....#...###.....#..#.#
+      .#.#......#........#.#.##....#..##.....#....#.##...........##..##..#....#.#..#.#
+      #.#.#......................#.#.....#..#.#.....#..###...#..#.....##.###.........#
+      .##.......................#.#...##....#.....#.#.........#.##..........#....#..#.
+      ......#......#.#.#..#.......#.#..#.........#.##.#.#.#...#..#...........#...##.##
+      ..#..#.##......#.##....#...........#.###...#....#..###.#.#..#..#......#......#..
+      ###.....#......#.#.#.###..#.##.......##..#...#.##......#.#.....#.#..........#...
+      .#...........#....#...#..........#.....#...#........#.#....#....#.#..........#..
+      .#...#.................##......##....#.###.#....#...#..##.##.#.......#..##...#.#
+      #..##......#.......###........#......#..#.......##.##..#...#.........###.#..#.#.
+      #..##....##.#.#.##.##....##......#.#...######..........#...#....#......#....#.#.
+      ....###.#...##...#....##...####..#..###...##..##...#........###.....#..#.....#..
+      .#..#.#......#.##....###......#.#..#......#.....#..........#.............#......
+      .#..#....#.....#...##....#.#.........##.##....#.##..........#...#...##.##....#..
+      .......####.......#.#.#..#.......#.......#..........##....#...........#..#..#...
+      ..........#..#...##...##.....###..........#....#....##.#....#..#.#...##.#...#...
+      ..#....#..#.##.##.......#.#...#.....#.....#.##..##.#..##.....#....##.#..........
+      #..##....#...#..###.#.##.#......##....#.........#...#.##....##..........##.###..
+      ##..#...#........#.#.....#..#.#...#..#..#....#.##.#......#..#...#..#.#####.....E
+    output: |
+      distance: 138
+      accessibles: 3407
+solution: |
+  from collections import deque
+
+  lignes, colonnes = map(int, input().split())
+  grille = [input() for _ in range(lignes)]
+
+  depart = next((l, c) for l in range(lignes) for c in range(colonnes) if grille[l][c] == "S")
+  distances = {depart: 0}
+  file = deque([depart])
+  while file:
+      l, c = file.popleft()
+      for dl, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+          nl, nc = l + dl, c + dc
+          if 0 <= nl < lignes and 0 <= nc < colonnes and grille[nl][nc] != "#" and (nl, nc) not in distances:
+              distances[(nl, nc)] = distances[(l, c)] + 1
+              file.append((nl, nc))
+
+  arrivee = next(((l, c) for l in range(lignes) for c in range(colonnes) if grille[l][c] == "E"), None)
+  print(f"distance: {distances[arrivee] if arrivee in distances else 'impossible'}")
+  print(f"accessibles: {len(distances)}")
+cours: |
+  ## Une grille est un graphe
+
+  Chaque case libre est un sommet, et deux cases adjacentes (haut, bas, gauche, droite) sont
+  reliées par une arête. Inutile de construire le graphe explicitement : on calcule les
+  voisins à la volée.
+
+  ```python
+  DIRECTIONS = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+  for dl, dc in DIRECTIONS:
+      nl, nc = l + dl, c + dc
+      if 0 <= nl < nb_lignes and 0 <= nc < nb_colonnes and grille[nl][nc] != "#":
+          ...
+  ```
+
+  Le test des bornes **avant** l'accès à `grille[nl][nc]` est essentiel ; et attention : en
+  Python, `grille[-1]` ne lève pas d'erreur, il renvoie la dernière ligne ! Un oubli de test
+  sur les indices négatifs crée des passages « à travers les bords ».
+
+  ## BFS et distances
+
+  Dans un graphe où chaque pas coûte 1, le parcours en largeur découvre les cases par
+  distance croissante. On stocke la distance de chaque case découverte (dictionnaire ou
+  tableau 2D initialisé à `-1`) : `dist[voisin] = dist[case] + 1`. La première fois qu'on
+  atteint la sortie, sa distance est minimale. Le même tableau sert de marqueur « déjà vu ».
+
+  ## Compter les cases accessibles
+
+  Si on poursuit le BFS jusqu'à épuisement de la file (sans s'arrêter à la sortie), le nombre
+  de cases découvertes est le nombre de cases accessibles : un seul parcours répond aux deux
+  questions.
+
+  ## Lecture de la grille
+
+  Lis les dimensions sur la première ligne, puis les lignes de la grille. Repère la position
+  de `S` (et de `E`) en parcourant la grille avec `enumerate`.
+
+  ## Complexité
+
+  O(L × C) : chaque case entre au plus une fois dans la file. Une grille de 60 × 80 (4 800
+  cases) est traitée instantanément ; un DFS récursif risquerait en revanche de dépasser la
+  limite de récursion, et ne donnerait pas le plus court chemin.
+
+  Applications : jeux vidéo, robots, routage dans une grille de circuits, propagation (« pot
+  de peinture » des logiciels de dessin).
+docs:
+  - title: collections.deque
+    url: https://docs.python.org/fr/3/library/collections.html#collections.deque
+  - title: Wikipédia — Algorithme de parcours en largeur
+    url: https://fr.wikipedia.org/wiki/Algorithme_de_parcours_en_largeur

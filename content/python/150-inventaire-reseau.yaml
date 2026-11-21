@@ -1,0 +1,191 @@
+title: Inventaire réseau et conflits d'adresses
+level: intermediaire
+order: 50
+tags: [projet, dictionnaires, ensembles, réseau, stdin]
+summary: Mini-projet — regrouper un inventaire par VLAN et détecter les conflits.
+mode: stdio
+description: |
+  Ton programme lit un inventaire sur l'entrée standard, jusqu'à la fin. Chaque ligne utile
+  a la forme :
+
+  ```
+  nom_machine adresse_ip vlan
+  ```
+
+  - les lignes vides et celles commençant par `#` sont ignorées ;
+  - une ligne qui n'a pas exactement 3 champs, dont le VLAN n'est pas un entier entre 1 et
+    4094, ou dont l'IP n'est pas une IPv4 valide (4 nombres de 0 à 255) est **invalide** :
+    elle est comptée et ignorée ;
+  - les noms de machines sont insensibles à la casse (mets-les en minuscules).
+
+  Affiche ensuite :
+
+  1. pour chaque VLAN, par numéro croissant : `VLAN <n> : <machines>` (noms triés, séparés
+     par `, `) ;
+  2. `Conflits IP :` puis une ligne `<ip> : <machines>` (triées) pour chaque IP utilisée par
+     **plusieurs** machines différentes, par IP croissante (ordre **numérique** des octets) ;
+     ou `Conflits IP : aucun` ;
+  3. `Doublons de nom : <noms>` (noms apparaissant plusieurs fois, triés) ou
+     `Doublons de nom : aucun` ;
+  4. `Lignes invalides : <n>`.
+
+  Une machine en double apparaît une seule fois dans chaque VLAN.
+starter: |
+  # Écris ton code ici
+cases:
+  - name: Inventaire avec conflits
+    input: |
+      # nom ip vlan
+      pc-01 192.168.10.11 10
+      PC-02 192.168.10.12 10
+      srv-web 192.168.20.5 20
+      imprimante 192.168.10.12 10
+
+      srv-db 192.168.20.6 20
+      pc-01 192.168.10.11 10
+      routeur 10.0.0.1 1
+      camera 192.168.30.300 30
+      wifi-ap 192.168.40.2 quarante
+      switch 192.168.1.2
+    output: |
+      VLAN 1 : routeur
+      VLAN 10 : imprimante, pc-01, pc-02
+      VLAN 20 : srv-db, srv-web
+      Conflits IP :
+      192.168.10.12 : imprimante, pc-02
+      Doublons de nom : pc-01
+      Lignes invalides : 3
+  - name: Tri numérique des IP
+    input: |
+      a 10.0.0.9 5
+      b 10.0.0.9 5
+      c 10.0.0.10 5
+      d 10.0.0.10 6
+      e 9.255.0.1 4094
+      f 9.255.0.1 4094
+      g 1.1.1.1 4095
+      h 1.1.1.1 0
+    output: |
+      VLAN 5 : a, b, c
+      VLAN 6 : d
+      VLAN 4094 : e, f
+      Conflits IP :
+      9.255.0.1 : e, f
+      10.0.0.9 : a, b
+      10.0.0.10 : c, d
+      Doublons de nom : aucun
+      Lignes invalides : 2
+  - name: Inventaire propre
+    input: |
+      srv1 10.1.1.1 100
+      srv2 10.1.1.2 100
+    output: |
+      VLAN 100 : srv1, srv2
+      Conflits IP : aucun
+      Doublons de nom : aucun
+      Lignes invalides : 0
+solution: |
+  import sys
+
+
+  def ip_valide(ip):
+      parties = ip.split(".")
+      return len(parties) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parties)
+
+
+  def cle_ip(ip):
+      return tuple(int(p) for p in ip.split("."))
+
+
+  par_vlan = {}
+  par_ip = {}
+  occurrences = {}
+  invalides = 0
+
+  for ligne in sys.stdin:
+      ligne = ligne.strip()
+      if not ligne or ligne.startswith("#"):
+          continue
+      champs = ligne.split()
+      if len(champs) != 3:
+          invalides += 1
+          continue
+      nom, ip, vlan = champs
+      nom = nom.lower()
+      if not vlan.isdigit() or not 1 <= int(vlan) <= 4094 or not ip_valide(ip):
+          invalides += 1
+          continue
+      vlan = int(vlan)
+      par_vlan.setdefault(vlan, set()).add(nom)
+      par_ip.setdefault(ip, set()).add(nom)
+      occurrences[nom] = occurrences.get(nom, 0) + 1
+
+  for vlan in sorted(par_vlan):
+      print(f"VLAN {vlan} : {', '.join(sorted(par_vlan[vlan]))}")
+
+  conflits = sorted((ip for ip, noms in par_ip.items() if len(noms) > 1), key=cle_ip)
+  if conflits:
+      print("Conflits IP :")
+      for ip in conflits:
+          print(f"{ip} : {', '.join(sorted(par_ip[ip]))}")
+  else:
+      print("Conflits IP : aucun")
+
+  doublons = sorted(nom for nom, n in occurrences.items() if n > 1)
+  print("Doublons de nom : " + (", ".join(doublons) if doublons else "aucun"))
+  print(f"Lignes invalides : {invalides}")
+cours: |
+  ## Un vrai besoin
+
+  Les tableurs d'inventaire maintenus à la main contiennent toujours des erreurs : deux
+  équipements avec la même IP (conflit qui provoque des coupures aléatoires), des doublons,
+  des fautes de frappe dans les VLAN. Un script de contrôle qui tourne avant chaque mise à
+  jour de la configuration DHCP ou DNS évite bien des incidents.
+
+  ## Valider chaque ligne
+
+  Une donnée invalide ne doit ni planter le programme, ni polluer les résultats : on la
+  **compte** et on l'**écarte**. Isoler la validation d'une IP dans une petite fonction rend
+  la boucle principale lisible. Ordre conseillé : nombre de champs, puis chaque champ.
+
+  ## Choisir les bonnes structures
+
+  | Question | Structure |
+  |----------|-----------|
+  | quelles machines dans chaque VLAN, sans doublon ? | `dict` : vlan → `set` de noms |
+  | quelles machines pour chaque IP ? | `dict` : ip → `set` de noms |
+  | combien de fois chaque nom apparaît ? | `dict` : nom → compteur |
+
+  `d.setdefault(cle, set()).add(valeur)` crée l'ensemble au premier passage puis le
+  complète. (`collections.defaultdict(set)` fait de même.) Une IP est en conflit si son
+  ensemble contient **plusieurs** noms différents : la même machine listée deux fois avec la
+  même IP n'est pas un conflit, mais un doublon.
+
+  ## Trier des adresses IP correctement
+
+  Triées comme des chaînes, `"10.0.0.10"` passe avant `"10.0.0.9"` et `"9.255.0.1"` après
+  `"10.0.0.9"`. La clé de tri doit être **numérique** : le tuple des quatre octets convertis
+  en entiers.
+
+  ```python
+  sorted(ips, key=lambda ip: tuple(int(o) for o in ip.split(".")))
+  ```
+
+  (Avec le module `ipaddress` : `key=ipaddress.ip_address`.) De même, les VLAN sont convertis
+  en `int` pour être triés numériquement.
+
+  ## Structurer la sortie
+
+  Collecter d'abord, afficher ensuite : toutes les données sont lues et rangées, puis chaque
+  section du rapport est produite à partir des structures. Cette séparation rend le code
+  facile à faire évoluer (un export CSV ou JSON à la place de l'affichage, par exemple).
+
+  ## Pour aller plus loin
+
+  Croiser cet inventaire avec un scan réel du réseau (`nmap -sn`, table ARP d'un switch) avec
+  des opérations d'ensembles révélerait les machines non déclarées et les fiches obsolètes.
+docs:
+  - title: Méthode dict.setdefault
+    url: https://docs.python.org/fr/3/library/stdtypes.html#dict.setdefault
+  - title: HOWTO — trier avec Python
+    url: https://docs.python.org/fr/3/howto/sorting.html

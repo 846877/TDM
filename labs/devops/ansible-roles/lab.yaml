@@ -1,0 +1,370 @@
+title: Ansible avancé - rôles, Vault et déploiements progressifs
+level: avance
+order: 7
+tags: [ansible, rôles, jinja2, vault, handlers, idempotence, ssh]
+summary: Structurer un projet Ansible en rôles - configuration, squelette de rôle, services, gabarits et handlers, précédence des variables, Ansible Vault, dépendances, idempotence et mise à jour progressive.
+compose: docker-compose.yml
+service: control
+shell: bash
+user: eleve
+workdir: /home/eleve/ansible
+setup: |
+  for i in $(seq 1 60); do [ -s /home/eleve/.ssh/id_ed25519 ] && break; sleep 1; done
+  sleep 3
+description: |
+  Trois conteneurs Ubuntu sur un même réseau :
+  - **`control`** (ton terminal, utilisateur `eleve`) avec **ansible-core** et une clé SSH déjà en place ;
+  - **`web1`** et **`web2`**, deux serveurs joignables en SSH avec l'utilisateur **`deploy`** (sudo sans
+    mot de passe). **Nginx** y est installé mais arrêté, et ces conteneurs n'ont pas systemd.
+
+  Ton projet est dans **`~/ansible`** ; il ne contient pour l'instant que l'inventaire
+  (`inventaire.ini`, groupe `web`). Ce lab suppose les bases d'Ansible (lab « Ansible » intermédiaire) :
+  inventaire, modules, playbooks. Tu vas construire un projet **structuré en rôles**, comme en entreprise,
+  et le faire évoluer jusqu'à un déploiement progressif.
+
+  Pour lancer le playbook principal : `ansible-playbook site.yml`. Les pages des serveurs se testent depuis
+  `control` : `curl http://web1:8080/`.
+cours: |
+  ## Structurer un projet Ansible
+
+  Un playbook unique de 300 lignes devient vite illisible et impossible à réutiliser. Ansible propose des
+  conventions de structure qui permettent de découper, de partager et de tester le code.
+
+  ```
+  ~/ansible
+  ├── ansible.cfg                 réglages du projet (inventaire, utilisateur, vault…)
+  ├── inventaire.ini              hôtes et groupes
+  ├── site.yml                    playbook principal : quels rôles sur quels groupes
+  ├── group_vars/web/             variables du groupe web (vars.yml, vault.yml chiffré)
+  ├── host_vars/web2.yml          variables propres à un hôte
+  └── roles/
+      ├── commun/                 rôle de base (utilisateurs, motd…)
+      └── webapp/
+          ├── defaults/main.yml   valeurs par défaut (précédence la plus faible)
+          ├── tasks/main.yml      tâches
+          ├── handlers/main.yml   actions déclenchées par notify (recharger un service)
+          ├── templates/          gabarits Jinja2 (*.j2)
+          ├── files/              fichiers copiés tels quels
+          └── meta/main.yml       métadonnées et dépendances
+  ```
+
+  ### Rôles
+
+  Un **rôle** regroupe tout ce qu'il faut pour une fonction (« serveur web », « base de données »), avec
+  des **valeurs par défaut** que l'on surcharge selon l'environnement. Les rôles se partagent par
+  **Ansible Galaxy** ou des collections, et se testent avec Molecule.
+
+  ### Précédence des variables (extrait, de la plus faible à la plus forte)
+
+  ```
+  defaults du rôle < group_vars/all < group_vars/<groupe> < host_vars/<hôte>
+                   < vars du play < vars du rôle < set_fact / register < -e (ligne de commande)
+  ```
+
+  Règle pratique : les **defaults** documentent ce qui est réglable ; l'inventaire (`group_vars`,
+  `host_vars`) porte les valeurs de chaque environnement ; `-e` sert aux cas ponctuels.
+
+  ### Idempotence, handlers et mode vérification
+
+  Une tâche **idempotente** ne change rien si l'état voulu est déjà atteint : un second passage doit
+  afficher `changed=0`. Les **handlers** ne s'exécutent qu'une fois, en fin de play, et seulement si une
+  tâche qui les notifie a changé quelque chose. `--check --diff` montre ce qui changerait sans rien
+  modifier : à lancer avant chaque passage en production.
+
+  ### Secrets : Ansible Vault
+
+  `ansible-vault encrypt` chiffre un fichier de variables (AES-256). Le mot de passe vient d'un fichier
+  (`vault_password_file`), d'un script ou d'une invite. Convention : `vault.yml` contient
+  `vault_cle_api`, et `vars.yml` déclare `cle_api: "{{ vault_cle_api }}"` pour garder les noms lisibles.
+
+  ### Mémo
+
+  | Commande | Effet |
+  |---|---|
+  | `ansible-galaxy role init roles/nom` | squelette de rôle |
+  | `ansible-playbook site.yml --check --diff` | simulation avec différences |
+  | `ansible-playbook site.yml --limit web2` | un seul hôte |
+  | `ansible-playbook site.yml --tags config` | seulement les tâches étiquetées |
+  | `ansible-inventory --host web2` | variables calculées d'un hôte |
+  | `ansible-config dump --only-changed` | réglages modifiés |
+
+  ### Pièges
+
+  - `command` et `shell` ne sont pas idempotents par défaut (utiliser `creates`, `changed_when`).
+  - Un mot de passe Vault versionné avec le dépôt.
+  - Redémarrer tous les serveurs en même temps : `serial` limite le nombre d'hôtes traités à la fois.
+  - Des variables homonymes à plusieurs niveaux : vérifie avec `ansible-inventory --host`.
+
+  ### Pour réviser
+
+  1. Où placer une valeur réglable d'un rôle, et où placer sa valeur pour la production ?
+  2. Quand un handler s'exécute-t-il, et combien de fois ?
+  3. Que doit afficher le second passage d'un playbook idempotent ?
+  4. Que se passe-t-il avec `serial: 1` et `max_fail_percentage: 0` si le premier serveur échoue ?
+docs:
+  - title: Les rôles Ansible
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_reuse_roles.html
+  - title: Précédence des variables
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_variables.html
+  - title: Ansible Vault
+    url: https://docs.ansible.com/ansible/latest/vault_guide/index.html
+  - title: Stratégies et exécution progressive (serial)
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_strategies.html
+exercises:
+  - id: ar-config
+    title: Un fichier ansible.cfg pour le projet
+    description: |
+      Crée **`~/ansible/ansible.cfg`** pour que, depuis ce dossier, Ansible :
+      - utilise `inventaire.ini` comme inventaire ;
+      - se connecte avec l'utilisateur **`deploy`** ;
+      - ne bloque pas sur la vérification des clés d'hôte SSH (environnement de lab).
+
+      Vérifie : `ansible web -m ping` doit répondre `pong` pour web1 et web2.
+    hint: "[defaults] inventory = inventaire.ini, remote_user = deploy, host_key_checking = False"
+    cours: |
+      Ansible cherche sa configuration dans cet ordre : la variable `ANSIBLE_CONFIG`, **`ansible.cfg` du
+      dossier courant**, `~/.ansible.cfg`, puis `/etc/ansible/ansible.cfg`. Le premier trouvé l'emporte
+      entièrement : les réglages ne se cumulent pas. Un `ansible.cfg` à la racine du projet rend le
+      comportement reproductible pour toute l'équipe.
+
+      Réglages courants de la section `[defaults]` : `inventory`, `remote_user`, `host_key_checking`,
+      `roles_path`, `vault_password_file`, `forks` (parallélisme), `stdout_callback`. La section
+      `[ssh_connection]` permet d'activer `pipelining`, qui accélère nettement les exécutions.
+
+      Désactiver la vérification des clés d'hôte est acceptable dans un lab éphémère ; en production, on
+      gère les clés connues (`known_hosts`) pour éviter les attaques de l'homme du milieu.
+      `ansible-config dump --only-changed` affiche ce qui diffère des valeurs par défaut.
+    checks:
+      - desc: ansible web -m ping réussit sur les deux serveurs
+        timeout: 90
+        run: cd /home/eleve/ansible && test "$(ANSIBLE_NOCOLOR=1 ansible web -m ping -o 2>/dev/null | grep -c 'SUCCESS')" = 2
+      - desc: L'utilisateur distant est deploy
+        run: cd /home/eleve/ansible && ansible-config dump --only-changed 2>/dev/null | grep -q 'DEFAULT_REMOTE_USER.*deploy'
+  - id: ar-role-init
+    title: Le squelette d'un rôle
+    description: |
+      Crée le rôle **`webapp`** dans **`~/ansible/roles/webapp`** avec la structure standard (tâches, handlers,
+      gabarits, valeurs par défaut, métadonnées…), en utilisant l'outil prévu pour cela.
+    hint: "ansible-galaxy role init roles/webapp"
+    cours: |
+      Un rôle est un dossier dont les sous-dossiers ont un rôle précis : `tasks/main.yml` (point d'entrée),
+      `handlers/main.yml`, `defaults/main.yml` (variables réglables), `vars/main.yml` (variables internes,
+      précédence forte), `templates/`, `files/`, `meta/main.yml` (auteur, plateformes, **dépendances**), et
+      `tests/`.
+
+      **`ansible-galaxy role init`** crée ce squelette, avec un `README.md` à compléter : documenter les
+      variables d'un rôle fait partie du travail. Quand un playbook cite un rôle, Ansible cherche dans
+      `roles/` à côté du playbook, puis dans `roles_path`.
+
+      Les rôles se publient sur **Ansible Galaxy** ou dans des **collections** (qui regroupent rôles,
+      modules et greffons) ; on déclare ceux dont dépend un projet dans un `requirements.yml`, installé par
+      `ansible-galaxy install -r requirements.yml`.
+    checks:
+      - desc: La structure du rôle webapp existe
+        run: |
+          r=/home/eleve/ansible/roles/webapp; for f in tasks/main.yml handlers/main.yml defaults/main.yml meta/main.yml; do test -f "$r/$f" || exit 1; done; test -d "$r/templates"
+  - id: ar-service
+    title: Un premier rôle qui démarre Nginx
+    description: |
+      Dans le rôle `webapp`, ajoute une tâche qui s'assure que le service **`nginx`** est **démarré**
+      (module `service`). Crée **`~/ansible/site.yml`**, qui applique le rôle `webapp` au groupe `web` avec
+      élévation de privilèges (`become`), puis lance-le.
+    hint: "tasks/main.yml : - name: Nginx est démarré / ansible.builtin.service: name=nginx state=started ; site.yml : - hosts: web, become: true, roles: [webapp]"
+    cours: |
+      Un **playbook** associe des groupes d'hôtes à des rôles et à des tâches. Dans `site.yml`, la clé
+      `roles:` liste les rôles à appliquer, dans l'ordre. **`become: true`** exécute les tâches avec
+      `sudo` sur la cible, car gérer un service demande les droits root.
+
+      Le module **`service`** pilote le gestionnaire de services détecté sur la cible (systemd, scripts
+      SysV, OpenRC…). `state: started` est **déclaratif** : on décrit l'état voulu, et Ansible n'agit que
+      s'il n'est pas atteint. `state: restarted` ou `reloaded` agit au contraire à chaque fois, et se place
+      donc plutôt dans un handler.
+
+      Préfère les noms complets des modules (`ansible.builtin.service`) : ils lèvent toute ambiguïté
+      quand plusieurs collections sont installées.
+    checks:
+      - desc: site.yml applique le rôle webapp
+        run: cd /home/eleve/ansible && python3 -c 'import yaml,sys; p=yaml.safe_load(open("site.yml")); sys.exit(not any("webapp" in str(play.get("roles", [])) for play in p))'
+      - desc: Nginx tourne sur web1 et web2
+        run: |
+          for h in web1 web2; do ssh -o StrictHostKeyChecking=no -o BatchMode=yes deploy@$h pgrep -x nginx >/dev/null 2>&1 || exit 1; done
+  - id: ar-template
+    title: Gabarits Jinja2 et handler
+    description: |
+      Fais servir par Nginx une page propre au rôle :
+      - **`defaults/main.yml`** : `webapp_port: 8080` et `webapp_titre: Boutique` ;
+      - un gabarit **`templates/webapp.conf.j2`** déployé dans **`/etc/nginx/conf.d/webapp.conf`** : un
+        serveur qui écoute sur `webapp_port` et sert `/var/www/webapp` ;
+      - un gabarit **`templates/index.html.j2`** déployé dans **`/var/www/webapp/index.html`**, qui affiche
+        `<h1>{{ webapp_titre }}</h1>` et le nom de l'hôte (`inventory_hostname`) ;
+      - un **handler** qui **recharge** Nginx, notifié uniquement quand la configuration change.
+
+      Test : `curl http://web1:8080/`.
+    hint: "template: src=webapp.conf.j2 dest=/etc/nginx/conf.d/webapp.conf + notify: recharger nginx ; handlers/main.yml : - name: recharger nginx / service: name=nginx state=reloaded ; pense à créer /var/www/webapp (module file)"
+    cours: |
+      Le module **`template`** génère un fichier à partir d'un gabarit **Jinja2** : `{{ variable }}` insère
+      une valeur, `{% if %}` et `{% for %}` structurent, les filtres transforment (`{{ nom | upper }}`,
+      `{{ liste | join(", ") }}`, `{{ valeur | default("x") }}`). Les faits (`ansible_hostname`,
+      `ansible_default_ipv4.address`) et les variables d'inventaire sont disponibles. Ajouter
+      `{{ ansible_managed }}` en commentaire signale que le fichier ne doit pas être modifié à la main.
+
+      Un **handler** est une tâche qui ne s'exécute que si une autre tâche le **notifie** (`notify: nom`)
+      **et** a changé quelque chose. Il ne tourne qu'une fois, en fin de play, même s'il est notifié
+      plusieurs fois. On recharge (`reloaded`) plutôt que de redémarrer quand le service le permet : aucune
+      connexion n'est coupée. L'option `validate:` du module `template` peut tester la configuration
+      (`nginx -t -c %s`) avant de l'installer.
+    checks:
+      - desc: web1 et web2 servent la page sur le port 8080 avec leur nom
+        run: |
+          for h in web1 web2; do p=$(curl -s --max-time 5 "http://$h:8080/") && echo "$p" | grep -q '<h1>' && echo "$p" | grep -q "$h" || exit 1; done
+      - desc: Les valeurs par défaut et le handler sont dans le rôle
+        run: |
+          r=/home/eleve/ansible/roles/webapp; grep -Eq '^webapp_port:[[:space:]]*8080' "$r/defaults/main.yml" && grep -Eq '^webapp_titre:' "$r/defaults/main.yml" && grep -q 'reloaded' "$r/handlers/main.yml" && grep -q 'notify' "$r/tasks/main.yml" && test -f "$r/templates/webapp.conf.j2" && test -f "$r/templates/index.html.j2"
+  - id: ar-variables
+    title: Variables de groupe et d'hôte
+    description: |
+      Sans modifier les valeurs par défaut du rôle :
+      - pour tout le groupe `web`, le titre devient **`Boutique en ligne`** ;
+      - pour **web2** seulement, il devient **`Boutique en ligne (secours)`**.
+
+      Place ces valeurs dans **`group_vars/web/vars.yml`** et **`host_vars/web2.yml`**, puis rejoue le
+      playbook.
+    hint: "group_vars/web/vars.yml : webapp_titre: Boutique en ligne ; host_vars/web2.yml : webapp_titre: Boutique en ligne (secours) ; vérifie avec ansible-inventory --host web2"
+    cours: |
+      Ansible fusionne des variables venues de nombreuses sources, avec une **précédence** précise. Pour un
+      rôle bien conçu :
+      - `defaults/main.yml` donne les valeurs par défaut, la **plus faible** précédence ;
+      - `group_vars/<groupe>` (fichier ou dossier) adapte les valeurs pour un groupe : un environnement,
+        un type de serveur ;
+      - `host_vars/<hôte>` traite les exceptions d'un hôte, et l'emporte sur le groupe.
+
+      Ces dossiers se placent à côté de l'inventaire ou du playbook. Un dossier `group_vars/web/` peut
+      contenir plusieurs fichiers, lus par ordre alphabétique : pratique pour séparer les variables
+      ordinaires des secrets.
+
+      `ansible-inventory --host web2 --yaml` affiche les variables d'inventaire calculées pour un hôte, et
+      `ansible -m debug -a var=webapp_titre web` leur valeur finale.
+    checks:
+      - desc: web1 affiche « Boutique en ligne », web2 la variante de secours
+        run: |
+          curl -s --max-time 5 http://web1:8080/ | grep -q '<h1>Boutique en ligne</h1>' && curl -s --max-time 5 http://web2:8080/ | grep -q '<h1>Boutique en ligne (secours)</h1>'
+      - desc: Les valeurs par défaut du rôle n'ont pas changé
+        run: grep -Eq '^webapp_titre:[[:space:]]*"?Boutique"?[[:space:]]*$' /home/eleve/ansible/roles/webapp/defaults/main.yml && test -f /home/eleve/ansible/group_vars/web/vars.yml && test -f /home/eleve/ansible/host_vars/web2.yml
+  - id: ar-vault
+    title: Un secret chiffré avec Ansible Vault
+    description: |
+      L'application a besoin d'une clé d'API : **`cle-api-boutique-42`**.
+      1. Stocke-la dans **`group_vars/web/vault.yml`** (variable `vault_webapp_cle_api`), **chiffré** avec
+         `ansible-vault` ; le mot de passe du coffre est dans **`~/.vault_pass`** (droits `600`) et déclaré
+         dans `ansible.cfg` ;
+      2. dans `vars.yml`, définis `webapp_cle_api: "{{ vault_webapp_cle_api }}"` ;
+      3. le rôle écrit **`/etc/webapp/api.conf`** contenant `cle_api=<la clé>`, propriétaire `root`, droits
+         **`0600`**, avec `no_log: true` sur la tâche.
+    hint: "echo 'un-mot-de-passe' > ~/.vault_pass && chmod 600 ~/.vault_pass ; vault_password_file = ~/.vault_pass ; ansible-vault create group_vars/web/vault.yml"
+    cours: |
+      **Ansible Vault** chiffre des fichiers (ou des valeurs isolées avec `encrypt_string`) en AES-256. Le
+      fichier commence par `$ANSIBLE_VAULT;1.1;AES256` et peut être versionné. Ansible le déchiffre à la
+      volée, à condition de connaître le mot de passe : `--ask-vault-pass`, ou `vault_password_file` dans
+      `ansible.cfg` (un fichier, ou un script qui interroge un gestionnaire de secrets).
+
+      Commandes : `ansible-vault create`, `edit`, `view`, `encrypt`, `decrypt`, `rekey` (changer le mot de
+      passe). La convention `vault_` + variable « miroir » dans `vars.yml` permet de retrouver avec `grep`
+      où une variable est utilisée, sans ouvrir le coffre.
+
+      Sur la cible, le fichier qui contient le secret doit être protégé (`mode: "0600"`), et **`no_log:
+      true`** évite que la valeur apparaisse dans la sortie d'Ansible ou dans les journaux de la CI.
+    checks:
+      - desc: vault.yml est chiffré et le mot de passe du coffre est protégé
+        run: |
+          head -1 /home/eleve/ansible/group_vars/web/vault.yml | grep -q '^\$ANSIBLE_VAULT;1\.1;AES256' && test "$(stat -c %a /home/eleve/.vault_pass)" = 600 && cd /home/eleve/ansible && ansible-config dump --only-changed 2>/dev/null | grep -q 'DEFAULT_VAULT_PASSWORD_FILE'
+      - desc: /etc/webapp/api.conf contient la clé, en 0600 root
+        run: |
+          for h in web1 web2; do ssh -o StrictHostKeyChecking=no -o BatchMode=yes deploy@$h 'sudo grep -qx "cle_api=cle-api-boutique-42" /etc/webapp/api.conf && test "$(sudo stat -c "%a %U" /etc/webapp/api.conf)" = "600 root"' || exit 1; done
+      - desc: La tâche est protégée par no_log
+        run: grep -rq 'no_log:[[:space:]]*true' /home/eleve/ansible/roles/webapp/tasks/
+  - id: ar-dependance
+    title: Un rôle de base en dépendance
+    description: |
+      Crée un rôle **`commun`** qui :
+      - crée l'utilisateur **`exploit`** (shell `/bin/bash`) ;
+      - écrit **`/etc/motd`** : `Serveur géré par Ansible - <nom de l'hôte>`.
+
+      Déclare `commun` comme **dépendance** de `webapp` (dans `roles/webapp/meta/main.yml`), sans l'ajouter
+      à `site.yml`, puis rejoue le playbook.
+    hint: "meta/main.yml de webapp : dependencies: [commun] (ou - role: commun) ; rôle commun : modules user et copy (content:)"
+    cours: |
+      Les **dépendances** d'un rôle sont déclarées dans `meta/main.yml` (`dependencies:`) : Ansible exécute
+      les rôles dépendants **avant** le rôle lui-même, avec éventuellement des variables. Un rôle de base
+      (`commun`, `base`, `durcissement`) regroupe ce que tout serveur doit avoir : comptes, fuseau horaire,
+      paquets de diagnostic, configuration SSH.
+
+      Un rôle n'est exécuté qu'**une fois** par play, même s'il apparaît plusieurs fois comme dépendance,
+      sauf avec `allow_duplicates: true`. Trop de dépendances implicites rendent cependant le projet
+      difficile à suivre : beaucoup d'équipes préfèrent lister les rôles explicitement dans les playbooks.
+
+      Le module **`user`** gère les comptes (shell, groupes, clés avec `authorized_key`) et **`copy`**
+      avec `content:` écrit un petit fichier sans gabarit.
+    checks:
+      - desc: webapp dépend de commun, qui n'est pas listé dans site.yml
+        run: |
+          cd /home/eleve/ansible && grep -q 'commun' roles/webapp/meta/main.yml && test -f roles/commun/tasks/main.yml && ! grep -q 'commun' site.yml
+      - desc: exploit existe et /etc/motd est en place sur les deux serveurs
+        run: |
+          for h in web1 web2; do ssh -o StrictHostKeyChecking=no -o BatchMode=yes deploy@$h "getent passwd exploit | grep -q ':/bin/bash$' && grep -q 'Serveur géré par Ansible - $h' /etc/motd" || exit 1; done
+  - id: ar-idempotence
+    title: Idempotence, étiquettes et simulation
+    description: |
+      Un bon playbook ne change rien quand tout est déjà en place.
+      1. Étiquette **`config`** (`tags`) les tâches qui déploient la configuration Nginx et la page.
+      2. Lance `ansible-playbook site.yml --check --diff`, puis deux fois `ansible-playbook site.yml` : le
+         second passage doit afficher **`changed=0`** pour les deux serveurs. Corrige les tâches qui
+         changent à chaque fois.
+    hint: "tags: [config] sur les tâches template ; une tâche command/shell doit avoir changed_when ou creates ; ansible-playbook site.yml --list-tags"
+    cours: |
+      L'**idempotence** est la propriété centrale d'Ansible : appliquer deux fois le même playbook donne le
+      même résultat, et le second passage ne modifie rien (`changed=0`). Elle permet de rejouer un
+      playbook à tout moment pour corriger une **dérive** de configuration, sans crainte d'effets de bord.
+
+      Les modules déclaratifs (`file`, `template`, `user`, `service: state=started`) sont idempotents. Les
+      modules `command` et `shell` ne le sont pas : on précise `creates:`, ou `changed_when:` à partir du
+      résultat. `state: restarted` dans une tâche ordinaire redémarre à chaque passage : on le met dans un
+      handler.
+
+      Les **étiquettes** (`tags`) permettent de n'exécuter qu'une partie (`--tags config`) ou d'en exclure
+      une (`--skip-tags`). Le mode **`--check --diff`** simule l'exécution et affiche les différences de
+      fichiers : un réflexe avant toute exécution en production.
+    checks:
+      - desc: L'étiquette config existe
+        run: cd /home/eleve/ansible && ANSIBLE_NOCOLOR=1 ansible-playbook site.yml --list-tags 2>/dev/null | grep -q 'config'
+      - desc: Un second passage ne change rien
+        timeout: 240
+        run: |
+          cd /home/eleve/ansible && ANSIBLE_NOCOLOR=1 ansible-playbook site.yml >/dev/null 2>&1 && r=$(ANSIBLE_NOCOLOR=1 ansible-playbook site.yml 2>/dev/null) && test "$(echo "$r" | grep -cE '^web[12] +: ok=[0-9]+ +changed=0 +unreachable=0 +failed=0')" = 2
+  - id: ar-serial
+    title: Mise à jour progressive
+    description: |
+      Pour ne jamais arrêter les deux serveurs en même temps, modifie `site.yml` pour traiter les hôtes
+      **un par un** (`serial`), arrêter tout le déploiement à la **première** erreur
+      (`max_fail_percentage: 0`), et **vérifier** après chaque serveur que sa page répond (module `uri`)
+      avant de passer au suivant.
+    hint: "Au niveau du play : serial: 1, max_fail_percentage: 0 ; post_tasks: - ansible.builtin.uri: url=http://localhost:{{ webapp_port }}/ status_code=200"
+    cours: |
+      Par défaut, Ansible exécute chaque tâche sur tous les hôtes en parallèle (`forks`). Pour une mise à
+      jour **progressive** (*rolling update*), **`serial`** découpe les hôtes en lots : `serial: 1` (un
+      par un), `serial: "25%"`, ou une progression `[1, 5, "50%"]` pour commencer prudemment.
+
+      **`max_fail_percentage`** arrête le play si trop d'hôtes d'un lot échouent ; avec 0, la première
+      erreur stoppe tout, et les serveurs suivants gardent l'ancienne version. Les **`post_tasks`**, exécutées
+      après les rôles, servent à **valider** chaque lot : le module **`uri`** vérifie qu'une URL répond avec
+      le bon code et, au besoin, le bon contenu.
+
+      Avec un répartiteur de charge, on ajoute des `pre_tasks` qui retirent le serveur du pool
+      (`delegate_to` vers le répartiteur) et des `post_tasks` qui l'y remettent.
+    checks:
+      - desc: site.yml traite un hôte à la fois et s'arrête à la première erreur
+        run: |
+          cd /home/eleve/ansible && python3 -c 'import yaml,sys; p=yaml.safe_load(open("site.yml"))[0]; sys.exit(not (str(p.get("serial")) == "1" and str(p.get("max_fail_percentage")) == "0"))'
+      - desc: Une vérification uri est faite, et web1 est terminé avant que web2 commence
+        timeout: 240
+        run: |
+          cd /home/eleve/ansible && grep -rqE 'uri:' site.yml roles/ && r=$(ANSIBLE_NOCOLOR=1 ansible-playbook site.yml 2>/dev/null) && l1=$(echo "$r" | grep -nE '^(ok|changed): \[web1\]' | tail -1 | cut -d: -f1) && f2=$(echo "$r" | grep -nE '^(ok|changed): \[web2\]' | head -1 | cut -d: -f1) && test -n "$l1" && test -n "$f2" && test "$l1" -lt "$f2"

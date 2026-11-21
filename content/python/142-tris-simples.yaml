@@ -1,0 +1,180 @@
+title: Tri à bulles, par sélection et par insertion
+level: intermediaire
+order: 42
+tags: [algorithmes, tri, complexité]
+summary: Implémenter les tris quadratiques et compter leurs opérations.
+description: |
+  Implémente trois tris **sans** utiliser `sorted()` ni `.sort()`. Chaque fonction reçoit une
+  liste de nombres, **ne la modifie pas**, et renvoie un tuple `(liste_triée, nb_comparaisons)`
+  où `nb_comparaisons` est le nombre de comparaisons **entre deux éléments** effectuées.
+
+  1. `tri_bulles(liste)` : on parcourt la liste en échangeant les voisins mal ordonnés ; après
+     chaque passage, le plus grand élément restant est à sa place. **Optimisation
+     obligatoire** : si un passage ne fait aucun échange, on s'arrête. Le passage `k`
+     (à partir de 0) compare les paires d'indices `(0,1)`, `(1,2)`, …, `(n-2-k, n-1-k)`.
+  2. `tri_selection(liste)` : pour chaque position `i`, on cherche le minimum de la partie
+     `i..n-1` (en comparant chaque élément au minimum provisoire) et on l'échange avec
+     l'élément `i`.
+  3. `tri_insertion(liste)` : on insère chaque élément `i` (à partir de 1) dans la partie
+     déjà triée à sa gauche, en le comparant aux éléments précédents de droite à gauche
+     jusqu'à trouver un élément **inférieur ou égal** (ou le début).
+
+  ```python
+  tri_bulles([1, 2, 3, 4])        # ([1, 2, 3, 4], 3)   un seul passage, aucun échange
+  tri_selection([1, 2, 3, 4])     # ([1, 2, 3, 4], 6)   toujours n(n-1)/2
+  tri_insertion([4, 3, 2, 1])     # ([1, 2, 3, 4], 6)
+  tri_insertion([1, 2, 3, 4])     # ([1, 2, 3, 4], 3)
+  ```
+starter: |
+  def tri_bulles(liste):
+      pass
+
+
+  def tri_selection(liste):
+      pass
+
+
+  def tri_insertion(liste):
+      pass
+tests: |
+  import random
+
+  def verifier(fonction, donnees):
+      copie = list(donnees)
+      trie, comps = fonction(donnees)
+      assert donnees == copie, f"{fonction.__name__} a modifié la liste reçue"
+      assert trie == sorted(copie), f"{fonction.__name__}({copie}) -> {trie}"
+      return comps
+
+  def test_tri_correct():
+      "Les trois tris trient correctement"
+      random.seed(4)
+      for _ in range(30):
+          d = [random.randint(-20, 20) for _ in range(random.randint(0, 25))]
+          for f in (solution.tri_bulles, solution.tri_selection, solution.tri_insertion):
+              verifier(f, d)
+
+  def test_bulles_comparaisons():
+      "tri_bulles : comparaisons et arrêt anticipé"
+      assert verifier(solution.tri_bulles, [1, 2, 3, 4]) == 3
+      assert verifier(solution.tri_bulles, [4, 3, 2, 1]) == 6
+      assert verifier(solution.tri_bulles, [2, 1, 3, 4, 5]) == 7
+      assert verifier(solution.tri_bulles, []) == 0
+
+  def test_selection_comparaisons():
+      "tri_selection : toujours n(n-1)/2 comparaisons"
+      assert verifier(solution.tri_selection, [1, 2, 3, 4]) == 6
+      assert verifier(solution.tri_selection, list(range(10, 0, -1))) == 45
+      assert verifier(solution.tri_selection, [5]) == 0
+
+  def test_insertion_comparaisons():
+      "tri_insertion : comparaisons"
+      assert verifier(solution.tri_insertion, [4, 3, 2, 1]) == 6
+      assert verifier(solution.tri_insertion, [1, 2, 3, 4]) == 3
+      assert verifier(solution.tri_insertion, [2, 1, 3]) == 2
+      assert verifier(solution.tri_insertion, [3, 1, 2]) == 3
+solution: |
+  def tri_bulles(liste):
+      l = list(liste)
+      n = len(l)
+      comparaisons = 0
+      for k in range(n - 1):
+          echange = False
+          for i in range(n - 1 - k):
+              comparaisons += 1
+              if l[i] > l[i + 1]:
+                  l[i], l[i + 1] = l[i + 1], l[i]
+                  echange = True
+          if not echange:
+              break
+      return l, comparaisons
+
+
+  def tri_selection(liste):
+      l = list(liste)
+      n = len(l)
+      comparaisons = 0
+      for i in range(n - 1):
+          mini = i
+          for j in range(i + 1, n):
+              comparaisons += 1
+              if l[j] < l[mini]:
+                  mini = j
+          l[i], l[mini] = l[mini], l[i]
+      return l, comparaisons
+
+
+  def tri_insertion(liste):
+      l = list(liste)
+      comparaisons = 0
+      for i in range(1, len(l)):
+          valeur = l[i]
+          j = i - 1
+          while j >= 0:
+              comparaisons += 1
+              if l[j] <= valeur:
+                  break
+              l[j + 1] = l[j]
+              j -= 1
+          l[j + 1] = valeur
+      return l, comparaisons
+cours: |
+  ## Pourquoi réimplémenter des tris ?
+
+  En pratique on utilise `sorted()`. Mais les tris sont le meilleur terrain pour apprendre à
+  **raisonner sur un algorithme** : invariants, boucles imbriquées, et surtout
+  **complexité** (combien d'opérations pour n éléments ?).
+
+  ## Tri à bulles
+
+  On compare les voisins deux à deux et on les échange s'ils sont dans le mauvais ordre. À la
+  fin de chaque passage, le plus grand élément restant a « remonté » jusqu'à sa place : le
+  passage suivant peut s'arrêter un cran plus tôt. Si un passage n'a fait aucun échange, la
+  liste est triée : on s'arrête.
+
+  ## Tri par sélection
+
+  On cherche le minimum de la partie non triée et on le place au début de celle-ci.
+  **Invariant** : après l'étape `i`, les `i + 1` premiers éléments sont les plus petits,
+  triés. Il fait toujours le même nombre de comparaisons, mais peu d'échanges (au plus
+  n − 1) : utile quand écrire coûte cher.
+
+  ## Tri par insertion
+
+  Comme pour trier des cartes à la main : on prend l'élément suivant et on le glisse à sa
+  place dans la partie déjà triée, en décalant les plus grands d'un cran vers la droite.
+  Sur une liste **presque triée**, il est très rapide (presque O(n)) : c'est pourquoi Timsort,
+  l'algorithme de `sorted()`, l'utilise sur les petits morceaux.
+
+  ## Échanger deux éléments
+
+  ```python
+  l[i], l[j] = l[j], l[i]
+  ```
+
+  ## Complexité
+
+  | Tri | Meilleur cas | Pire cas |
+  |-----|--------------|----------|
+  | bulles (avec arrêt) | O(n) | O(n²) |
+  | sélection | O(n²) | O(n²) |
+  | insertion | O(n) | O(n²) |
+  | fusion, Timsort | O(n log n) | O(n log n) |
+
+  n(n−1)/2 comparaisons pour n = 1000, c'est environ 500 000 ; pour n = 1 000 000, 500
+  milliards : impraticable. Un tri en O(n log n) n'en fait qu'environ 20 millions.
+
+  ## Ne pas modifier l'entrée
+
+  Travailler sur une copie (`list(liste)` ou `liste[:]`) protège les données de l'appelant.
+
+  ## Stabilité
+
+  Un tri est **stable** si deux éléments égaux gardent leur ordre relatif. Le tri par
+  insertion (avec `<=` pour s'arrêter) et le tri à bulles le sont ; le tri par sélection
+  classique ne l'est pas.
+docs:
+  - title: Wikipédia — Tri par insertion
+    url: https://fr.wikipedia.org/wiki/Tri_par_insertion
+  - title: Wikipédia — Tri à bulles
+    url: https://fr.wikipedia.org/wiki/Tri_%C3%A0_bulles

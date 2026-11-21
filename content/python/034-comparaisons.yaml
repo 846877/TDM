@@ -1,0 +1,151 @@
+title: Comparaisons et booléens
+level: debutant
+order: 34
+tags: [booléens, comparaisons, conditions]
+summary: Écrire des tests qui renvoient True ou False.
+description: |
+  Écris ces **prédicats** (fonctions qui renvoient `True` ou `False`). Chacun peut tenir en
+  une seule ligne `return ...` !
+
+  1. `est_port_valide(port)` : vrai si `port` est entre 1 et 65535 inclus.
+  2. `est_port_systeme(port)` : vrai si le port est valide **et** strictement inférieur à 1024.
+  3. `meme_signe(a, b)` : vrai si `a` et `b` sont tous deux strictement positifs, ou tous
+     deux strictement négatifs (0 n'a pas de signe : `meme_signe(0, 5)` est faux).
+  4. `peut_se_connecter(utilisateur, mot_de_passe_ok, bloque)` : vrai si le mot de passe est
+     correct et que le compte n'est pas bloqué, **ou** si l'utilisateur est `"root"`
+     (qui passe toujours).
+
+  ```python
+  est_port_valide(22)                        # True
+  est_port_systeme(8080)                     # False
+  meme_signe(-3, -8)                         # True
+  peut_se_connecter("alice", True, True)     # False
+  peut_se_connecter("root", False, True)     # True
+  ```
+starter: |
+  def est_port_valide(port):
+      pass
+
+
+  def est_port_systeme(port):
+      pass
+
+
+  def meme_signe(a, b):
+      pass
+
+
+  def peut_se_connecter(utilisateur, mot_de_passe_ok, bloque):
+      pass
+tests: |
+  def test_port_valide():
+      "est_port_valide (bornes comprises)"
+      for p, att in [(22, True), (1, True), (65535, True), (0, False), (65536, False), (-5, False)]:
+          r = solution.est_port_valide(p)
+          assert r is att, f"est_port_valide({p}) devrait valoir {att}, obtenu {r!r}"
+
+  def test_port_systeme():
+      "est_port_systeme"
+      for p, att in [(22, True), (1023, True), (1024, False), (8080, False), (0, False)]:
+          r = solution.est_port_systeme(p)
+          assert r is att, f"est_port_systeme({p}) devrait valoir {att}, obtenu {r!r}"
+
+  def test_meme_signe():
+      "meme_signe"
+      cas = [((3, 8), True), ((-3, -8), True), ((-3, 8), False), ((0, 5), False), ((0, 0), False), ((5, 0), False)]
+      for (a, b), att in cas:
+          r = solution.meme_signe(a, b)
+          assert r is att, f"meme_signe({a}, {b}) devrait valoir {att}, obtenu {r!r}"
+
+  def test_connexion():
+      "peut_se_connecter"
+      cas = [
+          (("alice", True, False), True),
+          (("alice", True, True), False),
+          (("alice", False, False), False),
+          (("root", False, True), True),
+          (("root", True, False), True),
+      ]
+      for args, att in cas:
+          r = solution.peut_se_connecter(*args)
+          assert r is att, f"peut_se_connecter{args} devrait valoir {att}, obtenu {r!r}"
+solution: |
+  def est_port_valide(port):
+      return 1 <= port <= 65535
+
+
+  def est_port_systeme(port):
+      return est_port_valide(port) and port < 1024
+
+
+  def meme_signe(a, b):
+      return (a > 0 and b > 0) or (a < 0 and b < 0)
+
+
+  def peut_se_connecter(utilisateur, mot_de_passe_ok, bloque):
+      return utilisateur == "root" or (mot_de_passe_ok and not bloque)
+cours: |
+  ## Les opérateurs de comparaison
+
+  | Opérateur | Sens |
+  |-----------|------|
+  | `==` | égal |
+  | `!=` | différent |
+  | `<`, `<=` | inférieur, inférieur ou égal |
+  | `>`, `>=` | supérieur, supérieur ou égal |
+
+  Une comparaison produit **toujours** un booléen : `True` ou `False`. On peut donc stocker
+  son résultat ou le renvoyer directement :
+
+  ```python
+  disque_plein = utilise >= capacite
+  return age >= 18
+  ```
+
+  Écrire `if condition: return True else: return False` est inutile : `return condition`
+  fait la même chose.
+
+  ## Comparaisons chaînées
+
+  Python permet d'écrire un encadrement comme en mathématiques :
+
+  ```python
+  0 <= note <= 20        # équivaut à : 0 <= note and note <= 20
+  ```
+
+  ## Les opérateurs logiques
+
+  - `a and b` : vrai si **les deux** sont vrais ;
+  - `a or b` : vrai si **au moins un** est vrai ;
+  - `not a` : l'inverse.
+
+  Priorité : `not` > `and` > `or`. Ainsi `a or b and c` se lit `a or (b and c)`. Mets des
+  parenthèses dès qu'il y a un doute : un humain doit pouvoir relire ta condition sans
+  connaître la table des priorités.
+
+  ## Évaluation en court-circuit
+
+  Python arrête l'évaluation dès que le résultat est connu : dans `a and b`, si `a` est
+  faux, `b` n'est même pas calculé. On s'en sert pour protéger un calcul :
+
+  ```python
+  if diviseur != 0 and total / diviseur > 10:
+      ...
+  ```
+
+  ## Réutiliser un prédicat
+
+  Un prédicat peut en appeler un autre : la règle « valide » est écrite **une seule fois**.
+  Si elle change, une seule ligne est à modifier.
+
+  ## Méthode : la table de vérité
+
+  Pour une condition composée, liste les combinaisons importantes et le résultat attendu
+  avant d'écrire le code (comme dans les tests de cet exercice). Pense aux valeurs
+  **frontières** (0, 1, 1023, 1024, 65535) : c'est là que se cachent les erreurs entre
+  `<` et `<=`.
+docs:
+  - title: Référence — comparaisons
+    url: https://docs.python.org/fr/3/reference/expressions.html#comparisons
+  - title: Référence — opérations booléennes
+    url: https://docs.python.org/fr/3/reference/expressions.html#boolean-operations

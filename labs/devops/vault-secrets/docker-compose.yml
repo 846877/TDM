@@ -1,0 +1,29 @@
+# Un serveur HashiCorp Vault (non initialisé), une base PostgreSQL et un poste « ops » avec la CLI vault.
+services:
+  vault:
+    build: ./vault
+    hostname: vault
+    environment:
+      SKIP_SETCAP: "1"
+    volumes:
+      - vault-data:/vault/file
+      - vault-logs:/vault/logs
+    ports: ["8210:8200"]
+  db:
+    build: ./db
+    hostname: db
+    environment:
+      POSTGRES_PASSWORD: tdm-admin
+      POSTGRES_DB: boutique
+    volumes:
+      - db-data:/var/lib/postgresql/data
+  ops:
+    build: ./ops
+    hostname: ops
+    depends_on: [vault, db]
+    volumes:
+      - vault-logs:/vault-logs:ro
+volumes:
+  vault-data:
+  vault-logs:
+  db-data:

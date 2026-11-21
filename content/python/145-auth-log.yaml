@@ -1,0 +1,183 @@
+title: Tentatives SSH dans auth.log
+level: intermediaire
+order: 45
+tags: [sysadmin, chaînes, dictionnaires, stdin, sécurité]
+summary: Repérer les adresses qui attaquent un serveur SSH à partir de ses journaux.
+mode: stdio
+description: |
+  Ton programme lit sur l'entrée standard un extrait de `/var/log/auth.log`. La **première
+  ligne** contient le seuil de blocage (entier). Les lignes suivantes sont des lignes de
+  journal. On s'intéresse uniquement à deux formes de lignes :
+
+  ```
+  Oct 19 08:01:12 srv sshd[812]: Failed password for root from 203.0.113.5 port 52114 ssh2
+  Oct 19 08:01:20 srv sshd[812]: Failed password for invalid user admin from 198.51.100.7 port 40022 ssh2
+  Oct 19 08:02:03 srv sshd[815]: Accepted password for alice from 192.168.1.20 port 51000 ssh2
+  ```
+
+  - une ligne contenant `Failed password for` est un **échec** : l'utilisateur est le mot qui
+    suit `for` (ou qui suit `invalid user` dans la seconde forme), l'IP est le mot qui suit
+    `from` ;
+  - une ligne contenant `Accepted password for` (ou `Accepted publickey for`) est un
+    **succès**, même format ;
+  - toutes les autres lignes sont ignorées.
+
+  Affiche :
+
+  ```
+  Échecs : 5
+  Succès : 1
+  Utilisateurs visés : admin, root, test
+  IP à bloquer :
+  203.0.113.5 (3)
+  ```
+
+  - `Utilisateurs visés` : les utilisateurs des échecs, sans doublon, triés (ou `aucun`) ;
+  - `IP à bloquer` : les IP dont le nombre d'échecs est **≥ seuil**, par nombre décroissant
+    puis IP croissante (ordre des chaînes), une par ligne ; si aucune, affiche `IP à bloquer :
+    aucune` sur une seule ligne.
+starter: |
+  # Écris ton code ici
+cases:
+  - name: Attaque simple
+    input: |
+      3
+      Oct 19 08:01:12 srv sshd[812]: Failed password for root from 203.0.113.5 port 52114 ssh2
+      Oct 19 08:01:14 srv sshd[812]: Failed password for root from 203.0.113.5 port 52116 ssh2
+      Oct 19 08:01:20 srv sshd[813]: Failed password for invalid user admin from 198.51.100.7 port 40022 ssh2
+      Oct 19 08:01:30 srv CRON[900]: pam_unix(cron:session): session opened for user root
+      Oct 19 08:01:41 srv sshd[812]: Failed password for invalid user test from 203.0.113.5 port 52118 ssh2
+      Oct 19 08:02:03 srv sshd[815]: Accepted password for alice from 192.168.1.20 port 51000 ssh2
+      Oct 19 08:02:09 srv sshd[816]: Failed password for root from 198.51.100.7 port 40030 ssh2
+    output: |
+      Échecs : 5
+      Succès : 1
+      Utilisateurs visés : admin, root, test
+      IP à bloquer :
+      203.0.113.5 (3)
+  - name: Plusieurs IP et égalités
+    input: |
+      2
+      Oct 19 09:00:00 srv sshd[1]: Failed password for root from 10.0.0.9 port 1 ssh2
+      Oct 19 09:00:01 srv sshd[1]: Failed password for root from 10.0.0.10 port 2 ssh2
+      Oct 19 09:00:02 srv sshd[1]: Failed password for root from 10.0.0.9 port 3 ssh2
+      Oct 19 09:00:03 srv sshd[1]: Failed password for oracle from 10.0.0.10 port 4 ssh2
+      Oct 19 09:00:04 srv sshd[1]: Failed password for invalid user pi from 172.16.0.1 port 5 ssh2
+      Oct 19 09:00:05 srv sshd[1]: Failed password for invalid user pi from 172.16.0.1 port 6 ssh2
+      Oct 19 09:00:06 srv sshd[1]: Failed password for invalid user pi from 172.16.0.1 port 7 ssh2
+      Oct 19 09:00:07 srv sshd[2]: Accepted publickey for deploy from 10.0.0.2 port 8 ssh2
+      Oct 19 09:00:08 srv sshd[3]: Accepted password for bob from 10.0.0.3 port 9 ssh2
+    output: |
+      Échecs : 7
+      Succès : 2
+      Utilisateurs visés : oracle, pi, root
+      IP à bloquer :
+      172.16.0.1 (3)
+      10.0.0.10 (2)
+      10.0.0.9 (2)
+  - name: Journal calme
+    input: |
+      5
+      Oct 19 10:00:00 srv sshd[5]: Server listening on 0.0.0.0 port 22.
+      Oct 19 10:00:07 srv sshd[6]: Accepted publickey for alice from 10.0.0.2 port 8 ssh2
+
+    output: |
+      Échecs : 0
+      Succès : 1
+      Utilisateurs visés : aucun
+      IP à bloquer : aucune
+solution: |
+  import sys
+
+  seuil = int(sys.stdin.readline())
+  echecs_par_ip = {}
+  utilisateurs = set()
+  nb_echecs = 0
+  nb_succes = 0
+
+
+  def mot_apres(mots, cle):
+      return mots[mots.index(cle) + 1]
+
+
+  for ligne in sys.stdin:
+      mots = ligne.split()
+      if "Failed password for" in ligne:
+          nb_echecs += 1
+          if "invalid user" in ligne:
+              utilisateur = mot_apres(mots, "user")
+          else:
+              utilisateur = mot_apres(mots, "for")
+          ip = mot_apres(mots, "from")
+          utilisateurs.add(utilisateur)
+          echecs_par_ip[ip] = echecs_par_ip.get(ip, 0) + 1
+      elif "Accepted password for" in ligne or "Accepted publickey for" in ligne:
+          nb_succes += 1
+
+  print(f"Échecs : {nb_echecs}")
+  print(f"Succès : {nb_succes}")
+  print("Utilisateurs visés : " + (", ".join(sorted(utilisateurs)) or "aucun"))
+  a_bloquer = [(ip, n) for ip, n in echecs_par_ip.items() if n >= seuil]
+  a_bloquer.sort(key=lambda c: (-c[1], c[0]))
+  if a_bloquer:
+      print("IP à bloquer :")
+      for ip, n in a_bloquer:
+          print(f"{ip} ({n})")
+  else:
+      print("IP à bloquer : aucune")
+cours: |
+  ## Lire un journal système
+
+  `/var/log/auth.log` (Debian/Ubuntu) ou `/var/log/secure` (Red Hat) enregistre les
+  authentifications. Un serveur SSH exposé sur Internet y voit défiler des milliers de
+  tentatives automatisées (*brute force*) sur `root`, `admin`, `test`, `pi`… Les repérer
+  permet de bloquer les adresses fautives — c'est exactement ce que fait **fail2ban**.
+
+  ## Découper une ligne en mots
+
+  Les lignes de journal sont semi-structurées : la position d'un champ varie (« invalid
+  user » ajoute deux mots), mais des **mots repères** sont stables (`for`, `from`, `port`).
+  La méthode `liste.index(mot)` donne la position d'un repère ; le champ voulu est juste
+  après :
+
+  ```python
+  mots = "Accepted password for alice from 10.0.0.2 port 22".split()
+  mots[mots.index("from") + 1]     # "10.0.0.2"
+  ```
+
+  `index` lève `ValueError` si le mot est absent : ne l'appelle que sur des lignes dont tu as
+  vérifié la forme (ici avec `in`).
+
+  ## Filtrer d'abord
+
+  `"Failed password for" in ligne` sélectionne les lignes intéressantes ; toutes les autres
+  sont ignorées sans traitement. L'ordre des tests compte quand une forme en contient une
+  autre (« invalid user » est un cas particulier d'échec).
+
+  ## Les bonnes structures
+
+  - un **compteur** par IP : un dictionnaire `ip → nombre` (`d.get(ip, 0) + 1`) ;
+  - les utilisateurs visés **sans doublon** : un `set` ;
+  - des totaux : de simples entiers.
+
+  ## Trier le résultat
+
+  Une liste de couples `(ip, nombre)` se trie avec une clé tuple : `-nombre` pour l'ordre
+  décroissant, puis l'IP pour départager. (Ici l'ordre des IP est celui des chaînes ; pour un
+  vrai ordre numérique, on utiliserait `ipaddress.ip_address(ip)` comme clé.)
+
+  ## Afficher une liste ou « aucun »
+
+  `", ".join(liste_vide)` donne `""`, qui est faux : `", ".join(...) or "aucun"` affiche la
+  valeur de repli.
+
+  ## Aller plus loin
+
+  Sur un système avec systemd : `journalctl -u ssh` (ou `-u sshd`). Pour se protéger :
+  authentification par clé uniquement (`PasswordAuthentication no`), `PermitRootLogin no`,
+  fail2ban, et éventuellement un port non standard pour réduire le bruit.
+docs:
+  - title: Méthodes de liste (index)
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#more-on-lists
+  - title: Module sys (sys.stdin)
+    url: https://docs.python.org/fr/3/library/sys.html#sys.stdin

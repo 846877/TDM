@@ -1,0 +1,123 @@
+title: Les N reines
+level: expert
+order: 7
+tags: [backtracking, récursivité]
+summary: Le backtracking appliqué à un casse-tête classique.
+description: |
+  Placer `n` reines sur un échiquier `n × n` sans qu'aucune ne puisse en prendre une autre
+  (même ligne, colonne ou diagonale).
+
+  Écris :
+
+  - `nombre_solutions(n)` : le nombre de placements possibles (`8` → `92`) ;
+  - `une_solution(n)` : une solution sous forme de liste où l'indice est la ligne et la valeur la
+    colonne de la reine, ou `None` s'il n'y en a pas.
+
+  La moulinette teste `n = 10` (724 solutions) en temps limité.
+starter: |
+  def nombre_solutions(n):
+      pass
+
+
+  def une_solution(n):
+      pass
+tests: |
+  def valide(sol):
+      n = len(sol)
+      return len(set(sol)) == n and len({r + c for r, c in enumerate(sol)}) == n and len({r - c for r, c in enumerate(sol)}) == n
+
+  def test_huit():
+      "92 solutions pour 8 reines"
+      assert solution.nombre_solutions(8) == 92
+
+  def test_petits():
+      "Cas n = 1, 2, 3"
+      assert [solution.nombre_solutions(i) for i in (1, 2, 3)] == [1, 0, 0]
+
+  def test_dix():
+      "724 solutions pour 10 reines"
+      assert solution.nombre_solutions(10) == 724
+
+  def test_une_solution():
+      "Une solution valide"
+      sol = solution.une_solution(8)
+      assert sol is not None and len(sol) == 8 and valide(sol)
+      assert solution.une_solution(3) is None
+solution: |
+  def _placer(n, ligne, colonnes, diag1, diag2, actuelle, premiere_seulement):
+      if ligne == n:
+          return 1, list(actuelle)
+      total, trouvee = 0, None
+      for c in range(n):
+          if c in colonnes or ligne + c in diag1 or ligne - c in diag2:
+              continue
+          colonnes.add(c); diag1.add(ligne + c); diag2.add(ligne - c); actuelle.append(c)
+          nb, sol = _placer(n, ligne + 1, colonnes, diag1, diag2, actuelle, premiere_seulement)
+          colonnes.discard(c); diag1.discard(ligne + c); diag2.discard(ligne - c); actuelle.pop()
+          total += nb
+          trouvee = trouvee or sol
+          if premiere_seulement and trouvee:
+              return total, trouvee
+      return total, trouvee
+
+
+  def nombre_solutions(n):
+      return _placer(n, 0, set(), set(), set(), [], False)[0]
+
+
+  def une_solution(n):
+      return _placer(n, 0, set(), set(), set(), [], True)[1]
+cours: |
+  ## Le retour sur trace (*backtracking*)
+
+  Pour explorer un espace de solutions énorme, on construit une solution **pas à pas** ; dès
+  qu'un choix partiel viole une contrainte, on l'abandonne et on revient en arrière
+  (*backtrack*) pour essayer le choix suivant. On élague ainsi des branches entières de
+  l'arbre des possibilités.
+
+  ```python
+  def explorer(partiel):
+      if complet(partiel):
+          traiter(partiel)
+          return
+      for choix in candidats(partiel):
+          if valide(partiel, choix):
+              partiel.append(choix)
+              explorer(partiel)
+              partiel.pop()          # on défait le choix : retour arrière
+  ```
+
+  ## Modéliser intelligemment
+
+  Une bonne modélisation réduit l'espace de recherche :
+
+  - **une reine par ligne** (forcément, sinon deux seraient sur la même ligne) : on place la
+    reine de la ligne 0, puis de la ligne 1, etc. L'état est une liste `colonnes` où
+    `colonnes[ligne]` est la colonne de la reine ;
+  - il reste à vérifier colonnes et diagonales.
+
+  ## Tester les conflits en O(1)
+
+  Sur une même diagonale « descendante », `ligne - colonne` est constant ; sur une
+  diagonale « montante », `ligne + colonne` est constant. Trois **ensembles** (colonnes
+  occupées, diagonales `l - c`, diagonales `l + c`) permettent de tester un placement en
+  temps constant au lieu de comparer avec toutes les reines déjà posées. On ajoute aux
+  ensembles avant l'appel récursif, on retire après.
+
+  ## Performance
+
+  Le nombre de placements bruts est n^n (10 milliards pour n = 10) ; le backtracking avec
+  élagage n'explore que quelques dizaines de milliers de nœuds. Les versions les plus
+  rapides utilisent des **masques de bits** à la place des ensembles.
+
+  Pour `une_solution`, arrête la recherche dès la première solution trouvée (la fonction
+  récursive renvoie un booléen ou la solution). Pour n = 2 et n = 3, il n'existe aucune
+  solution.
+
+  Le backtracking résout aussi le Sudoku, les mots croisés, la coloration de graphes et
+  beaucoup de problèmes de planification.
+docs:
+  - title: Wikipédia — Problème des huit dames
+    url: https://fr.wikipedia.org/wiki/Probl%C3%A8me_des_huit_dames
+  - title: Wikipédia — Retour sur trace (backtracking)
+    url: https://fr.wikipedia.org/wiki/Retour_sur_trace

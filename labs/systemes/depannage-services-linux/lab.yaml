@@ -1,0 +1,319 @@
+title: Dépannage de services Linux – le serveur applicatif hérité
+level: expert
+order: 2
+tags: [dépannage, linux, nginx, cron, ssh, logrotate, droits, nsswitch, lsof, méthodologie]
+summary: Huit pannes réelles sur un serveur repris d'un prestataire (web, disque fantôme, cron, compte, droits, résolution, rotation, SSH) à diagnostiquer par les journaux et à corriger sans réinstaller.
+build: .
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** *Ateliers Durand* reprend en interne le serveur applicatif `srv-appli`, jusqu'ici géré par
+  un prestataire (« JPL »). Il a été livré « fonctionnel »… Rien ne marche. Pour chaque ticket :
+  **observe** (journaux, `systemctl` n'existe pas ici : regarde les processus et les fichiers),
+  **formule une hypothèse**, **corrige à la source**, **vérifie**. Pas de réinstallation, pas de `chmod 777`.
+
+  **Machine.** Serveur Ubuntu sans systemd, terminal `root`. Les services se lancent à la main :
+  `nginx` (`nginx -t`, `nginx -s reload`), `/usr/sbin/sshd` (`sshd -t`), `cron`.
+
+  Réponses à écrire dans `/root/reponses.txt`, au format `cle=valeur`.
+
+  Boîte à outils : `ps auxf`, `ss -ltnp`, `lsof`, `fuser`, `df -h`, `du -sh`, `journaux dans /var/log`,
+  `file`, `cat -A`, `dos2unix`, `getent`, `chage -l`, `namei -l`, `stat`, `logrotate -d`, `sshd -t`,
+  `runuser -u <compte> -- <commande>`.
+cours: |
+  ## La démarche de dépannage d'un service
+
+  ```
+  1. OBSERVER      symptôme exact, message d'erreur, depuis quand, qui est touché
+  2. LOCALISER     le processus tourne-t-il ? écoute-t-il ? que dit son journal ?
+  3. HYPOTHÈSE     une cause précise, vérifiable
+  4. TESTER        une seule modification à la fois, réversible (copie .bak)
+  5. VÉRIFIER      du point de vue de l'utilisateur, puis noter dans le ticket
+  ```
+
+  Sur une machine avec systemd, le point de départ est `systemctl status <service>` puis
+  `journalctl -u <service> -e`. Ici, sans systemd, on remonte aux sources : processus, ports, fichiers
+  journaux, droits.
+
+  ## Les questions et leurs commandes
+
+  | Question                                   | Commandes                                           |
+  |--------------------------------------------|-----------------------------------------------------|
+  | Le processus tourne-t-il ? avec quel compte ? | `ps auxf`, `pgrep -a nginx`                     |
+  | Qui écoute sur le port ?                   | `ss -ltnp`, `fuser 80/tcp`, `lsof -i :80`           |
+  | La configuration est-elle valide ?         | `nginx -t`, `sshd -t`, `visudo -c`, `logrotate -d`, `testparm` |
+  | Que dit le journal ?                       | `tail -n 50 /var/log/<service>/error.log`, `journalctl` |
+  | Le compte peut-il lire ce chemin ?         | `namei -l /chemin/complet`, `runuser -u <compte> -- cat <f>` |
+  | Pourquoi le compte est-il refusé ?         | `chage -l`, `passwd -S`, `getent passwd` (shell), droits du dossier perso |
+  | Où est passé l'espace disque ?             | `df -h` vs `du -sh /*`, `lsof +L1`                   |
+  | Ce script est-il « propre » ?              | `file`, `cat -A` (fins de ligne `^M$` = Windows), `bash -x` |
+  | Un nom se résout-il ?                      | `getent hosts`, `/etc/hosts`, `/etc/nsswitch.conf`  |
+
+  ## Fichiers supprimés mais ouverts
+
+  ```
+  $ df -h /           → 85 % utilisés
+  $ du -sh /*         → la somme ne fait que 60 %
+  $ lsof +L1          → journal-appli  412  ...  /var/log/appli/debug.log (deleted)
+  ```
+
+  Un fichier n'est réellement effacé que lorsque plus aucun processus ne le garde ouvert. Solutions :
+  redémarrer le processus, ou vider le fichier par son descripteur (`: > /proc/<pid>/fd/<n>`). Pour éviter
+  le problème, on vide un journal avec `truncate -s 0` au lieu de le supprimer, et on utilise `copytruncate`
+  dans logrotate pour les applications qui ne savent pas rouvrir leurs fichiers.
+
+  ## Pièges des fichiers venus de Windows
+
+  Un script édité sous Windows a des fins de ligne **CRLF** : la première ligne devient `#!/bin/sh\r` et
+  le noyau cherche un interpréteur nommé `sh\r` (« bad interpreter » ou rien du tout sous cron).
+  `dos2unix` corrige ; `file script.sh` signale « with CRLF line terminators ».
+
+  ## cron : les exigences de /etc/cron.d
+
+  | Exigence                                        | Conséquence si non respectée          |
+  |-------------------------------------------------|---------------------------------------|
+  | un champ **utilisateur** après les 5 champs de date | ligne ignorée (erreur dans le journal) |
+  | fichier appartenant à root, non modifiable par le groupe ou les autres | fichier entier ignoré |
+  | nom sans point ni extension                     | fichier ignoré                        |
+  | script exécutable, chemins absolus              | commande en échec silencieux          |
+
+  ## Les droits minimum
+
+  Un service doit avoir **juste** les droits nécessaires : lire sa configuration (groupe du service,
+  `640`), écrire dans son dossier de données (propriétaire ou groupe), rien d'autre. `chmod 777` ou
+  `chmod 666` « réparent » en apparence mais ouvrent la porte : tout compte (ou un service compromis)
+  peut alors lire le mot de passe ou remplacer les fichiers.
+
+  ## Pièges courants
+
+  - Modifier une configuration sans la tester (`-t`) puis recharger : le service s'arrête.
+  - Corriger la première cause et déclarer le ticket résolu : les pannes sont souvent **empilées**.
+  - Supprimer un journal ouvert pour « faire de la place ».
+  - Oublier qu'un compte peut être bloqué de plusieurs façons (expiration, shell, verrouillage, droits du
+    dossier personnel).
+
+  ## Bonnes pratiques en entreprise
+
+  - Sauvegarder un fichier avant de le modifier (`cp -a fichier fichier.bak-$(date +%F)`), ou le versionner.
+  - Ticket complet : symptôme, diagnostic (commandes et résultats), cause racine, correction, vérification.
+  - Après un transfert de prestataire : inventaire des services, comptes, tâches planifiées et
+    configurations, puis remise aux normes documentée.
+docs:
+  - title: lsof(8) - fichiers ouverts par les processus (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man8/lsof.8.html
+  - title: namei(1) - suivre les droits d'un chemin
+    url: https://manpages.ubuntu.com/manpages/noble/man1/namei.1.html
+  - title: crontab(5) - format des fichiers cron (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/crontab.5.html
+exercises:
+  - id: svc-nginx-ne-demarre-pas
+    title: "Ticket 1 : l'application web affiche l'ancien portail"
+    cours: |
+      Deux questions systématiques quand un serveur web ne démarre pas :
+
+      1. **La configuration est-elle valide ?** `nginx -t` indique le fichier et la ligne en erreur. En
+         nginx, chaque directive se termine par un point-virgule.
+      2. **Le port est-il libre ?** Un seul processus peut écouter sur un port donné. `ss -ltnp` ou
+         `fuser -v 80/tcp` montre qui l'occupe ; « Address already in use » dans l'erreur de démarrage le
+         confirme.
+
+      Arrête proprement l'intrus (`kill <PID>`), puis démarre nginx et vérifie avec `curl`. Pense à ce qui
+      relancerait l'ancien service au prochain démarrage.
+    description: |
+      `curl http://localhost/` affiche « Ancien portail » au lieu de l'application. nginx est censé
+      servir `/var/www/appli`. Trouve pourquoi nginx ne tourne pas (il y a **deux** causes), corrige, et
+      démarre nginx. L'ancien portail doit être définitivement arrêté.
+    hint: "nginx -t (ligne en erreur : un « ; » manque) ; ss -ltnp | grep :80 (qui occupe le port ?) ; kill du processus busybox httpd ; nginx"
+    checks:
+      - desc: La configuration nginx est valide
+        run: nginx -t 2>/dev/null
+      - desc: L'ancien portail est arrêté
+        run: "! pgrep -f '[b]usybox httpd' >/dev/null"
+      - desc: nginx sert l'application sur le port 80
+        run: pgrep -x nginx >/dev/null && curl -sf --max-time 3 http://localhost/ | grep -q 'Application Durand'
+
+  - id: svc-disque-fantome
+    title: "Ticket 2 : 120 Mo disparus"
+    cours: |
+      `df` mesure l'espace occupé du point de vue du système de fichiers, `du` additionne les fichiers
+      **visibles**. Un écart important signifie souvent qu'un fichier a été supprimé alors qu'un processus le
+      garde ouvert : son nom a disparu, mais ses données restent tant que le descripteur est ouvert.
+
+      - `lsof +L1` liste les fichiers ouverts dont le nombre de liens est nul (supprimés) ;
+      - `ls -l /proc/<pid>/fd/` montre les descripteurs d'un processus, avec la mention `(deleted)`.
+
+      On libère l'espace en arrêtant ou redémarrant le processus, ou en tronquant le fichier à travers son
+      descripteur dans `/proc`.
+    description: |
+      La supervision signale que `df` compte 120 Mo de plus que la somme des fichiers visibles (`du`).
+      Un fichier a été supprimé… mais il occupe toujours de la place. Trouve **quel processus** le
+      retient (`lsof +L1` ou `ls -l /proc/*/fd | grep deleted`) et libère l'espace **sans redémarrer le
+      serveur**. Bonus : sans même arrêter le processus (vider le fichier via `/proc/<pid>/fd/<n>`).
+
+      Réponse : `processus=` (nom du processus).
+    hint: "lsof +L1 ; : > /proc/<PID>/fd/3   (ou arrêter le processus)"
+    checks:
+      - desc: Nom du processus
+        run: grep -Eq '^processus *= *journal-appli *$' /root/reponses.txt
+      - desc: Plus aucun fichier supprimé de plus de 1 Mo n'est retenu ouvert
+        run: |
+          for f in /proc/[0-9]*/fd/*; do l=$(readlink "$f" 2>/dev/null) || continue; case "$l" in *'(deleted)'*) s=$(stat -Lc %s "$f" 2>/dev/null || echo 0); [ "$s" -gt 1048576 ] && exit 1;; esac; done; exit 0
+
+  - id: svc-cron-rapport
+    title: "Ticket 3 : le rapport planifié ne tourne jamais"
+    cours: |
+      Quand une tâche planifiée ne tourne pas, sépare les problèmes :
+
+      1. **le script marche-t-il à la main ?** `file` et `cat -A` révèlent des fins de ligne Windows (`^M`) ;
+         un script doit être exécutable ;
+      2. **la ligne cron est-elle au bon format ?** Les fichiers de `/etc/cron.d/` ont un champ
+         supplémentaire par rapport à `crontab -e` (voir `man 5 crontab`) ;
+      3. **cron accepte-t-il le fichier ?** Il ignore les fichiers de `/etc/cron.d` modifiables par d'autres
+         que root.
+
+      Attends la minute suivante et vérifie le fichier de sortie.
+    description: |
+      `/etc/cron.d/rapport` doit lancer `/usr/local/bin/rapport.sh` toutes les minutes, qui ajoute une
+      ligne dans `/var/log/rapport.log`. Ce fichier n'existe même pas. Il y a **trois** problèmes entre
+      le fichier cron et le script : lance d'abord le script à la main, puis relis `man 5 crontab`
+      (le format de `/etc/cron.d` n'est pas celui de `crontab -e`) et vérifie les droits du fichier cron.
+    hint: "file rapport.sh (CRLF) → dos2unix + chmod +x ; dans /etc/cron.d il faut un champ utilisateur : * * * * * root /usr/local/bin/rapport.sh ; chmod 644 /etc/cron.d/rapport"
+    checks:
+      - desc: Le script est exécutable et au format Unix
+        run: test -x /usr/local/bin/rapport.sh && ! grep -q "$(printf '\r')" /usr/local/bin/rapport.sh
+      - desc: Le fichier cron.d indique l'utilisateur et n'est pas modifiable par le groupe
+        run: |
+          grep -Eq '^[^#]*\* +root +/usr/local/bin/rapport\.sh' /etc/cron.d/rapport && test "$(stat -c %a /etc/cron.d/rapport)" = 644
+      - desc: cron a écrit dans /var/log/rapport.log depuis moins de 2 minutes (attente jusqu'à 2 min)
+        timeout: 150
+        run: |
+          for i in $(seq 1 14); do [ -f /var/log/rapport.log ] && [ $(( $(date +%s) - $(stat -c %Y /var/log/rapport.log) )) -lt 120 ] && exit 0; sleep 10; done; exit 1
+
+  - id: svc-compte-comptable
+    title: "Ticket 4 : la comptable ne peut plus se connecter"
+    cours: |
+      Un compte peut être refusé à plusieurs étapes, chacune avec son message :
+
+      | Étape                       | Vérification                                   |
+      |-----------------------------|------------------------------------------------|
+      | compte expiré               | `chage -l <login>` (Account expires)           |
+      | mot de passe verrouillé     | `passwd -S <login>`                            |
+      | shell interdit              | 7e champ de `getent passwd <login>`            |
+      | dossier personnel inutilisable | `ls -ld /home/<login>` (propriétaire, droits) |
+
+      `su - <login>` en root contourne le mot de passe mais pas l'expiration ni le shell : lis chaque message
+      attentivement, corrige, puis reteste jusqu'à ce que tout passe.
+    description: |
+      Le compte `comptable` doit pouvoir ouvrir une session shell et écrire dans son dossier personnel.
+      Teste avec `su - comptable` et lis bien chaque message d'erreur : il y a **trois** causes.
+    hint: "chage -l comptable (expiration) ; getent passwd comptable (shell) ; ls -ld /home/comptable (propriétaire)"
+    checks:
+      - desc: Le compte n'expire plus et a un shell interactif
+        run: chage -l comptable | grep -i '^account expires' | grep -qi never && getent passwd comptable | grep -q ':/bin/bash$'
+      - desc: comptable ouvre une session et écrit dans son dossier
+        run: test "$(su - comptable -c 'touch ~/verif-session && rm ~/verif-session && id -un' 2>/dev/null)" = comptable
+
+  - id: svc-droits-appli
+    title: "Ticket 5 : le service applicatif tourne à vide"
+    cours: |
+      Le journal d'une application dit généralement **quel fichier** elle n'arrive pas à lire ou écrire.
+
+      - `namei -l <chemin>` affiche propriétaire et droits de **chaque** dossier du chemin : un seul `x`
+        manquant sur un dossier parent suffit à bloquer ;
+      - `runuser -u <compte> -- <commande>` teste avec l'identité du service ;
+      - pour qu'un service lise un fichier sensible, on lui donne le **groupe** (`chgrp`) et des droits
+        `640`, plutôt que de rendre le fichier lisible par tous.
+
+      Après correction, attends le prochain cycle du service et contrôle le fichier attendu.
+    description: |
+      Le service `appli-service` (utilisateur `appli`) tourne, mais n'a jamais écrit son battement de
+      cœur dans `/srv/appli/data/heartbeat`. Lis `/var/log/appli/service.log`, puis donne **juste les
+      droits nécessaires** : le fichier de configuration contient un mot de passe (personne d'autre que
+      root et `appli` ne doit pouvoir le lire), et le dossier de données ne doit pas être ouvert à tous.
+    hint: "chgrp appli /etc/appli/appli.conf && chmod 640 … ; chown appli:appli /srv/appli/data (ou chgrp + chmod 770) ; namei -l pour suivre les droits du chemin"
+    checks:
+      - desc: Le battement de cœur a moins de 30 secondes
+        timeout: 40
+        run: |
+          for i in 1 2 3; do [ -f /srv/appli/data/heartbeat ] && [ $(( $(date +%s) - $(stat -c %Y /srv/appli/data/heartbeat) )) -lt 30 ] && exit 0; sleep 10; done; exit 1
+      - desc: La configuration n'est pas lisible par les autres
+        run: test "$(stat -c %A /etc/appli/appli.conf | cut -c8-10)" = ---
+      - desc: Le dossier de données n'est pas modifiable par tous
+        run: test "$(stat -c %A /srv/appli/data | cut -c9)" = -
+
+  - id: svc-resolution-bdd
+    title: "Ticket 6 : « base de données introuvable »"
+    cours: |
+      La résolution des noms par les applications suit `/etc/nsswitch.conf`, ligne `hosts:` : les sources y
+      sont consultées dans l'ordre (`files` = `/etc/hosts`, `dns` = serveurs de `/etc/resolv.conf`). Si une
+      source manque, elle n'est jamais interrogée, même pour `localhost`.
+
+      - `getent hosts <nom>` teste exactement ce que verra l'application ;
+      - `/etc/hosts` contient des lignes `<adresse> <nom> [alias...]` ;
+      - toute la plage `127.0.0.0/8` est locale : `127.0.0.2` est une adresse de bouclage valide.
+
+      Teste ensuite le port avec `nc -zv`.
+    description: |
+      L'application se connecte à `bdd.durand.lan:5432`. La base tourne sur ce serveur même, à l'adresse
+      **127.0.0.2**. Pourtant `nc -zv bdd.durand.lan 5432` échoue, et même `getent hosts localhost` ne
+      renvoie rien. Il y a **deux** erreurs dans la configuration de la résolution de noms.
+    hint: "grep ^hosts /etc/nsswitch.conf (il manque « files ») ; /etc/hosts : bdd.durand.lan doit pointer sur 127.0.0.2"
+    checks:
+      - desc: Le fichier /etc/hosts est consulté (localhost résout)
+        run: getent hosts localhost | grep -q '127\.0\.0\.1\|::1'
+      - desc: bdd.durand.lan résout en 127.0.0.2
+        run: test "$(getent hosts bdd.durand.lan | awk '{print $1}')" = 127.0.0.2
+      - desc: Le port 5432 de bdd.durand.lan répond
+        run: nc -z -w 2 bdd.durand.lan 5432
+
+  - id: svc-logrotate
+    title: "Ticket 7 : les journaux de l'application ne tournent pas"
+    cours: |
+      `logrotate -d <fichier>` simule la rotation et affiche les erreurs sans rien modifier.
+
+      Points de contrôle :
+      - logrotate ignore, par sécurité, un fichier de règles modifiable par le groupe ou les autres ;
+      - chaque directive doit avoir une valeur valide (`rotate` attend un nombre) ;
+      - le dossier des journaux ne doit pas être modifiable par n'importe qui, sinon logrotate exige une
+        directive `su <utilisateur> <groupe>`.
+
+      `logrotate -f <fichier>` force une rotation pour vérifier : un fichier `.1` (ou `.1.gz`) doit apparaître.
+    description: |
+      `/var/log/appli/app.log` grossit sans fin. La règle `/etc/logrotate.d/appli` existe pourtant.
+      Teste-la à blanc (`logrotate -d`), corrige **tout** ce qui est signalé (droits du fichier de règle,
+      valeur invalide : on garde 7 rotations), puis force une rotation pour prouver qu'elle marche.
+    hint: "logrotate -d /etc/logrotate.d/appli ; chmod 644 /etc/logrotate.d/appli ; rotate 7 ; logrotate -f /etc/logrotate.d/appli"
+    checks:
+      - desc: La règle est en 644 et garde 7 rotations
+        run: test "$(stat -c %a /etc/logrotate.d/appli)" = 644 && grep -Eq '^\s*rotate\s+7\s*$' /etc/logrotate.d/appli
+      - desc: logrotate n'y trouve plus d'erreur
+        run: "! logrotate -d /etc/logrotate.d/appli 2>&1 | grep -qi 'error'"
+      - desc: Une rotation a eu lieu (app.log.1 ou app.log.1.gz)
+        run: ls /var/log/appli/app.log.1* >/dev/null 2>&1
+
+  - id: svc-sshd
+    title: "Ticket 8 : impossible de se connecter en SSH"
+    cours: |
+      `sshd -t` teste la configuration **et** la présence des clés d'hôte, puis affiche la première erreur
+      rencontrée : corrige-la, relance le test, et ainsi de suite jusqu'à ce qu'il ne dise plus rien.
+
+      - les clés d'hôte manquantes se régénèrent avec `ssh-keygen -A` ;
+      - chaque directive a des valeurs autorisées (voir `man sshd_config`) : un mot inventé ou un nombre mal
+        écrit empêche le démarrage ;
+      - `sshd -T` affiche la configuration effective une fois valide.
+
+      Démarre sshd et vérifie qu'il écoute (`ss -ltnp | grep :22`).
+    description: |
+      Le serveur SSH ne démarre pas (`/usr/sbin/sshd` ne laisse aucun processus). Trouve les erreurs
+      avec `sshd -t` (corrige-les une par une) : les intentions de durcissement de JPL étaient bonnes,
+      garde-les avec des valeurs **valides** (connexion root par mot de passe interdite, 3 essais
+      maximum, pas d'authentification par mot de passe). Démarre sshd.
+    hint: "ssh-keygen -A (clés d'hôte) ; PermitRootLogin no ; MaxAuthTries 3 ; sshd -t && /usr/sbin/sshd"
+    checks:
+      - desc: La configuration sshd est valide
+        run: sshd -t
+      - desc: Les intentions de durcissement sont conservées
+        run: |
+          c=$(sshd -T 2>/dev/null) && echo "$c" | grep -Eq '^permitrootlogin (no|prohibit-password)$' && echo "$c" | grep -qx 'maxauthtries 3' && echo "$c" | grep -qx 'passwordauthentication no'
+      - desc: sshd écoute sur le port 22
+        run: pgrep -x sshd >/dev/null && nc -z -w 2 127.0.0.1 22

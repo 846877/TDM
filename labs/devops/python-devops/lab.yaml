@@ -1,0 +1,446 @@
+title: Python pour le DevOps
+level: debutant
+order: 4
+tags: [python, venv, pip, api, flask, pytest, automatisation]
+summary: Environnements virtuels, scripts d'automatisation, API, sonde, tests et paquet installable.
+image: python:3.12-slim
+ports: ["5001:5000"]
+shell: bash
+workdir: /root
+setup: |
+  mkdir -p /root/projet && printf '{"serveurs": [{"nom": "web1", "cpu": 82}, {"nom": "web2", "cpu": 35}, {"nom": "db1", "cpu": 91}]}\n' > /root/projet/metrics.json
+  python3 - <<'EOF'
+  ips = ["10.0.0.1"] * 40 + ["10.0.0.2"] * 25 + ["192.168.1.7"] * 18 + ["172.16.0.9"] * 12 + ["10.0.0.3"] * 5
+  pages = ["/", "/login", "/api/serveurs", "/static/app.css", "/admin"]
+  codes = ["200"] * 7 + ["404", "500", "301"]
+  with open("/root/projet/access.log", "w") as f:
+      for i in range(100):
+          ip = ips[(i * 37) % 100]
+          f.write(f'{ip} - - [18/Oct/2026:10:{i // 60:02d}:{i % 60:02d} +0000] "GET {pages[i % 5]} HTTP/1.1" {codes[i % 10]} {500 + i * 7}\n')
+  EOF
+description: |
+  Le lab Vagrant `python` de ta formation est une VM de bureau avec PyCharm. Ici, on se concentre sur
+  l'usage de Python en ops, dans un conteneur Python 3.12. Pour l'apprentissage du langage, il y a
+  la catégorie **Python** de la plateforme.
+
+  Travaille dans `/root/projet`. Le port 5000 du conteneur est publié sur **http://localhost:5001**.
+
+  Le parcours : environnement virtuel, scripts d'automatisation (alertes, analyse de logs, sauvegarde avec
+  rotation), petite API, sonde de supervision, tests automatisés et enfin un outil installable avec `pip`.
+cours: |
+  ## Python, le couteau suisse de l'ops
+
+  Quand un script Bash dépasse quelques dizaines de lignes, qu'il faut manipuler du JSON, appeler une API ou
+  écrire des tests, Python prend le relais. Ansible, de nombreux outils cloud (AWS CLI, Azure CLI), les
+  exporters Prometheus ou les scripts de migration sont écrits en Python.
+
+  ### Isoler les dépendances
+
+  Le Python du système appartient au système : on n'y installe rien. Chaque projet a son **environnement
+  virtuel**, un dossier qui contient un interpréteur et ses propres paquets.
+
+  ```
+  projet/
+  ├── .venv/             ← python -m venv .venv (jamais commité)
+  ├── requirements.txt   ← dépendances figées (pip freeze)
+  ├── pyproject.toml     ← métadonnées du projet, commandes
+  ├── alerte.py
+  └── tests/
+      └── test_alerte.py
+  ```
+
+  On peut « activer » le venv (`source .venv/bin/activate`) ou appeler directement `.venv/bin/python` et
+  `.venv/bin/pip`, ce qui est plus sûr dans les scripts et la CI.
+
+  ### Un script d'ops bien élevé
+
+  Un script destiné à être lancé par d'autres outils (cron, CI, supervision) respecte un contrat :
+
+  | Élément | Outil Python |
+  |---|---|
+  | Arguments et aide | `argparse` (ou `sys.argv`) |
+  | Code de sortie | `sys.exit(0)` succès, autre valeur = échec |
+  | Messages d'erreur | `print(..., file=sys.stderr)` |
+  | Données structurées | `json.load` / `json.dumps` |
+  | Fichiers et chemins | `pathlib.Path` |
+  | Commandes externes | `subprocess.run([...], check=True)` |
+  | HTTP | `urllib.request` ou `requests` |
+
+  Le code de sortie est essentiel : c'est lui que lisent le shell (`&&`, `||`), les pipelines de CI et les
+  sondes de supervision (convention Nagios : 0 OK, 1 WARNING, 2 CRITICAL).
+
+  ```python
+  import argparse, json, sys
+
+  def main() -> int:
+      parser = argparse.ArgumentParser(description="Alerte CPU")
+      parser.add_argument("seuil", type=int)
+      args = parser.parse_args()
+      ...
+      return 1 if alertes else 0
+
+  if __name__ == "__main__":
+      sys.exit(main())
+  ```
+
+  Le bloc `if __name__ == "__main__"` permet d'importer le module (dans des tests, depuis une commande
+  installée) sans lancer le script.
+
+  ### Tester
+
+  `pytest` découvre les fichiers `test_*.py` et les fonctions `test_*`, et utilise de simples `assert`.
+  Pour tester un script en boîte noire, on le lance avec `subprocess.run(..., capture_output=True,
+  text=True)` puis on vérifie `returncode` et `stdout`.
+
+  ### Distribuer un outil
+
+  `pyproject.toml` décrit le projet (nom, version, dépendances) et peut déclarer des **commandes** dans
+  `[project.scripts]`. `pip install -e .` installe le projet en mode *éditable* : les modifications du code
+  sont prises en compte immédiatement.
+
+  ### Pièges courants
+
+  - `pip install` hors venv (avec `sudo` en prime) : conflits avec les paquets du système.
+  - Oublier `requirements.txt` : la CI n'a pas les mêmes versions que toi.
+  - Un `except: pass` qui avale toutes les erreurs : le script « réussit » alors qu'il a échoué.
+  - Pas de délai (`timeout`) sur les appels réseau : la sonde reste bloquée indéfiniment.
+  - Comparer des nombres lus dans un fichier sans les convertir (`"9" > "80"` est vrai en texte !).
+
+  ### Bonnes pratiques
+
+  Des fonctions petites et testables, la bibliothèque standard d'abord, des dépendances épinglées, un
+  formateur et un linter (`ruff`, `black`) dans la CI.
+
+  ### Pour réviser
+
+  - Pourquoi ne jamais installer de paquets avec `pip` dans le Python du système ?
+  - Que lit un outil de supervision dans le résultat d'une sonde ?
+  - Pourquoi le bloc `if __name__ == "__main__"` est-il utile pour les tests ?
+  - Qu'apporte `pip install -e .` par rapport à un `pip install .` classique ?
+docs:
+  - title: Tutoriel officiel Python (français)
+    url: https://docs.python.org/fr/3/tutorial/
+  - title: Environnements virtuels (venv)
+    url: https://docs.python.org/fr/3/library/venv.html
+  - title: Documentation de pytest
+    url: https://docs.pytest.org/
+  - title: Guide de l'empaquetage Python
+    url: https://packaging.python.org/
+exercises:
+  - id: venv
+    title: Environnement virtuel
+    description: |
+      Crée un environnement virtuel `/root/projet/.venv`, installe-y `requests` et `flask`, et fige les
+      dépendances dans `/root/projet/requirements.txt` (`pip freeze`).
+    cours: |
+      `python3 -m venv chemin` crée un environnement virtuel : un dossier avec sa propre copie de l'interpréteur
+      et de `pip`. Les paquets installés avec `chemin/bin/pip install ...` restent confinés dans ce dossier et
+      ne touchent pas au Python du système.
+
+      `pip freeze` affiche les paquets installés **avec leur version exacte** (`flask==3.0.3`), y compris les
+      dépendances indirectes. Redirigé dans `requirements.txt`, il permet de recréer exactement le même
+      environnement ailleurs (`pip install -r requirements.txt`), par exemple dans un Dockerfile ou une CI.
+
+      Le dossier `.venv` lui-même ne se commite pas (il est propre à une machine) : seul `requirements.txt`
+      est versionné.
+    checks:
+      - desc: L'environnement virtuel existe
+        run: test -x /root/projet/.venv/bin/python
+      - desc: requests et flask sont installés dans le venv
+        run: /root/projet/.venv/bin/python -c "import requests, flask"
+      - desc: requirements.txt liste flask et requests
+        run: grep -qi '^flask==' /root/projet/requirements.txt && grep -qi '^requests==' /root/projet/requirements.txt
+  - id: script
+    title: Script d'alerte
+    description: |
+      Écris `/root/projet/alerte.py` qui lit `metrics.json` et affiche, une par ligne et **triés par nom**,
+      les serveurs dont le CPU dépasse un seuil passé en argument (`python alerte.py 80` affiche `db1` puis `web1`).
+      Le script doit renvoyer le code de sortie `1` s'il y a au moins une alerte, `0` sinon.
+    hint: "sys.argv, json.load, sys.exit"
+    cours: |
+      `sys.argv` contient les arguments de la ligne de commande (`sys.argv[0]` est le nom du script). Ce sont
+      des **chaînes** : convertis le seuil avec `int()` ou `float()` avant de comparer.
+
+      `json.load(fichier)` transforme un fichier JSON en structures Python (dictionnaires et listes). Observe
+      d'abord la forme de `metrics.json` pour savoir comment parcourir les serveurs.
+
+      `sorted()` trie une liste, et `sys.exit(code)` termine le programme avec un code de sortie. Ce code est ce
+      qui rend un script utilisable par d'autres outils : `python alerte.py 80 || envoyer_mail`.
+      Teste avec `echo $?` juste après l'exécution.
+    checks:
+      - desc: Seuil 80 -> db1 et web1
+        run: cd /root/projet && test "$(python alerte.py 80 | tr '\n' ' ')" = "db1 web1 "
+      - desc: Code de sortie 1 en cas d'alerte
+        run: cd /root/projet && python alerte.py 80 >/dev/null; test $? -eq 1
+      - desc: Code de sortie 0 sans alerte
+        run: cd /root/projet && python alerte.py 95 >/dev/null
+  - id: api
+    title: API de santé
+    description: |
+      Écris `/root/projet/app.py` : une application Flask avec une route `GET /health` qui renvoie
+      `{"status": "ok"}` et une route `GET /serveurs` qui renvoie le contenu de `metrics.json`.
+      Lance-la en arrière-plan sur `0.0.0.0:5000` (`nohup .venv/bin/flask --app app run --host 0.0.0.0 &`).
+    cours: |
+      Flask est un micro-framework web : une application est un objet `Flask(__name__)` et chaque route est une
+      fonction décorée par `@app.route("/chemin")`. Une fonction qui renvoie un dictionnaire produit
+      automatiquement une réponse JSON (`jsonify` existe aussi).
+
+      Le serveur de développement écoute par défaut sur `127.0.0.1`, donc seulement à l'intérieur du conteneur.
+      `--host 0.0.0.0` le rend joignable depuis l'extérieur, ici via le port publié 5001.
+
+      Une route `/health` est une convention : les répartiteurs de charge, Docker et Kubernetes l'interrogent
+      pour savoir si l'application est vivante. Teste avec `curl -s localhost:5000/health`.
+    checks:
+      - desc: /health répond status ok
+        run: python -c "import urllib.request,json; assert json.load(urllib.request.urlopen('http://localhost:5000/health'))['status']=='ok'"
+      - desc: /serveurs renvoie les 3 serveurs
+        run: python -c "import urllib.request,json; assert len(json.load(urllib.request.urlopen('http://localhost:5000/serveurs'))['serveurs'])==3"
+  - id: logs
+    title: Analyser des logs d'accès
+    description: |
+      `/root/projet/access.log` contient 100 lignes de log nginx (format *combined*). Écris `analyse.py` :
+      `python analyse.py access.log` doit afficher **un objet JSON** avec :
+      - `total` : le nombre de requêtes ;
+      - `codes` : le nombre de requêtes par code HTTP, par exemple `{"200": 70, "404": 10, ...}` ;
+      - `top_ip` : l'adresse IP qui a fait le plus de requêtes.
+    hint: "line.split() : l'IP est le champ 0 et le code HTTP le champ 8 ; collections.Counter et json.dumps font le reste"
+    cours: |
+      Une ligne au format *combined* ressemble à :
+      `10.0.0.1 - - [10/Oct/2024:13:55:36 +0000] "GET /index.html HTTP/1.1" 200 2326 "-" "curl/8.0"`.
+      L'adresse IP est le premier champ ; le code HTTP suit la requête entre guillemets. `str.split()` suffit
+      souvent ; une expression régulière (`re`) est plus robuste.
+
+      `collections.Counter` compte les occurrences et sa méthode `most_common(1)` donne la plus fréquente.
+      `json.dumps()` produit le JSON final.
+
+      Attention aux types : en JSON, les clés d'objet sont toujours des chaînes. Lis le fichier passé en
+      argument plutôt qu'un nom écrit en dur.
+    checks:
+      - desc: analyse.py produit du JSON
+        run: cd /root/projet && python analyse.py access.log | python -c "import json,sys; json.load(sys.stdin)"
+      - desc: total, codes et top_ip sont exacts
+        run: |
+          cd /root/projet && python analyse.py access.log > /tmp/analyse.json && python -c "
+          import json, collections
+          lignes = [l.split() for l in open('access.log') if l.strip()]
+          r = json.load(open('/tmp/analyse.json'))
+          assert r['total'] == len(lignes), 'total'
+          assert {str(k): v for k, v in r['codes'].items()} == dict(collections.Counter(l[8] for l in lignes)), 'codes'
+          assert r['top_ip'] == collections.Counter(l[0] for l in lignes).most_common(1)[0][0], 'top_ip'
+          "
+  - id: sauvegarde
+    title: Sauvegarde avec rotation
+    description: |
+      Écris `sauvegarde.py SOURCE DESTINATION [--garder N]` (module `argparse`) qui :
+      1. crée dans `DESTINATION` (à créer si besoin) une archive `sauvegarde-AAAAMMJJ-HHMMSS.tar.gz` du dossier `SOURCE` ;
+      2. ne **garde que les N archives les plus récentes** (3 par défaut) et supprime les plus anciennes ;
+      3. si `SOURCE` n'existe pas, affiche une erreur sur la **sortie d'erreur** et quitte avec le code **2**.
+    hint: "tarfile.open(chemin, 'w:gz'), datetime.now().strftime('%Y%m%d-%H%M%S'), sorted(Path(dest).glob('sauvegarde-*.tar.gz'))"
+    cours: |
+      `argparse` construit une vraie interface en ligne de commande : arguments positionnels, options comme
+      `--garder` avec `type=int` et `default=3`, et un `--help` généré automatiquement.
+
+      Briques utiles :
+      - `shutil.make_archive()` ou le module `tarfile` pour créer l'archive ;
+      - `datetime.now().strftime("%Y%m%d-%H%M%S")` pour l'horodatage ;
+      - `pathlib.Path` : `mkdir(parents=True, exist_ok=True)`, `glob()`, `unlink()`.
+
+      Un horodatage `AAAAMMJJ-HHMMSS` se trie dans l'ordre chronologique par simple tri alphabétique : pratique
+      pour la rotation. Les erreurs vont sur `sys.stderr`, et le code 2 est la convention pour une mauvaise
+      utilisation.
+    checks:
+      - desc: Une archive valide est créée
+        run: |
+          rm -rf /tmp/sv && mkdir -p /tmp/sv/src && echo important > /tmp/sv/src/data.txt && cd /root/projet && python sauvegarde.py /tmp/sv/src /tmp/sv/dest && ls /tmp/sv/dest/sauvegarde-*.tar.gz >/dev/null && tar -tzf /tmp/sv/dest/sauvegarde-*.tar.gz | grep -q 'data.txt'
+      - desc: Seules les 3 plus récentes sont gardées
+        run: |
+          rm -rf /tmp/sv && mkdir -p /tmp/sv/src && echo x > /tmp/sv/src/a.txt && cd /root/projet && for i in 1 2 3 4 5; do python sauvegarde.py /tmp/sv/src /tmp/sv/dest || exit 1; sleep 1.1; done; test "$(ls /tmp/sv/dest | grep -c '^sauvegarde-.*\.tar\.gz$')" = 3
+      - desc: --garder 1 ne garde qu'une archive
+        run: |
+          cd /root/projet && python sauvegarde.py /tmp/sv/src /tmp/sv/dest --garder 1 && test "$(ls /tmp/sv/dest | wc -l)" = 1
+      - desc: Code 2 et message d'erreur si la source n'existe pas
+        run: |
+          test -f /root/projet/sauvegarde.py && cd /root/projet && python sauvegarde.py /tmp/nexiste/pas /tmp/sv/dest 2>/tmp/sv-err >/dev/null; test $? -eq 2 && test -s /tmp/sv-err
+  - id: sonde
+    title: Sonde de supervision HTTP
+    description: |
+      Écris `sonde.py URL`, une sonde utilisable par un outil de supervision :
+      - si l'URL répond avec un code 2xx ou 3xx : affiche `OK <code>` et quitte avec le code **0** ;
+      - si elle répond avec un code d'erreur (4xx, 5xx) : affiche `KO <code>` et quitte avec le code **1** ;
+      - si elle est injoignable (connexion refusée, délai de 3 s dépassé) : affiche `KO injoignable`, code **2**.
+
+      Teste-la sur ton API de l'exercice précédent (qui doit tourner) : `.venv/bin/python sonde.py http://localhost:5000/health`.
+    hint: "requests.get(url, timeout=3) et requests.exceptions.RequestException ; ou urllib.request avec HTTPError / URLError"
+    cours: |
+      Une sonde de supervision interroge un service et répond par un **code de sortie** et une ligne de texte.
+      Avec `urllib.request.urlopen(url, timeout=3)` :
+      - une réponse 2xx/3xx se lit avec `.status` ;
+      - un code d'erreur HTTP lève `urllib.error.HTTPError`, qui porte aussi le code (`.code`) ;
+      - un problème de connexion ou un délai dépassé lève `URLError` ou une erreur de socket (`TimeoutError`,
+        `OSError`).
+
+      L'ordre des `except` compte : `HTTPError` hérite de `URLError`, il faut donc l'attraper en premier.
+      Sans `timeout`, une sonde peut rester bloquée et bloquer l'outil qui l'appelle.
+    checks:
+      - desc: OK 200 sur /health (code 0)
+        run: cd /root/projet && .venv/bin/python sonde.py http://localhost:5000/health | grep -qx 'OK 200'
+      - desc: KO 404 sur une page absente (code 1)
+        run: cd /root/projet && out=$(.venv/bin/python sonde.py http://localhost:5000/nexistepas); test $? -eq 1 && test "$out" = "KO 404"
+      - desc: KO injoignable sur un port fermé (code 2)
+        run: cd /root/projet && out=$(.venv/bin/python sonde.py http://localhost:5999/); test $? -eq 2 && test "$out" = "KO injoignable"
+  - id: tests
+    title: Tests automatisés avec pytest
+    description: |
+      Installe `pytest` dans le venv et écris `/root/projet/tests/test_alerte.py` avec **au moins 3 tests**
+      du script `alerte.py` (par exemple : la sortie avec un seuil de 80, le code de sortie 1 en cas d'alerte,
+      le code 0 sans alerte). Utilise `subprocess.run` pour lancer le script.
+
+      `cd /root/projet && .venv/bin/python -m pytest -q` doit réussir.
+    hint: "subprocess.run([sys.executable, 'alerte.py', '80'], capture_output=True, text=True, cwd=...) puis assert sur returncode et stdout"
+    cours: |
+      `pytest` cherche les fichiers `test_*.py` et y exécute les fonctions dont le nom commence par `test_`.
+      Une vérification est un simple `assert` : en cas d'échec, pytest affiche les valeurs comparées.
+
+      Pour tester un script comme le ferait un utilisateur, on le lance dans un sous-processus :
+      `subprocess.run([sys.executable, "alerte.py", "80"], capture_output=True, text=True)` puis on vérifie
+      `.returncode` et `.stdout`. `sys.executable` garantit d'utiliser le Python du venv. Attention au dossier
+      courant : utilise des chemins construits à partir de `__file__` ou le paramètre `cwd`.
+
+      Des tests automatisés sont le prérequis de toute intégration continue.
+    checks:
+      - desc: pytest est installé dans le venv
+        run: /root/projet/.venv/bin/python -m pytest --version
+      - desc: Au moins 3 tests sont collectés
+        run: cd /root/projet && test "$(.venv/bin/python -m pytest --collect-only -q tests 2>/dev/null | grep -c '::')" -ge 3
+      - desc: Tous les tests passent
+        run: cd /root/projet && .venv/bin/python -m pytest -q tests
+        timeout: 120
+  - id: paquet
+    title: Un outil installable avec pip
+    description: |
+      Transforme ton script d'alerte en **commande installable** :
+      1. Ajoute une fonction `main()` dans `alerte.py` (garde le bloc `if __name__ == "__main__": main()`).
+      2. Écris `/root/projet/pyproject.toml` (projet `tdm-outils`, version `0.1.0`) qui déclare la commande
+         `tdm-alerte` pointant vers `alerte:main` (section `[project.scripts]`) et le module `alerte`.
+      3. Installe le projet en mode éditable dans le venv : `.venv/bin/pip install -e .`
+
+      `cd /root/projet && .venv/bin/tdm-alerte 80` doit afficher `db1` puis `web1`.
+    hint: |
+      [build-system]
+      requires = ["setuptools>=61"]
+      build-backend = "setuptools.build_meta"
+      [project]
+      name = "tdm-outils"
+      version = "0.1.0"
+      [project.scripts]
+      tdm-alerte = "alerte:main"
+      [tool.setuptools]
+      py-modules = ["alerte"]
+    cours: |
+      `pyproject.toml` est le fichier standard de description d'un projet Python. Il contient :
+      - `[build-system]` : l'outil de construction (`setuptools` par exemple) ;
+      - `[project]` : `name`, `version`, dépendances ;
+      - `[project.scripts]` : les commandes à créer, au format `commande = "module:fonction"`.
+
+      Avec setuptools, un projet constitué d'un module isolé se déclare avec `[tool.setuptools]` et
+      `py-modules = ["alerte"]`.
+
+      `pip install -e .` installe le projet en mode éditable et génère dans `.venv/bin` un petit lanceur qui
+      appelle ta fonction. Le code de sortie de la commande est la valeur passée à `sys.exit()` (ou renvoyée par
+      `main()` si le lanceur l'utilise).
+    checks:
+      - desc: pyproject.toml déclare tdm-alerte
+        run: grep -Eq 'tdm-alerte *= *"alerte:main"' /root/projet/pyproject.toml
+      - desc: Le paquet tdm-outils est installé dans le venv
+        run: /root/projet/.venv/bin/pip show tdm-outils | grep -q '^Version. 0.1.0'
+      - desc: La commande tdm-alerte fonctionne
+        run: cd /root/projet && test "$(.venv/bin/tdm-alerte 80 | tr '\n' ' ')" = "db1 web1 "
+  - id: py-env
+    title: Configuration par variables d'environnement
+    description: |
+      Une application conteneurisée lit sa configuration dans l'**environnement** (méthode « 12 facteurs »).
+      Écris `/root/projet/parametres.py` qui affiche un objet JSON `{"env": ..., "port": ...}` :
+      - `env` vient de la variable `APP_ENV` (par défaut `dev`) ;
+      - `port` vient de `APP_PORT`, converti en **entier** (par défaut `8000`) ;
+      - si `APP_PORT` n'est pas un entier, le script écrit une erreur sur la sortie d'erreur et quitte avec le code **2**.
+
+      Exemple : `APP_ENV=prod APP_PORT=9000 python3 parametres.py` affiche `{"env": "prod", "port": 9000}`.
+    hint: "os.environ.get('APP_ENV', 'dev') ; int(...) dans un try/except ValueError ; json.dumps"
+    cours: |
+      Le principe « **12-factor app** » recommande de séparer strictement code et configuration : la même image
+      tourne en dev, en recette et en production, seules les variables d'environnement changent
+      (`docker run -e`, `environment:` dans Compose, ConfigMap dans Kubernetes).
+
+      En Python, `os.environ` est un dictionnaire des variables : `os.environ["X"]` lève une `KeyError` si la
+      variable manque, `os.environ.get("X", "défaut")` renvoie une valeur par défaut. Les valeurs sont toujours
+      des **chaînes** : il faut les convertir (`int()`, et attention aux booléens : `"false"` est une chaîne
+      non vide, donc vraie !).
+
+      Valider la configuration **au démarrage** et échouer immédiatement avec un message clair vaut mieux que
+      planter plus tard au milieu d'une requête. `json.dumps` produit la sortie ; un entier y reste un nombre.
+    checks:
+      - desc: Valeurs par défaut
+        run: cd /root/projet && test "$(env -u APP_ENV -u APP_PORT python3 parametres.py | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["env"], d["port"], type(d["port"]).__name__)')" = "dev 8000 int"
+      - desc: Valeurs lues dans l'environnement
+        run: cd /root/projet && test "$(APP_ENV=prod APP_PORT=9000 python3 parametres.py | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["env"], d["port"])')" = "prod 9000"
+      - desc: Port invalide → code 2 et message sur la sortie d'erreur
+        run: cd /root/projet && test -f parametres.py && APP_PORT=abc python3 parametres.py >/tmp/o 2>/tmp/e; test $? -eq 2 && test -s /tmp/e && ! test -s /tmp/o
+  - id: py-subprocess
+    title: Piloter des commandes système
+    description: |
+      Écris `/root/projet/inventaire.py` qui lance des commandes du système avec le module `subprocess` et
+      affiche un objet JSON contenant :
+      - `noyau` : la sortie de `uname -r` (sans retour à la ligne) ;
+      - `disque_pct` : le taux d'occupation de `/` en **entier**, lu dans la sortie de `df -P /` ;
+      - `processus` : le nombre de processus, c'est-à-dire le nombre de lignes de `ps -e --no-headers`
+        (`procps` est-il installé ? sinon, compte les dossiers numériques de `/proc`).
+    hint: "subprocess.run(['uname', '-r'], capture_output=True, text=True, check=True).stdout.strip()"
+    cours: |
+      `subprocess.run()` lance une commande et attend sa fin. Les bons réflexes :
+      - passer la commande sous forme de **liste** (`["df", "-P", "/"]`) plutôt qu'une chaîne avec
+        `shell=True` : pas d'interprétation par un shell, donc pas d'injection ni de problème de guillemets ;
+      - `capture_output=True, text=True` récupère `stdout` et `stderr` sous forme de chaînes ;
+      - `check=True` lève `CalledProcessError` si le code de sortie n'est pas nul, au lieu de continuer
+        silencieusement ;
+      - `timeout=` évite qu'une commande bloquée bloque tout le script.
+
+      Il reste à **analyser** la sortie : `splitlines()`, `split()`, puis convertir (`int("42%".rstrip("%"))`).
+      Quand une information est disponible directement en Python (`os.uname()`, `shutil.disk_usage()`,
+      `/proc`), c'est souvent plus simple et plus portable qu'une commande externe.
+    checks:
+      - desc: Le noyau est correct
+        run: cd /root/projet && test "$(python3 inventaire.py | python3 -c 'import json,sys; print(json.load(sys.stdin)["noyau"])')" = "$(uname -r)"
+      - desc: Le taux d'occupation du disque est un entier exact
+        run: cd /root/projet && test "$(python3 inventaire.py | python3 -c 'import json,sys; v=json.load(sys.stdin)["disque_pct"]; assert isinstance(v,int); print(v)')" = "$(df -P / | awk 'NR==2 {gsub("%","",$5); print $5}')"
+      - desc: Le nombre de processus est plausible
+        run: cd /root/projet && python3 inventaire.py | python3 -c 'import json,sys; v=json.load(sys.stdin)["processus"]; assert isinstance(v,int) and v >= 1'
+  - id: py-logging
+    title: Journaliser proprement avec logging
+    description: |
+      Les `print` ne suffisent plus : écris `/root/projet/journal.py` qui utilise le module `logging` pour écrire
+      dans le fichier `/root/projet/app.log`, au format `NIVEAU:message` (`%(levelname)s:%(message)s`) :
+      - un message `DEBUG` : `detail technique` ;
+      - un message `INFO` : `demarrage` ;
+      - un message `WARNING` : `disque presque plein`.
+
+      Par défaut, le niveau minimal est `INFO` (le message DEBUG n'apparaît pas) ; avec l'option `--verbose`, il
+      passe à `DEBUG`. Chaque lancement **ajoute** ses lignes à la fin du fichier.
+    hint: "logging.basicConfig(filename=..., format='%(levelname)s:%(message)s', level=logging.DEBUG if '--verbose' in sys.argv else logging.INFO)"
+    cours: |
+      Le module `logging` sépare **ce qu'on journalise** (`logger.info(...)`, `logger.warning(...)`) de **la
+      façon de le faire** (où, dans quel format, à partir de quel niveau). Les niveaux, du plus bavard au plus
+      grave : `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. Un message n'est écrit que si son niveau est au
+      moins égal au niveau configuré.
+
+      `logging.basicConfig(...)` configure rapidement le journal racine : `filename` (fichier, ouvert en ajout
+      par défaut), `format` (avec `%(asctime)s`, `%(levelname)s`, `%(name)s`, `%(message)s`…) et `level`.
+      Sans `filename`, les messages vont sur la sortie d'erreur, ce qui est la bonne pratique dans un conteneur
+      (Docker et Kubernetes collectent les flux).
+
+      `logger = logging.getLogger(__name__)` donne un journal par module. Pour les erreurs,
+      `logger.exception(...)` ajoute automatiquement la trace de la pile.
+    checks:
+      - desc: Sans --verbose, INFO et WARNING sont écrits, pas DEBUG
+        run: cd /root/projet && rm -f app.log && python3 journal.py && test "$(cat app.log)" = "$(printf 'INFO:demarrage\nWARNING:disque presque plein')"
+      - desc: Avec --verbose, DEBUG apparaît aussi et les lignes sont ajoutées
+        run: cd /root/projet && rm -f app.log && python3 journal.py && python3 journal.py --verbose && test "$(grep -c . app.log)" = 5 && grep -qx 'DEBUG:detail technique' app.log

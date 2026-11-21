@@ -1,0 +1,134 @@
+title: Panier de courses
+level: debutant
+order: 27
+tags: [dictionnaires, boucles]
+summary: Lire et parcourir des dictionnaires.
+description: |
+  Un **dictionnaire** associe des clés à des valeurs. On dispose de deux dictionnaires :
+
+  ```python
+  tarifs = {"pomme": 0.5, "pain": 1.2, "lait": 0.95}
+  panier = {"pomme": 4, "pain": 1}
+  ```
+
+  1. Écris `total_panier(panier, tarifs)` qui renvoie le prix total, **arrondi à 2 décimales**.
+     Un article absent des tarifs lève une `KeyError` (c'est le comportement normal de `d[cle]`).
+  2. Écris `ajouter(panier, article, quantite=1)` qui ajoute la quantité à l'article dans le
+     panier (en le créant s'il n'existe pas) et **renvoie le panier**.
+
+  ```python
+  total_panier(panier, tarifs)   # 4 * 0.5 + 1 * 1.2 = 3.2
+  ajouter(panier, "lait", 2)     # {"pomme": 4, "pain": 1, "lait": 2}
+  ajouter(panier, "pomme")       # {"pomme": 5, "pain": 1, "lait": 2}
+  ```
+
+  Astuces : `for article, quantite in panier.items():` et `panier.get(article, 0)`.
+starter: |
+  def total_panier(panier, tarifs):
+      pass
+
+
+  def ajouter(panier, article, quantite=1):
+      pass
+tests: |
+  TARIFS = {"pomme": 0.5, "pain": 1.2, "lait": 0.95}
+
+  def test_total():
+      "Total d'un panier"
+      r = solution.total_panier({"pomme": 4, "pain": 1}, TARIFS)
+      assert r == 3.2, f"attendu 3.2, obtenu {r!r}"
+
+  def test_total_arrondi():
+      "Total arrondi à 2 décimales"
+      r = solution.total_panier({"lait": 3}, TARIFS)
+      assert r == 2.85, f"attendu 2.85, obtenu {r!r}"
+
+  def test_total_vide():
+      "Panier vide"
+      assert solution.total_panier({}, TARIFS) == 0
+
+  def test_article_inconnu():
+      "Article absent des tarifs -> KeyError"
+      try:
+          solution.total_panier({"caviar": 1}, TARIFS)
+      except KeyError:
+          return
+      raise AssertionError("un article inconnu aurait dû lever KeyError")
+
+  def test_ajouter_nouveau():
+      "Ajouter un nouvel article"
+      panier = {"pomme": 4}
+      r = solution.ajouter(panier, "lait", 2)
+      assert panier == {"pomme": 4, "lait": 2}, f"panier obtenu : {panier!r}"
+      assert r is panier, "ajouter doit renvoyer le panier lui-même"
+
+  def test_ajouter_existant():
+      "Ajouter à un article existant (quantité 1 par défaut)"
+      panier = {"pomme": 4}
+      solution.ajouter(panier, "pomme")
+      assert panier == {"pomme": 5}, f"panier obtenu : {panier!r}"
+solution: |
+  def total_panier(panier, tarifs):
+      total = 0
+      for article, quantite in panier.items():
+          total += tarifs[article] * quantite
+      return round(total, 2)
+
+
+  def ajouter(panier, article, quantite=1):
+      panier[article] = panier.get(article, 0) + quantite
+      return panier
+cours: |
+  ## Le dictionnaire
+
+  Un `dict` associe des **clés** (uniques) à des **valeurs**. L'accès par clé est très
+  rapide (temps constant en moyenne), quelle que soit la taille du dictionnaire.
+
+  ```python
+  ports = {"ssh": 22, "http": 80}
+  ports["http"]          # 80
+  ports["https"] = 443   # ajout (ou remplacement si la clé existe)
+  "ssh" in ports         # True (teste les clés)
+  del ports["ssh"]
+  ```
+
+  ## Clé absente
+
+  `ports["ftp"]` lève une `KeyError` si la clé n'existe pas. Deux solutions :
+
+  ```python
+  ports.get("ftp")        # None
+  ports.get("ftp", 21)    # 21 : valeur par défaut
+  ```
+
+  Le choix dépend du besoin : parfois une erreur est le bon comportement (un prix inconnu ne
+  doit pas compter pour 0 en silence !).
+
+  ## Parcourir
+
+  ```python
+  for service in ports:                 # les clés
+      ...
+  for service, port in ports.items():   # clés ET valeurs
+      print(f"{service} -> {port}")
+  ```
+
+  `values()` donne uniquement les valeurs. Depuis Python 3.7, l'ordre d'insertion est
+  conservé.
+
+  ## Paramètre par défaut et mutation
+
+  `def f(x, n=1)` : si l'appelant ne donne pas `n`, il vaut 1. Une fonction qui reçoit un
+  dictionnaire et le modifie agit sur **l'objet de l'appelant** (pas une copie) ; renvoyer ce
+  même dictionnaire permet en plus de chaîner les appels.
+
+  **Piège** à connaître : n'utilise jamais une liste ou un dict comme valeur par défaut
+  (`def f(panier={})`) : il est créé une seule fois et partagé entre les appels. On écrit
+  plutôt `panier=None` puis on crée le dict dans la fonction.
+
+  Pour les montants, arrondis le total à la fin (`round(total, 2)`) à cause des flottants.
+docs:
+  - title: Tutoriel — les dictionnaires
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#dictionaries
+  - title: Type dict (méthodes get, items…)
+    url: https://docs.python.org/fr/3/library/stdtypes.html#mapping-types-dict

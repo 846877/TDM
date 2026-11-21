@@ -1,0 +1,219 @@
+title: Rotation de journaux avec gzip
+level: avance
+order: 36
+tags: [fichiers, pathlib, gzip, sysadmin]
+summary: Réimplémenter le principe de logrotate - décaler, compresser, purger.
+description: |
+  On réécrit en Python le cœur de `logrotate`. Pour un journal `app.log`, les archives se
+  nomment `app.log.1.gz` (la plus récente), `app.log.2.gz`, etc. Utilise `pathlib` et `gzip`.
+  Les chemins reçus sont des chaînes ou des `Path`.
+
+  1. `archives(chemin)` renvoie la liste des **noms** (pas des chemins complets) des archives
+     existantes de ce journal, triées par numéro **croissant numériquement** (`app.log.10.gz`
+     vient après `app.log.9.gz`). Ignore les fichiers qui ne suivent pas exactement le motif
+     `<nom>.<entier>.gz`.
+  2. `rotater(chemin, garder=3)` :
+     - si le journal n'existe pas ou est vide, ne fait rien et renvoie `False` ;
+     - sinon supprime les archives de numéro ≥ `garder`, décale les autres
+       (`.2.gz` → `.3.gz`, puis `.1.gz` → `.2.gz`, en commençant par la plus ancienne),
+       compresse le journal courant en `.1.gz`, puis **vide** le journal (le fichier existe
+       toujours, avec une taille de 0) ; renvoie `True`.
+
+     Après la rotation, il reste donc au plus `garder` archives.
+  3. `lire_archive(chemin_archive)` renvoie le contenu texte (UTF-8) d'une archive gzip.
+
+  ```python
+  rotater("/var/log/app.log", garder=2)
+  archives("/var/log/app.log")      # ["app.log.1.gz", "app.log.2.gz"]
+  ```
+starter: |
+  import gzip
+  import shutil
+  from pathlib import Path
+
+
+  def archives(chemin):
+      pass
+
+
+  def rotater(chemin, garder=3):
+      pass
+
+
+  def lire_archive(chemin_archive):
+      pass
+tests: |
+  import gzip
+  import tempfile
+  from pathlib import Path
+
+  def ecrire(p, texte):
+      Path(p).write_text(texte, encoding="utf-8")
+
+  def test_rotation_simple():
+      "Première rotation"
+      with tempfile.TemporaryDirectory() as d:
+          log = Path(d) / "app.log"
+          ecrire(log, "ligne 1\nligne 2\n")
+          assert solution.rotater(log) is True
+          assert log.exists() and log.stat().st_size == 0, "le journal doit être vidé, pas supprimé"
+          assert solution.archives(log) == ["app.log.1.gz"]
+          assert solution.lire_archive(Path(d) / "app.log.1.gz") == "ligne 1\nligne 2\n"
+
+  def test_rien_a_faire():
+      "Journal absent ou vide"
+      with tempfile.TemporaryDirectory() as d:
+          log = Path(d) / "app.log"
+          assert solution.rotater(str(log)) is False
+          ecrire(log, "")
+          assert solution.rotater(str(log)) is False
+          assert solution.archives(str(log)) == []
+
+  def test_rotations_successives():
+      "Décalage et purge"
+      with tempfile.TemporaryDirectory() as d:
+          log = Path(d) / "app.log"
+          for i in range(1, 6):
+              ecrire(log, f"jour {i}\n")
+              assert solution.rotater(log, garder=3)
+          assert solution.archives(log) == ["app.log.1.gz", "app.log.2.gz", "app.log.3.gz"]
+          contenus = [solution.lire_archive(Path(d) / n) for n in solution.archives(log)]
+          assert contenus == ["jour 5\n", "jour 4\n", "jour 3\n"], contenus
+
+  def test_vraie_compression():
+      "L'archive est bien au format gzip"
+      with tempfile.TemporaryDirectory() as d:
+          log = Path(d) / "big.log"
+          ecrire(log, "GET /index.html 200\n" * 5000)
+          solution.rotater(log)
+          arch = Path(d) / "big.log.1.gz"
+          with gzip.open(arch, "rt", encoding="utf-8") as f:
+              assert f.read().count("\n") == 5000
+          assert arch.stat().st_size < 10000, "le contenu doit être compressé"
+
+  def test_archives_tri_numerique():
+      "archives : tri numérique et filtrage"
+      with tempfile.TemporaryDirectory() as d:
+          for n in ["app.log.10.gz", "app.log.9.gz", "app.log.1.gz", "app.log.x.gz", "app.log.2",
+                    "autre.log.1.gz", "app.log.3.gz.bak", "app.log"]:
+              (Path(d) / n).write_bytes(b"")
+          assert solution.archives(Path(d) / "app.log") == ["app.log.1.gz", "app.log.9.gz", "app.log.10.gz"]
+
+  def test_garder_reduit():
+      "garder plus petit que le nombre d'archives existantes"
+      with tempfile.TemporaryDirectory() as d:
+          log = Path(d) / "app.log"
+          for i in range(1, 5):
+              with gzip.open(Path(d) / f"app.log.{i}.gz", "wt", encoding="utf-8") as f:
+                  f.write(f"ancien {i}")
+          ecrire(log, "actuel")
+          solution.rotater(log, garder=2)
+          assert solution.archives(log) == ["app.log.1.gz", "app.log.2.gz"]
+          assert solution.lire_archive(Path(d) / "app.log.2.gz") == "ancien 1"
+solution: |
+  import gzip
+  import shutil
+  from pathlib import Path
+
+
+  def _numero(nom_journal, nom):
+      prefixe = nom_journal + "."
+      if not (nom.startswith(prefixe) and nom.endswith(".gz")):
+          return None
+      milieu = nom[len(prefixe):-3]
+      return int(milieu) if milieu.isdigit() else None
+
+
+  def archives(chemin):
+      chemin = Path(chemin)
+      trouvees = []
+      for f in chemin.parent.iterdir():
+          n = _numero(chemin.name, f.name)
+          if n is not None:
+              trouvees.append((n, f.name))
+      return [nom for _, nom in sorted(trouvees)]
+
+
+  def rotater(chemin, garder=3):
+      chemin = Path(chemin)
+      if not chemin.exists() or chemin.stat().st_size == 0:
+          return False
+
+      def archive(n):
+          return chemin.with_name(f"{chemin.name}.{n}.gz")
+
+      for nom in archives(chemin):
+          if _numero(chemin.name, nom) >= garder:
+              (chemin.parent / nom).unlink()
+      for n in range(garder - 1, 0, -1):
+          if archive(n).exists():
+              archive(n).rename(archive(n + 1))
+      with open(chemin, "rb") as src, gzip.open(archive(1), "wb") as dst:
+          shutil.copyfileobj(src, dst)
+      chemin.write_bytes(b"")
+      return True
+
+
+  def lire_archive(chemin_archive):
+      with gzip.open(chemin_archive, "rt", encoding="utf-8") as f:
+          return f.read()
+cours: |
+  ## Pourquoi faire tourner les journaux ?
+
+  Un journal qui grossit sans fin finit par remplir le disque. `logrotate` (ou
+  `RotatingFileHandler` côté Python) applique une politique simple : à intervalles réguliers,
+  on **archive** le journal courant, on **compresse** les anciens et on **supprime** les plus
+  vieux au-delà d'un certain nombre.
+
+  ## L'ordre des opérations compte
+
+  Pour décaler `.1 → .2 → .3`, il faut commencer par **la plus ancienne** : renommer `.1` en
+  `.2` d'abord écraserait l'ancien `.2`. On parcourt donc les numéros à l'envers avec
+  `range(garder - 1, 0, -1)`. Et on purge avant de décaler.
+
+  ## `pathlib` pour manipuler les noms
+
+  ```python
+  from pathlib import Path
+  p = Path("/var/log/app.log")
+  p.name, p.parent              # 'app.log', Path('/var/log')
+  p.with_name("app.log.1.gz")   # même dossier, autre nom
+  p.rename(cible); p.unlink()   # renommer, supprimer
+  p.parent.glob("app.log.*.gz") # motif shell
+  ```
+
+  Attention : un motif glob comme `app.log.*.gz` accepte aussi `app.log.x.gz`. Pour un filtrage
+  strict, on vérifie le nom soi-même (`str.isdigit()` sur la partie centrale).
+
+  ## Tri naturel
+
+  Trier des chaînes donne `1, 10, 2, 9` : l'ordre lexicographique compare caractère par
+  caractère. On trie sur le **numéro extrait** converti en entier (clé de tri ou tuples
+  `(numero, nom)`).
+
+  ## `gzip` et la copie en flux
+
+  ```python
+  import gzip, shutil
+  with open("app.log", "rb") as src, gzip.open("app.log.1.gz", "wb") as dst:
+      shutil.copyfileobj(src, dst)      # par blocs : marche aussi pour des Go
+  with gzip.open("app.log.1.gz", "rt", encoding="utf-8") as f:
+      texte = f.read()
+  ```
+
+  `gzip.open` s'utilise comme `open` : mode `"rb"`/`"wb"` pour les octets, `"rt"`/`"wt"` pour
+  le texte. `copyfileobj` évite de charger tout le fichier en mémoire.
+
+  ## Vider plutôt que supprimer
+
+  Un démon garde souvent son fichier journal **ouvert**. Si on le supprime, il continue
+  d'écrire dans un fichier fantôme (l'espace disque n'est pas libéré !). Tronquer le fichier
+  (l'option `copytruncate` de logrotate) laisse le descripteur valide. L'autre approche
+  consiste à renommer puis demander au démon de rouvrir son journal (signal `HUP`).
+docs:
+  - title: Module gzip
+    url: https://docs.python.org/fr/3/library/gzip.html
+  - title: Module pathlib
+    url: https://docs.python.org/fr/3/library/pathlib.html
+  - title: Module shutil
+    url: https://docs.python.org/fr/3/library/shutil.html

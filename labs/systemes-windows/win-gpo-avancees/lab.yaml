@@ -1,0 +1,424 @@
+title: GPO avancées - filtres WMI, préférences, bouclage et délégation
+level: avance
+order: 1
+tags: [active directory, gpo, wmi, préférences, bouclage, loopback, magasin central, rsop, délégation]
+summary: Aller au-delà des GPO de base - filtre WMI, préférences de registre, filtrage de sécurité, traitement en boucle, ordre des liens, magasin central, RSoP, sauvegarde/import et délégation.
+vagrant: bundled
+machine: dc01
+description: |
+  **Contexte.** Le parc des *Ateliers Durand* a grandi : postes Windows 11 et anciens postes, salle de
+  formation partagée, service comptable avec ses propres besoins, et un technicien (`jroux`) qui doit pouvoir
+  modifier certaines stratégies sans être administrateur du domaine. Les GPO « simples » ne suffisent plus :
+  il faut cibler finement, ordonner, documenter et déléguer.
+
+  **Machines** (prévoir **8 Go de RAM libres**) :
+
+  | VM | Système | Adresse LAN | Rôle |
+  |----|---------|-------------|------|
+  | `SRV-DC01` (terminal) | Windows Server 2022 (2 Go) | 192.168.10.10 | contrôleur de `durand.lan`, GPMC |
+  | `PC01` | Windows 11 (3 Go) | 192.168.10.101 | poste joint, dans l'OU `Postes` |
+
+  L'annuaire contient `Ateliers Durand` (`Utilisateurs\Direction|Compta|Atelier|Informatique`, `Groupes`,
+  `Postes`, `Postes\Formation`), les groupes `GG_Direction`, `GG_Compta`, `GG_Atelier`, `GG_Support` et des
+  comptes (mot de passe `Bienvenue2024!`). Trois GPO sont déjà liées à `Postes` : `C - Securite minimale`,
+  `C - Exceptions atelier` et `C - Ancien proxy`. Pour agir sur PC01 : `Invoke-Command -ComputerName PC01 { ... }`.
+cours: |
+  ## Cibler : liens, filtrage de sécurité et filtres WMI
+
+  Une GPO s'applique à un objet si trois conditions sont réunies : elle est **liée** à un conteneur au-dessus
+  de lui (site, domaine, OU), l'objet a les droits **Lire** et **Appliquer la stratégie de groupe** sur elle,
+  et le **filtre WMI** éventuel est vrai sur la machine. Le filtrage de sécurité se règle par groupe ; depuis
+  le correctif MS16-072, les stratégies utilisateur sont lues avec le compte **ordinateur** : il faut toujours
+  laisser *Utilisateurs authentifiés* (ou *Ordinateurs du domaine*) en **lecture**, même quand on retire
+  *Appliquer*. Le filtre WMI est une requête WQL évaluée sur le poste (`SELECT * FROM Win32_OperatingSystem
+  WHERE ...`) : pratique pour distinguer Windows 10 et 11, portables et fixes, mais chaque requête ralentit
+  le traitement ; on les garde simples et peu nombreuses. Un filtre est un objet `msWMI-Som` de l'annuaire
+  (`CN=SOM,CN=WMIPolicy,CN=System`), rattaché à une GPO par l'attribut `gPCWQLFilter`.
+
+  ## Stratégies, préférences et ciblage
+
+  Les **préférences** (GPP) écrivent des valeurs que l'utilisateur peut modifier : registre, lecteurs,
+  raccourcis, tâches planifiées, groupes locaux. Chaque élément a une **action** (*Créer*, *Remplacer*,
+  *Mettre à jour*, *Supprimer*) et peut être ciblé élément par élément (*Item-level targeting*) sans filtre
+  WMI. Côté PowerShell, `Set-GPPrefRegistryValue` gère les préférences de registre ; les autres types sont
+  des fichiers XML dans le SYSVOL de la GPO.
+
+  ## Le traitement en boucle (loopback)
+
+  Normalement, les réglages utilisateur viennent des GPO liées à l'OU de l'**utilisateur**. Sur une salle de
+  formation ou un kiosque, on veut l'inverse : les réglages dépendent de la **machine**. Le mode *loopback*,
+  réglé dans la partie ordinateur d'une GPO liée à l'OU des postes, applique les réglages utilisateur des GPO
+  liées aux **ordinateurs** : en mode **Remplacer**, seuls ceux-là ; en mode **Fusionner**, ceux de
+  l'utilisateur puis ceux de l'ordinateur (qui gagnent).
+
+  ## Ordre, magasin central, preuve
+
+  Sur une même OU, le lien d'**ordre 1** est appliqué **en dernier** et gagne les conflits. Le **magasin
+  central** (`SYSVOL\...\Policies\PolicyDefinitions`) partage les mêmes fichiers ADMX/ADML pour toutes les
+  consoles, au lieu des modèles locaux de chaque machine. Pour prouver ce qui s'applique, le **jeu de
+  stratégies résultant** (`gpresult`, `Get-GPResultantSetOfPolicy`) reste l'outil de référence.
+
+  ## Exploiter : sauvegarde et délégation
+
+  `Backup-GPO` sauvegarde contenu et ACL (pas les liens), `Import-GPO` recopie des réglages sauvegardés dans
+  une GPO existante ou nouvelle : c'est ainsi qu'on teste une modification sur une copie, ou qu'on passe d'un
+  domaine de recette au domaine de production. Enfin, on **délègue** : membre de *Propriétaires créateurs de
+  la stratégie de groupe* pour créer des GPO, droit *Modifier* sur une GPO précise pour la maintenir, droit
+  *Lier* sur une OU pour la déployer. Le technicien n'a pas besoin d'être administrateur du domaine.
+docs:
+  - title: Module GroupPolicy (PowerShell)
+    url: https://learn.microsoft.com/fr-fr/powershell/module/grouppolicy/
+  - title: Traitement en boucle de la stratégie de groupe
+    url: https://learn.microsoft.com/fr-fr/troubleshoot/windows-server/group-policy/loopback-processing-of-group-policy
+  - title: Créer et gérer le magasin central
+    url: https://learn.microsoft.com/fr-fr/troubleshoot/windows-client/group-policy/create-and-manage-central-store
+exercises:
+  - id: win-gpoa-wmi
+    title: Un filtre WMI pour les postes Windows 11
+    description: |
+      Crée le filtre WMI **`Windows 11`** dont la requête (espace de noms `root\CIMv2`) retient les postes de
+      travail de build 22000 et plus :
+
+      ```
+      SELECT * FROM Win32_OperatingSystem WHERE Version LIKE "10.0.2%" AND ProductType = "1"
+      ```
+
+      Crée ensuite la GPO `C - Postes Windows 11`, lie-la à l'OU `Postes` et associe-lui ce filtre.
+    hint: gpmc.msc › Filtres WMI › Nouveau ; ou New-ADObject -Type msWMI-Som dans CN=SOM,CN=WMIPolicy,CN=System, puis gPCWQLFilter = '[durand.lan;{GUID-du-filtre};0]' sur la GPO
+    cours: |
+      Dans GPMC : *Filtres WMI* › *Nouveau*, puis sur la GPO, liste *Filtrage WMI*. Le module GroupPolicy n'a
+      pas de cmdlet pour les filtres : en PowerShell on crée l'objet annuaire directement.
+
+      ```powershell
+      $q = 'SELECT * FROM Win32_OperatingSystem WHERE Version LIKE "10.0.2%" AND ProductType = "1"'
+      $id = "{$([guid]::NewGuid().ToString().ToUpper())}"
+      $date = (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss.ffffff-000')
+      New-ADObject -Name $id -Type 'msWMI-Som' -Path 'CN=SOM,CN=WMIPolicy,CN=System,DC=durand,DC=lan' -OtherAttributes @{
+          'msWMI-Name' = 'Windows 11'; 'msWMI-ID' = $id; 'msWMI-Author' = 'vagrant@durand.lan'
+          'msWMI-Parm2' = "1;3;10;$($q.Length);WQL;root\CIMv2;$q;"
+          'msWMI-ChangeDate' = $date; 'msWMI-CreationDate' = $date }
+      Set-ADObject "CN={$($gpo.Id)},CN=Policies,CN=System,DC=durand,DC=lan" -Replace @{ gPCWQLFilter = "[durand.lan;$id;0]" }
+      ```
+
+      `ProductType` vaut 1 pour un poste, 2 pour un DC, 3 pour un serveur. Teste toujours la requête sur une
+      machine (`Get-CimInstance -Query $q`) avant de l'associer : une requête fausse rend la GPO muette.
+    docs:
+      - title: WQL (SQL pour WMI)
+        url: https://learn.microsoft.com/fr-fr/windows/win32/wmisdk/wql-sql-for-wmi
+      - title: Classe Win32_OperatingSystem
+        url: https://learn.microsoft.com/fr-fr/windows/win32/cimwin32prov/win32-operatingsystem
+    checks:
+      - desc: Le filtre WMI « Windows 11 » existe avec une requête sur ProductType
+        run: |
+          $f = Get-ADObject -SearchBase 'CN=SOM,CN=WMIPolicy,CN=System,DC=durand,DC=lan' -LDAPFilter '(msWMI-Name=Windows 11)' -Properties 'msWMI-Parm2'
+          [bool]$f -and $f.'msWMI-Parm2' -match 'Win32_OperatingSystem' -and $f.'msWMI-Parm2' -match 'ProductType'
+      - desc: La GPO C - Postes Windows 11 est liée à Postes et filtrée par « Windows 11 »
+        run: |
+          $lien = (Get-GPInheritance -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan').GpoLinks | Where-Object DisplayName -eq 'C - Postes Windows 11'
+          [bool]$lien -and (Get-GPO -Name 'C - Postes Windows 11').WmiFilter.Name -eq 'Windows 11'
+    solution: |
+      $q = 'SELECT * FROM Win32_OperatingSystem WHERE Version LIKE "10.0.2%" AND ProductType = "1"'
+      $id = "{$([guid]::NewGuid().ToString().ToUpper())}"
+      $date = (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss.ffffff-000')
+      New-ADObject -Name $id -Type 'msWMI-Som' -Path 'CN=SOM,CN=WMIPolicy,CN=System,DC=durand,DC=lan' -OtherAttributes @{
+          'msWMI-Name' = 'Windows 11'; 'msWMI-Parm1' = 'Postes Windows 11'; 'msWMI-ID' = $id
+          'msWMI-Author' = 'vagrant@durand.lan'; 'msWMI-Parm2' = "1;3;10;$($q.Length);WQL;root\CIMv2;$q;"
+          'msWMI-ChangeDate' = $date; 'msWMI-CreationDate' = $date }
+      $gpo = New-GPO -Name 'C - Postes Windows 11'
+      $gpo | New-GPLink -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' | Out-Null
+      Set-ADObject "CN={$($gpo.Id)},CN=Policies,CN=System,DC=durand,DC=lan" -Replace @{ gPCWQLFilter = "[durand.lan;$id;0]" }
+
+  - id: win-gpoa-preference
+    title: Une préférence de registre
+    description: |
+      Dans `C - Postes Windows 11`, ajoute une **préférence** (pas une stratégie) côté ordinateur qui écrit la
+      valeur chaîne `Site` = `Lyon` sous `HKLM\Software\Ateliers Durand`, avec l'action **Mettre à jour**.
+    hint: Set-GPPrefRegistryValue -Name 'C - Postes Windows 11' -Context Computer -Action Update -Key 'HKLM\Software\Ateliers Durand' -ValueName Site -Type String -Value Lyon
+    cours: |
+      ```powershell
+      Set-GPPrefRegistryValue -Name 'C - Postes Windows 11' -Context Computer -Action Update `
+          -Key 'HKLM\Software\Ateliers Durand' -ValueName Site -Type String -Value Lyon
+      Get-GPPrefRegistryValue -Name 'C - Postes Windows 11' -Context Computer -Key 'HKLM\Software\Ateliers Durand'
+      ```
+
+      Contrairement à `Set-GPRegistryValue` (stratégie sous une clé `Policies`, retirée quand la GPO ne
+      s'applique plus), une préférence peut écrire **n'importe où** et reste en place après retrait (sauf
+      option *Supprimer cet élément lorsqu'il n'est plus appliqué*). L'action *Mettre à jour* crée la valeur
+      si elle manque et la corrige si elle diffère : c'est le choix le plus courant. *Remplacer* supprime puis
+      recrée, *Créer* n'agit que si la valeur n'existe pas. Le réglage est stocké dans
+      `Machine\Preferences\Registry\Registry.xml` de la GPO.
+    docs:
+      - title: Set-GPPrefRegistryValue
+        url: https://learn.microsoft.com/fr-fr/powershell/module/grouppolicy/set-gpprefregistryvalue
+    checks:
+      - desc: La préférence Site = Lyon est présente dans la GPO (contexte ordinateur)
+        run: |
+          $p = Get-GPPrefRegistryValue -Name 'C - Postes Windows 11' -Context Computer -Key 'HKLM\Software\Ateliers Durand' -ValueName Site -ErrorAction SilentlyContinue
+          [bool]($p | Where-Object { $_.Value -eq 'Lyon' })
+      - desc: L'action est « Mettre à jour »
+        run: |
+          (Get-GPPrefRegistryValue -Name 'C - Postes Windows 11' -Context Computer -Key 'HKLM\Software\Ateliers Durand' -ValueName Site).Action -contains 'Update'
+    solution: |
+      Set-GPPrefRegistryValue -Name 'C - Postes Windows 11' -Context Computer -Action Update -Key 'HKLM\Software\Ateliers Durand' -ValueName Site -Type String -Value Lyon | Out-Null
+
+  - id: win-gpoa-filtrage
+    title: Une GPO réservée à la comptabilité
+    description: |
+      Crée la GPO `U - Comptabilite`, liée à `OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan`, avec une
+      préférence utilisateur `HKCU\Software\Ateliers Durand` › `Service` = `Compta` (action *Mettre à jour*).
+      Elle ne doit **s'appliquer qu'à `GG_Compta`** : *Utilisateurs authentifiés* ne garde que la **lecture**.
+    hint: Set-GPPermission -Name 'U - Comptabilite' -TargetName 'Authenticated Users' -TargetType Group -PermissionLevel GpoRead -Replace ; puis -TargetName GG_Compta -PermissionLevel GpoApply
+    cours: |
+      ```powershell
+      $gpo = 'U - Comptabilite'
+      New-GPO -Name $gpo | New-GPLink -Target 'OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan'
+      Set-GPPrefRegistryValue -Name $gpo -Context User -Action Update -Key 'HKCU\Software\Ateliers Durand' `
+          -ValueName Service -Type String -Value Compta
+      Set-GPPermission -Name $gpo -TargetName 'Authenticated Users' -TargetType Group -PermissionLevel GpoRead -Replace
+      Set-GPPermission -Name $gpo -TargetName GG_Compta -TargetType Group -PermissionLevel GpoApply
+      ```
+
+      `-Replace` est indispensable pour **rétrograder** une autorisation existante (sinon la cmdlet refuse de
+      baisser le niveau). Sur un serveur en français, le nom affiché est *Utilisateurs authentifiés* ; le nom
+      anglais `Authenticated Users` reste accepté. Retirer complètement *Utilisateurs authentifiés* serait
+      l'erreur classique : depuis MS16-072 la GPO ne serait plus lue du tout, ni par les comptables.
+    docs:
+      - title: Set-GPPermission
+        url: https://learn.microsoft.com/fr-fr/powershell/module/grouppolicy/set-gppermission
+    checks:
+      - desc: U - Comptabilite est liée à l'OU Utilisateurs et contient la préférence Service = Compta
+        run: |
+          $lien = (Get-GPInheritance -Target 'OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan').GpoLinks | Where-Object DisplayName -eq 'U - Comptabilite'
+          $p = Get-GPPrefRegistryValue -Name 'U - Comptabilite' -Context User -Key 'HKCU\Software\Ateliers Durand' -ValueName Service -ErrorAction SilentlyContinue
+          [bool]$lien -and [bool]($p | Where-Object Value -eq 'Compta')
+      - desc: Utilisateurs authentifiés a seulement la lecture, GG_Compta a « Appliquer »
+        run: |
+          $perms = Get-GPPermission -Name 'U - Comptabilite' -All
+          $au = $perms | Where-Object { $_.Trustee.Sid.Value -eq 'S-1-5-11' }
+          $gg = $perms | Where-Object { $_.Trustee.Name -eq 'GG_Compta' }
+          $au.Permission -eq 'GpoRead' -and $gg.Permission -eq 'GpoApply'
+    solution: |
+      $gpo = 'U - Comptabilite'
+      New-GPO -Name $gpo | New-GPLink -Target 'OU=Utilisateurs,OU=Ateliers Durand,DC=durand,DC=lan' | Out-Null
+      Set-GPPrefRegistryValue -Name $gpo -Context User -Action Update -Key 'HKCU\Software\Ateliers Durand' -ValueName Service -Type String -Value Compta | Out-Null
+      $au = (New-Object Security.Principal.SecurityIdentifier 'S-1-5-11').Translate([Security.Principal.NTAccount]).Value.Split('\')[-1]
+      Set-GPPermission -Name $gpo -TargetName $au -TargetType Group -PermissionLevel GpoRead -Replace | Out-Null
+      Set-GPPermission -Name $gpo -TargetName GG_Compta -TargetType Group -PermissionLevel GpoApply | Out-Null
+
+  - id: win-gpoa-loopback
+    title: La salle de formation en mode bouclage
+    description: |
+      Crée la GPO `C - Salle formation`, liée à `OU=Formation,OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan`,
+      qui active le **traitement en boucle en mode Remplacer** et, dans sa partie **utilisateur**, interdit le
+      Panneau de configuration (`NoControlPanel` = 1). Quiconque ouvre une session sur un poste de la salle
+      reçoit ainsi ces réglages, quel que soit son service.
+    hint: Set-GPRegistryValue ... -Key 'HKLM\Software\Policies\Microsoft\Windows\System' -ValueName UserPolicyMode -Type DWord -Value 2 ; puis HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer NoControlPanel 1
+    cours: |
+      Le réglage se trouve dans *Configuration ordinateur* › *Modèles d'administration* › *Système* ›
+      *Stratégie de groupe* › « Configurer le mode de traitement par bouclage de la stratégie de groupe
+      utilisateur ». Il correspond à `UserPolicyMode` : 1 = Fusionner, 2 = Remplacer.
+
+      ```powershell
+      $gpo = 'C - Salle formation'
+      New-GPO -Name $gpo | New-GPLink -Target 'OU=Formation,OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+      Set-GPRegistryValue -Name $gpo -Key 'HKLM\Software\Policies\Microsoft\Windows\System' -ValueName UserPolicyMode -Type DWord -Value 2
+      Set-GPRegistryValue -Name $gpo -Key 'HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer' -ValueName NoControlPanel -Type DWord -Value 1
+      ```
+
+      Attention au filtrage : en loopback, ce sont les **utilisateurs** qui doivent avoir le droit *Appliquer*
+      sur la GPO pour sa partie utilisateur (*Utilisateurs authentifiés* l'a par défaut). Le loopback est la
+      cause de beaucoup de « pourquoi ce réglage ne s'applique pas ? » : documente-le dans le nom de la GPO.
+    docs:
+      - title: Traitement en boucle de la stratégie de groupe
+        url: https://learn.microsoft.com/fr-fr/troubleshoot/windows-server/group-policy/loopback-processing-of-group-policy
+    checks:
+      - desc: C - Salle formation est liée à l'OU Formation
+        run: |
+          [bool]((Get-GPInheritance -Target 'OU=Formation,OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan').GpoLinks | Where-Object DisplayName -eq 'C - Salle formation')
+      - desc: Bouclage en mode Remplacer (UserPolicyMode = 2) et NoControlPanel = 1
+        run: |
+          $m = (Get-GPRegistryValue -Name 'C - Salle formation' -Key 'HKLM\Software\Policies\Microsoft\Windows\System' -ValueName UserPolicyMode).Value
+          $n = (Get-GPRegistryValue -Name 'C - Salle formation' -Key 'HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer' -ValueName NoControlPanel).Value
+          $m -eq 2 -and $n -eq 1
+    solution: |
+      $gpo = 'C - Salle formation'
+      New-GPO -Name $gpo | New-GPLink -Target 'OU=Formation,OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' | Out-Null
+      Set-GPRegistryValue -Name $gpo -Key 'HKLM\Software\Policies\Microsoft\Windows\System' -ValueName UserPolicyMode -Type DWord -Value 2 | Out-Null
+      Set-GPRegistryValue -Name $gpo -Key 'HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer' -ValueName NoControlPanel -Type DWord -Value 1 | Out-Null
+
+  - id: win-gpoa-ordre
+    title: Remettre de l'ordre dans les liens
+    description: |
+      Sur l'OU `Postes`, `C - Securite minimale` (verrouillage après 600 s) et `C - Exceptions atelier`
+      (1800 s) règlent la même valeur. Les exceptions doivent **gagner** : place leur lien en **ordre 1**.
+      Le lien de `C - Ancien proxy` doit être **désactivé** (sans supprimer la GPO, gardée pour l'historique).
+    hint: Set-GPLink -Name 'C - Exceptions atelier' -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' -Order 1 ; Set-GPLink -Name 'C - Ancien proxy' -Target ... -LinkEnabled No
+    cours: |
+      ```powershell
+      $postes = 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+      (Get-GPInheritance -Target $postes).GpoLinks | Format-Table Order, DisplayName, Enabled, Enforced
+      Set-GPLink -Name 'C - Exceptions atelier' -Target $postes -Order 1
+      Set-GPLink -Name 'C - Ancien proxy' -Target $postes -LinkEnabled No
+      ```
+
+      Sur un même conteneur, les liens sont traités de l'ordre le plus **grand** vers l'ordre **1** : le lien
+      d'ordre 1 est appliqué en dernier et l'emporte. C'est contre-intuitif, d'où l'intérêt de toujours
+      vérifier avec `gpresult` quelle GPO est « gagnante ». Désactiver un lien (plutôt que le supprimer) est
+      réversible en un clic et garde la trace de l'ancienne configuration. Une GPO qui ne sert plus à rien
+      devrait finir sauvegardée puis supprimée.
+    docs:
+      - title: Set-GPLink
+        url: https://learn.microsoft.com/fr-fr/powershell/module/grouppolicy/set-gplink
+    checks:
+      - desc: C - Exceptions atelier est en ordre 1 sur Postes
+        run: |
+          ((Get-GPInheritance -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan').GpoLinks | Where-Object DisplayName -eq 'C - Exceptions atelier').Order -eq 1
+      - desc: Le lien de C - Ancien proxy est désactivé, la GPO existe toujours
+        run: |
+          $l = (Get-GPInheritance -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan').GpoLinks | Where-Object DisplayName -eq 'C - Ancien proxy'
+          [bool]$l -and -not $l.Enabled -and [bool](Get-GPO -Name 'C - Ancien proxy')
+    solution: |
+      $postes = 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+      Set-GPLink -Name 'C - Exceptions atelier' -Target $postes -Order 1 | Out-Null
+      Set-GPLink -Name 'C - Ancien proxy' -Target $postes -LinkEnabled No | Out-Null
+
+  - id: win-gpoa-magasin
+    title: Le magasin central des modèles
+    description: |
+      Crée le **magasin central** des modèles d'administration du domaine en copiant les fichiers ADMX de
+      `C:\Windows\PolicyDefinitions` (avec les sous-dossiers de langue `fr-FR` et `en-US` s'ils existent) vers
+      `\\durand.lan\SYSVOL\durand.lan\Policies\PolicyDefinitions`.
+    hint: Copy-Item C:\Windows\PolicyDefinitions -Destination C:\Windows\SYSVOL\sysvol\durand.lan\Policies\PolicyDefinitions -Recurse
+    cours: |
+      ```powershell
+      Copy-Item C:\Windows\PolicyDefinitions C:\Windows\SYSVOL\sysvol\durand.lan\Policies\PolicyDefinitions -Recurse
+      ```
+
+      Sans magasin central, chaque console GPMC utilise les modèles **locaux** de la machine où elle tourne :
+      un réglage ajouté depuis un poste Windows 11 récent peut apparaître comme « paramètres supplémentaires
+      du registre » sur un serveur plus ancien. Avec le magasin central, toutes les consoles du domaine lisent
+      les mêmes fichiers, répliqués par SYSVOL sur tous les DC. En production, on y copie les modèles **les
+      plus récents** (téléchargés pour la dernière version de Windows 11), plus ceux d'Office, Edge, Chrome...
+      Les fichiers `.adml` de langue doivent accompagner chaque `.admx`, sinon la console affiche une erreur.
+    docs:
+      - title: Créer et gérer le magasin central
+        url: https://learn.microsoft.com/fr-fr/troubleshoot/windows-client/group-policy/create-and-manage-central-store
+    checks:
+      - desc: Le magasin central contient au moins 100 fichiers ADMX
+        run: |
+          @(Get-ChildItem C:\Windows\SYSVOL\sysvol\durand.lan\Policies\PolicyDefinitions -Filter *.admx -ErrorAction SilentlyContinue).Count -ge 100
+      - desc: Les fichiers de langue (.adml) sont présents
+        run: |
+          @(Get-ChildItem C:\Windows\SYSVOL\sysvol\durand.lan\Policies\PolicyDefinitions -Filter *.adml -Recurse -ErrorAction SilentlyContinue).Count -ge 100
+    solution: |
+      Copy-Item C:\Windows\PolicyDefinitions C:\Windows\SYSVOL\sysvol\durand.lan\Policies\PolicyDefinitions -Recurse -Force
+
+  - id: win-gpoa-rsop
+    title: Vérifier sur le poste
+    description: |
+      Force l'application des stratégies ordinateur sur **PC01**, vérifie que la préférence `Site` = `Lyon`
+      y est écrite, puis produis sur SRV-DC01 le jeu de stratégies résultant de l'ordinateur PC01 au format
+      **XML** dans `C:\Admin\rsop-pc01.xml`.
+    hint: Invoke-Command -ComputerName PC01 { gpupdate /target:computer /force } ; Get-GPResultantSetOfPolicy -Computer PC01 -ReportType Xml -Path C:\Admin\rsop-pc01.xml
+    cours: |
+      ```powershell
+      Invoke-Command -ComputerName PC01 { gpupdate /target:computer /force; Get-ItemProperty 'HKLM:\Software\Ateliers Durand' }
+      Get-GPResultantSetOfPolicy -Computer PC01 -ReportType Xml -Path C:\Admin\rsop-pc01.xml
+      ([xml](Get-Content C:\Admin\rsop-pc01.xml)).Rsop.ComputerResults.GPO | Select-Object Name, FilterAllowed
+      ```
+
+      Le rapport XML se prête à l'automatisation : chaque GPO y figure avec `FilterAllowed`, `AccessDenied`
+      et le filtre WMI évalué. Si `C - Postes Windows 11` manque, regarde dans l'ordre : le lien, les droits,
+      le résultat du filtre (`Get-CimInstance -Query ...` sur le poste), puis le journal
+      *Microsoft-Windows-GroupPolicy/Operational*. Le rapport HTML est plus lisible pour un humain ; le XML
+      sert pour comparer deux postes ou alimenter un inventaire.
+    docs:
+      - title: Get-GPResultantSetOfPolicy
+        url: https://learn.microsoft.com/fr-fr/powershell/module/grouppolicy/get-gpresultantsetofpolicy
+      - title: gpresult
+        url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/gpresult
+    checks:
+      - desc: PC01 a reçu la préférence Site = Lyon
+        machine: pc01
+        run: |
+          (Get-ItemProperty 'HKLM:\Software\Ateliers Durand' -ErrorAction SilentlyContinue).Site -eq 'Lyon'
+      - desc: Le rapport C:\Admin\rsop-pc01.xml cite C - Postes Windows 11
+        run: |
+          (Test-Path C:\Admin\rsop-pc01.xml) -and [bool](Select-String -Path C:\Admin\rsop-pc01.xml -Pattern 'C - Postes Windows 11' -SimpleMatch -Quiet)
+    solution: |
+      Invoke-Command -ComputerName PC01 { gpupdate /target:computer /force } | Out-Null
+      Get-GPResultantSetOfPolicy -Computer PC01 -ReportType Xml -Path C:\Admin\rsop-pc01.xml | Out-Null
+
+  - id: win-gpoa-sauvegarde
+    title: Sauvegarder et importer dans une copie de test
+    description: |
+      Sauvegarde **toutes** les GPO du domaine dans `C:\Admin\GPO-Sauvegardes`, puis importe la sauvegarde de
+      `C - Postes Windows 11` dans une **nouvelle** GPO `C - Postes Windows 11 (test)`, non liée, pour y
+      préparer les prochaines modifications.
+    hint: Backup-GPO -All -Path C:\Admin\GPO-Sauvegardes ; Import-GPO -BackupGpoName 'C - Postes Windows 11' -Path C:\Admin\GPO-Sauvegardes -TargetName 'C - Postes Windows 11 (test)' -CreateIfNeeded
+    cours: |
+      ```powershell
+      New-Item C:\Admin\GPO-Sauvegardes -ItemType Directory -Force
+      Backup-GPO -All -Path C:\Admin\GPO-Sauvegardes
+      Import-GPO -BackupGpoName 'C - Postes Windows 11' -Path C:\Admin\GPO-Sauvegardes `
+          -TargetName 'C - Postes Windows 11 (test)' -CreateIfNeeded
+      ```
+
+      Une sauvegarde contient les réglages, les préférences et l'ACL, mais **ni les liens ni le filtre WMI**
+      (seulement sa référence) : note les liens à part (`Get-GPInheritance`, ou un rapport HTML de chaque GPO).
+      `Restore-GPO` remet une GPO dans son état sauvegardé (même GUID) ; `Import-GPO` copie les réglages dans
+      une autre GPO, éventuellement d'un autre domaine (avec une table de correspondance pour les comptes et
+      les chemins UNC). Tester sur une copie non liée, puis la lier à une OU de test, évite de casser tout le
+      parc à cause d'une faute de frappe.
+    docs:
+      - title: Backup-GPO
+        url: https://learn.microsoft.com/fr-fr/powershell/module/grouppolicy/backup-gpo
+      - title: Import-GPO
+        url: https://learn.microsoft.com/fr-fr/powershell/module/grouppolicy/import-gpo
+    checks:
+      - desc: C:\Admin\GPO-Sauvegardes contient une sauvegarde de chaque GPO (au moins 6)
+        run: |
+          @(Get-ChildItem C:\Admin\GPO-Sauvegardes -Filter bkupInfo.xml -Recurse -Force -ErrorAction SilentlyContinue).Count -ge 6
+      - desc: C - Postes Windows 11 (test) existe, contient des réglages ordinateur et n'est liée nulle part
+        run: |
+          $g = Get-GPO -Name 'C - Postes Windows 11 (test)' -ErrorAction SilentlyContinue
+          [xml]$r = Get-GPOReport -Name 'C - Postes Windows 11 (test)' -ReportType Xml
+          [bool]$g -and $g.Computer.DSVersion -gt 0 -and -not $r.GPO.LinksTo
+    solution: |
+      New-Item C:\Admin\GPO-Sauvegardes -ItemType Directory -Force | Out-Null
+      Backup-GPO -All -Path C:\Admin\GPO-Sauvegardes | Out-Null
+      Import-GPO -BackupGpoName 'C - Postes Windows 11' -Path C:\Admin\GPO-Sauvegardes -TargetName 'C - Postes Windows 11 (test)' -CreateIfNeeded | Out-Null
+
+  - id: win-gpoa-delegation
+    title: Déléguer au support
+    description: |
+      Le groupe `GG_Support` (Julien Roux) doit pouvoir **modifier** `C - Salle formation` (niveau *Modifier
+      les paramètres*) et **créer** de nouvelles GPO dans le domaine, sans être administrateur du domaine.
+    hint: Set-GPPermission -Name 'C - Salle formation' -TargetName GG_Support -TargetType Group -PermissionLevel GpoEdit ; Add-ADGroupMember 'Group Policy Creator Owners' GG_Support (nom localisé possible, SID du domaine -520)
+    cours: |
+      ```powershell
+      Set-GPPermission -Name 'C - Salle formation' -TargetName GG_Support -TargetType Group -PermissionLevel GpoEdit
+      $gpco = Get-ADGroup -Identity "$((Get-ADDomain).DomainSID)-520"   # Propriétaires créateurs de la stratégie de groupe
+      Add-ADGroupMember $gpco -Members GG_Support
+      ```
+
+      Trois délégations distinctes existent dans GPMC : **créer** des GPO (groupe *Propriétaires créateurs*, ou
+      onglet *Délégation* du conteneur *Objets de stratégie de groupe*), **modifier** une GPO (`GpoEdit`, ou
+      `GpoEditDeleteModifySecurity` pour aussi gérer ses droits) et **lier** des GPO à une OU (écriture de
+      l'attribut `gPLink` de l'OU, déléguée depuis l'onglet *Délégation* de l'OU dans GPMC). Le SID relatif
+      **520** désigne le groupe des créateurs quelle que soit la langue du serveur.
+    docs:
+      - title: Set-GPPermission
+        url: https://learn.microsoft.com/fr-fr/powershell/module/grouppolicy/set-gppermission
+      - title: Groupes de sécurité Active Directory
+        url: https://learn.microsoft.com/fr-fr/windows-server/identity/ad-ds/manage/understand-security-groups
+    checks:
+      - desc: GG_Support peut modifier C - Salle formation
+        run: |
+          (Get-GPPermission -Name 'C - Salle formation' -TargetName GG_Support -TargetType Group -ErrorAction SilentlyContinue).Permission -in 'GpoEdit', 'GpoEditDeleteModifySecurity'
+      - desc: GG_Support est membre des créateurs de GPO (RID 520)
+        run: |
+          (Get-ADGroupMember -Identity "$((Get-ADDomain).DomainSID)-520").Name -contains 'GG_Support'
+    solution: |
+      Set-GPPermission -Name 'C - Salle formation' -TargetName GG_Support -TargetType Group -PermissionLevel GpoEdit | Out-Null
+      Add-ADGroupMember -Identity "$((Get-ADDomain).DomainSID)-520" -Members GG_Support

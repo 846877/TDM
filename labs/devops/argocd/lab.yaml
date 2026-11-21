@@ -1,0 +1,291 @@
+title: GitOps avec Argo CD
+level: avance
+order: 2
+tags: [gitops, argocd, kubernetes, helm, vagrant]
+summary: Déployer depuis un dépôt Git avec Argo CD, sur Minikube en VM.
+vagrant: argoCD/argoCD_ubuntu22
+description: |
+  Lab Vagrant de ta formation : Minikube + Argo CD, Helm, kustomize et le CLI `argocd`. L'interface
+  web est sur le port **30000** de l'IP 192.168.x affichée à la fin du `vagrant up` (identifiant
+  `admin`). Un dépôt Git nu est prêt dans `/repos`.
+
+  `kubectl` s'utilise en root : `sudo -i` ou `sudo kubectl ...`.
+cours: |
+  ## GitOps avec Argo CD
+
+  Le **GitOps** applique les pratiques du développement (Git, revue, historique) au déploiement : l'état
+  désiré de l'infrastructure et des applications est décrit dans un dépôt Git, et un agent dans le cluster
+  le fait converger en permanence. On ne lance plus `kubectl apply` à la main : on fait une *merge request*.
+
+  ### Pull plutôt que push
+
+  ```
+   Push (CI classique)                     Pull (GitOps)
+   dev ─▶ Git ─▶ CI ──kubectl apply──▶ K8s   dev ─▶ Git ◀──surveille── Argo CD ──applique──▶ K8s
+         (la CI détient les accès              (les accès restent dans le cluster ;
+          au cluster)                            dérive détectée et corrigée)
+  ```
+
+  Les quatre principes : état **déclaratif**, **versionné** et immuable dans Git, **tiré** automatiquement
+  par un agent, **réconcilié** en continu.
+
+  ### Argo CD
+
+  Argo CD est un contrôleur Kubernetes. Il compare l'état décrit dans Git (manifestes bruts, Kustomize, Helm)
+  et l'état réel du cluster, affiche les écarts et synchronise.
+
+  | Notion | Sens |
+  |---|---|
+  | **Application** | ressource qui relie une source Git (dépôt, chemin, révision) à une destination (cluster, namespace) |
+  | **Sync status** | `Synced` : le cluster correspond à Git ; `OutOfSync` : écart |
+  | **Health status** | `Healthy`, `Progressing`, `Degraded`, `Missing` |
+  | **Sync policy** | manuelle, ou `automated` avec `prune` et `selfHeal` |
+  | **AppProject** | cloisonnement : sources, destinations et types de ressources autorisés |
+
+  ```yaml
+  apiVersion: argoproj.io/v1alpha1
+  kind: Application
+  metadata:
+    name: guestbook
+    namespace: argocd
+  spec:
+    project: default
+    source:
+      repoURL: file:///repos
+      targetRevision: HEAD
+      path: guestbook
+    destination:
+      server: https://kubernetes.default.svc
+      namespace: guestbook
+    syncPolicy:
+      automated: { prune: true, selfHeal: true }
+      syncOptions: [CreateNamespace=true]
+  ```
+
+  ### Plusieurs environnements
+
+  - **Kustomize** : une `base` commune et des `overlays` (dev, prod) qui la modifient par des patchs, sans
+    modèle.
+  - **Helm** : un chart paramétré par des `values` ; Argo CD peut surcharger des valeurs par application.
+
+  ### Mémo
+
+  ```bash
+  argocd login <ip>:30000 --username admin --insecure
+  argocd app list ; argocd app get guestbook ; argocd app sync guestbook
+  argocd app diff guestbook ; argocd app history guestbook
+  kubectl -n argocd get applications
+  kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
+  kustomize build overlays/prod ; helm template charts/hello
+  ```
+
+  ### Pièges courants
+
+  - Modifier le cluster à la main avec `selfHeal` actif : Argo CD annule le changement (c'est voulu).
+  - Oublier `prune` : une ressource supprimée du dépôt reste dans le cluster.
+  - Mettre des secrets en clair dans le dépôt : utilise Sealed Secrets, SOPS ou un gestionnaire externe.
+  - Pointer une Application sur une branche qui bouge sans revue.
+  - Laisser toutes les équipes dans le projet `default`, qui autorise tout.
+
+  ### Bonnes pratiques
+
+  Un dépôt (ou un dossier) de configuration séparé du code applicatif, la CI qui met à jour le tag d'image
+  dans ce dépôt, des AppProjects par équipe, le modèle *app of apps* ou les ApplicationSets pour gérer de
+  nombreuses applications, et des notifications sur les échecs de synchronisation.
+
+  ### Pour réviser
+
+  - Quelle est la différence entre le modèle *push* d'une CI classique et le modèle *pull* du GitOps ?
+  - Que se passe-t-il si quelqu'un fait `kubectl scale` sur une application avec `selfHeal` ?
+  - Pourquoi l'option `prune` n'est-elle pas activée par défaut ?
+  - À quoi sert un AppProject par rapport au projet `default` ?
+docs:
+  - title: Documentation Argo CD
+    url: https://argo-cd.readthedocs.io/en/stable/
+  - title: Configuration déclarative d'Argo CD
+    url: https://argo-cd.readthedocs.io/en/stable/operator-manual/declarative-setup/
+  - title: Principes OpenGitOps
+    url: https://opengitops.dev/
+  - title: Gestion déclarative avec Kustomize
+    url: https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/
+exercises:
+  - id: depot
+    title: Préparer le dépôt GitOps
+    description: |
+      Clone `/repos` dans `/home/vagrant/gitops`, ajoute un dossier `guestbook/` contenant un
+      déploiement `guestbook` (image `nginx:1.27`, 1 réplica) et son service, puis commit et pousse
+      sur la branche `master` (ou `main`).
+    hint: "sudo chown -R vagrant /repos si besoin ; git push origin HEAD"
+    cours: |
+      En GitOps, le dépôt de configuration est la **source de vérité** : il contient les manifestes, organisés
+      par application et par environnement. Ici, `/repos` est un dépôt nu qui joue le rôle du serveur Git.
+
+      Le flux reste celui de Git : cloner, ajouter les fichiers, committer, pousser. Un dossier par application
+      (`guestbook/`) contenant un manifeste par objet (ou un seul fichier avec des `---`) est une organisation
+      courante.
+
+      Vérifie la branche par défaut du dépôt (`git branch -r` après le clone) : l'Application Argo CD devra suivre
+      la même. Pense à configurer `user.name` et `user.email` si git le demande.
+    checks:
+      - desc: Le dépôt nu contient guestbook/
+        run: git --git-dir=/repos log --all --name-only --format= | grep -q '^guestbook/'
+  - id: application
+    title: Application Argo CD
+    description: |
+      Crée une Application Argo CD `guestbook` qui suit le dossier `guestbook` du dépôt
+      `file:///repos` (ou monte le dépôt autrement) et déploie dans le namespace `guestbook`.
+      Active la synchronisation automatique.
+    hint: "argocd app create ... --sync-policy automated --dest-namespace guestbook --sync-option CreateNamespace=true"
+    cours: |
+      Une **Application** Argo CD est une ressource personnalisée (dans le namespace `argocd`) qui relie une
+      **source** (`repoURL`, `path`, `targetRevision`) à une **destination** (`server`, `namespace`). Elle peut
+      être créée dans l'interface, avec `argocd app create` ou par un manifeste appliqué avec kubectl (la méthode
+      déclarative, elle-même versionnable).
+
+      `syncPolicy.automated` déclenche la synchronisation dès qu'un écart est détecté. L'option
+      `CreateNamespace=true` crée le namespace de destination s'il n'existe pas.
+
+      Le serveur de dépôts d'Argo CD doit pouvoir lire la source : un chemin `file://` doit être visible depuis
+      son pod. `argocd app get guestbook` affiche l'état de synchronisation et de santé.
+    checks:
+      - desc: L'application existe
+        run: sudo kubectl -n argocd get application guestbook
+      - desc: Synchronisation automatique activée
+        run: sudo kubectl -n argocd get application guestbook -o jsonpath='{.spec.syncPolicy.automated}' | grep -q .
+      - desc: Statut Synced et Healthy
+        run: |
+          test "$(sudo kubectl -n argocd get application guestbook -o jsonpath='{.status.sync.status}/{.status.health.status}')" = Synced/Healthy
+  - id: gitops
+    title: Changer l'état par Git
+    description: |
+      Sans toucher à `kubectl`, passe le déploiement `guestbook` à **3 réplicas** en modifiant le dépôt.
+      Argo CD doit appliquer le changement tout seul.
+    cours: |
+      Le principe même du GitOps : pour changer le cluster, on change le dépôt. Modifie `replicas` dans le
+      manifeste, committe avec un message explicite, pousse.
+
+      Argo CD interroge le dépôt périodiquement (toutes les 3 minutes par défaut) ; un webhook rend la détection
+      immédiate. Tu peux aussi forcer le rafraîchissement : bouton *Refresh* ou `argocd app get guestbook --refresh`.
+
+      Chaque synchronisation est tracée dans l'historique de l'application, associée au commit : on sait
+      toujours quelle version de la configuration est déployée, et revenir en arrière consiste à faire un
+      `git revert`.
+    checks:
+      - desc: 3 réplicas disponibles dans guestbook
+        run: test "$(sudo kubectl -n guestbook get deploy guestbook -o jsonpath='{.status.availableReplicas}')" = 3
+      - desc: Le dépôt déclare 3 réplicas
+        run: git --git-dir=/repos grep -h 'replicas' $(git --git-dir=/repos rev-parse HEAD) -- guestbook | grep -q 3
+  - id: auto-reparation
+    title: Auto-réparation et nettoyage
+    description: |
+      Avec GitOps, Git est la seule source de vérité. Active sur l'application `guestbook` :
+      - `selfHeal` : toute modification manuelle dans le cluster est annulée ;
+      - `prune` : une ressource retirée du dépôt est supprimée du cluster.
+
+      Teste : supprime le déploiement à la main (`sudo kubectl -n guestbook delete deploy guestbook`)
+      et observe Argo CD le recréer.
+    hint: "argocd app set guestbook --self-heal --auto-prune"
+    cours: |
+      Deux options de la synchronisation automatique :
+      - **selfHeal** : si quelqu'un modifie ou supprime une ressource directement dans le cluster, Argo CD détecte
+        l'écart avec Git et le corrige. La **dérive** (*drift*) est éliminée ;
+      - **prune** : une ressource présente dans le cluster mais retirée du dépôt est supprimée. Sans cette
+        option, Argo CD se contente de la signaler.
+
+      Elles se règlent dans `spec.syncPolicy.automated` (`kubectl -n argocd patch application ... --type merge`),
+      dans l'interface ou avec `argocd app set --self-heal --auto-prune`.
+
+      Conséquence : en GitOps, `kubectl edit` en production n'a plus d'effet durable. C'est volontaire.
+    checks:
+      - desc: selfHeal activé
+        run: test "$(sudo kubectl -n argocd get application guestbook -o jsonpath='{.spec.syncPolicy.automated.selfHeal}')" = true
+      - desc: prune activé
+        run: test "$(sudo kubectl -n argocd get application guestbook -o jsonpath='{.spec.syncPolicy.automated.prune}')" = true
+      - desc: Le déploiement guestbook existe et est disponible
+        run: test "$(sudo kubectl -n guestbook get deploy guestbook -o jsonpath='{.status.availableReplicas}')" -ge 1
+  - id: kustomize
+    title: Environnements avec Kustomize
+    description: |
+      Dans le dépôt, crée `guestbook-kustomize/base` (le déploiement et le service `guestbook` + un
+      `kustomization.yaml`) et un overlay `guestbook-kustomize/overlays/prod` qui :
+      - ajoute le préfixe `prod-` aux noms (`namePrefix`) ;
+      - passe à **2 réplicas** ;
+      - cible le namespace `guestbook-prod`.
+
+      Pousse, puis crée l'Application `guestbook-prod` qui suit `guestbook-kustomize/overlays/prod`
+      (synchronisation automatique, création du namespace).
+    hint: "Teste le rendu en local avec kubectl kustomize guestbook-kustomize/overlays/prod avant de pousser"
+    cours: |
+      **Kustomize** (intégré à kubectl : `kubectl apply -k`) personnalise des manifestes sans modèle. Un dossier
+      contient un `kustomization.yaml` qui liste ses `resources` et des transformations.
+
+      - La **base** contient les manifestes communs.
+      - Un **overlay** référence la base (`resources: [../../base]`) et ajoute : `namePrefix`, `namespace`,
+        `labels`, `images` (changer un tag), `replicas`, ou des `patches` pour tout le reste.
+
+      `kustomize build overlays/prod` (ou `kubectl kustomize`) affiche le résultat final : vérifie-le avant de
+      pousser. Argo CD détecte automatiquement un dossier Kustomize. Le préfixe s'applique aussi aux sélecteurs
+      du service, Kustomize gère la cohérence.
+    checks:
+      - desc: L'application guestbook-prod est Synced et Healthy
+        run: |
+          test "$(sudo kubectl -n argocd get application guestbook-prod -o jsonpath='{.status.sync.status}/{.status.health.status}')" = Synced/Healthy
+      - desc: Argo CD a détecté une source Kustomize
+        run: test "$(sudo kubectl -n argocd get application guestbook-prod -o jsonpath='{.status.sourceType}')" = Kustomize
+      - desc: prod-guestbook a 2 réplicas dans guestbook-prod
+        run: test "$(sudo kubectl -n guestbook-prod get deploy prod-guestbook -o jsonpath='{.status.availableReplicas}')" = 2
+  - id: helm
+    title: Déployer un chart Helm avec Argo CD
+    description: |
+      Ajoute au dépôt un chart Helm `charts/hello` (`helm create charts/hello`), pousse-le, puis crée l'Application
+      `hello` qui déploie ce chart dans le namespace `hello` en **surchargeant** la valeur `replicaCount` à `2`
+      (paramètre Helm de l'application, sans modifier le `values.yaml` du dépôt).
+    hint: "argocd app create hello --repo ... --path charts/hello --dest-namespace hello --helm-set replicaCount=2 --sync-policy automated --sync-option CreateNamespace=true"
+    cours: |
+      **Helm** est le gestionnaire de paquets de Kubernetes. Un **chart** est un dossier contenant
+      `Chart.yaml` (nom, version), `values.yaml` (paramètres par défaut) et `templates/` (manifestes avec la
+      syntaxe des modèles Go : `{{ .Values.replicaCount }}`). `helm create` génère un chart d'exemple complet.
+
+      Argo CD sait rendre un chart lui-même. Dans l'Application, `spec.source.helm` permet de surcharger des
+      valeurs sans toucher au dépôt : `parameters` (paires nom/valeur), `values` ou `valueFiles`.
+
+      `helm template charts/hello --set replicaCount=2` affiche localement les manifestes produits.
+      Argo CD ne fait pas de `helm install` : il applique le rendu, ce qui ne crée pas de release Helm.
+    checks:
+      - desc: L'application hello est de type Helm
+        run: test "$(sudo kubectl -n argocd get application hello -o jsonpath='{.status.sourceType}')" = Helm
+      - desc: replicaCount est surchargé à 2 dans l'application
+        run: sudo kubectl -n argocd get application hello -o jsonpath='{.spec.source.helm}' | grep -q 'replicaCount'
+      - desc: Le déploiement a 2 réplicas disponibles
+        run: test "$(sudo kubectl -n hello get deploy -o jsonpath='{.items[0].status.availableReplicas}')" = 2
+  - id: projet
+    title: Cloisonner avec un AppProject
+    description: |
+      Le projet `default` autorise tout. Crée un **AppProject** `equipe-web` qui :
+      - n'autorise que ton dépôt comme source (`sourceRepos`) ;
+      - n'autorise que les namespaces `guestbook` et `guestbook-prod` du cluster local comme destinations.
+
+      Rattache ensuite l'application `guestbook` à ce projet (elle doit rester Synced/Healthy).
+    hint: "argocd proj create equipe-web -d https://kubernetes.default.svc,guestbook -d https://kubernetes.default.svc,guestbook-prod -s <url du dépôt> ; argocd app set guestbook --project equipe-web"
+    cours: |
+      Un **AppProject** regroupe des Applications et définit ce qu'elles ont le droit de faire :
+      - `sourceRepos` : les dépôts autorisés comme sources ;
+      - `destinations` : les couples cluster/namespace autorisés ;
+      - `clusterResourceWhitelist` / `namespaceResourceBlacklist` : les types de ressources permis ;
+      - des rôles pour les droits des utilisateurs.
+
+      Le projet `default` autorise tout : en entreprise, chaque équipe a son projet, ce qui empêche une équipe de
+      déployer dans le namespace d'une autre ou depuis un dépôt non maîtrisé.
+
+      Une Application se rattache à un projet par `spec.project`. Si sa source ou sa destination ne sont pas
+      autorisées, Argo CD refuse de la synchroniser et l'explique dans ses conditions.
+    checks:
+      - desc: L'AppProject equipe-web limite les destinations
+        run: |
+          d=$(sudo kubectl -n argocd get appproject equipe-web -o jsonpath='{.spec.destinations[*].namespace}'); echo "$d" | grep -qw guestbook && ! echo "$d" | grep -q '\*'
+      - desc: Les sources sont restreintes
+        run: |
+          s=$(sudo kubectl -n argocd get appproject equipe-web -o jsonpath='{.spec.sourceRepos[*]}'); test -n "$s" && test "$s" != '*'
+      - desc: guestbook appartient à equipe-web et reste saine
+        run: |
+          test "$(sudo kubectl -n argocd get application guestbook -o jsonpath='{.spec.project} {.status.health.status}')" = "equipe-web Healthy"

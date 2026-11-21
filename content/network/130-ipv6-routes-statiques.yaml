@@ -1,0 +1,104 @@
+title: Routes statiques IPv6 et adresses link-local
+level: intermediaire
+order: 30
+device: router
+hostname: R-NORD
+tags: [ipv6, routage, static, link-local]
+summary: Écrire des routes IPv6 vers un saut suivant link-local, une route hôte et une route flottante.
+description: |
+  `R-NORD` est relié à `R-SUD` par `G0/1` (link-local de `R-SUD` : `fe80::2`) et au FAI par `G0/2`
+  (link-local du FAI : `fe80::1`). Les adresses sont déjà en place.
+
+  1. active le routage IPv6 ;
+  2. réseau `2001:db8:acad:2::/64` (derrière `R-SUD`) via `G0/1` et `fe80::2` ;
+  3. route **hôte** vers le serveur `2001:db8:acad:99::10/128` via l'adresse globale de
+     `R-SUD`, `2001:db8:acad:ff::2` ;
+  4. route par défaut via `G0/2` et `fe80::1` ;
+  5. route par défaut **de secours** via `G0/1` et `fe80::2`, distance administrative `200`.
+
+  Contrôle avec `show ipv6 route static`.
+initial: |
+  interface g0/0
+  ipv6 address 2001:db8:acad:1::1/64
+  no shutdown
+  interface g0/1
+  ipv6 address 2001:db8:acad:ff::1/64
+  ipv6 address fe80::1 link-local
+  no shutdown
+  interface g0/2
+  ipv6 address 2001:db8:cafe:1::2/64
+  no shutdown
+checks:
+  - desc: Routage IPv6 activé
+    expr: d.ipv6_routing
+  - desc: 2001:db8:acad:2::/64 via G0/1 et fe80::2
+    expr: route6("2001:db8:acad:2::/64", "g0/1 fe80::2")
+    hint: "Un saut suivant link-local doit être accompagné de l'interface de sortie"
+  - desc: Route hôte 2001:db8:acad:99::10/128 via 2001:db8:acad:ff::2
+    expr: route6("2001:db8:acad:99::10/128", "2001:db8:acad:ff::2")
+  - desc: Route par défaut via G0/2 et fe80::1, secours via G0/1 en distance 200
+    expr: route6("::/0", "g0/2 fe80::1", 1) and route6("::/0", "g0/1 fe80::2", 200)
+solution: |
+  configure terminal
+  ipv6 unicast-routing
+  ipv6 route 2001:db8:acad:2::/64 g0/1 fe80::2
+  ipv6 route 2001:db8:acad:99::10/128 2001:db8:acad:ff::2
+  ipv6 route ::/0 g0/2 fe80::1
+  ipv6 route ::/0 g0/1 fe80::2 200
+  end
+cours: |
+  ## Les trois façons d'indiquer un saut suivant en IPv6
+
+  | Forme                                   | Exemple                                     |
+  |-----------------------------------------|---------------------------------------------|
+  | adresse **globale** du voisin           | `ipv6 route 2001:db8:5::/64 2001:db8:f::2`  |
+  | interface de sortie seule               | `ipv6 route 2001:db8:5::/64 s0/0/0` (liens point à point) |
+  | interface **+ link-local** (« entièrement spécifiée ») | `ipv6 route 2001:db8:5::/64 g0/0 fe80::5` |
+
+  Une adresse **link-local** (`fe80::/10`) n'est unique **que sur un lien** : la même `fe80::1`
+  peut exister sur chaque interface. Le routeur ne peut donc pas savoir par où sortir : il faut
+  **toujours** préciser l'interface avec un saut suivant link-local.
+
+  Pourquoi utiliser le link-local ? Il ne change pas quand on renumérote le réseau, et c'est ce que
+  les protocoles de routage IPv6 (OSPFv3, EIGRP pour IPv6) utilisent eux-mêmes comme saut suivant.
+  Fixer un link-local lisible facilite la lecture : `ipv6 address fe80::5 link-local`.
+
+  ### Prérequis
+
+  `ipv6 unicast-routing` : sans cette commande, le routeur se comporte comme un hôte IPv6 (pas de
+  transfert, pas d'annonces RA).
+
+  ### Routes particulières
+
+  ```
+  R1(config)# ipv6 route 2001:db8:5::25/128 2001:db8:f::2        ! route hôte
+  R1(config)# ipv6 route ::/0 g0/0 fe80::5                         ! route par défaut
+  R1(config)# ipv6 route ::/0 g0/1 fe80::6 250                     ! route flottante
+  R1# show ipv6 route static
+  S   ::/0 [1/0]
+       via FE80::5, GigabitEthernet0/0
+  S   2001:DB8:5::25/128 [1/0]
+       via 2001:DB8:F::2
+  R1# ping 2001:db8:5::25
+  ```
+
+  La route flottante n'apparaît dans la table que si la route principale disparaît (interface
+  `G0/0` tombée).
+
+  ### Pièges fréquents
+
+  - Saut suivant link-local sans interface : `% Interface has to be specified for a link-local
+    nexthop`.
+  - Oublier le `/longueur` du préfixe : la syntaxe IPv6 n'utilise pas de masque décimal.
+  - Une route flottante dont la distance est **inférieure** à celle de la principale : elle
+    devient la principale.
+
+  ### Pour le CCNA
+
+  L'examen demande de configurer et vérifier les routes statiques IPv4 **et** IPv6 : réseau, hôte,
+  par défaut et flottante, avec les différentes formes de saut suivant.
+docs:
+  - title: RFC 4291 — IP Version 6 Addressing Architecture
+    url: https://www.rfc-editor.org/rfc/rfc4291
+  - title: Wikipédia — Adresse IPv6
+    url: https://fr.wikipedia.org/wiki/Adresse_IPv6

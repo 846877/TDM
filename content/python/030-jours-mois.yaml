@@ -1,0 +1,133 @@
+title: Jours dans un mois
+level: debutant
+order: 30
+tags: [fonctions, tuples, conditions]
+summary: Combiner plusieurs fonctions et une table de valeurs.
+description: |
+  1. Écris `est_bissextile(annee)` (règle : divisible par 4, sauf par 100, sauf par 400).
+  2. Écris `jours_dans_mois(mois, annee)` qui renvoie le nombre de jours du mois (1 = janvier,
+     12 = décembre). Février a 29 jours les années bissextiles. Si le mois n'est pas entre 1 et
+     12, renvoie `0`.
+  3. Écris `jours_dans_annee(annee)` qui **réutilise** `jours_dans_mois` pour additionner les
+     jours des 12 mois.
+
+  ```python
+  jours_dans_mois(2, 2024)    # 29
+  jours_dans_mois(4, 2023)    # 30
+  jours_dans_annee(2023)      # 365
+  ```
+
+  Astuce : un tuple `(31, 28, 31, 30, ...)` indexé par `mois - 1` évite une longue suite de `if`.
+starter: |
+  def est_bissextile(annee):
+      pass
+
+
+  def jours_dans_mois(mois, annee):
+      pass
+
+
+  def jours_dans_annee(annee):
+      pass
+tests: |
+  def test_mois_31():
+      "Janvier, juillet, août et décembre ont 31 jours"
+      for mois in (1, 7, 8, 12):
+          r = solution.jours_dans_mois(mois, 2023)
+          assert r == 31, f"jours_dans_mois({mois}, 2023) : attendu 31, obtenu {r!r}"
+
+  def test_mois_30():
+      "Avril, juin, septembre et novembre ont 30 jours"
+      for mois in (4, 6, 9, 11):
+          r = solution.jours_dans_mois(mois, 2023)
+          assert r == 30, f"jours_dans_mois({mois}, 2023) : attendu 30, obtenu {r!r}"
+
+  def test_fevrier():
+      "Février : 28 ou 29 jours"
+      cas = {2023: 28, 2024: 29, 1900: 28, 2000: 29}
+      for annee, attendu in cas.items():
+          r = solution.jours_dans_mois(2, annee)
+          assert r == attendu, f"février {annee} : attendu {attendu}, obtenu {r!r}"
+
+  def test_mois_invalide():
+      "Mois invalide -> 0"
+      for mois in (0, 13, -1):
+          r = solution.jours_dans_mois(mois, 2023)
+          assert r == 0, f"jours_dans_mois({mois}, 2023) : attendu 0, obtenu {r!r}"
+
+  def test_annee():
+      "365 ou 366 jours"
+      assert solution.jours_dans_annee(2023) == 365, "2023 a 365 jours"
+      assert solution.jours_dans_annee(2024) == 366, "2024 a 366 jours"
+      assert solution.jours_dans_annee(2100) == 365, "2100 n'est pas bissextile"
+solution: |
+  JOURS = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+
+
+  def est_bissextile(annee):
+      return annee % 4 == 0 and (annee % 100 != 0 or annee % 400 == 0)
+
+
+  def jours_dans_mois(mois, annee):
+      if not 1 <= mois <= 12:
+          return 0
+      if mois == 2 and est_bissextile(annee):
+          return 29
+      return JOURS[mois - 1]
+
+
+  def jours_dans_annee(annee):
+      total = 0
+      for mois in range(1, 13):
+          total += jours_dans_mois(mois, annee)
+      return total
+cours: |
+  ## Une table plutôt qu'une cascade de `if`
+
+  Quand une valeur dépend d'un petit nombre de cas fixes, une **table** (tuple ou liste) est
+  plus lisible et moins sujette aux erreurs qu'une suite de conditions :
+
+  ```python
+  JOURS_SEMAINE = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
+  JOURS_SEMAINE[0]       # "lundi"
+  JOURS_SEMAINE[3 - 1]   # "mercredi" (jour n°3 -> indice 2)
+  ```
+
+  Les indices commencent à 0 alors que les humains comptent à partir de 1 : d'où le
+  décalage `- 1`. Les noms en MAJUSCULES signalent par convention une **constante**.
+  Un tuple convient bien car la table ne doit pas être modifiée.
+
+  ## Valider les entrées
+
+  Avant d'indexer la table, vérifie que la valeur est dans la plage autorisée : sinon on
+  obtient une `IndexError`… ou pire, un résultat faux sans erreur, car les indices négatifs
+  sont valides en Python (`table[-1]` renvoie le dernier élément !).
+
+  ## Réutiliser ses fonctions
+
+  Une fonction peut en appeler une autre : c'est la base de la **décomposition** d'un
+  problème. Écrire `jours_dans_annee` à partir de `jours_dans_mois` garantit que les deux
+  restent cohérentes ; si on corrige un bug dans l'une, l'autre en profite.
+
+  ```python
+  def secondes_dans_jour():
+      return 24 * secondes_dans_heure()
+
+  def secondes_dans_heure():
+      return 60 * 60
+  ```
+
+  (L'ordre de définition n'importe pas tant que la fonction existe au moment de l'**appel**.)
+
+  ## Cas particulier
+
+  Février est l'exception : la table donne la valeur normale, et une condition ajuste le cas
+  bissextile. Isoler l'exception plutôt que de la mélanger à la règle générale est une bonne
+  habitude.
+
+  En vrai : `calendar.monthrange(annee, mois)[1]` donne le nombre de jours d'un mois.
+docs:
+  - title: Tutoriel — tuples et séquences
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#tuples-and-sequences
+  - title: Module calendar (monthrange)
+    url: https://docs.python.org/fr/3/library/calendar.html

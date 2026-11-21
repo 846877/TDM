@@ -1,0 +1,209 @@
+title: Le problème du sac à dos
+level: expert
+order: 21
+tags: [programmation dynamique, algorithmes, optimisation, stdin]
+summary: Sac à dos 0/1 par programmation dynamique, avec critère de départage.
+mode: stdio
+description: |
+  Tu pars en randonnée avec un sac de capacité limitée. Chaque objet a un poids et une valeur ; tu peux
+  le prendre **une fois** ou pas du tout. Ton programme lit sur l'entrée standard :
+
+  - une ligne `capacite n` ;
+  - `n` lignes `nom poids valeur` (entiers positifs, nom sans espace).
+
+  Il affiche la valeur totale maximale qu'on peut emporter sans dépasser la capacité, puis, parmi les
+  choix qui atteignent cette valeur, le **poids total le plus petit** :
+
+  ```
+  valeur max: 90
+  poids utilise: 7
+  ```
+
+  - Un algorithme glouton (trier par valeur/poids) ne donne pas toujours l'optimum.
+  - Tester toutes les combinaisons coûte `2^n` : impossible avec 60 objets.
+  - Programmation dynamique : `meilleur[c]` = meilleur résultat avec une capacité `c`, en traitant
+    les objets un par un et en parcourant `c` **de la capacité vers 0** (pour ne pas prendre deux
+    fois le même objet). Astuce : comparer des couples `(valeur, -poids)` gère le départage
+    automatiquement.
+starter: |
+  import sys
+
+  donnees = sys.stdin.read().split()
+cases:
+  - name: Randonnée
+    input: |
+      10 4
+      carte 5 10
+      lampe 4 40
+      gourde 6 30
+      corde 3 50
+    output: |
+      valeur max: 90
+      poids utilise: 7
+  - name: Le glouton se trompe
+    input: |
+      50 3
+      x 10 60
+      y 20 100
+      z 30 120
+    output: |
+      valeur max: 220
+      poids utilise: 50
+  - name: Départage par le poids
+    input: |
+      5 3
+      a 1 3
+      b 3 3
+      c 5 6
+    output: |
+      valeur max: 6
+      poids utilise: 4
+  - name: Rien ne rentre
+    input: |
+      3 2
+      lourd 4 100
+      enorme 10 500
+    output: |
+      valeur max: 0
+      poids utilise: 0
+  - name: Aucun objet
+    input: |
+      7 0
+    output: |
+      valeur max: 0
+      poids utilise: 0
+  - name: 60 objets
+    input: |
+      2000 60
+      objet0 90 210
+      objet1 52 201
+      objet2 163 499
+      objet3 133 184
+      objet4 82 488
+      objet5 174 242
+      objet6 128 404
+      objet7 190 226
+      objet8 136 124
+      objet9 23 400
+      objet10 150 473
+      objet11 84 231
+      objet12 28 208
+      objet13 168 456
+      objet14 145 109
+      objet15 42 123
+      objet16 73 499
+      objet17 114 377
+      objet18 130 345
+      objet19 151 185
+      objet20 40 138
+      objet21 133 383
+      objet22 112 486
+      objet23 193 439
+      objet24 68 378
+      objet25 162 210
+      objet26 81 287
+      objet27 39 486
+      objet28 115 405
+      objet29 68 248
+      objet30 91 280
+      objet31 164 66
+      objet32 108 415
+      objet33 198 474
+      objet34 111 253
+      objet35 94 63
+      objet36 55 39
+      objet37 59 260
+      objet38 148 226
+      objet39 187 49
+      objet40 115 167
+      objet41 66 290
+      objet42 27 408
+      objet43 42 377
+      objet44 160 144
+      objet45 178 245
+      objet46 153 488
+      objet47 140 256
+      objet48 104 170
+      objet49 193 312
+      objet50 108 222
+      objet51 82 157
+      objet52 157 236
+      objet53 21 461
+      objet54 166 92
+      objet55 99 250
+      objet56 92 67
+      objet57 78 346
+      objet58 186 126
+      objet59 166 104
+    output: |
+      valeur max: 9309
+      poids utilise: 1993
+solution: |
+  import sys
+
+  donnees = sys.stdin.read().split()
+  capacite, n = int(donnees[0]), int(donnees[1])
+  objets = [(donnees[2 + 3 * i], int(donnees[3 + 3 * i]), int(donnees[4 + 3 * i])) for i in range(n)]
+
+  # meilleur[c] = (valeur maximale, -poids minimal) pour un poids total <= c
+  meilleur = [(0, 0)] * (capacite + 1)
+  for _, poids, valeur in objets:
+      for c in range(capacite, poids - 1, -1):
+          v, moins_p = meilleur[c - poids]
+          candidat = (v + valeur, moins_p - poids)
+          if candidat > meilleur[c]:
+              meilleur[c] = candidat
+
+  valeur, moins_poids = meilleur[capacite]
+  print(f"valeur max: {valeur}")
+  print(f"poids utilise: {-moins_poids}")
+cours: |
+  ## Un problème d'optimisation combinatoire
+
+  Choisir un sous-ensemble d'objets qui maximise la valeur sous une contrainte de poids. Il
+  modélise de nombreux problèmes réels : allocation de budget, choix de tâches à planifier,
+  remplissage de conteneurs, sélection de sauvegardes à placer sur un support limité.
+
+  ## Pourquoi pas le glouton ?
+
+  Trier par rapport valeur/poids et prendre dans l'ordre est optimal si l'on peut **couper**
+  les objets (sac à dos fractionnaire), mais pas en version 0/1 : un objet très rentable mais
+  lourd peut bloquer une meilleure combinaison. Et l'énumération des 2ⁿ sous-ensembles est
+  impossible au-delà de n ≈ 25.
+
+  ## La programmation dynamique
+
+  `meilleur[c]` = meilleure valeur atteignable avec une capacité `c`, en n'utilisant que les
+  objets déjà traités. Pour un nouvel objet `(p, v)`, à chaque capacité `c ≥ p`, deux choix :
+  ne pas le prendre (`meilleur[c]` inchangé) ou le prendre (`meilleur[c - p] + v`). On garde
+  le meilleur.
+
+  ### Le sens de parcours
+
+  Avec un tableau **à une dimension**, on parcourt les capacités **de la plus grande à la
+  plus petite**. Si on montait, `meilleur[c - p]` pourrait déjà inclure l'objet courant (mis
+  à jour plus tôt dans la même passe) : on le prendrait plusieurs fois, ce qui est la
+  variante « quantités illimitées ».
+
+  ## Critère secondaire
+
+  Pour départager les solutions de même valeur par le poids le plus petit, on compare des
+  **couples** : les tuples se comparent élément par élément, donc `(valeur, -poids)` maximise
+  la valeur puis minimise le poids. Le tableau stocke alors des couples.
+
+  ## Complexité : pseudo-polynomiale
+
+  O(n × C) en temps et O(C) en mémoire. C'est polynomial en la **valeur** de C, pas en sa
+  taille en bits : avec une capacité d'un milliard, le tableau est inutilisable. Le sac à dos
+  est d'ailleurs NP-difficile ; la programmation dynamique est efficace parce que les poids
+  sont de petits entiers.
+
+  ## Retrouver les objets
+
+  Pour savoir **quels** objets prendre, il faut garder la table complète (n × C) ou noter les
+  décisions, puis remonter, comme pour la LCS.
+docs:
+  - title: Wikipédia — Problème du sac à dos
+    url: https://fr.wikipedia.org/wiki/Probl%C3%A8me_du_sac_%C3%A0_dos
+  - title: Wikipédia — Programmation dynamique
+    url: https://fr.wikipedia.org/wiki/Programmation_dynamique

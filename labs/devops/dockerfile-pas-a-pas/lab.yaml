@@ -1,0 +1,386 @@
+title: Dockerfile pas à pas
+level: debutant
+order: 8
+tags: [docker, dockerfile, image, build, multi-étapes, healthcheck]
+summary: Écrire un Dockerfile instruction par instruction - FROM, COPY, RUN, ENV, EXPOSE, USER, ARG, LABEL, HEALTHCHECK, STOPSIGNAL et construction multi-étapes.
+build: .
+privileged: true
+command: []
+shell: sh
+workdir: /root/projet
+setup: |
+  for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+description: |
+  Un hôte Docker rien qu'à toi (Docker dans Docker). Dans **`/root/projet`** se trouve un petit site
+  statique (`site/`), un script de génération (`generer.sh`) et deux choses qui n'ont rien à faire dans
+  une image : `secrets.env` et le dossier `brouillons/`.
+
+  Chaque exercice te demande de construire une image taguée **`pas:N`** (`docker build -t pas:1 .`).
+  Tu peux faire évoluer le même `Dockerfile` ou en garder un par étape (`Dockerfile.1`,
+  `Dockerfile.2`… avec `docker build -f Dockerfile.2 -t pas:2 .`) : les vérifications regardent les
+  **images** et les **conteneurs**, pas le fichier.
+
+  Images de base à utiliser : **`alpine:3.20`** et **`python:3.12-alpine`** (qui fournit un petit serveur
+  web : `python3 -m http.server 8080`). Pour tester un site depuis le terminal :
+  `wget -qO- http://localhost:8080/`.
+cours: |
+  ## Le Dockerfile : la recette d'une image
+
+  Un **Dockerfile** est un fichier texte qui décrit, instruction par instruction, comment fabriquer une
+  image. `docker build` le lit de haut en bas : chaque instruction part de l'état laissé par la
+  précédente. Celles qui modifient le système de fichiers (`RUN`, `COPY`, `ADD`) créent une **couche** ;
+  les autres (`CMD`, `ENV`, `EXPOSE`, `USER`, `LABEL`…) ne font qu'ajouter des métadonnées.
+
+  ```
+   Dockerfile                    image pas:4
+   ──────────                    ───────────────────────────────
+   FROM python:3.12-alpine  ──>  couches de l'image de base
+   WORKDIR /srv/site        ──>  (métadonnée + dossier créé)
+   COPY site/ .             ──>  couche : les fichiers du site
+   RUN adduser -D web       ──>  couche : /etc/passwd modifié
+   ENV PORT=8080            ──>  métadonnée
+   CMD [...]                ──>  métadonnée : commande par défaut
+  ```
+
+  ### Le contexte de construction
+
+  Dans `docker build -t pas:1 .`, le point désigne le **contexte** : le dossier envoyé au moteur de
+  construction. `COPY` ne peut prendre que des fichiers de ce contexte. Le fichier **`.dockerignore`**
+  en exclut des chemins (secrets, dépendances locales, `.git`), ce qui accélère la construction et évite
+  de livrer par erreur des fichiers sensibles.
+
+  ### Le cache
+
+  Docker réutilise une couche si l'instruction et ses entrées n'ont pas changé. Dès qu'une couche change,
+  **toutes les suivantes** sont reconstruites. On place donc en haut ce qui change rarement (paquets,
+  dépendances) et en bas ce qui change souvent (le code). `docker build --no-cache` force une
+  reconstruction complète.
+
+  ### Mémo des instructions
+
+  | Instruction | Rôle |
+  |---|---|
+  | `FROM image:tag` | image de départ (toujours avec une étiquette précise) |
+  | `WORKDIR /chemin` | dossier courant pour la suite (créé si besoin) |
+  | `COPY src dest` | copie depuis le contexte (`--chown=` pour le propriétaire) |
+  | `RUN commande` | exécute une commande pendant la construction |
+  | `ENV CLE=valeur` | variable d'environnement, aussi présente à l'exécution |
+  | `ARG NOM=defaut` | variable de construction (`--build-arg NOM=...`), absente à l'exécution |
+  | `EXPOSE 8080` | documente le port d'écoute (ne publie rien) |
+  | `USER nom` | utilisateur des instructions suivantes et du conteneur |
+  | `LABEL cle=valeur` | métadonnées (auteur, version, source…) |
+  | `HEALTHCHECK CMD ...` | commande de contrôle de santé |
+  | `STOPSIGNAL SIGINT` | signal envoyé par `docker stop` |
+  | `CMD [...]` / `ENTRYPOINT [...]` | commande lancée au démarrage |
+
+  ### Forme exec ou forme shell
+
+  `CMD ["python3", "-m", "http.server"]` (forme **exec**, un tableau JSON) lance le programme directement :
+  il devient le processus n°1 du conteneur et reçoit les signaux. `CMD python3 -m http.server` (forme
+  **shell**) passe par `/bin/sh -c` : les variables sont remplacées, mais c'est le shell qui reçoit les
+  signaux, et `docker stop` attend souvent 10 secondes avant de tuer le conteneur.
+
+  ### Pièges fréquents
+
+  - `FROM image` sans étiquette, ou avec `latest` : la construction change sans prévenir.
+  - Un `RUN` par commande : beaucoup de couches. Enchaîne avec `&&` ce qui va ensemble.
+  - Supprimer un fichier dans un `RUN` suivant ne le retire pas de l'image : il reste dans la couche
+    précédente. Les secrets ne doivent jamais entrer dans une couche.
+  - `COPY . .` sans `.dockerignore` embarque tout le dossier.
+  - Conteneur lancé en `root` alors que rien ne l'exige.
+
+  ### Bonnes pratiques
+
+  Image de base petite et épinglée, utilisateur non privilégié, `.dockerignore`, instructions triées pour
+  le cache, étiquettes OCI (`org.opencontainers.image.*`), contrôle de santé, et construction
+  **multi-étapes** pour que les outils de construction ne se retrouvent pas dans l'image finale.
+  `docker history pas:N` et `docker image inspect pas:N` montrent ce que contient réellement une image.
+
+  ### Pour réviser
+
+  1. Quelles instructions créent une couche ?
+  2. Que se passe-t-il pour le cache quand on modifie un fichier copié au milieu du Dockerfile ?
+  3. Quelle différence entre `ARG` et `ENV` ?
+  4. Pourquoi la forme exec de `CMD` est-elle préférable ?
+docs:
+  - title: Référence du Dockerfile
+    url: https://docs.docker.com/reference/dockerfile/
+  - title: Bonnes pratiques de construction
+    url: https://docs.docker.com/build/building/best-practices/
+  - title: Constructions multi-étapes
+    url: https://docs.docker.com/build/building/multi-stage/
+  - title: Le cache de construction
+    url: https://docs.docker.com/build/cache/
+exercises:
+  - id: df-from-cmd
+    title: Première image - FROM et CMD
+    description: |
+      Écris un Dockerfile minimal à partir de **`alpine:3.20`** dont la commande par défaut affiche
+      exactement `Bonjour depuis mon image`. Construis-le sous le nom **`pas:1`**, puis teste :
+      `docker run --rm pas:1`.
+    hint: "Deux lignes : FROM alpine:3.20 puis CMD [\"echo\", \"Bonjour depuis mon image\"] ; docker build -t pas:1 ."
+    cours: |
+      Tout Dockerfile commence par **`FROM`**, qui choisit l'image de départ. On précise toujours une
+      **étiquette** (`alpine:3.20`) : sans elle, Docker prend `latest`, qui change au fil des publications,
+      et ta construction ne sera plus la même demain.
+
+      **`CMD`** fixe la commande lancée par `docker run` quand on n'en donne pas. Elle s'écrit de préférence
+      sous forme de tableau JSON (forme *exec*), avec des **guillemets doubles**. Une commande passée à
+      `docker run pas:1 autre-commande` remplace `CMD`.
+
+      `docker build -t nom:etiquette .` construit l'image à partir du `Dockerfile` du dossier courant (le
+      point est le **contexte**). `docker images` liste le résultat, `docker history` en montre les étapes.
+    checks:
+      - desc: L'image pas:1 affiche le message
+        run: test "$(docker run --rm pas:1 2>/dev/null)" = "Bonjour depuis mon image"
+      - desc: Elle est basée sur Alpine 3.20
+        run: docker run --rm --entrypoint cat pas:1 /etc/alpine-release | grep -q '^3\.20'
+  - id: df-copy
+    title: WORKDIR et COPY
+    description: |
+      Construis **`pas:2`** à partir de `alpine:3.20` : le dossier de travail est **`/srv/site`** et tout le
+      contenu de `site/` y est copié (on doit trouver `/srv/site/index.html` et `/srv/site/a-propos.html`).
+      Garde une commande par défaut qui liste les fichiers (`ls -l`).
+    hint: "WORKDIR /srv/site puis COPY site/ . (la destination . est relative au WORKDIR)"
+    cours: |
+      **`WORKDIR`** fixe le dossier courant pour les instructions suivantes et pour le conteneur. Il crée
+      le dossier s'il n'existe pas : inutile, et moins lisible, d'écrire `RUN mkdir -p ... && cd ...`
+      (chaque `RUN` repart d'ailleurs du `WORKDIR`, un `cd` ne survit pas à la ligne).
+
+      **`COPY source destination`** copie des fichiers du **contexte** de construction vers l'image. Une
+      destination relative part du `WORKDIR`. Attention à la barre oblique : `COPY site/ .` copie le
+      **contenu** du dossier, alors que `COPY site ./site` le recrée sous son nom.
+
+      `ADD` fait la même chose et sait en plus décompresser une archive ou télécharger une URL ; on lui
+      préfère `COPY`, plus prévisible, sauf pour ces cas précis.
+    checks:
+      - desc: Le dossier de travail de pas:2 est /srv/site
+        run: test "$(docker image inspect -f '{{.Config.WorkingDir}}' pas:2)" = /srv/site
+      - desc: Les deux pages sont copiées
+        run: docker run --rm --entrypoint cat pas:2 /srv/site/index.html /srv/site/a-propos.html | grep -q Bienvenue
+  - id: df-run
+    title: RUN et les couches
+    description: |
+      Construis **`pas:3`** : comme `pas:2`, avec en plus **une seule instruction `RUN`** qui :
+      1. crée l'utilisateur **`web`** avec l'UID **1000** (`adduser -D -u 1000 web` sous Alpine) ;
+      2. écrit `ok` dans **`/srv/site/sante.txt`**.
+
+      Observe ensuite les couches avec `docker history pas:3`.
+    hint: "RUN adduser -D -u 1000 web && echo ok > /srv/site/sante.txt"
+    cours: |
+      **`RUN`** exécute une commande pendant la construction, dans un shell (`/bin/sh -c`), et enregistre le
+      résultat dans une nouvelle **couche**. Une image est un empilement de couches en lecture seule :
+      chaque `RUN`, `COPY` ou `ADD` en ajoute une.
+
+      On regroupe dans un même `RUN`, avec `&&`, les commandes qui forment une seule étape logique :
+      installation de paquets et nettoyage du cache, création d'un utilisateur et de ses dossiers. Moins de
+      couches, et surtout pas de fichier temporaire « supprimé » qui resterait en réalité dans une couche
+      précédente. `&&` arrête la chaîne à la première erreur, et la construction échoue.
+
+      Pour la lisibilité, une longue commande se coupe avec `\` en fin de ligne. `docker history` affiche
+      chaque couche avec l'instruction qui l'a créée et sa taille.
+    checks:
+      - desc: pas:3 contient l'utilisateur web (UID 1000) et sante.txt
+        run: docker run --rm --entrypoint sh pas:3 -c 'test "$(id -u web)" = 1000 && grep -qx ok /srv/site/sante.txt && test -f /srv/site/index.html'
+      - desc: Une seule instruction RUN a été ajoutée
+        run: test "$(docker history --no-trunc --format '{{.CreatedBy}}' pas:3 | grep -cE '^RUN |^/bin/sh -c [^#]')" = 1
+  - id: df-serveur
+    title: ENV, EXPOSE et un vrai service
+    description: |
+      Construis **`pas:4`** à partir de **`python:3.12-alpine`** : le site est dans `/srv/site`, la variable
+      d'environnement **`PORT=8080`** est définie, le port **8080** est déclaré avec `EXPOSE`, et la commande
+      par défaut sert le site avec `python3 -m http.server` sur ce port.
+
+      Lance-le en arrière-plan sous le nom **`site`**, port 8080 publié : `docker run -d --name site -p
+      8080:8080 pas:4`, puis `wget -qO- http://localhost:8080/`.
+    hint: "ENV PORT=8080, EXPOSE 8080, CMD python3 -m http.server \"$PORT\" (forme shell pour utiliser la variable) ou CMD [\"python3\", \"-m\", \"http.server\", \"8080\"]"
+    cours: |
+      **`ENV`** définit une variable d'environnement disponible pendant la suite de la construction **et**
+      dans le conteneur. On peut la surcharger au lancement : `docker run -e PORT=9000 ...`. C'est la façon
+      habituelle de configurer une application conteneurisée.
+
+      **`EXPOSE`** documente le port sur lequel l'application écoute. Il ne publie rien : c'est `-p
+      hote:conteneur` au lancement qui rend le port accessible depuis l'extérieur. `docker run -P` publie
+      tous les ports déclarés sur des ports hôte aléatoires.
+
+      Pour qu'une variable soit remplacée dans `CMD`, il faut un shell : la forme exec `["python3", ...,
+      "$PORT"]` passerait le texte `$PORT` tel quel. La forme shell (`CMD python3 -m http.server "$PORT"`) le
+      permet, avec un inconvénient que l'exercice sur `STOPSIGNAL` te fera découvrir.
+    checks:
+      - desc: pas:4 définit PORT=8080 et expose 8080
+        run: |
+          docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' pas:4 | grep -qx 'PORT=8080' && docker image inspect -f '{{json .Config.ExposedPorts}}' pas:4 | grep -q '"8080/tcp"'
+      - desc: Le conteneur site tourne à partir de pas:4
+        run: test "$(docker inspect -f '{{.Config.Image}} {{.State.Running}}' site 2>/dev/null)" = "pas:4 true"
+      - desc: Le site répond sur le port 8080
+        run: wget -qO- http://localhost:8080/ | grep -q Bienvenue
+  - id: df-dockerignore
+    title: Le fichier .dockerignore
+    description: |
+      Construis **`pas:5`** (base libre parmi les deux proposées) avec l'instruction **`COPY . /srv/app`**, qui
+      copie tout le projet. Grâce à un fichier **`/root/projet/.dockerignore`**, l'image ne doit contenir
+      **ni `secrets.env` ni `brouillons/`**, mais bien `site/`.
+    hint: "Une ligne par motif dans .dockerignore : secrets.env, brouillons (et pourquoi pas Dockerfile*, .dockerignore)"
+    cours: |
+      Avant toute instruction, le client Docker envoie le **contexte** (le dossier passé à `docker build`)
+      au moteur de construction. Le fichier **`.dockerignore`**, à la racine du contexte, en exclut des
+      chemins, avec une syntaxe proche de `.gitignore` : un motif par ligne, `*` et `**` comme jokers, `!`
+      pour réinclure une exception.
+
+      Deux bénéfices :
+      - la **sécurité** : un fichier exclu ne peut pas finir dans une image par un `COPY . .` trop large ;
+        or une image se partage, se pousse sur un registre, et chacune de ses couches peut être extraite ;
+      - la **rapidité** : moins de fichiers à envoyer, et le cache n'est plus invalidé par des fichiers
+        sans rapport (journaux, `.git`, `node_modules`).
+
+      On y place typiquement `.git`, les fichiers `.env`, les dépendances installées localement, les
+      fichiers de l'éditeur et les artefacts de construction.
+    checks:
+      - desc: Le fichier .dockerignore existe
+        run: test -s /root/projet/.dockerignore
+      - desc: pas:5 contient site/ mais ni secrets.env ni brouillons/
+        run: docker run --rm --entrypoint sh pas:5 -c 'test -f /srv/app/site/index.html && test ! -e /srv/app/secrets.env && test ! -e /srv/app/brouillons'
+  - id: df-user
+    title: Ne pas tourner en root avec USER
+    description: |
+      Construis **`pas:6`** : le même service web que `pas:4` (toujours sur le port **8080**), mais exécuté par
+      l'utilisateur **`web`** (UID 1000) grâce à l'instruction `USER`. Les fichiers du site peuvent rester
+      à `root` : ils doivent seulement être lisibles.
+    hint: "RUN adduser -D -u 1000 web puis USER web, placé avant CMD"
+    cours: |
+      Par défaut, le processus d'un conteneur tourne en **root**. Les espaces de noms isolent le conteneur,
+      mais en cas de faille de l'application ou du moteur, un attaquant root dans le conteneur est bien plus
+      dangereux qu'un utilisateur ordinaire. Sauf besoin réel, on exécute donc l'application avec un
+      compte **non privilégié**.
+
+      **`USER nom`** (ou `USER 1000`) s'applique aux instructions `RUN` suivantes et au processus du
+      conteneur. On crée le compte avant (sous Alpine : `adduser -D`, sous Debian/Ubuntu : `useradd`), et on
+      place `USER` le plus tard possible, après les installations qui demandent root.
+
+      Un utilisateur non root ne peut pas écouter sur un port inférieur à 1024 : c'est une raison de plus
+      d'utiliser 8080 plutôt que 80. Pour donner des fichiers à cet utilisateur : `COPY --chown=web:web`.
+    checks:
+      - desc: pas:6 s'exécute avec l'UID 1000
+        run: |
+          u=$(docker image inspect -f '{{.Config.User}}' pas:6) && test -n "$u" && test "$u" != root && test "$u" != 0 && test "$(docker run --rm --entrypoint id pas:6 -u)" = 1000
+      - desc: Le service répond toujours sur le port 8080
+        run: |
+          c=$(docker run -d pas:6) || exit 1; ok=1; for i in 1 2 3 4 5 6 7 8 9 10; do docker exec "$c" wget -qO- http://localhost:8080/ 2>/dev/null | grep -q Bienvenue && { ok=0; break; }; sleep 1; done; docker rm -f "$c" >/dev/null; exit $ok
+  - id: df-arg-label
+    title: ARG et LABEL pour versionner
+    description: |
+      Construis **`pas:7`** avec une variable de construction **`VERSION`** (`ARG`), passée en ligne de
+      commande : `docker build --build-arg VERSION=1.2.0 -t pas:7 .`. L'image doit :
+      1. porter l'étiquette OCI **`org.opencontainers.image.version`** égale à `1.2.0` ;
+      2. contenir le fichier **`/srv/site/version.txt`** qui contient `1.2.0`.
+
+      La valeur `1.2.0` ne doit pas être écrite en dur dans le Dockerfile.
+    hint: "ARG VERSION puis LABEL org.opencontainers.image.version=$VERSION et RUN echo \"$VERSION\" > /srv/site/version.txt"
+    cours: |
+      **`ARG`** déclare une variable qui n'existe que **pendant la construction** ; on la renseigne avec
+      `--build-arg NOM=valeur`, et elle peut avoir une valeur par défaut (`ARG VERSION=dev`). Contrairement à
+      `ENV`, elle n'est pas présente dans le conteneur. Mais elle reste visible dans `docker history` : ce
+      n'est donc pas un moyen de passer un secret (on utilise pour cela `RUN --mount=type=secret`).
+
+      **`LABEL`** ajoute des métadonnées à l'image, lisibles avec `docker image inspect`. Le standard
+      **OCI** définit des clés communes : `org.opencontainers.image.version`, `.source`, `.revision`,
+      `.created`, `.authors`… Les registres et les scanners les affichent.
+
+      En CI, on passe ainsi la version ou le commit Git à chaque construction : une seule recette, des
+      images traçables.
+    checks:
+      - desc: L'étiquette OCI vaut 1.2.0
+        run: test "$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.version"}}' pas:7)" = 1.2.0
+      - desc: version.txt contient 1.2.0
+        run: docker run --rm --entrypoint cat pas:7 /srv/site/version.txt | grep -qx '1.2.0'
+      - desc: La version vient d'un ARG
+        run: docker history --no-trunc --format '{{.CreatedBy}}' pas:7 | grep -q 'VERSION'
+  - id: df-healthcheck
+    title: Un contrôle de santé
+    description: |
+      Construis **`pas:8`** : le service web de `pas:6`, avec une instruction **`HEALTHCHECK`** qui vérifie
+      toutes les **5 secondes** que la page d'accueil répond (`wget -q --spider http://localhost:8080/`).
+
+      Lance-le sous le nom **`site-sain`** (`docker run -d --name site-sain pas:8`) et attends que
+      `docker ps` affiche `(healthy)`.
+    hint: "HEALTHCHECK --interval=5s --timeout=3s --retries=3 CMD wget -q --spider http://localhost:8080/ || exit 1"
+    cours: |
+      Un conteneur « démarré » n'est pas forcément un service qui fonctionne : l'application peut être
+      bloquée, ou encore en train de s'initialiser. **`HEALTHCHECK`** indique à Docker une commande à lancer
+      régulièrement **dans** le conteneur. Code 0 : sain ; code 1 : en échec.
+
+      Options principales : `--interval` (fréquence), `--timeout` (durée maximale d'un essai), `--retries`
+      (échecs consécutifs avant l'état `unhealthy`) et `--start-period` (délai de grâce au démarrage). L'état
+      passe de `starting` à `healthy` ou `unhealthy`, visible dans `docker ps` et `docker inspect -f
+      '{{.State.Health.Status}}'`.
+
+      La commande doit exister dans l'image (ici le `wget` de BusyBox) et rester légère. Compose s'en sert
+      pour `depends_on: condition: service_healthy`, Swarm pour remplacer les tâches malades.
+    checks:
+      - desc: pas:8 déclare un HEALTHCHECK
+        run: test -n "$(docker image inspect -f '{{if .Config.Healthcheck}}{{.Config.Healthcheck.Test}}{{end}}' pas:8)"
+      - desc: Le conteneur site-sain est healthy
+        timeout: 90
+        run: |
+          test "$(docker inspect -f '{{.Config.Image}}' site-sain 2>/dev/null)" = pas:8 || exit 1; for i in $(seq 1 40); do test "$(docker inspect -f '{{.State.Health.Status}}' site-sain)" = healthy && exit 0; sleep 2; done; exit 1
+  - id: df-arret
+    title: Un arrêt rapide - forme exec et STOPSIGNAL
+    description: |
+      Lance un conteneur de `pas:4` puis arrête-le avec `docker stop` : combien de temps cela prend-il ?
+      Docker attend 10 secondes avant de tuer un processus qui ignore le signal d'arrêt.
+
+      Construis **`pas:9`**, un service web sur le port 8080 qui s'arrête en **moins de 3 secondes** avec
+      `docker stop`. Le serveur de Python s'arrête proprement sur **SIGINT** (comme un Ctrl+C), pas sur
+      SIGTERM quand il est le processus n°1.
+    hint: "CMD en forme exec (tableau JSON) pour que python soit le PID 1, et STOPSIGNAL SIGINT"
+    cours: |
+      `docker stop` envoie un signal au **processus n°1** du conteneur (SIGTERM par défaut), attend 10
+      secondes, puis envoie SIGKILL. Le PID 1 a un statut particulier : le noyau ne lui applique pas
+      l'action par défaut des signaux, donc un programme qui ne gère pas SIGTERM l'**ignore**.
+
+      Deux causes classiques de lenteur :
+      - la **forme shell** de `CMD` : le PID 1 est `/bin/sh`, qui ne transmet pas le signal à son enfant ;
+        la forme **exec** (ou `exec` en tête d'une commande shell) fait du programme lui-même le PID 1 ;
+      - un programme qui attend un autre signal : **`STOPSIGNAL`** choisit celui que `docker stop`
+        enverra (Nginx utilise par exemple SIGQUIT pour un arrêt en douceur).
+
+      `docker run --init` ajoute un mini-init (tini) qui transmet les signaux et récupère les processus
+      zombies. Un arrêt rapide et propre compte pour les mises à jour progressives et les redémarrages.
+    checks:
+      - desc: Un conteneur de pas:9 sert le site puis s'arrête en moins de 3 secondes
+        timeout: 60
+        run: |
+          c=$(docker run -d pas:9) || exit 1; ok=1; for i in 1 2 3 4 5 6 7 8 9 10; do docker exec "$c" wget -qO- http://localhost:8080/ 2>/dev/null | grep -q Bienvenue && { ok=0; break; }; sleep 1; done; s=$(date +%s); docker stop "$c" >/dev/null; e=$(date +%s); docker rm -f "$c" >/dev/null; test "$ok" = 0 && test $((e - s)) -lt 3
+  - id: df-multietape
+    title: Construction multi-étapes
+    description: |
+      Construis **`pas:10`** avec **deux étapes** :
+      1. une étape nommée `build` (à partir de `alpine:3.20`) copie `site/` et `generer.sh`, puis lance
+         `./generer.sh /out`, qui produit le site final dans `/out` (dont un fichier `stats.html`) ;
+      2. l'étape finale (à partir de `python:3.12-alpine`) ne récupère **que** le dossier `/out` dans
+         `/srv/site` (`COPY --from=build`) et sert le site sur le port 8080.
+
+      Le script `generer.sh` ne doit **pas** se trouver dans l'image finale.
+    hint: "FROM alpine:3.20 AS build ... RUN ./generer.sh /out puis FROM python:3.12-alpine et COPY --from=build /out /srv/site"
+    cours: |
+      Une construction **multi-étapes** enchaîne plusieurs `FROM` dans un même Dockerfile. Chaque étape
+      repart d'une image propre ; on nomme une étape avec `FROM image AS nom` et on y puise des fichiers
+      avec `COPY --from=nom chemin destination`. Seule la **dernière étape** forme l'image finale.
+
+      ```
+      étape build : outils + sources ──> génère /out
+                                            │ COPY --from=build
+      étape finale : image d'exécution <────┘   (ni outils, ni sources)
+      ```
+
+      C'est la technique standard pour compiler (Go, Java, Node, Rust) ou générer un site sans livrer le
+      compilateur, les dépendances de développement ni le code source : l'image finale est plus petite et
+      offre moins de surface d'attaque. `docker build --target build` ne construit que jusqu'à une étape
+      donnée, ce qui est pratique pour déboguer.
+    checks:
+      - desc: pas:10 contient le site généré
+        run: docker run --rm --entrypoint sh pas:10 -c 'grep -q pages /srv/site/stats.html && test -f /srv/site/index.html'
+      - desc: generer.sh n'est pas dans l'image finale
+        run: docker run --rm --entrypoint sh pas:10 -c 'test -z "$(find / -xdev -name generer.sh 2>/dev/null)"'
+      - desc: L'image finale est basée sur Python
+        run: docker run --rm --entrypoint python3 pas:10 --version | grep -q 'Python 3\.12'

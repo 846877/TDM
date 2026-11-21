@@ -1,0 +1,430 @@
+title: YAML et JSON pour le DevOps
+level: debutant
+order: 7
+tags: [yaml, json, jq, yq, configuration, python]
+summary: Lire, valider, filtrer, transformer et convertir des fichiers JSON et YAML avec jq, yq et Python, et éviter les pièges classiques.
+user: eleve
+workdir: /home/eleve/travail
+description: |
+  Un conteneur Ubuntu (utilisateur `eleve`, `sudo` sans mot de passe) avec **`jq`**, **`yq`** (la version
+  Python, qui reprend la syntaxe de jq) et **Python 3 + PyYAML**.
+
+  Presque tous les outils DevOps se configurent en **YAML** (Compose, Kubernetes, Ansible, GitLab CI,
+  GitHub Actions…) et parlent **JSON** (API REST, `docker inspect`, `kubectl get -o json`, Terraform). Ce
+  lab t'entraîne à les lire, les réparer, en extraire des informations et les transformer sans jamais
+  éditer à la main ce qu'un outil peut faire de façon fiable.
+
+  Les fichiers d'exemple sont dans **`~/donnees`** ; tes résultats vont dans **`~/travail`** (le dossier
+  courant). Les vérifications comparent les **données** (pas la mise en forme) : l'indentation ou l'ordre
+  des clés d'un objet n'ont pas d'importance, sauf mention contraire.
+cours: |
+  ## JSON et YAML : deux façons d'écrire les mêmes données
+
+  JSON et YAML décrivent les mêmes structures : des **objets** (dictionnaires clé → valeur), des
+  **tableaux** (listes ordonnées) et des **scalaires** (chaînes, nombres, booléens, `null`). YAML 1.2 est
+  même un sur-ensemble de JSON : un fichier JSON valide est un YAML valide.
+
+  ```
+  JSON                                   YAML
+  {                                      application: boutique
+    "application": "boutique",           port: 8080
+    "port": 8080,                        tags:
+    "tags": ["web", "public"],             - web
+    "base": {"hote": "db", "tls": true}    - public
+  }                                      base:
+                                           hote: db
+                                           tls: true
+  ```
+
+  **JSON** est strict et simple à analyser : guillemets doubles obligatoires, pas de virgule finale, pas
+  de commentaire. C'est le format des API et des sorties de commandes (`docker inspect`, `kubectl get -o
+  json`, `terraform show -json`).
+
+  **YAML** est fait pour être écrit par des humains : l'**indentation** (des espaces, jamais de
+  tabulation) donne la structure, `-` introduit un élément de liste, `#` un commentaire. Il offre aussi
+  des blocs de texte (`|` garde les retours à la ligne, `>` les replie), plusieurs documents par fichier
+  (séparés par `---`), et des **ancres** (`&nom`) et **alias** (`*nom`) pour réutiliser un bloc.
+
+  ### Les outils
+
+  - **`jq`** : le couteau suisse du JSON. Un *filtre* transforme l'entrée : `.` (tout), `.cle`, `.[]`
+    (chaque élément), `|` (enchaîner), `select(condition)`, `map(f)`, `length`, `keys`, `add`,
+    `to_entries`/`from_entries`. `-r` sort des chaînes brutes, `-e` donne un code de retour selon le
+    résultat, `--arg` passe une variable.
+  - **`yq`** : même syntaxe que jq, mais lit du YAML. Dans ce lab, c'est la version Python : `yq -r
+    '.services | keys[]' f.yaml`, et `yq -y` écrit du YAML au lieu de JSON. Une autre version très
+    répandue (celle de Mike Farah, écrite en Go) a une syntaxe proche mais des options différentes :
+    regarde toujours `yq --help`.
+  - **Python** : `json.load`/`json.dump` et `yaml.safe_load`/`yaml.safe_dump` (jamais `yaml.load` sur un
+    fichier non fiable : il peut construire des objets Python arbitraires).
+
+  ```
+  fichier.json ──jq──> extraction / filtre / transformation ──> JSON, texte
+  fichier.yaml ──yq──> même langage de filtre ──> JSON (par défaut) ou YAML (-y)
+  ```
+
+  ### Mémo jq
+
+  | Besoin | Filtre |
+  |---|---|
+  | une clé | `.name` |
+  | chaque élément d'un tableau | `.[]` |
+  | filtrer | `.[] \| select(.env == "prod")` |
+  | garder un tableau | `map(select(.replicas >= 2))` |
+  | additionner | `map(.replicas) \| add` |
+  | construire un objet | `{nom: .name, port}` |
+  | modifier | `.port = 80`, `.replicas += 1`, `(.[] \| select(...)).x = 1` |
+  | objet depuis paires | `map({key: .name, value: .port}) \| from_entries` |
+
+  ### Les pièges classiques
+
+  - **Tabulations** en YAML : interdites pour indenter.
+  - **Indentation** incohérente : un élément décalé d'un espace change la structure ou casse le fichier.
+  - **Typage implicite** (YAML 1.1, encore utilisé par PyYAML et beaucoup d'outils) : `NO`, `off`, `yes`
+    deviennent des booléens, `1.10` devient le nombre `1.1`, `01200` peut être lu en octal. Mets entre
+    guillemets toute valeur qui doit rester une chaîne.
+  - **Virgule finale** et **guillemets simples** en JSON : refusés.
+  - **Redirection sur le fichier source** : `jq ... f.json > f.json` vide le fichier avant de le lire.
+    Écris dans un fichier temporaire puis renomme-le.
+
+  ### Bonnes pratiques
+
+  Valide tes fichiers avant de les livrer (`jq empty f.json`, `python3 -c 'import yaml,sys;
+  yaml.safe_load(open(sys.argv[1]))' f.yaml`, ou `yamllint` en CI). Préfère une transformation par outil
+  à une édition manuelle : elle est reproductible et scriptable. Garde des clés explicites et des valeurs
+  typées sans ambiguïté (`true`/`false`, chaînes entre guillemets).
+
+  ### Pour réviser
+
+  1. Pourquoi `jq . f.json > f.json` détruit-il le fichier ?
+  2. Comment YAML 1.1 lit-il `NO` et `1.10` ?
+  3. Quelle option de jq permet d'utiliser son résultat dans un `if` du shell ?
+  4. Que permettent les ancres et les clés de fusion `<<` ?
+docs:
+  - title: Manuel de jq
+    url: https://jqlang.org/manual/
+  - title: Spécification YAML 1.2.2
+    url: https://yaml.org/spec/1.2.2/
+  - title: Présentation de JSON (json.org, en français)
+    url: https://www.json.org/json-fr.html
+  - title: Documentation de PyYAML
+    url: https://pyyaml.org/wiki/PyYAMLDocumentation
+exercises:
+  - id: yj-json-valide
+    title: Réparer un fichier JSON
+    description: |
+      `~/donnees/casse.json` est refusé par tous les outils. Corrige-le **sur place** pour qu'il devienne un
+      JSON valide, sans perdre d'information : `application`, `version`, `debug`, `port`, l'objet `base`
+      et les trois `fonctions` doivent rester.
+
+      Commence par `jq . ~/donnees/casse.json` : le message d'erreur indique la ligne du problème.
+    hint: "Trois erreurs : une virgule manquante, des guillemets simples, des virgules finales (après le dernier élément d'un objet ou d'une liste)"
+    cours: |
+      JSON ne tolère aucune approximation : chaque clé est une chaîne entre **guillemets doubles**, les
+      paires d'un objet et les éléments d'un tableau sont séparés par **une** virgule, et il n'y a **pas de
+      virgule après le dernier élément**. Les commentaires n'existent pas.
+
+      `jq empty fichier.json` ne produit rien et renvoie 0 si le fichier est valide ; sinon il affiche la
+      ligne et la colonne de l'erreur. Attention : l'analyseur signale souvent l'erreur **après** sa cause
+      réelle, au premier caractère qu'il ne comprend plus. Regarde donc aussi la ligne précédente.
+
+      `python3 -m json.tool fichier.json` est une alternative toujours disponible avec Python.
+    checks:
+      - desc: casse.json est un JSON valide
+        run: jq empty /home/eleve/donnees/casse.json
+      - desc: Les données sont complètes
+        run: |
+          jq -e '.application == "boutique" and .version == "2.3.1" and .debug == false and .port == 8080 and .base == {"hote": "db.interne", "port": 5432} and .fonctions == ["panier", "paiement", "suivi"]' /home/eleve/donnees/casse.json >/dev/null
+  - id: yj-yaml-valide
+    title: Réparer un fichier YAML
+    description: |
+      `~/donnees/casse.yaml` ne se charge pas. Corrige-le **sur place** : `base` doit contenir `hote` et
+      `port` (nombre 5432), `fonctions` doit être une liste de trois éléments, et les clés `application`,
+      `environnement` et `responsable` doivent rester.
+
+      Pour tester : `python3 -c 'import yaml; print(yaml.safe_load(open("/home/eleve/donnees/casse.yaml")))'`
+      ou `yq . ~/donnees/casse.yaml`. `cat -A` affiche les tabulations sous la forme `^I`.
+    hint: "Une tabulation sert d'indentation (remplace-la par deux espaces) et un élément de liste est décalé d'un espace"
+    cours: |
+      En YAML, l'**indentation est la structure** : les clés d'un même objet, ou les éléments d'une même
+      liste, doivent commencer exactement à la même colonne. Un espace de trop crée un niveau inattendu
+      ou une erreur.
+
+      Les **tabulations sont interdites** pour indenter, et elles sont invisibles dans la plupart des
+      éditeurs. `cat -A` les montre (`^I`) ; dans vim, `:set list` fait de même. Configure ton éditeur
+      pour insérer des espaces dans les fichiers YAML (deux espaces par niveau est la convention la plus
+      courante).
+
+      Les messages d'erreur donnent la ligne et la colonne (`line 5, column 1`) : c'est l'endroit où
+      l'analyseur a été surpris, la cause est souvent juste au-dessus.
+    checks:
+      - desc: casse.yaml se charge
+        run: python3 -c 'import yaml; yaml.safe_load(open("/home/eleve/donnees/casse.yaml"))'
+      - desc: La structure est celle attendue
+        run: |
+          python3 -c 'import yaml,sys; d=yaml.safe_load(open("/home/eleve/donnees/casse.yaml")); sys.exit(d != {"application": "boutique", "environnement": "prod", "base": {"hote": "db.interne", "port": 5432}, "fonctions": ["panier", "paiement", "suivi"], "responsable": "equipe-web"})'
+  - id: yj-jq-lire
+    title: Extraire des valeurs avec jq
+    description: |
+      À partir de `~/donnees/services.json` (une liste de services), crée dans `~/travail` :
+      1. `noms.txt` : le nom de chaque service, **un par ligne**, sans guillemets, dans l'ordre du fichier ;
+      2. `total.txt` : le **nombre total de réplicas** de tous les services (un seul nombre).
+
+      Utilise `jq` (pas de copie à la main).
+    hint: "jq -r '.[].name' ; pour la somme : jq 'map(.replicas) | add'"
+    cours: |
+      Un filtre jq décrit un chemin dans le document. `.` est l'entrée entière, `.name` la valeur d'une clé,
+      `.[]` « chaque élément » du tableau : `.[].name` produit donc une sortie par service.
+
+      Par défaut, jq écrit du JSON : les chaînes sortent entre guillemets. L'option **`-r`** (*raw*) les
+      écrit telles quelles, ce qui est indispensable pour réutiliser le résultat dans le shell (`for nom in
+      $(jq -r ...)`).
+
+      Pour calculer sur l'ensemble, on reconstruit un tableau : `map(.replicas)` donne `[3, 2, ...]`, et
+      `add` en fait la somme (ou concatène des chaînes ou des tableaux). `length` compte les éléments.
+      Le pipe `|` interne à jq enchaîne les filtres comme celui du shell.
+    checks:
+      - desc: noms.txt contient les 6 noms dans l'ordre
+        run: |
+          printf 'web\napi\nworker\ndb\napi-test\ncache\n' | cmp -s - /home/eleve/travail/noms.txt
+      - desc: total.txt vaut 10
+        run: test "$(tr -d ' \n' < /home/eleve/travail/total.txt)" = 10
+  - id: yj-jq-filtrer
+    title: Filtrer avec select
+    description: |
+      Crée `~/travail/prod-ha.json` : un **tableau JSON** contenant les services complets (tous leurs
+      champs) dont `env` vaut `prod` **et** qui ont **au moins 2 réplicas**.
+    hint: "jq 'map(select(.env == \"prod\" and .replicas >= 2))'"
+    cours: |
+      `select(condition)` laisse passer son entrée si la condition est vraie et ne produit rien sinon. On
+      combine les conditions avec `and`, `or` et `not` (qui s'écrit en filtre : `select(.debug | not)`).
+
+      Deux formes à distinguer :
+      - `.[] | select(...)` produit une **suite** d'objets séparés, ce qui n'est pas un document JSON
+        unique ;
+      - `map(select(...))` produit un **tableau**, ce qui est en général ce qu'on veut écrire dans un
+        fichier.
+
+      Les comparaisons respectent les types : `.port == "8080"` (chaîne) est faux si le port est le nombre
+      8080. D'autres fonctions utiles pour filtrer : `contains`, `test("regex")`, `startswith`, `has("cle")`,
+      `index`.
+    checks:
+      - desc: prod-ha.json contient exactement web et api, complets
+        run: |
+          jq -e --slurpfile src /home/eleve/donnees/services.json '. == ($src[0] | map(select(.name == "web" or .name == "api")))' /home/eleve/travail/prod-ha.json >/dev/null
+  - id: yj-jq-construire
+    title: Construire un nouvel objet
+    description: |
+      Crée `~/travail/ports.json` : un **objet** qui associe le nom de chaque service à son port, en
+      **ignorant** les services sans port (`null`). Résultat attendu, par exemple :
+      `{"web": 8080, "api": 9000, ...}`.
+    hint: "map(select(.port != null) | {key: .name, value: .port}) | from_entries"
+    cours: |
+      jq sait fabriquer des données autant qu'en extraire. `{nom: .name, port: .port}` crée un objet ; la
+      forme courte `{name, port}` reprend les clés du même nom.
+
+      Pour produire un objet dont les **clés viennent des données**, on passe par des paires : un tableau
+      d'objets `{key: ..., value: ...}`, que `from_entries` convertit en objet. `to_entries` fait
+      l'inverse et permet de parcourir un objet comme une liste. `with_entries(f)` combine les deux.
+
+      `null` est une valeur à part entière : `select(.port != null)` ou `select(.port)` (faux pour `null` et
+      `false`) l'écarte. L'opérateur `//` donne une valeur par défaut : `.port // 0`.
+    checks:
+      - desc: ports.json associe les 5 services qui ont un port
+        run: |
+          jq -e '. == {"web": 8080, "api": 9000, "db": 5432, "api-test": 9100, "cache": 6379}' /home/eleve/travail/ports.json >/dev/null
+  - id: yj-jq-modifier
+    title: Modifier un document JSON
+    description: |
+      Crée `~/travail/services-v2.json` à partir de `services.json` (sans modifier l'original) :
+      1. l'image du service `api` devient `registry.local/api:1.5.0` ;
+      2. **chaque** service reçoit un champ `owner` valant `equipe-devops`.
+
+      Tout le reste doit être identique.
+    hint: "(.[] | select(.name == \"api\") | .image) = \"...\" puis map(. + {owner: \"equipe-devops\"}) ; écris dans un nouveau fichier"
+    cours: |
+      L'affectation de jq ne modifie pas le fichier : elle produit un **nouveau document** avec la valeur
+      changée. `.port = 80` remplace une valeur, `.replicas += 1` la met à jour, `del(.tags)` supprime une clé,
+      `. + {cle: valeur}` fusionne un objet.
+
+      Pour ne toucher qu'à certains éléments, place le chemin entre parenthèses à gauche de l'affectation :
+      `(.[] | select(.env == "staging") | .replicas) = 0`. Tout ce qui n'est pas visé reste intact.
+
+      Pour « modifier un fichier », écris le résultat ailleurs puis renomme : `jq '...' f.json > f.tmp && mv
+      f.tmp f.json`. Rediriger directement vers le fichier lu le vide avant même que jq ne l'ouvre.
+    checks:
+      - desc: services.json n'a pas été modifié
+        run: jq -e '.[1].image == "registry.local/api:1.4.2" and (.[0] | has("owner") | not)' /home/eleve/donnees/services.json >/dev/null
+      - desc: services-v2.json contient les modifications demandées et rien d'autre
+        run: |
+          jq -e --slurpfile src /home/eleve/donnees/services.json '. == ($src[0] | map(. + {owner: "equipe-devops"}) | map(if .name == "api" then .image = "registry.local/api:1.5.0" else . end))' /home/eleve/travail/services-v2.json >/dev/null
+  - id: yj-yaml-lire
+    title: Interroger un fichier YAML
+    description: |
+      `~/donnees/stack.yaml` décrit une pile de services. Crée `~/travail/images.txt` : l'image de chaque
+      service, **une par ligne**, triées par ordre alphabétique.
+    hint: "yq -r '.services[].image' ~/donnees/stack.yaml | sort"
+    cours: |
+      `yq` applique les filtres de jq à du YAML : il convertit le fichier en JSON, lance jq, puis écrit le
+      résultat (en JSON par défaut, en YAML avec `-y`). Tout ce que tu sais de jq s'applique donc :
+      `.services | keys` liste les noms des services, `.services[]` parcourt leurs définitions, `-r` écrit
+      des chaînes brutes.
+
+      Un objet YAML se parcourt avec `.[]` comme un tableau, mais on perd alors les clés ; `to_entries` les
+      garde (`.services | to_entries[] | "\(.key) \(.value.image)"`).
+
+      Les commentaires disparaissent lors de cette conversion : yq sert à lire et générer, pas à retoucher
+      finement un fichier commenté. Pour cela, on utilise un éditeur, ou des outils qui conservent les
+      commentaires (ruamel.yaml en Python, yq de Mike Farah).
+    checks:
+      - desc: images.txt contient les 3 images triées
+        run: |
+          printf 'nginx:1.27\npostgres:16\nregistry.local/api:1.4.2\n' | cmp -s - /home/eleve/travail/images.txt
+  - id: yj-yaml-modifier
+    title: Produire une variante YAML
+    description: |
+      Crée `~/travail/stack-prod.yaml`, une copie de `stack.yaml` où le service **`web`** a **3 réplicas** et
+      `LOG_LEVEL: warn`. Tout le reste (autres services, ports, volumes) doit être identique. Le fichier doit
+      rester du **YAML** valide.
+    hint: "yq -y '.services.web.replicas = 3 | .services.web.environment.LOG_LEVEL = \"warn\"' ~/donnees/stack.yaml > stack-prod.yaml"
+    cours: |
+      Générer les variantes d'une configuration (dev, recette, production) est une tâche courante. Le faire
+      avec un outil plutôt qu'à la main garantit que seule la valeur visée change, et la commande peut
+      être rejouée dans un script ou une CI.
+
+      Avec yq, on enchaîne les affectations par `|` et on demande une sortie YAML avec `-y`. En Python, le
+      même travail tient en quelques lignes : `yaml.safe_load`, modification du dictionnaire,
+      `yaml.safe_dump(d, sort_keys=False)`.
+
+      Cette approche est celle d'outils comme **Kustomize** (des « patchs » appliqués à une base) ou des
+      fichiers de surcharge de Compose. Pour des variantes plus nombreuses, on passe à des gabarits (Helm,
+      Jinja2) ou à des valeurs par environnement.
+    checks:
+      - desc: stack-prod.yaml est du YAML (et pas du JSON)
+        run: |
+          test -f /home/eleve/travail/stack-prod.yaml && ! head -c1 /home/eleve/travail/stack-prod.yaml | grep -q '{' && python3 -c 'import yaml; yaml.safe_load(open("/home/eleve/travail/stack-prod.yaml"))'
+      - desc: Seuls replicas et LOG_LEVEL de web ont changé
+        run: |
+          python3 -c 'import yaml,sys; a=yaml.safe_load(open("/home/eleve/donnees/stack.yaml")); b=yaml.safe_load(open("/home/eleve/travail/stack-prod.yaml")); a["services"]["web"]["replicas"]=3; a["services"]["web"]["environment"]["LOG_LEVEL"]="warn"; sys.exit(a != b)'
+  - id: yj-conversion
+    title: Convertir entre JSON et YAML
+    description: |
+      Crée dans `~/travail` :
+      1. `inventaire.json` : le contenu de `~/donnees/inventaire.yaml` en JSON ;
+      2. `services.yaml` : le contenu de `~/donnees/services.json` en YAML (pas en JSON).
+
+      Les données doivent être strictement identiques (types compris : `null`, booléens, nombres).
+    hint: "yq . inventaire.yaml > inventaire.json ; yq -y . services.json > services.yaml (yq lit aussi le JSON)"
+    cours: |
+      JSON et YAML représentent les mêmes types : passer de l'un à l'autre est sans perte, sauf pour ce que
+      seul YAML sait faire (commentaires, ancres, plusieurs documents par fichier), qui disparaît vers JSON.
+
+      Pourquoi convertir ? Une API attend du JSON alors que l'équipe écrit du YAML ; `kubectl` accepte les
+      deux ; un outil ne lit que l'un des formats. Comme YAML est un sur-ensemble de JSON, un lecteur YAML
+      accepte aussi un fichier JSON : c'est pour cela que `yq` peut lire `services.json`.
+
+      Vérifie les types après conversion : `null` doit rester `null` (et non la chaîne `"null"`), `true` un
+      booléen, une adresse IP comme `10.0.1.11` une chaîne. Le séparateur `---` en tête d'un document YAML
+      est facultatif quand il n'y en a qu'un.
+    checks:
+      - desc: inventaire.json est un JSON identique à inventaire.yaml
+        run: |
+          python3 -c 'import yaml,json,sys; sys.exit(yaml.safe_load(open("/home/eleve/donnees/inventaire.yaml")) != json.load(open("/home/eleve/travail/inventaire.json")))'
+      - desc: services.yaml est un YAML identique à services.json
+        run: |
+          ! head -c1 /home/eleve/travail/services.yaml | grep -q '\[' && python3 -c 'import yaml,json,sys; sys.exit(json.load(open("/home/eleve/donnees/services.json")) != yaml.safe_load(open("/home/eleve/travail/services.yaml")))'
+  - id: yj-ancres
+    title: Factoriser avec les ancres YAML
+    description: |
+      Écris `~/travail/environnements.yaml` avec un bloc de paramètres communs défini **une seule fois**
+      grâce à une **ancre** (`&`), puis réutilisé par deux environnements avec la **clé de fusion** `<<:`.
+
+      Une fois chargé, le fichier doit contenir (entre autres clés libres) :
+      - `dev` : `timeout: 30`, `retries: 3`, `log_level: debug` ;
+      - `prod` : `timeout: 30`, `retries: 3`, `log_level: warn`.
+
+      `timeout` et `retries` ne doivent apparaître qu'**une fois** dans le texte du fichier.
+    hint: "defaut: &defaut { timeout: 30, retries: 3 } puis dev: { <<: *defaut, log_level: debug }"
+    cours: |
+      Les **ancres** évitent les copier-coller dans un même fichier YAML. `&nom` étiquette un nœud, `*nom`
+      le réutilise (un **alias**). Pour un objet, la **clé de fusion** `<<: *nom` copie ses clés dans
+      l'objet courant ; les clés écrites à côté **surchargent** celles de l'ancre.
+
+      ```yaml
+      base: &base
+        image: nginx:1.27
+        restart: always
+      web:
+        <<: *base
+        restart: unless-stopped   # surcharge
+      ```
+
+      Compose (avec les champs `x-…`), GitLab CI et Ansible les utilisent beaucoup. Limites : une ancre ne
+      traverse pas les fichiers, et `<<` vient de YAML 1.1 : la plupart des outils le gèrent, mais pas tous.
+      GitLab CI propose aussi `extends:`, plus lisible.
+    checks:
+      - desc: Le fichier utilise une ancre, un alias et la clé de fusion
+        run: |
+          f=/home/eleve/travail/environnements.yaml; grep -q '&' "$f" && grep -q '\*' "$f" && grep -q '<<' "$f" && test "$(grep -c 'timeout' "$f")" = 1 && test "$(grep -c 'retries' "$f")" = 1
+      - desc: dev et prod ont les bonnes valeurs
+        run: |
+          python3 -c 'import yaml,sys; d=yaml.safe_load(open("/home/eleve/travail/environnements.yaml")); dv=d["dev"]; pr=d["prod"]; sys.exit(not (dv["timeout"]==30 and dv["retries"]==3 and dv["log_level"]=="debug" and pr["timeout"]==30 and pr["retries"]==3 and pr["log_level"]=="warn"))'
+  - id: yj-pieges
+    title: Éviter le typage implicite
+    description: |
+      `~/donnees/pays.yaml` est valide, mais charge-le avec Python : plusieurs valeurs ne sont pas lues
+      comme prévu. Corrige-le **sur place** pour obtenir exactement :
+      - `pays` : la liste de **chaînes** `FR`, `NO`, `SE` ;
+      - `version_app` : la chaîne `1.10` ;
+      - `code_postal` : la chaîne `01200` ;
+      - `mode_maintenance` : le booléen faux, écrit **explicitement** `false` ;
+      - `fuseau` : `Europe/Paris`.
+    hint: "Mets entre guillemets ce qui doit rester une chaîne (\"NO\", \"1.10\", \"01200\") et remplace off par false"
+    cours: |
+      YAML devine le type des valeurs non entourées de guillemets. Avec les règles de YAML 1.1, encore
+      appliquées par PyYAML, Ansible et bien d'autres outils :
+      - `yes`, `no`, `on`, `off`, `y`, `n` (toutes casses) deviennent des **booléens**. C'est le célèbre
+        « problème de la Norvège » : le code pays `NO` devient `false` ;
+      - `1.10` devient le nombre `1.1`, et une version perd son zéro final ;
+      - un nombre qui commence par `0` peut être lu en **octal** (`0755` devient 493) ;
+      - `12:30` peut devenir un nombre en base 60.
+
+      YAML 1.2 a réduit ces règles, mais tous les outils ne l'appliquent pas. La règle simple : une valeur
+      qui doit rester du texte se met **entre guillemets**, et les booléens s'écrivent `true`/`false`.
+      Charge toujours un fichier pour vérifier ce qu'un outil comprend vraiment.
+    checks:
+      - desc: Toutes les valeurs ont le bon type
+        run: |
+          python3 -c 'import yaml,sys; d=yaml.safe_load(open("/home/eleve/donnees/pays.yaml")); sys.exit(d != {"pays": ["FR", "NO", "SE"], "version_app": "1.10", "code_postal": "01200", "mode_maintenance": False, "fuseau": "Europe/Paris"})'
+      - desc: Le booléen est écrit explicitement
+        run: grep -Eq '^mode_maintenance:[[:space:]]*false[[:space:]]*$' /home/eleve/donnees/pays.yaml
+  - id: yj-script
+    title: Un contrôle automatique avec jq -e
+    description: |
+      Écris le script exécutable `~/travail/verifier-replicas.sh` qui prend en argument un fichier JSON au
+      format de `services.json` et :
+      - **réussit** (code 0) si **tous** les services de l'environnement `prod` ont au moins 2 réplicas ;
+      - **échoue** (code 1) sinon, en affichant sur la sortie d'erreur le nom des services fautifs.
+
+      Ce genre de garde-fou tourne dans une CI avant un déploiement.
+    hint: "jq -e 'map(select(.env == \"prod\")) | all(.replicas >= 2)' \"$1\" > /dev/null ; jq -r pour lister les fautifs >&2"
+    cours: |
+      Par défaut, jq renvoie 0 dès qu'il a pu lire son entrée, quel que soit le résultat. Avec **`-e`**, le
+      code de retour dépend de la **dernière valeur produite** : 0 si elle est vraie, 1 si elle vaut `false`
+      ou `null`. Le filtre devient alors une condition utilisable par le shell (`if jq -e ...; then`).
+
+      `all(condition)` et `any(condition)` testent un tableau entier. Pour expliquer l'échec, une seconde
+      commande liste les éléments en cause ; on l'écrit sur la sortie d'erreur (`>&2`) pour la séparer d'une
+      éventuelle sortie utile.
+
+      C'est exactement le principe des « politiques » en CI : on interroge une configuration ou un plan
+      (`terraform show -json`, `kubectl get -o json`) et on bloque si une règle n'est pas respectée.
+    checks:
+      - desc: Le script est exécutable
+        run: test -x /home/eleve/travail/verifier-replicas.sh
+      - desc: Il échoue sur services.json et nomme worker et db
+        run: |
+          out=$(/home/eleve/travail/verifier-replicas.sh /home/eleve/donnees/services.json 2>&1 >/dev/null); rc=$?; test "$rc" = 1 && echo "$out" | grep -q worker && echo "$out" | grep -q db
+      - desc: Il réussit sur un fichier conforme
+        run: |
+          t=$(mktemp) && jq 'map(.replicas = 2)' /home/eleve/donnees/services.json > "$t" && /home/eleve/travail/verifier-replicas.sh "$t" >/dev/null 2>&1; rc=$?; rm -f "$t"; test "$rc" = 0

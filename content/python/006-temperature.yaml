@@ -1,0 +1,88 @@
+title: Conversion de températures
+level: debutant
+order: 6
+tags: [calculs, fonctions]
+summary: Appliquer une formule et arrondir.
+description: |
+  Écris deux fonctions :
+
+  - `celsius_vers_fahrenheit(c)` : `F = C × 9/5 + 32`
+  - `fahrenheit_vers_celsius(f)` : l'inverse
+
+  Les deux renvoient le résultat **arrondi à 1 décimale** (`round(x, 1)`).
+starter: |
+  def celsius_vers_fahrenheit(c):
+      pass
+
+
+  def fahrenheit_vers_celsius(f):
+      pass
+tests: |
+  def test_c_vers_f():
+      "100 °C = 212 °F"
+      assert solution.celsius_vers_fahrenheit(100) == 212
+
+  def test_c_vers_f_negatif():
+      "-40 °C = -40 °F"
+      assert solution.celsius_vers_fahrenheit(-40) == -40
+
+  def test_f_vers_c():
+      "98.6 °F = 37 °C"
+      assert solution.fahrenheit_vers_celsius(98.6) == 37.0
+
+  def test_arrondi():
+      "Arrondi à une décimale"
+      assert solution.fahrenheit_vers_celsius(50.5) == 10.3
+solution: |
+  def celsius_vers_fahrenheit(c):
+      return round(c * 9 / 5 + 32, 1)
+
+
+  def fahrenheit_vers_celsius(f):
+      return round((f - 32) * 5 / 9, 1)
+cours: |
+  ## Traduire une formule en Python
+
+  Les opérateurs suivent les priorités mathématiques habituelles : `**` d'abord, puis
+  `* / // %`, puis `+ -`. Les parenthèses forcent l'ordre.
+
+  ```python
+  vitesse_kmh = 90
+  vitesse_ms = vitesse_kmh * 1000 / 3600   # 25.0
+  perimetre = 2 * 3.14159 * 5
+  ```
+
+  `/` renvoie toujours un `float`, même si la division tombe juste (`6 / 3` vaut `2.0`).
+
+  ## Les flottants ne sont pas exacts
+
+  Les nombres à virgule sont stockés en binaire, avec une précision limitée :
+
+  ```python
+  0.1 + 0.2          # 0.30000000000000004
+  0.1 + 0.2 == 0.3   # False !
+  ```
+
+  Conséquences :
+
+  - on n'utilise pas `==` pour comparer deux flottants calculés (on utilise
+    `math.isclose(a, b)` ou on arrondit) ;
+  - pour l'affichage ou pour un résultat attendu, on **arrondit**.
+
+  ## `round(x, n)`
+
+  `round(3.14159, 2)` vaut `3.14`. Sans second argument, on obtient un entier.
+  Python applique l'**arrondi bancaire** sur les cas pile au milieu : `round(2.5)` vaut `2`
+  et `round(3.5)` vaut `4`. Ce n'est pas un bug, c'est la norme IEEE 754.
+
+  ## Deux fonctions, une logique
+
+  Quand on écrit une conversion et son inverse, on peut **vérifier** l'une avec l'autre :
+  convertir puis reconvertir doit redonner (à l'arrondi près) la valeur de départ. C'est un
+  bon réflexe de test. Pour inverser une formule `y = a × x + b`, on isole `x` :
+  `x = (y - b) / a`.
+docs:
+  - title: Documentation Python — round()
+    url: https://docs.python.org/fr/3/library/functions.html#round
+  - title: Tutoriel — arithmétique en virgule flottante
+    url: https://docs.python.org/fr/3/tutorial/floatingpoint.html

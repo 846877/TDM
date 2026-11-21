@@ -1,0 +1,234 @@
+title: Base clé-valeur avec transactions
+level: expert
+order: 27
+tags: [structures de données, transactions, conception, stdin]
+summary: Un mini-Redis avec transactions imbriquées, ROLLBACK et COMMIT.
+mode: stdio
+description: |
+  Implémente une petite base de données clé-valeur en mémoire pilotée par des commandes lues sur
+  l'entrée standard (une par ligne, jusqu'à la fin du flux ou la commande `END`). Les noms de commandes
+  ne tiennent pas compte de la casse ; clés et valeurs sont des mots sans espace.
+
+  | Commande | Effet / affichage |
+  |----------|-------------------|
+  | `SET cle valeur` | associe `valeur` à `cle` |
+  | `GET cle` | affiche la valeur, ou `NULL` |
+  | `DELETE cle` | supprime la clé (sans effet si elle n'existe pas) |
+  | `COUNT valeur` | affiche le nombre de clés associées à cette valeur |
+  | `BEGIN` | ouvre une transaction ; les transactions peuvent être **imbriquées** |
+  | `ROLLBACK` | annule toutes les modifications de la transaction **la plus récente** et la ferme |
+  | `COMMIT` | valide définitivement **toutes** les transactions ouvertes |
+  | `END` | arrête le programme |
+
+  - `ROLLBACK` ou `COMMIT` sans transaction ouverte affiche `AUCUNE TRANSACTION` ;
+  - une commande inconnue ou avec un mauvais nombre d'arguments affiche `COMMANDE INCONNUE`.
+
+  Contraintes de performance (comme dans une vraie base) : `GET`, `SET`, `DELETE` et `COUNT` doivent
+  être en **O(1)** — maintiens un compteur des valeurs plutôt que de parcourir toutes les clés —
+  et `ROLLBACK` ne doit coûter que le nombre de clés modifiées dans la transaction (pas de copie
+  complète de la base à chaque `BEGIN`). Indice : pour chaque transaction, un **journal** des anciennes
+  valeurs des clés modifiées.
+starter: |
+  import sys
+
+  for ligne in sys.stdin.read().splitlines():
+      pass
+cases:
+  - name: Commandes de base
+    input: |
+      SET a 10
+      GET a
+      GET b
+      COUNT 10
+      SET b 10
+      COUNT 10
+      DELETE a
+      GET a
+      COUNT 10
+      DELETE zzz
+      END
+      GET b
+    output: |
+      10
+      NULL
+      1
+      2
+      NULL
+      1
+  - name: Transactions imbriquées et ROLLBACK
+    input: |
+      BEGIN
+      SET a 10
+      GET a
+      BEGIN
+      SET a 20
+      GET a
+      ROLLBACK
+      GET a
+      ROLLBACK
+      GET a
+      ROLLBACK
+    output: |
+      10
+      20
+      10
+      NULL
+      AUCUNE TRANSACTION
+  - name: COMMIT valide tout
+    input: |
+      SET x 1
+      BEGIN
+      SET x 2
+      BEGIN
+      DELETE x
+      SET y 2
+      COUNT 2
+      COMMIT
+      GET x
+      GET y
+      ROLLBACK
+      COMMIT
+    output: |
+      1
+      NULL
+      2
+      AUCUNE TRANSACTION
+      AUCUNE TRANSACTION
+  - name: ROLLBACK après plusieurs modifications de la même clé
+    input: |
+      SET a 5
+      BEGIN
+      SET a 6
+      SET a 7
+      DELETE a
+      SET b 5
+      COUNT 5
+      ROLLBACK
+      GET a
+      GET b
+      COUNT 5
+      COUNT 7
+      set c 1
+      GET c
+      PUT a 1
+      SET a
+      fin
+    output: |
+      1
+      5
+      NULL
+      1
+      0
+      1
+      COMMANDE INCONNUE
+      COMMANDE INCONNUE
+      COMMANDE INCONNUE
+solution: |
+  import sys
+  from collections import Counter
+
+  donnees = {}
+  compteurs = Counter()        # valeur -> nombre de clés qui l'ont
+  transactions = []            # pile de journaux {cle: ancienne valeur ou None}
+
+
+  def ecrire(cle, valeur):
+      """Écrit (ou supprime si valeur est None) en journalisant l'ancienne valeur."""
+      if transactions and cle not in transactions[-1]:
+          transactions[-1][cle] = donnees.get(cle)
+      ancienne = donnees.pop(cle, None)
+      if ancienne is not None:
+          compteurs[ancienne] -= 1
+      if valeur is not None:
+          donnees[cle] = valeur
+          compteurs[valeur] += 1
+
+
+  for ligne in sys.stdin.read().splitlines():
+      morceaux = ligne.split()
+      if not morceaux:
+          continue
+      commande, args = morceaux[0].upper(), morceaux[1:]
+      if commande == "SET" and len(args) == 2:
+          ecrire(args[0], args[1])
+      elif commande == "GET" and len(args) == 1:
+          print(donnees.get(args[0], "NULL"))
+      elif commande == "DELETE" and len(args) == 1:
+          ecrire(args[0], None)
+      elif commande == "COUNT" and len(args) == 1:
+          print(compteurs[args[0]])
+      elif commande == "BEGIN" and not args:
+          transactions.append({})
+      elif commande == "ROLLBACK" and not args:
+          if not transactions:
+              print("AUCUNE TRANSACTION")
+              continue
+          journal = transactions.pop()
+          for cle, ancienne in journal.items():
+              courante = donnees.pop(cle, None)
+              if courante is not None:
+                  compteurs[courante] -= 1
+              if ancienne is not None:
+                  donnees[cle] = ancienne
+                  compteurs[ancienne] += 1
+      elif commande == "COMMIT" and not args:
+          if not transactions:
+              print("AUCUNE TRANSACTION")
+          transactions.clear()
+      elif commande == "END" and not args:
+          break
+      else:
+          print("COMMANDE INCONNUE")
+cours: |
+  ## Transactions
+
+  Une transaction regroupe des modifications qui doivent être appliquées **toutes ou
+  aucune**. `ROLLBACK` annule, `COMMIT` valide. Avec des transactions imbriquées, chaque
+  `ROLLBACK` n'annule que le niveau le plus récent.
+
+  ## Deux stratégies
+
+  ### 1. Le journal d'annulation (*undo log*)
+
+  Une **pile** de journaux, un par transaction ouverte. Avant chaque modification d'une clé,
+  on note dans le journal courant son **ancienne valeur** (ou son absence), seulement la
+  première fois qu'elle est modifiée dans cette transaction. `ROLLBACK` rejoue le journal
+  pour restaurer ; `COMMIT` jette tous les journaux. Les écritures sont directes, donc les
+  lectures sont simples.
+
+  ```python
+  ABSENT = object()               # sentinelle : la clé n'existait pas
+  journal = {}                    # cle -> ancienne valeur
+  journal.setdefault(cle, donnees.get(cle, ABSENT))
+  ```
+
+  ### 2. Les couches (*copy-on-write*)
+
+  Chaque transaction est une couche de modifications au-dessus de la précédente ; une
+  lecture cherche de la couche la plus haute vers la base. Élégant, mais les lectures et les
+  suppressions demandent plus de soin.
+
+  ## `COUNT` en O(1)
+
+  Compter les clés ayant une valeur donnée en parcourant tout le dictionnaire coûte O(n). On
+  maintient un **index inverse** `valeur → nombre de clés` (un `Counter`), mis à jour à chaque
+  changement : décrémenter l'ancienne valeur, incrémenter la nouvelle. L'index doit lui aussi
+  être correctement restauré lors d'un `ROLLBACK` — passer par une unique fonction
+  d'écriture bas niveau garantit la cohérence.
+
+  ## Robustesse de l'interpréteur
+
+  Commandes insensibles à la casse (`upper()` sur la commande seulement, pas sur les
+  valeurs), mauvais nombre d'arguments, transaction absente : chaque cas a son message.
+
+  ## Dans le monde réel
+
+  Les bases de données (PostgreSQL, SQLite) utilisent un **journal** (WAL) pour garantir
+  l'atomicité et la durabilité même en cas de coupure de courant. Redis propose `MULTI` /
+  `EXEC`. Les propriétés ACID (Atomicité, Cohérence, Isolation, Durabilité) résument ces
+  garanties.
+docs:
+  - title: Tutoriel — les dictionnaires
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#dictionaries
+  - title: Wikipédia — Propriétés ACID
+    url: https://fr.wikipedia.org/wiki/Propri%C3%A9t%C3%A9s_ACID

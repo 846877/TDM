@@ -1,0 +1,93 @@
+title: Sauvegarder la configuration sur un serveur TFTP
+level: debutant
+order: 18
+device: switch
+hostname: SW-COMPTA
+tags: [sauvegarde, tftp, startup-config]
+summary: Garder une copie de la configuration hors de l'équipement.
+description: |
+  La sauvegarde en NVRAM (`startup-config`) ne protège pas contre la panne du switch lui-même.
+  On garde donc aussi une copie sur un serveur, ici le serveur TFTP `192.168.1.50`.
+
+  1. sauvegarde d'abord la configuration en NVRAM : `copy running-config startup-config` ;
+  2. copie ensuite la configuration courante sur le serveur, sous le nom `SW-COMPTA-confg` :
+
+  ```
+  copy running-config tftp://192.168.1.50/SW-COMPTA-confg
+  ```
+
+  (Sur un vrai switch, `copy running-config tftp:` pose les questions une par une ;
+  le simulateur attend la destination complète sur une seule ligne.)
+
+  Vérifie avec `show startup-config`.
+checks:
+  - desc: Configuration sauvegardée en NVRAM
+    expr: d.saved
+    hint: "copy running-config startup-config"
+  - desc: Copie envoyée sur le serveur TFTP 192.168.1.50 sous le nom SW-COMPTA-confg
+    expr: '"tftp://192.168.1.50/SW-COMPTA-confg" in d.backups'
+    hint: "copy running-config tftp://192.168.1.50/SW-COMPTA-confg"
+solution: |
+  copy running-config startup-config
+  copy running-config tftp://192.168.1.50/SW-COMPTA-confg
+cours: |
+  ## Où vit la configuration d'un équipement Cisco ?
+
+  | Mémoire | Contenu                                   | Après un redémarrage |
+  |---------|-------------------------------------------|----------------------|
+  | RAM     | `running-config` (configuration active)   | perdue               |
+  | NVRAM   | `startup-config` (chargée au démarrage)   | conservée            |
+  | Flash   | image IOS, fichiers, archives             | conservée            |
+
+  `copy running-config startup-config` (ou `write memory`) recopie la RAM vers la NVRAM.
+  Mais si le switch grille ou est volé, la NVRAM disparaît avec lui : il faut une copie
+  **externe**.
+
+  ### TFTP : simple, mais sans sécurité
+
+  **TFTP** (*Trivial File Transfer Protocol*, UDP 69) transfère un fichier sans authentification
+  ni chiffrement. On l'utilise sur le réseau d'administration uniquement. Les alternatives sûres
+  sont **SCP** (sur SSH) et **SFTP**.
+
+  ```
+  SW1# copy running-config tftp:
+  Address or name of remote host []? 10.0.0.5
+  Destination filename [sw1-confg]? SW1-2026-10-19.cfg
+  !!
+  1873 bytes copied in 0.412 secs
+  ```
+
+  La forme sur une ligne évite les questions (pratique dans un script) :
+  `copy running-config tftp://10.0.0.5/SW1-2026-10-19.cfg`. Avec SCP :
+  `copy running-config scp://admin@10.0.0.5/SW1.cfg`.
+
+  ### Restaurer
+
+  - `copy tftp://10.0.0.5/SW1.cfg running-config` **fusionne** le fichier avec la configuration
+    courante (les lignes absentes du fichier ne sont pas supprimées) ;
+  - `copy tftp://10.0.0.5/SW1.cfg startup-config` puis `reload` repart exactement du fichier ;
+  - `configure replace` (IOS récents) remplace proprement la configuration courante.
+
+  ### Bonnes pratiques
+
+  - Nommer les fichiers avec le **nom d'hôte et la date**.
+  - Sauvegarder **avant et après** chaque changement, pour pouvoir revenir en arrière.
+  - Automatiser : la commande `archive` (niveau intermédiaire) ou un outil comme Oxidized/RANCID.
+
+  ### Pièges fréquents
+
+  - Oublier `copy running-config startup-config` : tout le travail est perdu au prochain
+    redémarrage (coupure électrique...).
+  - Inverser source et destination : `copy startup-config running-config` n'enregistre rien.
+  - Un pare-feu qui bloque UDP 69, ou un serveur TFTP qui refuse de **créer** un fichier
+    inexistant (cas fréquent sous Linux sans l'option `-c`).
+
+  ### Pour le CCNA
+
+  Connaître le rôle de la RAM, de la NVRAM et de la flash, et la différence entre `copy` vers
+  `running-config` (fusion) et vers `startup-config` (remplacement au prochain démarrage).
+docs:
+  - title: RFC 1350 — The TFTP Protocol (Revision 2)
+    url: https://www.rfc-editor.org/rfc/rfc1350
+  - title: Wikipédia — Trivial File Transfer Protocol
+    url: https://fr.wikipedia.org/wiki/Trivial_File_Transfer_Protocol

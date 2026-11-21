@@ -1,0 +1,99 @@
+title: Inspection ARP dynamique
+level: avance
+order: 12
+device: switch
+hostname: SW-ACCES
+tags: [dai, arp, sécurité, errdisable]
+summary: Empêcher l'usurpation ARP (attaque de l'homme du milieu).
+description: |
+  Avec un outil d'empoisonnement ARP, un poste peut se faire passer pour la passerelle et
+  intercepter le trafic de ses voisins. L'**inspection ARP dynamique** (DAI) vérifie chaque
+  réponse ARP à l'aide de la table construite par le DHCP snooping (déjà configuré ici).
+
+  1. active la DAI sur les VLAN `10` et `20` : `ip arp inspection vlan 10,20` ;
+  2. l'uplink `Gi0/1` est de confiance : `ip arp inspection trust` ;
+  3. un port coupé pour violation DAI passe en *err-disabled* : réactive-le automatiquement
+     après `300` secondes :
+     `errdisable recovery cause arp-inspection` et `errdisable recovery interval 300`.
+initial: |
+  vlan 10
+  vlan 20
+  ip dhcp snooping
+  ip dhcp snooping vlan 10,20
+  interface range fa0/1 - 24
+  switchport mode access
+  switchport access vlan 10
+  interface g0/1
+  switchport mode trunk
+  ip dhcp snooping trust
+checks:
+  - desc: DAI sur les VLAN 10 et 20
+    expr: "{10, 20} <= d.arp_inspection_vlans"
+  - desc: Gi0/1 de confiance pour la DAI
+    expr: intf("g0/1").arp_inspection_trust
+    hint: "interface g0/1 puis ip arp inspection trust"
+  - desc: Les ports utilisateurs ne sont pas de confiance
+    expr: not any(i.arp_inspection_trust for i in ports("fa0/1-24"))
+  - desc: Réactivation automatique après violation DAI (300 s)
+    expr: '"arp-inspection" in d.errdisable_recovery and d.errdisable_interval == 300'
+solution: |
+  configure terminal
+  ip arp inspection vlan 10,20
+  interface g0/1
+  ip arp inspection trust
+  exit
+  errdisable recovery cause arp-inspection
+  errdisable recovery interval 300
+  end
+cours: |
+  ## L'usurpation ARP
+
+  **ARP** associe une adresse IP à une adresse MAC dans un réseau local. Il n'a aucune
+  authentification : n'importe quel poste peut envoyer une réponse ARP non sollicitée
+  (*gratuitous ARP*) affirmant « 172.16.40.1 (la passerelle), c'est ma MAC ». Les victimes
+  mettent à jour leur cache et envoient leur trafic à l'attaquant, qui le relaie après l'avoir lu
+  ou modifié : attaque de l'**homme du milieu**.
+
+  ### L'inspection ARP dynamique (DAI)
+
+  DAI vérifie chaque paquet ARP reçu sur un port **non fiable** : la correspondance IP/MAC doit
+  exister dans la **table de liaisons du DHCP snooping** (ou dans une ACL ARP pour les adresses
+  fixes). Sinon, le paquet est jeté et journalisé.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# ip dhcp snooping
+  SW1(config)# ip dhcp snooping vlan 40
+  SW1(config)# ip arp inspection vlan 40
+  SW1(config)# interface gi0/2
+  SW1(config-if)# ip dhcp snooping trust
+  SW1(config-if)# ip arp inspection trust
+  SW1(config)# errdisable recovery cause arp-inspection
+  SW1(config)# errdisable recovery interval 120
+  SW1# show ip arp inspection vlan 40
+  SW1# show ip arp inspection statistics
+  ```
+
+  - DAI dépend du **DHCP snooping** : sans table de liaisons, tous les ARP des postes sont
+    refusés ;
+  - les uplinks (vers d'autres switchs ou le routeur) sont déclarés **trusted** ;
+  - par défaut, un port non fiable est limité à 15 paquets ARP/s ; au-delà, err-disabled — d'où
+    la récupération automatique ;
+  - les équipements en **adresse fixe** (imprimantes, serveurs) ont besoin d'une ACL ARP
+    (`arp access-list`) ou d'une liaison statique.
+
+  ### Pièges fréquents
+
+  - Activer DAI sans DHCP snooping fonctionnel : coupure générale.
+  - Oublier l'uplink en trusted.
+  - Oublier les adresses fixes.
+
+  ### Pour le CCNA
+
+  DAI est cité parmi les protections de couche 2, avec son lien avec le DHCP snooping.
+docs:
+  - title: "Wikipédia — Address Resolution Protocol"
+    url: https://fr.wikipedia.org/wiki/Address_Resolution_Protocol
+  - title: "Wikipédia (EN) — ARP spoofing"
+    url: https://en.wikipedia.org/wiki/ARP_spoofing

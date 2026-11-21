@@ -1,0 +1,113 @@
+title: "OSPF : élection du DR, types de réseau et timers"
+level: intermediaire
+order: 19
+device: router
+hostname: R-CORE
+tags: [ospf, dr, bdr, point-to-point, hello]
+summary: Maîtriser l'élection du routeur désigné et adapter OSPF à chaque type de lien.
+description: |
+  OSPF tourne déjà sur `R-CORE`. Ajuste chaque interface à son contexte :
+
+  1. `G0/0` est un LAN partagé avec trois autres routeurs : `R-CORE` doit **toujours** être le
+     routeur désigné (DR) → `ip ospf priority 255` ;
+  2. `G0/1` est un lien Ethernet direct vers `R2` (deux routeurs seulement) : inutile d'élire un DR
+     → `ip ospf network point-to-point` ;
+  3. `G0/2` va vers un partenaire qui détecte les pannes plus vite : intervalles hello `5` s et
+     dead `20` s (`ip ospf hello-interval 5`, `ip ospf dead-interval 20`).
+
+  Contrôle avec `show ip ospf interface brief`.
+initial: |
+  interface g0/0
+  ip address 10.1.0.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.0.12.1 255.255.255.252
+  no shutdown
+  interface g0/2
+  ip address 10.0.13.1 255.255.255.252
+  no shutdown
+  router ospf 1
+  router-id 1.1.1.1
+  network 10.1.0.0 0.0.0.255 area 0
+  network 10.0.12.0 0.0.0.3 area 0
+  network 10.0.13.0 0.0.0.3 area 0
+checks:
+  - desc: Priorité OSPF 255 sur G0/0
+    expr: intf("g0/0").ospf_priority == 255
+  - desc: G0/1 en réseau point à point
+    expr: intf("g0/1").ospf_network == "point-to-point"
+  - desc: Hello 5 s et dead 20 s sur G0/2
+    expr: intf("g0/2").ospf_hello == 5 and intf("g0/2").ospf_dead == 20
+  - desc: Les timers des autres interfaces sont inchangés
+    expr: intf("g0/2").ospf_hello == 5 and intf("g0/0").ospf_hello is None and intf("g0/1").ospf_hello is None
+solution: |
+  configure terminal
+  interface g0/0
+  ip ospf priority 255
+  interface g0/1
+  ip ospf network point-to-point
+  interface g0/2
+  ip ospf hello-interval 5
+  ip ospf dead-interval 20
+  end
+cours: |
+  ## Pourquoi un routeur désigné ?
+
+  Sur un réseau **multi-accès** (Ethernet avec plusieurs routeurs), si chaque routeur échangeait
+  sa base topologique avec chacun des autres, on aurait n×(n−1)/2 adjacences. OSPF élit donc un
+  **DR** (*Designated Router*) et un **BDR** (secours) : chaque routeur ne forme d'adjacence
+  complète (`FULL`) qu'avec eux, et reste en `2WAY` avec les autres (`DROTHER`).
+
+  Les routeurs envoient leurs mises à jour au DR sur `224.0.0.6` ; le DR les rediffuse à tous sur
+  `224.0.0.5`.
+
+  ### L'élection
+
+  1. la **priorité** d'interface la plus haute gagne (0 à 255, 1 par défaut ; **0 = jamais DR**) ;
+  2. à égalité, le **router-id** le plus élevé.
+
+  L'élection n'est **pas préemptive** : un routeur à priorité 255 qui démarre après l'élection ne
+  devient pas DR tant que le DR actuel fonctionne (il faut `clear ip ospf process` ou une panne).
+
+  ```
+  R1(config-if)# ip ospf priority 0        (ne jamais être DR, ex. routeur d'agence)
+  R1# show ip ospf neighbor
+  Neighbor ID   Pri   State          Dead Time   Address     Interface
+  2.2.2.2       1     FULL/BDR       00:00:36    10.1.0.2    Gi0/0
+  3.3.3.3       1     2WAY/DROTHER   00:00:33    10.1.0.3    Gi0/0
+  ```
+
+  ### Les types de réseau
+
+  | Type               | Exemple                   | DR/BDR | Hello/Dead |
+  |--------------------|---------------------------|--------|------------|
+  | broadcast          | Ethernet (par défaut)     | oui    | 10/40 s    |
+  | point-to-point     | série HDLC/PPP, ou forcé  | non    | 10/40 s    |
+  | non-broadcast      | anciens Frame Relay       | oui    | 30/120 s   |
+
+  Sur un lien Ethernet qui ne relie que **deux** routeurs, `ip ospf network point-to-point`
+  supprime l'élection : l'adjacence monte plus vite et la base topologique est plus simple.
+  Les **deux** extrémités doivent avoir le même type.
+
+  ### Les timers
+
+  Le *hello* est envoyé périodiquement ; si aucun hello n'arrive pendant le *dead interval*, le
+  voisin est déclaré mort. Ces valeurs doivent être **identiques** des deux côtés, sinon
+  l'adjacence ne se forme pas. Changer le hello recalcule le dead (×4), mais l'inverse n'est pas
+  vrai.
+
+  ### Pièges fréquents
+
+  - Timers ou type de réseau différents entre voisins : aucun voisin dans `show ip ospf neighbor`.
+  - S'attendre à ce qu'une nouvelle priorité prenne effet immédiatement.
+  - Mettre la priorité 0 sur tous les routeurs d'un LAN : aucun DR, aucune adjacence complète.
+
+  ### Pour le CCNA
+
+  L'élection DR/BDR, les états de voisinage et les conditions d'adjacence (zone, timers, masque,
+  authentification, MTU) sont très souvent évalués.
+docs:
+  - title: RFC 2328 — OSPF Version 2
+    url: https://www.rfc-editor.org/rfc/rfc2328
+  - title: Cisco — OSPF Design Guide
+    url: https://www.cisco.com/c/en/us/support/docs/ip/open-shortest-path-first-ospf/7039-1.html

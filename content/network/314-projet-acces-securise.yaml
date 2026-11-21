@@ -1,0 +1,184 @@
+title: "Projet : switch d'accès sécurisé"
+level: expert
+order: 14
+device: switch
+hostname: SW-ET3
+tags: [projet, sécurité, port-security, dhcp snooping, dai, voix]
+summary: Déployer un switch d'étage conforme à la politique de sécurité.
+description: |
+  Le 3ᵉ étage accueille 20 postes équipés de téléphones IP. Le RSSI exige un switch d'accès
+  **durci**. Configure `SW-ET3` :
+
+  **1. VLAN** — `10 USERS`, `99 MGMT`, `150 VOIX`, `999 PARKING`.
+
+  **2. Ports utilisateurs `Fa0/1` à `Fa0/20`**
+  - access VLAN `10`, VLAN voix `150`, PortFast et BPDU Guard ;
+  - port-security : maximum `3` adresses MAC (PC + téléphone), apprentissage sticky, violation `restrict` ;
+  - storm-control broadcast à `10` % (`storm-control broadcast level 10`) ;
+  - DHCP snooping limité à `15` paquets/s.
+
+  **3. Ports inutilisés `Fa0/21` à `Fa0/24` et `Gi0/2`** — access VLAN `999`, éteints.
+
+  **4. Uplink `Gi0/1`** — trunk, natif `99`, VLAN autorisés `10,99,150`, DTP désactivé,
+  port de confiance DHCP snooping **et** inspection ARP.
+
+  **5. Protections globales**
+  - DHCP snooping activé pour les VLAN `10` et `150` ; inspection ARP sur le VLAN `10` ;
+  - réactivation automatique des ports coupés par port-security et BPDU Guard
+    (`errdisable recovery cause psecure-violation`, `... bpduguard`), intervalle `600` s.
+
+  **6. Administration**
+  - `Vlan99` en `192.168.99.13/24`, passerelle `192.168.99.1` ;
+  - domaine `tdm.local`, utilisateur `netadmin` privilège 15, RSA 2048, SSH v2 ;
+  - VTY : `login local`, SSH seul, `access-class MGMT-ONLY in` (ACL standard autorisant `192.168.99.0/24`).
+
+  **7.** Sauvegarde.
+checks:
+  - desc: VLAN créés et nommés
+    expr: vlan(10) == "USERS" and vlan(99) == "MGMT" and vlan(150) == "VOIX" and vlan(999) == "PARKING"
+  - desc: Ports utilisateurs en access VLAN 10, voix 150, PortFast et BPDU Guard
+    expr: all(i.mode == "access" and i.access_vlan == 10 and i.voice_vlan == 150 and i.portfast and i.bpduguard for i in ports("fa0/1-20"))
+  - desc: Port-security (3 MAC, sticky, restrict) sur les ports utilisateurs
+    expr: all(i.port_security and i.port_security_max == 3 and i.port_security_sticky and i.port_security_violation == "restrict" for i in ports("fa0/1-20"))
+  - desc: Storm-control broadcast 10 % et DHCP limité à 15 pps
+    expr: all(i.storm_control.get("broadcast") == "10.00" and i.dhcp_snooping_rate == 15 for i in ports("fa0/1-20"))
+  - desc: Ports inutilisés parqués dans le VLAN 999 et éteints
+    expr: all(i.access_vlan == 999 and i.shutdown for i in ports("fa0/21-24") + [intf("g0/2")])
+  - desc: Uplink Gi0/1 trunk natif 99, VLAN 10, 99, 150, sans DTP
+    expr: intf("g0/1").mode == "trunk" and intf("g0/1").native_vlan == 99 and intf("g0/1").allowed_vlans() == {10, 99, 150} and intf("g0/1").nonegotiate
+  - desc: Gi0/1 de confiance (DHCP snooping et inspection ARP), et lui seul
+    expr: intf("g0/1").dhcp_snooping_trust and intf("g0/1").arp_inspection_trust and not any(i.dhcp_snooping_trust or i.arp_inspection_trust for i in ports("fa0/1-24"))
+  - desc: DHCP snooping (VLAN 10 et 150) et inspection ARP (VLAN 10) actifs
+    expr: d.dhcp_snooping and {10, 150} <= d.dhcp_snooping_vlans and 10 in d.arp_inspection_vlans
+  - desc: Réactivation automatique psecure-violation et bpduguard après 600 s
+    expr: '{"psecure-violation", "bpduguard"} <= d.errdisable_recovery and d.errdisable_interval == 600'
+  - desc: Gestion sur Vlan99 (192.168.99.13, passerelle .1)
+    expr: intf("vlan99").ip == "192.168.99.13" and not intf("vlan99").shutdown and d.default_gateway == "192.168.99.1"
+  - desc: SSH v2 et VTY filtrées par MGMT-ONLY
+    expr: d.ssh_version == 2 and (d.rsa_modulus or 0) >= 2048 and d.users.get("netadmin", {}).get("privilege") == 15 and line("vty").login == "local" and line("vty").transport_input == "ssh" and line("vty").access_class.get("in") == "MGMT-ONLY" and "permit 192.168.99.0 0.0.0.255" in acl("MGMT-ONLY")
+  - desc: Configuration sauvegardée
+    expr: d.saved
+solution: |
+  configure terminal
+  vlan 10
+  name USERS
+  vlan 99
+  name MGMT
+  vlan 150
+  name VOIX
+  vlan 999
+  name PARKING
+  exit
+  interface range fa0/1 - 20
+  switchport mode access
+  switchport access vlan 10
+  switchport voice vlan 150
+  spanning-tree portfast
+  spanning-tree bpduguard enable
+  switchport port-security
+  switchport port-security maximum 3
+  switchport port-security mac-address sticky
+  switchport port-security violation restrict
+  storm-control broadcast level 10
+  ip dhcp snooping limit rate 15
+  interface range fa0/21 - 24, g0/2
+  switchport mode access
+  switchport access vlan 999
+  shutdown
+  interface g0/1
+  switchport mode trunk
+  switchport trunk native vlan 99
+  switchport trunk allowed vlan 10,99,150
+  switchport nonegotiate
+  ip dhcp snooping trust
+  ip arp inspection trust
+  exit
+  ip dhcp snooping vlan 10,150
+  ip dhcp snooping
+  ip arp inspection vlan 10
+  errdisable recovery cause psecure-violation
+  errdisable recovery cause bpduguard
+  errdisable recovery interval 600
+  interface vlan 99
+  ip address 192.168.99.13 255.255.255.0
+  no shutdown
+  exit
+  ip default-gateway 192.168.99.1
+  ip domain-name tdm.local
+  username netadmin privilege 15 secret N3t@dminEt3
+  crypto key generate rsa general-keys modulus 2048
+  ip ssh version 2
+  ip access-list standard MGMT-ONLY
+  permit 192.168.99.0 0.0.0.255
+  exit
+  line vty 0 15
+  login local
+  transport input ssh
+  access-class MGMT-ONLY in
+  end
+  copy running-config startup-config
+cours: |
+  ## La défense en profondeur à l'accès
+
+  La couche **accès** est là où se branchent les utilisateurs... et les attaquants. Un switch
+  d'étage conforme empile plusieurs protections complémentaires :
+
+  | Menace                          | Protection                              |
+  |---------------------------------|-----------------------------------------|
+  | prise libre utilisée            | ports inutilisés éteints, VLAN parking  |
+  | mini-switch, PC pirate, MAC flooding | port-security                      |
+  | switch qui perturbe STP         | PortFast + BPDU Guard                   |
+  | faux serveur DHCP               | DHCP snooping                           |
+  | usurpation ARP                  | inspection ARP dynamique                |
+  | tempête de broadcast            | storm control                           |
+  | négociation de trunk sauvage    | `switchport mode access`, DTP désactivé |
+
+  ### Modèle de port utilisateur (autres valeurs)
+
+  ```
+  interface range gi1/0/1 - 40
+   switchport mode access
+   switchport access vlan 40
+   switchport voice vlan 140
+   spanning-tree portfast
+   spanning-tree bpduguard enable
+   switchport port-security
+   switchport port-security maximum 3
+   switchport port-security violation restrict
+   ip dhcp snooping limit rate 10
+  interface gi1/0/48
+   switchport mode trunk
+   ip dhcp snooping trust
+   ip arp inspection trust
+  ip dhcp snooping
+  ip dhcp snooping vlan 40,140
+  ip arp inspection vlan 40,140
+  ```
+
+  ### Points d'attention
+
+  - les protections fondées sur le DHCP snooping (DAI, IP Source Guard) exigent que l'uplink soit
+    **trusted** ;
+  - un téléphone + un PC = au moins 2 adresses MAC (3 selon les modèles) ;
+  - `errdisable recovery` évite des interventions manuelles pour chaque port coupé ;
+  - une gestion du switch **séparée** (VLAN dédié, SSH, ACL sur les VTY).
+
+  ### Vérifier
+
+  `show port-security`, `show ip dhcp snooping binding`, `show ip arp inspection`,
+  `show spanning-tree summary`, `show interfaces status err-disabled`.
+
+  ### Pièges fréquents
+
+  - Oublier l'uplink en trusted : plus de DHCP pour personne.
+  - Port-security à 1 adresse avec des téléphones IP.
+  - Activer DAI sans DHCP snooping fonctionnel.
+
+  ### Pour le CCNA
+
+  Ce projet couvre l'ensemble des protections de couche 2 du domaine sécurité.
+docs:
+  - title: "Cisco Catalyst 2960-X — guides de configuration"
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html
+  - title: "Wikipédia (EN) — DHCP snooping"
+    url: https://en.wikipedia.org/wiki/DHCP_snooping

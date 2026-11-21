@@ -1,0 +1,246 @@
+title: Compression de Huffman
+level: expert
+order: 35
+tags: [heapq, arbres, compression, bits]
+summary: Construire un code préfixe optimal avec un tas, encoder, décoder et empaqueter en octets.
+description: |
+  Implémente le codage de Huffman avec `heapq`.
+
+  1. `codes(texte)` renvoie un dictionnaire `{caractère: code}` où chaque code est une chaîne
+     de `"0"` et `"1"`. Les codes doivent former un **code préfixe** (aucun code n'est le
+     début d'un autre) **optimal** : la longueur totale `Σ fréquence × len(code)` est minimale.
+     Cas particuliers : texte vide → `{}` ; un seul caractère distinct → son code est `"0"`.
+  2. `encoder(texte)` renvoie le tuple `(bits, table)` où `table = codes(texte)` et `bits` la
+     concaténation des codes.
+  3. `decoder(bits, table)` reconstruit le texte. Si `bits` contient autre chose que `0`/`1`
+     ou se termine au milieu d'un code, lève `ValueError`. En O(longueur de `bits`).
+  4. `vers_octets(bits)` empaquette la chaîne de bits en `bytes` (8 bits par octet, le premier
+     bit est le bit de poids fort du premier octet, le dernier octet complété par des `0`) et
+     renvoie `(donnees, remplissage)` ; `depuis_octets(donnees, remplissage)` fait l'inverse.
+
+  ```python
+  bits, table = encoder("abracadabra")
+  len(bits)                       # 23 (contre 88 bits en ASCII)
+  decoder(bits, table)            # "abracadabra"
+  vers_octets("101")              # (b"\xa0", 5)
+  ```
+starter: |
+  import heapq
+  from collections import Counter
+
+
+  def codes(texte):
+      pass
+
+
+  def encoder(texte):
+      pass
+
+
+  def decoder(bits, table):
+      pass
+
+
+  def vers_octets(bits):
+      pass
+
+
+  def depuis_octets(donnees, remplissage):
+      pass
+tests: |
+  import heapq
+  import random
+  import time
+  from collections import Counter
+
+  def cout_optimal(texte):
+      f = list(Counter(texte).values())
+      if len(f) <= 1:
+          return len(texte)
+      heapq.heapify(f)
+      total = 0
+      while len(f) > 1:
+          a, b = heapq.heappop(f), heapq.heappop(f)
+          total += a + b
+          heapq.heappush(f, a + b)
+      return total
+
+  def est_prefixe(table):
+      c = sorted(table.values())
+      return all(not c[i + 1].startswith(c[i]) for i in range(len(c) - 1))
+
+  def verifier(texte):
+      table = solution.codes(texte)
+      assert set(table) == set(texte)
+      assert all(v and set(v) <= {"0", "1"} for v in table.values())
+      assert est_prefixe(table), f"code non préfixe : {table}"
+      f = Counter(texte)
+      assert sum(f[c] * len(table[c]) for c in f) == cout_optimal(texte), "code non optimal"
+
+  def test_codes():
+      "codes optimaux et préfixes"
+      for t in ["abracadabra", "aaaaabbbbcccdde", "le serveur répond 200 OK", "ab", "".join(chr(65 + i) * (i + 1) for i in range(20))]:
+          verifier(t)
+
+  def test_cas_limites():
+      "codes : cas limites"
+      assert solution.codes("") == {}
+      assert solution.codes("zzzz") == {"z": "0"}
+
+  def test_aller_retour():
+      "encoder puis decoder"
+      rng = random.Random(3)
+      for _ in range(30):
+          t = "".join(rng.choice("aaaabbc d\né") for _ in range(rng.randint(1, 200)))
+          bits, table = solution.encoder(t)
+          assert bits == "".join(table[c] for c in t)
+          assert solution.decoder(bits, table) == t
+      assert solution.encoder("") == ("", {})
+      assert solution.decoder("", {}) == ""
+      bits, table = solution.encoder("aaa")
+      assert bits == "000" and solution.decoder(bits, table) == "aaa"
+
+  def test_abracadabra():
+      "abracadabra tient en 23 bits"
+      bits, table = solution.encoder("abracadabra")
+      assert len(bits) == 23
+
+  def test_decoder_invalide():
+      "decoder : flux invalide"
+      table = {"a": "0", "b": "10", "c": "11"}
+      assert solution.decoder("01011", table) == "abc"
+      for mauvais in ["1", "0101", "01x"]:
+          try:
+              solution.decoder(mauvais, table)
+          except ValueError:
+              continue
+          raise AssertionError(f"{mauvais!r} devrait lever ValueError")
+
+  def test_decoder_rapide():
+      "decoder en temps linéaire"
+      t = "".join(random.Random(5).choice("abcdefghij") for _ in range(200_000))
+      bits, table = solution.encoder(t)
+      debut = time.perf_counter()
+      assert solution.decoder(bits, table) == t
+      assert time.perf_counter() - debut < 3
+
+  def test_octets():
+      "vers_octets / depuis_octets"
+      assert solution.vers_octets("101") == (b"\xa0", 5)
+      assert solution.vers_octets("11111111") == (b"\xff", 0)
+      assert solution.vers_octets("") == (b"", 0)
+      assert solution.vers_octets("000000001") == (b"\x00\x80", 7)
+      for bits in ["", "1", "0110", "101010101010101", "1" * 64]:
+          assert solution.depuis_octets(*solution.vers_octets(bits)) == bits
+solution: |
+  import heapq
+  from collections import Counter
+
+
+  def codes(texte):
+      frequences = Counter(texte)
+      if not frequences:
+          return {}
+      if len(frequences) == 1:
+          return {next(iter(frequences)): "0"}
+      # (fréquence, compteur pour départager, nœud) ; feuille = caractère, nœud = (gauche, droite)
+      tas = [(f, i, c) for i, (c, f) in enumerate(sorted(frequences.items()))]
+      heapq.heapify(tas)
+      compteur = len(tas)
+      while len(tas) > 1:
+          f1, _, a = heapq.heappop(tas)
+          f2, _, b = heapq.heappop(tas)
+          heapq.heappush(tas, (f1 + f2, compteur, (a, b)))
+          compteur += 1
+      table = {}
+      pile = [(tas[0][2], "")]
+      while pile:
+          noeud, prefixe = pile.pop()
+          if isinstance(noeud, tuple):
+              pile.append((noeud[0], prefixe + "0"))
+              pile.append((noeud[1], prefixe + "1"))
+          else:
+              table[noeud] = prefixe
+      return table
+
+
+  def encoder(texte):
+      table = codes(texte)
+      return "".join(table[c] for c in texte), table
+
+
+  def decoder(bits, table):
+      inverse = {code: c for c, code in table.items()}
+      resultat = []
+      courant = ""
+      for b in bits:
+          if b not in "01":
+              raise ValueError(f"bit invalide : {b!r}")
+          courant += b
+          if courant in inverse:
+              resultat.append(inverse[courant])
+              courant = ""
+      if courant:
+          raise ValueError("flux tronqué au milieu d'un code")
+      return "".join(resultat)
+
+
+  def vers_octets(bits):
+      remplissage = -len(bits) % 8
+      bits += "0" * remplissage
+      donnees = bytes(int(bits[i:i + 8], 2) for i in range(0, len(bits), 8))
+      return donnees, remplissage
+
+
+  def depuis_octets(donnees, remplissage):
+      bits = "".join(f"{octet:08b}" for octet in donnees)
+      return bits[:len(bits) - remplissage]
+cours: |
+  ## L'idée de Huffman
+
+  En ASCII, chaque caractère coûte 8 bits, qu'il soit fréquent ou rare. Huffman donne des
+  codes **courts aux caractères fréquents** et longs aux rares, à la manière du morse. Pour
+  pouvoir décoder sans séparateur, le code doit être **préfixe** : aucun code n'est le début
+  d'un autre. Les codes sont alors les chemins vers les feuilles d'un arbre binaire
+  (0 = gauche, 1 = droite).
+
+  ## L'algorithme glouton
+
+  1. Créer une feuille par caractère, pondérée par sa fréquence.
+  2. Tant qu'il reste plus d'un arbre : retirer les **deux plus légers**, les réunir sous un
+     nouveau nœud de poids égal à leur somme, le remettre dans la collection.
+  3. L'arbre restant donne les codes.
+
+  Ce choix glouton est **prouvablement optimal** parmi les codes préfixes caractère par
+  caractère. Avec un tas (`heapq`), chaque fusion coûte O(log n) : O(n log n) au total.
+
+  ## Pièges avec `heapq`
+
+  `heapq` compare des tuples élément par élément. À fréquence égale, il comparerait les
+  nœuds eux-mêmes : un caractère avec un tuple lève `TypeError`. On insère un **compteur**
+  unique en deuxième position pour départager. Cela rend aussi le résultat déterministe.
+
+  ## Décoder
+
+  On lit les bits un à un en descendant dans l'arbre (ou en accumulant un préfixe cherché dans
+  un dictionnaire inversé) ; à chaque feuille, on émet le caractère et on repart de la racine.
+  Un reste non vide à la fin signale un flux corrompu.
+
+  ## Des bits aux octets
+
+  Une chaîne de `"0"`/`"1"` occupe 8 fois plus que des vrais bits. Pour stocker, on
+  regroupe par 8 (`int(morceau, 2)`) et on note le **remplissage** ajouté au dernier octet :
+  sans lui, le décodeur lirait des bits parasites. Dans l'autre sens, `f"{octet:08b}"` donne
+  les 8 bits avec les zéros de tête.
+
+  ## En pratique
+
+  Huffman est un étage de DEFLATE (zip, gzip, PNG), après LZ77 qui remplace les répétitions
+  par des références. Les formats réels transmettent un code **canonique** (seulement les
+  longueurs) plutôt que l'arbre complet. Pour un texte presque uniforme, le gain est faible :
+  l'entropie de Shannon donne la limite théorique.
+docs:
+  - title: Module heapq
+    url: https://docs.python.org/fr/3/library/heapq.html
+  - title: Module collections (Counter)
+    url: https://docs.python.org/fr/3/library/collections.html

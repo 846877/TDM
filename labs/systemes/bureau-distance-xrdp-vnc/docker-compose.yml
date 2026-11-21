@@ -1,0 +1,15 @@
+# Serveur de bureaux à distance Linux (xrdp + TigerVNC + XFCE) et poste d'administration.
+# Le port RDP 3389 est publié sur le port 9489 de ta machine (client « Connexion Bureau à distance »).
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    volumes: [cles:/lab-ssh]
+  bureau:
+    build: {context: ., dockerfile: bureau/Dockerfile}
+    hostname: bureau
+    volumes: [cles:/lab-ssh]
+    ports: ["9489:3389"]
+    shm_size: 256m
+volumes:
+  cles:

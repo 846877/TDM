@@ -1,0 +1,255 @@
+title: Analyser une configuration de routeur
+level: expert
+order: 33
+tags: [parsing, réseau, arbres, sysadmin]
+summary: Transformer une configuration indentée façon Cisco IOS en arbre, l'interroger et la comparer.
+description: |
+  Les équipements réseau exportent leur configuration sous forme de texte **indenté** :
+
+  ```
+  hostname R1
+  !
+  interface GigabitEthernet0/0
+   description LAN
+   ip address 192.168.1.1 255.255.255.0
+  !
+  router ospf 1
+   network 10.0.0.0 0.0.0.255 area 0
+  ```
+
+  1. `analyser(texte)` renvoie l'arbre de la configuration : une liste de nœuds
+     `{"ligne": texte_sans_indentation, "enfants": [...]}`. Une ligne est enfant de la ligne
+     précédente moins indentée. Les lignes vides et les lignes `!` (seules, indentées ou non)
+     sont ignorées. La profondeur est quelconque. Tous les enfants directs d'un même nœud
+     doivent avoir **la même** indentation, sinon `ValueError` (avec le numéro de ligne,
+     compté à partir de 1, dans le message). Les espaces en fin de ligne sont retirés.
+  2. `chercher(arbre, motif)` renvoie les nœuds de **premier niveau** dont la ligne
+     correspond à l'expression régulière `motif` depuis le début (`re.match`).
+  3. `interfaces(texte)` renvoie `{nom: {"description": ..., "ip": ..., "actif": ...}}` pour
+     chaque bloc `interface <nom>` : `description` (texte après `description `, ou `None`),
+     `ip` en notation CIDR (`"192.168.1.1/24"`, à partir de `ip address <ip> <masque>`, ou
+     `None`), `actif` vaut `False` si le bloc contient la ligne `shutdown`, `True` sinon.
+  4. `differences(ancien, nouveau)` compare deux configurations (textes) et renvoie
+     `(ajouts, suppressions)` : deux listes triées de **chemins**, un chemin étant les lignes
+     depuis la racine jointes par `" > "`. Seuls les nœuds les plus hauts ajoutés ou supprimés
+     sont listés (pas leurs descendants).
+
+  ```python
+  differences("interface G0\n ip address 10.0.0.1 255.0.0.0\n",
+              "interface G0\n ip address 10.0.0.2 255.0.0.0\n shutdown\n")
+  # (["interface G0 > ip address 10.0.0.2 255.0.0.0", "interface G0 > shutdown"],
+  #  ["interface G0 > ip address 10.0.0.1 255.0.0.0"])
+  ```
+starter: |
+  import ipaddress
+  import re
+
+
+  def analyser(texte):
+      pass
+
+
+  def chercher(arbre, motif):
+      pass
+
+
+  def interfaces(texte):
+      pass
+
+
+  def differences(ancien, nouveau):
+      pass
+tests: |
+  CONFIG = """hostname R1
+  !
+  interface GigabitEthernet0/0
+   description LAN bureaux
+   ip address 192.168.1.1 255.255.255.0
+   no shutdown
+  !
+  interface GigabitEthernet0/1
+   ip address 10.0.12.1 255.255.255.252
+   shutdown
+  interface Loopback0
+  !
+  router ospf 1
+   router-id 1.1.1.1
+   network 10.0.0.0 0.0.0.255 area 0
+  ip access-list extended FILTRE
+   10 permit tcp any host 192.168.1.10 eq 22
+   20 deny ip any any
+  """
+
+  def test_analyser_structure():
+      "analyser : arbre à deux niveaux"
+      arbre = solution.analyser(CONFIG)
+      assert [n["ligne"] for n in arbre] == ["hostname R1", "interface GigabitEthernet0/0", "interface GigabitEthernet0/1",
+                                             "interface Loopback0", "router ospf 1", "ip access-list extended FILTRE"]
+      g0 = arbre[1]
+      assert [n["ligne"] for n in g0["enfants"]] == ["description LAN bureaux", "ip address 192.168.1.1 255.255.255.0", "no shutdown"]
+      assert g0["enfants"][0] == {"ligne": "description LAN bureaux", "enfants": []}
+      assert arbre[3]["enfants"] == []
+
+  def test_analyser_profond():
+      "analyser : profondeur quelconque, ! indentés"
+      texte = "a\n  b\n    c\n     !\n    d\n  e\nf   \n"
+      assert solution.analyser(texte) == [
+          {"ligne": "a", "enfants": [
+              {"ligne": "b", "enfants": [{"ligne": "c", "enfants": []}, {"ligne": "d", "enfants": []}]},
+              {"ligne": "e", "enfants": []}]},
+          {"ligne": "f", "enfants": []}]
+
+  def test_analyser_incoherent():
+      "analyser : indentation incohérente"
+      try:
+          solution.analyser("interface A\n    description x\n  shutdown\n")
+      except ValueError as e:
+          assert "3" in str(e), str(e)
+      else:
+          raise AssertionError("ValueError attendue")
+
+  def test_chercher():
+      "chercher"
+      arbre = solution.analyser(CONFIG)
+      assert [n["ligne"] for n in solution.chercher(arbre, r"interface Gig")] == \
+          ["interface GigabitEthernet0/0", "interface GigabitEthernet0/1"]
+      assert solution.chercher(arbre, r"router ospf (\d+)")[0]["enfants"][0]["ligne"] == "router-id 1.1.1.1"
+      assert solution.chercher(arbre, "ospf") == [], "re.match : depuis le début de la ligne"
+
+  def test_interfaces():
+      "interfaces"
+      r = solution.interfaces(CONFIG)
+      assert r == {
+          "GigabitEthernet0/0": {"description": "LAN bureaux", "ip": "192.168.1.1/24", "actif": True},
+          "GigabitEthernet0/1": {"description": None, "ip": "10.0.12.1/30", "actif": False},
+          "Loopback0": {"description": None, "ip": None, "actif": True},
+      }, r
+
+  def test_differences():
+      "differences"
+      a = "interface G0\n ip address 10.0.0.1 255.0.0.0\n"
+      b = "interface G0\n ip address 10.0.0.2 255.0.0.0\n shutdown\n"
+      assert solution.differences(a, b) == (
+          ["interface G0 > ip address 10.0.0.2 255.0.0.0", "interface G0 > shutdown"],
+          ["interface G0 > ip address 10.0.0.1 255.0.0.0"])
+      nouveau = CONFIG.replace("hostname R1", "hostname R2") + "ntp server 10.0.0.5\n"
+      nouveau = nouveau.replace("interface Loopback0\n", "")
+      ajouts, supp = solution.differences(CONFIG, nouveau)
+      assert ajouts == ["hostname R2", "ntp server 10.0.0.5"], ajouts
+      assert supp == ["hostname R1", "interface Loopback0"], supp
+      ajouts, supp = solution.differences("router ospf 1\n network 1.0.0.0 0.0.0.255 area 0\n", "")
+      assert (ajouts, supp) == ([], ["router ospf 1"]), "seul le nœud le plus haut est listé"
+      assert solution.differences(CONFIG, CONFIG) == ([], [])
+solution: |
+  import ipaddress
+  import re
+
+
+  def analyser(texte):
+      racine = {"ligne": None, "enfants": []}
+      pile = [(-1, racine)]
+      indent_enfants = {}            # id(nœud) -> indentation de ses enfants
+      for numero, brute in enumerate(texte.splitlines(), start=1):
+          ligne = brute.rstrip()
+          contenu = ligne.lstrip()
+          if not contenu or contenu == "!":
+              continue
+          indent = len(ligne) - len(contenu)
+          while pile[-1][0] >= indent:
+              pile.pop()
+          parent = pile[-1][1]
+          attendu = indent_enfants.setdefault(id(parent), indent)
+          if attendu != indent:
+              raise ValueError(f"indentation incohérente ligne {numero}")
+          noeud = {"ligne": contenu, "enfants": []}
+          parent["enfants"].append(noeud)
+          pile.append((indent, noeud))
+      return racine["enfants"]
+
+
+  def chercher(arbre, motif):
+      return [n for n in arbre if re.match(motif, n["ligne"])]
+
+
+  def interfaces(texte):
+      resultat = {}
+      for bloc in chercher(analyser(texte), r"interface "):
+          nom = bloc["ligne"].split(None, 1)[1]
+          infos = {"description": None, "ip": None, "actif": True}
+          for enfant in bloc["enfants"]:
+              ligne = enfant["ligne"]
+              if ligne.startswith("description "):
+                  infos["description"] = ligne[len("description "):]
+              elif m := re.fullmatch(r"ip address (\S+) (\S+)", ligne):
+                  iface = ipaddress.ip_interface(f"{m[1]}/{m[2]}")
+                  infos["ip"] = iface.with_prefixlen
+              elif ligne == "shutdown":
+                  infos["actif"] = False
+          resultat[nom] = infos
+      return resultat
+
+
+  def _index(noeuds, prefixe=()):
+      index = {}
+      for n in noeuds:
+          chemin = prefixe + (n["ligne"],)
+          index[chemin] = n
+          index.update(_index(n["enfants"], chemin))
+      return index
+
+
+  def differences(ancien, nouveau):
+      a, b = _index(analyser(ancien)), _index(analyser(nouveau))
+
+      def plus_hauts(chemins, existants):
+          return sorted(" > ".join(c) for c in chemins if c[:-1] == () or c[:-1] in existants)
+
+      ajouts = plus_hauts(b.keys() - a.keys(), a.keys())
+      suppressions = plus_hauts(a.keys() - b.keys(), b.keys())
+      return ajouts, suppressions
+cours: |
+  ## Des fichiers structurés par l'indentation
+
+  Cisco IOS, Arista EOS ou Huawei VRP écrivent leur configuration
+  sous forme de **blocs indentés** : une ligne de premier niveau (`interface …`, `router ospf
+  …`) et ses sous-commandes en retrait. Python, YAML et bien des formats suivent le même
+  principe. Savoir transformer ce texte en **arbre** permet d'auditer un parc (toutes les
+  interfaces actives ont-elles une description ?), de générer des rapports ou de détecter les
+  dérives de configuration.
+
+  ## Construire l'arbre avec une pile
+
+  L'algorithme classique parcourt les lignes une à une en tenant une **pile** des ancêtres
+  ouverts, chacun avec son indentation :
+
+  1. tant que le sommet de la pile est indenté **autant ou plus** que la ligne courante, on
+     le dépile (on remonte dans l'arbre) ;
+  2. le sommet restant est le **parent** ; on y accroche le nouveau nœud ;
+  3. on empile le nouveau nœud, qui pourra recevoir des enfants.
+
+  Une **racine fictive** d'indentation -1 évite les cas particuliers pour le premier niveau.
+  Ce traitement est linéaire : chaque nœud est empilé et dépilé une seule fois.
+
+  ## Détecter les incohérences
+
+  Si les enfants d'un même parent n'ont pas tous la même indentation, la structure est
+  ambiguë : mieux vaut refuser avec un message précis (numéro de ligne) que deviner. C'est
+  exactement ce que fait Python avec `IndentationError`.
+
+  ## Interroger
+
+  Une fois l'arbre construit, les requêtes deviennent des parcours simples : filtrer les blocs
+  par expression régulière, puis lire leurs enfants. `ipaddress.ip_interface("10.0.0.1/255.255.255.252")`
+  accepte un masque décimal et le convertit en préfixe.
+
+  ## Comparer deux configurations
+
+  Indexer chaque nœud par son **chemin** (le tuple des lignes depuis la racine) transforme la
+  comparaison en différence d'ensembles : `nouveau - ancien` pour les ajouts. Pour ne garder
+  que les nœuds les plus hauts, on vérifie que le **parent** du chemin existe de l'autre côté.
+  Des outils comme `ciscoconfparse` ou les modules Ansible `*_config` reposent sur ces idées.
+docs:
+  - title: Module re
+    url: https://docs.python.org/fr/3/library/re.html
+  - title: Module ipaddress
+    url: https://docs.python.org/fr/3/library/ipaddress.html

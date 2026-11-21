@@ -1,0 +1,33 @@
+# Serveur de fichiers d'« Ateliers Durand » : srv-fichiers (Samba installé, non configuré),
+# admin (poste du LAN avec smbclient) et invite (poste du Wi-Fi invités, qui ne doit pas accéder aux partages).
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.171.0.5}
+  srv-fichiers:
+    build: {context: ., dockerfile: srv-fichiers/Dockerfile}
+    hostname: srv-fichiers
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.171.0.10}
+      invites: {ipv4_address: 10.171.1.10}
+  invite:
+    build: {context: ., dockerfile: invite/Dockerfile}
+    hostname: invite
+    volumes: [cles:/lab-ssh]
+    networks:
+      invites: {ipv4_address: 10.171.1.50}
+volumes:
+  cles:
+networks:
+  lan:
+    internal: true
+    ipam:
+      config: [{subnet: 10.171.0.0/24, ip_range: 10.171.0.128/28}]
+  invites:
+    internal: true
+    ipam:
+      config: [{subnet: 10.171.1.0/24, ip_range: 10.171.1.128/28}]

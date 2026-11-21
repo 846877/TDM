@@ -1,0 +1,354 @@
+title: Administration de bases MariaDB
+level: intermediaire
+order: 11
+tags: [mariadb, mysql, sql, utilisateurs, droits, sauvegarde, restauration]
+summary: Démarrer et sécuriser MariaDB, importer une base, requêtes SQL, comptes applicatifs et droits, index, sauvegarde planifiée, restauration et journal des requêtes lentes.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Le logiciel de gestion commerciale d'*Ateliers Durand* utilise une base **MariaDB**
+  (compatible MySQL). Le serveur vient d'être installé à partir d'une vieille procédure : il faut le
+  sécuriser, importer les données, créer les comptes de l'application et de la comptabilité, mettre en
+  place les sauvegardes et restaurer une base supprimée par erreur.
+
+  | Machine | Adresse | Rôle |
+  |---|---|---|
+  | `admin` | 10.174.0.5 | ton poste, qui joue aussi le serveur d'application (client `mariadb`) — terminal du lab |
+  | `srv-bdd` | 10.174.0.10 | MariaDB installé, **non démarré** ; `/root/gestion.sql`, `/srv/sauvegardes/` |
+
+  - `ssh srv-bdd` (root, par clé). Sur srv-bdd, root se connecte à MariaDB sans mot de passe (`mariadb`),
+    grâce à l'authentification par socket Unix.
+  - Pas de systemd : `service mariadb start|stop|restart`.
+
+  Réponses à écrire dans `/root/reponses.txt` d'admin, au format `cle=valeur`.
+cours: |
+  ## MariaDB en bref
+
+  **MariaDB** est un serveur de bases de données relationnelles, issu de MySQL et compatible avec lui. Il
+  stocke les données de nombreuses applications métier (gestion, sites web, GLPI, Nextcloud...). Une
+  **base** contient des **tables** ; chaque table a des colonnes typées et des lignes. On l'interroge en
+  **SQL**.
+
+  ```
+  application (admin) ── TCP 3306 ──▶ mariadbd (srv-bdd) ── /var/lib/mysql (fichiers InnoDB)
+  root sur srv-bdd    ── socket Unix /run/mysqld/mysqld.sock ──▶ (authentification unix_socket)
+  ```
+
+  | Fichier / commande                          | Rôle                                         |
+  |---------------------------------------------|----------------------------------------------|
+  | `/etc/mysql/mariadb.conf.d/50-server.cnf`   | configuration du serveur (`bind-address`...) |
+  | `/var/log/mysql/`                           | journaux (erreurs, requêtes lentes)          |
+  | `mariadb` (ou `mysql`)                      | client en ligne de commande                  |
+  | `mariadb-dump`, `mariadb-admin`             | sauvegarde, administration                   |
+
+  ## SQL : le minimum vital
+
+  ```sql
+  SHOW DATABASES;  USE gestion;  SHOW TABLES;  DESCRIBE clients;
+  SELECT nom, ville FROM clients WHERE ville = 'Lyon' ORDER BY nom;
+  SELECT COUNT(*) FROM clients;
+  SELECT c.nom, SUM(o.montant) FROM clients c JOIN commandes o ON o.client_id = c.id GROUP BY c.nom;
+  INSERT INTO clients (nom, ville) VALUES ('Nouveau client', 'Lyon');
+  UPDATE clients SET ville = 'Lyon' WHERE id = 7;      -- toujours avec un WHERE !
+  DELETE FROM commandes WHERE id = 30;
+  ```
+
+  ## Comptes et droits
+
+  Un compte MariaDB est un couple **utilisateur + hôte d'origine** : `'appli'@'10.174.0.%'` n'est pas le
+  même compte que `'appli'@'localhost'`.
+
+  ```sql
+  CREATE USER 'appli'@'10.174.0.%' IDENTIFIED BY 'motdepasse';
+  GRANT SELECT, INSERT, UPDATE, DELETE ON gestion.* TO 'appli'@'10.174.0.%';
+  GRANT SELECT ON gestion.commandes TO 'compta'@'10.174.0.%';   -- droit sur une seule table
+  SHOW GRANTS FOR 'appli'@'10.174.0.%';
+  REVOKE DELETE ON gestion.* FROM 'appli'@'10.174.0.%';
+  DROP USER 'ancien'@'%';
+  ```
+
+  | Niveau        | Exemple                     |
+  |---------------|-----------------------------|
+  | global        | `ON *.*` (administrateurs seulement) |
+  | base          | `ON gestion.*`              |
+  | table         | `ON gestion.commandes`      |
+  | colonne       | `GRANT SELECT (nom) ON gestion.clients` |
+
+  ## Sauvegarde et restauration
+
+  | Besoin                         | Commande                                                     |
+  |--------------------------------|--------------------------------------------------------------|
+  | Sauvegarde logique cohérente   | `mariadb-dump --single-transaction gestion \| gzip > gestion.sql.gz` |
+  | Toutes les bases               | `mariadb-dump --all-databases --single-transaction`          |
+  | Restaurer une base             | `zcat sauvegarde.sql.gz \| mariadb` (ou `mariadb base < fichier.sql`) |
+  | Sauvegarde physique à chaud    | `mariadb-backup --backup --target-dir=...`                   |
+
+  `--single-transaction` produit une image cohérente des tables InnoDB sans bloquer l'application. Une
+  sauvegarde n'est valable que si l'on a déjà **testé sa restauration**.
+
+  ## Pièges courants
+
+  - Laisser des comptes anonymes ou la base `test` (installations anciennes) : `mariadb-secure-installation`.
+  - Écouter sur toutes les interfaces sans filtrer : le port 3306 ne doit être joignable que des serveurs
+    d'application.
+  - Donner `ALL PRIVILEGES ON *.*` à une application : une injection SQL devient une catastrophe.
+  - Un `UPDATE` ou `DELETE` sans `WHERE`.
+  - Copier les fichiers de `/var/lib/mysql` serveur démarré : sauvegarde incohérente.
+
+  ## Bonnes pratiques en entreprise
+
+  - Un compte par application, avec le minimum de droits et une origine précise.
+  - Sauvegardes quotidiennes automatisées, copiées hors du serveur, restauration testée régulièrement.
+  - Journal des requêtes lentes et index adaptés pour les performances.
+  - Mises à jour de sécurité et supervision (connexions, espace disque, réplication).
+docs:
+  - title: Documentation de MariaDB (Knowledge Base)
+    url: https://mariadb.com/kb/en/documentation/
+  - title: MariaDB - GRANT
+    url: https://mariadb.com/kb/en/grant/
+  - title: MariaDB - mariadb-dump
+    url: https://mariadb.com/kb/en/mariadb-dump/
+  - title: Ubuntu Server - installer MySQL / MariaDB
+    url: https://documentation.ubuntu.com/server/how-to/databases/install-mysql/
+exercises:
+  - id: db-demarrer-securiser
+    title: Démarrer et sécuriser MariaDB
+    cours: |
+      Les vieilles installations de MySQL/MariaDB créaient un compte **anonyme** (nom vide) et une base
+      `test` accessible à tous : n'importe qui pouvait se connecter et y stocker des données.
+
+      `mariadb-secure-installation` propose de les supprimer. À la main :
+
+      ```sql
+      SELECT user, host FROM mysql.user;    -- liste des comptes
+      DROP USER ''@'localhost';
+      DROP DATABASE test;
+      ```
+
+      Sans systemd, `service mariadb start` lance le serveur. Sur srv-bdd, `mariadb` (en root) ouvre une
+      session d'administration sans mot de passe grâce au plugin `unix_socket`.
+    description: |
+      Sur `srv-bdd`, démarre MariaDB, puis supprime **tous** les comptes anonymes et la base `test`.
+    hint: ssh srv-bdd ; service mariadb start ; mariadb -e "SELECT user,host FROM mysql.user" ; DROP USER ''@'localhost'; DROP USER ''@'srv-bdd'; DROP DATABASE test;
+    checks:
+      - desc: MariaDB est démarré
+        run: ssh srv-bdd 'mariadb-admin ping' 2>/dev/null | grep -q alive
+      - desc: Plus aucun compte anonyme
+        run: test "$(ssh srv-bdd "mariadb -N -e \"SELECT COUNT(*) FROM mysql.user WHERE user=''\"")" = 0
+      - desc: La base test a été supprimée
+        run: |
+          ssh srv-bdd 'mariadb -N -e "SHOW DATABASES"' | grep -q mysql && ! ssh srv-bdd 'mariadb -N -e "SHOW DATABASES"' | grep -qx test
+
+  - id: db-importer
+    title: Créer la base et importer les données
+    cours: |
+      Une base se crée avec `CREATE DATABASE <nom> CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`.
+      **utf8mb4** est le vrai UTF-8 complet (accents, tous les caractères) ; l'ancien `utf8` de MySQL est
+      incomplet.
+
+      Un fichier SQL s'importe en le donnant au client sur son entrée standard :
+      `mariadb <base> < fichier.sql`. On vérifie ensuite avec `SHOW TABLES;` et `SELECT COUNT(*) FROM
+      <table>;`. Pour explorer, la session interactive `mariadb <base>` accepte toutes les commandes SQL
+      (terminées par `;`, `exit` pour quitter).
+
+      Vérifie ensuite le nombre de lignes de chaque table avec `SELECT COUNT(*)` : une importation interrompue peut laisser une base à moitié remplie.
+    description: |
+      Crée la base **`gestion`** en `utf8mb4` et importes-y le script `/root/gestion.sql` de srv-bdd.
+    hint: mariadb -e "CREATE DATABASE gestion CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci" ; mariadb gestion < /root/gestion.sql
+    checks:
+      - desc: La base gestion est en utf8mb4
+        run: |
+          ssh srv-bdd "mariadb -N -e \"SELECT default_character_set_name FROM information_schema.schemata WHERE schema_name='gestion'\"" | grep -qx utf8mb4
+      - desc: 12 clients et 30 commandes importés
+        run: |
+          test "$(ssh srv-bdd 'mariadb -N gestion -e "SELECT (SELECT COUNT(*) FROM clients), (SELECT COUNT(*) FROM commandes)"' | tr '\t' ' ')" = "12 30"
+
+  - id: db-requetes
+    title: Interroger la base en SQL
+    cours: |
+      Quelques constructions SQL pour répondre aux questions courantes :
+
+      - filtrer : `SELECT ... FROM clients WHERE ville = 'Lyon';` ;
+      - compter : `SELECT COUNT(*) FROM ... WHERE ...;` ;
+      - additionner : `SELECT SUM(montant) FROM commandes WHERE client_id = 1;` ;
+      - relier deux tables : `... FROM commandes o JOIN clients c ON c.id = o.client_id` ;
+      - regrouper : `GROUP BY c.nom ORDER BY SUM(o.montant) DESC LIMIT 1`.
+
+      Les chaînes s'écrivent entre apostrophes. L'option `-N` du client supprime les en-têtes, `-e` exécute
+      une requête sans session interactive : pratique dans un script.
+    description: |
+      Réponds aux questions du directeur commercial :
+
+      - `nb_clients_lyon=` : le nombre de clients situés à Lyon ;
+      - `ca_boulangerie=` : le total des commandes de la « Boulangerie Petit » (format `1234.56`) ;
+      - `meilleur_client=` : le nom du client au plus gros total de commandes.
+    hint: SELECT COUNT(*) FROM clients WHERE ville='Lyon'; SELECT SUM(o.montant) FROM commandes o JOIN clients c ON c.id=o.client_id WHERE c.nom='Boulangerie Petit'; ... GROUP BY c.nom ORDER BY SUM(o.montant) DESC LIMIT 1;
+    checks:
+      - desc: Nombre de clients à Lyon
+        run: |
+          n=$(ssh srv-bdd "mariadb -N gestion -e \"SELECT COUNT(*) FROM clients WHERE ville='Lyon'\""); grep -Eq "^nb_clients_lyon *= *$n *\$" /root/reponses.txt
+      - desc: Total de la Boulangerie Petit
+        run: |
+          n=$(ssh srv-bdd "mariadb -N gestion -e \"SELECT SUM(o.montant) FROM commandes o JOIN clients c ON c.id=o.client_id WHERE c.nom='Boulangerie Petit'\""); grep -Eq "^ca_boulangerie *= *$n *\$" /root/reponses.txt
+      - desc: Meilleur client
+        run: |
+          n=$(ssh srv-bdd "mariadb -N gestion -e \"SELECT c.nom FROM commandes o JOIN clients c ON c.id=o.client_id GROUP BY c.nom ORDER BY SUM(o.montant) DESC LIMIT 1\""); grep -Fxq "meilleur_client=$n" /root/reponses.txt
+
+  - id: db-compte-applicatif
+    title: Ouvrir l'accès réseau à l'application
+    cours: |
+      Par défaut sur Ubuntu, MariaDB n'écoute que sur `127.0.0.1` (`bind-address` dans
+      `/etc/mysql/mariadb.conf.d/50-server.cnf`) : aucune autre machine ne peut s'y connecter. Pour un
+      serveur d'application distant, on écoute sur l'adresse du LAN (ou `0.0.0.0`) et on redémarre.
+
+      Le compte de l'application est limité :
+
+      - à son **origine** (`'appli'@'10.174.0.%'` : `%` est un joker dans l'hôte) ;
+      - à **sa base** et aux seules opérations nécessaires (`SELECT, INSERT, UPDATE, DELETE`), sans droit de
+        modifier la structure (`CREATE`, `DROP`, `ALTER`).
+
+      Depuis admin : `mariadb -h 10.174.0.10 -u appli -p gestion`.
+    description: |
+      Fais écouter MariaDB sur le réseau, puis crée le compte **`appli`** (mot de passe `Appli2026!`),
+      utilisable seulement depuis le réseau `10.174.0.0/24`, qui peut lire et modifier les données de la
+      base `gestion` mais pas changer sa structure.
+    hint: bind-address = 0.0.0.0 dans 50-server.cnf ; service mariadb restart ; CREATE USER 'appli'@'10.174.0.%' IDENTIFIED BY 'Appli2026!'; GRANT SELECT, INSERT, UPDATE, DELETE ON gestion.* TO 'appli'@'10.174.0.%';
+    checks:
+      - desc: appli lit les clients depuis admin
+        run: mariadb -h 10.174.0.10 -u appli -p'Appli2026!' -N -e 'SELECT COUNT(*) FROM gestion.clients' 2>/dev/null | grep -qx 12
+      - desc: appli peut modifier les données
+        run: mariadb -h 10.174.0.10 -u appli -p'Appli2026!' -e "UPDATE gestion.clients SET ville=ville WHERE id=1" 2>/dev/null
+      - desc: appli ne peut pas modifier la structure
+        run: |
+          ! mariadb -h 10.174.0.10 -u appli -p'Appli2026!' -e 'CREATE TABLE gestion.essai (x INT)' 2>/dev/null && ! mariadb -h 10.174.0.10 -u appli -p'Appli2026!' -e 'DROP TABLE gestion.commandes' 2>/dev/null
+
+  - id: db-lecture-seule-table
+    title: Un accès en lecture seule à une table
+    cours: |
+      Un droit peut porter sur une **table** précise : `GRANT SELECT ON gestion.commandes TO ...`. Le compte
+      ne voit alors que cette table de la base ; les autres lui sont invisibles (`SHOW TABLES` n'affiche que
+      ce qu'il a le droit de voir).
+
+      C'est le principe du **moindre privilège** : la comptabilité n'a pas besoin des coordonnées des
+      clients pour rapprocher les montants. `SHOW GRANTS FOR '<compte>'@'<hôte>';` vérifie le résultat ;
+      teste toujours aussi ce qui doit être **refusé**.
+
+      `SHOW GRANTS FOR` le compte affiche ses droits exacts ; c'est la commande à joindre à toute demande d'accès validée.
+    description: |
+      Crée le compte **`compta`** (mot de passe `Compta2026!`, depuis `10.174.0.0/24`) qui peut **lire** la
+      table `gestion.commandes`, et rien d'autre.
+    hint: CREATE USER 'compta'@'10.174.0.%' IDENTIFIED BY 'Compta2026!'; GRANT SELECT ON gestion.commandes TO 'compta'@'10.174.0.%';
+    checks:
+      - desc: compta lit les commandes
+        run: mariadb -h 10.174.0.10 -u compta -p'Compta2026!' -N -e 'SELECT COUNT(*) FROM gestion.commandes' 2>/dev/null | grep -qx 30
+      - desc: compta ne lit pas les clients
+        run: |
+          mariadb -h 10.174.0.10 -u compta -p'Compta2026!' -e 'SELECT 1' >/dev/null 2>&1 && ! mariadb -h 10.174.0.10 -u compta -p'Compta2026!' -e 'SELECT * FROM gestion.clients' >/dev/null 2>&1
+      - desc: compta ne modifie pas les commandes
+        run: |
+          mariadb -h 10.174.0.10 -u compta -p'Compta2026!' -e 'SELECT 1' >/dev/null 2>&1 && ! mariadb -h 10.174.0.10 -u compta -p'Compta2026!' -e 'DELETE FROM gestion.commandes WHERE id=1' >/dev/null 2>&1
+
+  - id: db-index
+    title: Accélérer une requête avec un index
+    cours: |
+      Sans index, chercher les commandes d'un client oblige MariaDB à lire **toute** la table (*full scan*) :
+      invisible avec 30 lignes, catastrophique avec des millions. Un **index** est une structure triée qui
+      permet de trouver directement les lignes.
+
+      - `EXPLAIN SELECT ... WHERE client_id = 3;` montre le plan d'exécution : colonne `type` = `ALL`
+        (lecture complète) ou `ref` (utilisation d'un index), colonne `key` = index utilisé ;
+      - `CREATE INDEX <nom> ON <table> (<colonne>);` crée l'index ;
+      - `SHOW INDEX FROM <table>;` les liste.
+
+      Les colonnes utilisées dans les `WHERE` et les jointures sont les candidates naturelles.
+    description: |
+      Les recherches de commandes par client sont lentes. Crée l'index **`idx_client`** sur la colonne
+      `client_id` de `gestion.commandes`, puis vérifie avec `EXPLAIN` qu'il est utilisé.
+    hint: EXPLAIN SELECT * FROM gestion.commandes WHERE client_id=3; CREATE INDEX idx_client ON gestion.commandes (client_id);
+    checks:
+      - desc: Index idx_client sur commandes.client_id
+        run: |
+          ssh srv-bdd "mariadb -N -e \"SELECT column_name FROM information_schema.statistics WHERE table_schema='gestion' AND table_name='commandes' AND index_name='idx_client'\"" | grep -qx client_id
+
+  - id: db-sauvegarde
+    title: Sauvegarder la base chaque nuit
+    cours: |
+      `mariadb-dump` produit un script SQL qui recrée la base (structure + données). Options importantes :
+
+      - `--single-transaction` : image cohérente des tables InnoDB sans bloquer l'application ;
+      - `--routines --triggers` : inclut procédures et déclencheurs ;
+      - `| gzip > fichier.sql.gz` : compresse au passage.
+
+      Un script de sauvegarde commence par `#!/bin/sh`, s'arrête à la première erreur (`set -e`) et utilise
+      des chemins absolus. La planification système se fait dans `/etc/cron.d/<nom>` : cinq champs de date,
+      puis l'**utilisateur**, puis la commande (`30 1 * * *` = chaque jour à 1 h 30).
+    description: |
+      Sur srv-bdd, écris le script exécutable `/usr/local/bin/sauvegarde-bdd.sh` qui sauvegarde la base
+      `gestion` (cohérente, compressée) dans `/srv/sauvegardes/gestion.sql.gz`. Lance-le une fois, puis
+      planifie-le chaque jour à **1 h 30** pour root dans `/etc/cron.d/sauvegarde-bdd`.
+    hint: |
+      script : mariadb-dump --single-transaction gestion | gzip > /srv/sauvegardes/gestion.sql.gz ; chmod +x ; /etc/cron.d/sauvegarde-bdd : 30 1 * * * root /usr/local/bin/sauvegarde-bdd.sh
+    checks:
+      - desc: La sauvegarde contient la base gestion
+        run: ssh srv-bdd 'zcat /srv/sauvegardes/gestion.sql.gz | grep -q "CREATE TABLE .clients." && zcat /srv/sauvegardes/gestion.sql.gz | grep -q "INSERT INTO .commandes."'
+      - desc: Le script est exécutable et utilise --single-transaction
+        run: ssh srv-bdd 'test -x /usr/local/bin/sauvegarde-bdd.sh && grep -q -- "--single-transaction" /usr/local/bin/sauvegarde-bdd.sh'
+      - desc: Planification chaque jour à 1 h 30 pour root
+        run: |
+          ssh srv-bdd "grep -Eq '^30 +1 +\* +\* +\* +root +/usr/local/bin/sauvegarde-bdd.sh' /etc/cron.d/sauvegarde-bdd"
+
+  - id: db-restauration
+    title: Restaurer une base supprimée
+    cours: |
+      Une sauvegarde faite avec `--databases <base>` contient les ordres `CREATE DATABASE` et `USE` : on la
+      restaure simplement en la donnant au client, `zcat <fichier>.sql.gz | mariadb`. Sans `--databases`, il
+      faut créer la base vide avant et préciser son nom : `zcat ... | mariadb <base>`.
+
+      Avant de restaurer, on regarde le début du fichier (`zcat ... | head -30`) pour savoir ce qu'il
+      contient : une restauration écrase les tables du même nom. Après, on contrôle le nombre de lignes et
+      on prévient les utilisateurs de la date des données restaurées (tout ce qui a été saisi depuis est
+      perdu).
+    description: |
+      La base **`stock`** a été supprimée par erreur. Restaure-la à partir de la sauvegarde
+      `/srv/sauvegardes/stock-2026-10-18.sql.gz` de srv-bdd.
+    hint: zcat /srv/sauvegardes/stock-2026-10-18.sql.gz | head -30 ; zcat /srv/sauvegardes/stock-2026-10-18.sql.gz | mariadb
+    checks:
+      - desc: La table stock.articles contient ses 25 articles
+        run: test "$(ssh srv-bdd 'mariadb -N -e "SELECT COUNT(*) FROM stock.articles"' 2>/dev/null)" = 25
+
+  - id: db-requetes-lentes
+    title: Journaliser les requêtes lentes
+    cours: |
+      Le **journal des requêtes lentes** enregistre les requêtes qui dépassent une durée : c'est le point de
+      départ de toute optimisation.
+
+      ```ini
+      # /etc/mysql/mariadb.conf.d/60-requetes-lentes.cnf
+      [mariadbd]
+      slow_query_log      = 1
+      slow_query_log_file = /var/log/mysql/requetes-lentes.log
+      long_query_time     = 1
+      ```
+
+      Les fichiers de `mariadb.conf.d` sont lus dans l'ordre alphabétique ; un fichier dédié est plus simple
+      à maintenir que de modifier `50-server.cnf`. `SELECT @@slow_query_log, @@long_query_time;` vérifie
+      les valeurs actives après redémarrage. `SELECT SLEEP(2);` produit une requête lente de test.
+
+      Analyse ensuite le journal avec `mariadb-dumpslow`, qui regroupe les requêtes semblables et les classe par temps total.
+    description: |
+      Active de façon **permanente** le journal des requêtes lentes (plus d'**1 seconde**) dans le fichier
+      `/var/log/mysql/requetes-lentes.log`, avec un fichier de configuration
+      `/etc/mysql/mariadb.conf.d/60-requetes-lentes.cnf`. Redémarre MariaDB et vérifie avec une requête
+      `SELECT SLEEP(2);`.
+    hint: |
+      printf '[mariadbd]\nslow_query_log = 1\nslow_query_log_file = /var/log/mysql/requetes-lentes.log\nlong_query_time = 1\n' > /etc/mysql/mariadb.conf.d/60-requetes-lentes.cnf ; service mariadb restart ; mariadb -e "SELECT SLEEP(2)"
+    checks:
+      - desc: Configuration permanente dans 60-requetes-lentes.cnf
+        run: ssh srv-bdd 'grep -Eq "^slow_query_log *= *(1|ON)" /etc/mysql/mariadb.conf.d/60-requetes-lentes.cnf'
+      - desc: Valeurs actives (journal activé, seuil 1 s)
+        run: |
+          test "$(ssh srv-bdd 'mariadb -N -e "SELECT @@slow_query_log, @@long_query_time, @@slow_query_log_file"' | tr '\t' ' ')" = "1 1.000000 /var/log/mysql/requetes-lentes.log"
+      - desc: Une requête lente est journalisée
+        run: ssh srv-bdd 'mariadb -e "SELECT SLEEP(1.5)" >/dev/null && sleep 1 && grep -q "SLEEP" /var/log/mysql/requetes-lentes.log'

@@ -1,0 +1,127 @@
+title: Opérations sur les ensembles
+level: intermediaire
+order: 15
+tags: [ensembles, dictionnaires]
+summary: Union, intersection et différence avec set.
+description: |
+  Deux clubs publient la liste de leurs membres (avec parfois des doublons). Écris
+  `comparer_clubs(club_a, club_b)` qui renvoie un dictionnaire de **quatre ensembles** :
+
+  | clé | contenu |
+  |-----|---------|
+  | `"communs"` | membres des deux clubs |
+  | `"seulement_a"` | membres de A mais pas de B |
+  | `"seulement_b"` | membres de B mais pas de A |
+  | `"tous"` | membres d'au moins un club |
+
+  Écris aussi `sans_doublons_triee(liste)` qui renvoie une liste triée de valeurs uniques.
+
+  ```python
+  comparer_clubs(["Ana", "Bo", "Ana"], ["Bo", "Cy"])
+  # {"communs": {"Bo"}, "seulement_a": {"Ana"}, "seulement_b": {"Cy"},
+  #  "tous": {"Ana", "Bo", "Cy"}}
+  ```
+
+  Opérateurs utiles : `a & b`, `a | b`, `a - b`.
+starter: |
+  def comparer_clubs(club_a, club_b):
+      pass
+
+
+  def sans_doublons_triee(liste):
+      pass
+tests: |
+  def test_exemple():
+      "Exemple de l'énoncé"
+      r = solution.comparer_clubs(["Ana", "Bo", "Ana"], ["Bo", "Cy"])
+      attendu = {"communs": {"Bo"}, "seulement_a": {"Ana"}, "seulement_b": {"Cy"},
+                 "tous": {"Ana", "Bo", "Cy"}}
+      assert r == attendu, f"obtenu {r!r}"
+
+  def test_types():
+      "Les valeurs sont des set"
+      r = solution.comparer_clubs(["x"], ["y"])
+      for cle, valeur in r.items():
+          assert isinstance(valeur, set), f"{cle!r} doit être un set, pas un {type(valeur).__name__}"
+
+  def test_disjoints():
+      "Clubs sans membre commun"
+      r = solution.comparer_clubs(["a", "b"], ["c"])
+      assert r["communs"] == set(), f"communs : obtenu {r['communs']!r}"
+      assert r["tous"] == {"a", "b", "c"}
+
+  def test_vides():
+      "Clubs vides"
+      r = solution.comparer_clubs([], [])
+      assert all(v == set() for v in r.values()), f"obtenu {r!r}"
+      assert set(r) == {"communs", "seulement_a", "seulement_b", "tous"}, "il manque des clés"
+
+  def test_tri():
+      "sans_doublons_triee"
+      r = solution.sans_doublons_triee([3, 1, 3, 2, 1])
+      assert r == [1, 2, 3], f"attendu [1, 2, 3], obtenu {r!r}"
+      assert solution.sans_doublons_triee([]) == []
+solution: |
+  def comparer_clubs(club_a, club_b):
+      a, b = set(club_a), set(club_b)
+      return {
+          "communs": a & b,
+          "seulement_a": a - b,
+          "seulement_b": b - a,
+          "tous": a | b,
+      }
+
+
+  def sans_doublons_triee(liste):
+      return sorted(set(liste))
+cours: |
+  ## Algèbre des ensembles
+
+  Les ensembles Python implémentent les opérations mathématiques classiques :
+
+  | Opérateur | Méthode | Résultat |
+  |-----------|---------|----------|
+  | `a \| b` | `a.union(b)` | éléments de a **ou** b |
+  | `a & b` | `a.intersection(b)` | éléments de a **et** b |
+  | `a - b` | `a.difference(b)` | dans a mais pas dans b |
+  | `a ^ b` | `a.symmetric_difference(b)` | dans un seul des deux |
+
+  ```python
+  autorises = {"ssh", "http", "https"}
+  ouverts = {"ssh", "telnet", "https"}
+  ouverts - autorises      # {"telnet"} : à fermer !
+  autorises - ouverts      # {"http"}  : service absent
+  ```
+
+  Les méthodes acceptent n'importe quel itérable (`a.union(liste)`), les opérateurs
+  exigent deux ensembles.
+
+  ## Comparaisons
+
+  `a <= b` teste l'inclusion (a est un sous-ensemble de b), `a.isdisjoint(b)` vérifie qu'ils
+  n'ont rien en commun. Deux ensembles sont égaux s'ils ont les mêmes éléments, quel que soit
+  l'ordre d'insertion.
+
+  ## De la liste à l'ensemble, et retour
+
+  `set(liste)` élimine les doublons. Mais un set n'a pas d'ordre : pour un résultat
+  reproductible (affichage, tests), on le trie avec `sorted(ensemble)`, qui renvoie une
+  **liste**.
+
+  ## Performance
+
+  Ces opérations sont en temps linéaire en la taille des ensembles, grâce au hachage. Les
+  remplacer par des boucles imbriquées sur des listes (« pour chaque élément de A, est-il
+  dans B ? ») donne du O(n × m).
+
+  ## `frozenset`
+
+  Un `frozenset` est un ensemble immuable, donc hachable : il peut servir de clé de
+  dictionnaire ou être mis dans un autre ensemble.
+
+  **Rappel** : `{}` est un dictionnaire vide ; l'ensemble vide s'écrit `set()`.
+docs:
+  - title: Tutoriel — les ensembles
+    url: https://docs.python.org/fr/3/tutorial/datastructures.html#sets
+  - title: Types d'ensembles (set, frozenset)
+    url: https://docs.python.org/fr/3/library/stdtypes.html#set-types-set-frozenset

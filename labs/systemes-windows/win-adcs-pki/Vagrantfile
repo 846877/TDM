@@ -1,0 +1,12 @@
+# Lab « PKI d'entreprise » : SRV-DC01 (Windows Server 2022, 2 Go, contrôleur de durand.lan promu
+# automatiquement, future autorité de certification) et PC01 (Windows 11, 3 Go, joint au domaine).
+# Prévoir 8 Go de RAM libres.
+require_relative "../_commun/tdm"
+
+Vagrant.configure("2") do |config|
+  TDM.lab(config, __dir__) do |lab|
+    lab.server "dc01", hostname: "SRV-DC01", ip: "192.168.10.10", domain: :forest, primary: true,
+               scenario: "scenario-dc01.ps1"
+    lab.client "pc01", hostname: "PC01", ip: "192.168.10.101", dns: "192.168.10.10", join: true
+  end
+end

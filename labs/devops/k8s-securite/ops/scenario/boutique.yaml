@@ -1,0 +1,44 @@
+# Point de départ : une application « vitrine » déployée sans aucune mesure de sécurité.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: boutique
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: externe
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vitrine
+  namespace: boutique
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: vitrine
+  template:
+    metadata:
+      labels:
+        app: vitrine
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.27-alpine
+          ports:
+            - name: http
+              containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vitrine
+  namespace: boutique
+spec:
+  selector:
+    app: vitrine
+  ports:
+    - port: 8080
+      targetPort: http

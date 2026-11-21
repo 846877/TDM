@@ -1,0 +1,174 @@
+title: Évaluateur d'expressions
+level: expert
+order: 3
+tags: [parsing, récursivité, algorithmes]
+summary: Écrire un mini-interpréteur sans eval().
+description: |
+  Écris `calculer(expression)` qui évalue une expression arithmétique contenant des nombres
+  (entiers ou décimaux), `+ - * /`, des parenthèses, des espaces et le **moins unaire** (`-3`, `-(2+1)`).
+  Les priorités habituelles s'appliquent.
+
+  ```python
+  calculer("2 + 3 * 4")        # 14
+  calculer("(2 + 3) * -4")     # -20
+  calculer("10 / 4")           # 2.5
+  ```
+
+  `eval`, `exec` et `compile` sont **interdits**. Lève `ValueError` pour une expression invalide.
+  Indice : un analyseur à descente récursive (expression → terme → facteur).
+starter: |
+  def calculer(expression):
+      pass
+tests: |
+  import inspect
+
+  def test_priorites():
+      "Priorité des opérateurs"
+      assert solution.calculer("2 + 3 * 4") == 14
+      assert solution.calculer("2 * 3 + 4") == 10
+
+  def test_parentheses():
+      "Parenthèses et moins unaire"
+      assert solution.calculer("(2 + 3) * -4") == -20
+      assert solution.calculer("-(1 + 2) * 2") == -6
+
+  def test_division():
+      "Division décimale et associativité à gauche"
+      assert solution.calculer("10 / 4") == 2.5
+      assert solution.calculer("8 - 3 - 2") == 3
+      assert solution.calculer("16 / 4 / 2") == 2
+
+  def test_decimaux():
+      "Nombres décimaux"
+      assert abs(solution.calculer("1.5 * 2 + .5") - 3.5) < 1e-9
+
+  def test_invalide():
+      "Expression invalide"
+      for expr in ("2 +", "(1 + 2", "3 $ 4", ""):
+          try:
+              solution.calculer(expr)
+          except ValueError:
+              continue
+          raise AssertionError(f"{expr!r} aurait dû lever ValueError")
+
+  def test_sans_eval():
+      "eval/exec ne sont pas utilisés"
+      source = inspect.getsource(solution)
+      assert "eval(" not in source and "exec(" not in source and "compile(" not in source
+solution: |
+  import re
+
+
+  def calculer(expression):
+      jetons = re.findall(r"\d+\.?\d*|\.\d+|[-+*/()]|\S", expression)
+      position = 0
+
+      def voir():
+          return jetons[position] if position < len(jetons) else None
+
+      def prendre():
+          nonlocal position
+          jeton = voir()
+          if jeton is None:
+              raise ValueError("expression incomplète")
+          position += 1
+          return jeton
+
+      def expr():
+          valeur = terme()
+          while voir() in ("+", "-"):
+              if prendre() == "+":
+                  valeur += terme()
+              else:
+                  valeur -= terme()
+          return valeur
+
+      def terme():
+          valeur = facteur()
+          while voir() in ("*", "/"):
+              if prendre() == "*":
+                  valeur *= facteur()
+              else:
+                  valeur /= facteur()
+          return valeur
+
+      def facteur():
+          jeton = prendre()
+          if jeton == "-":
+              return -facteur()
+          if jeton == "+":
+              return facteur()
+          if jeton == "(":
+              valeur = expr()
+              if prendre() != ")":
+                  raise ValueError("parenthèse manquante")
+              return valeur
+          try:
+              return float(jeton) if "." in jeton else int(jeton)
+          except ValueError:
+              raise ValueError(f"jeton invalide : {jeton}") from None
+
+      if not jetons:
+          raise ValueError("expression vide")
+      resultat = expr()
+      if position != len(jetons):
+          raise ValueError("jetons en trop")
+      return resultat
+cours: |
+  ## Deux étapes : lexer puis parser
+
+  1. **Analyse lexicale** (*tokenizer*) : découper le texte en **jetons** : nombres,
+     opérateurs, parenthèses. `"12.5*(3-1)"` → `[12.5, "*", "(", 3, "-", 1, ")"]`. Une
+     regex comme `\d+\.?\d*|[-+*/()]` avec `re.findall`, ou une boucle caractère par
+     caractère, fait l'affaire ; tout caractère inattendu est une erreur.
+  2. **Analyse syntaxique** (*parser*) : reconnaître la structure selon une **grammaire**.
+
+  ## Une grammaire qui encode les priorités
+
+  ```
+  expression := terme   (("+" | "-") terme)*
+  terme      := facteur (("*" | "/") facteur)*
+  facteur    := nombre | "(" expression ")" | "-" facteur
+  ```
+
+  Chaque niveau correspond à une priorité : les `*` sont regroupés **dans** les termes, donc
+  calculés avant les `+`. Les parenthèses relancent une expression complète : c'est la
+  récursion.
+
+  ## La descente récursive
+
+  On écrit **une fonction par règle**, qui consomme les jetons et renvoie une valeur :
+
+  ```python
+  def expression(self):
+      valeur = self.terme()
+      while self.courant() in ("+", "-"):
+          op = self.consommer()
+          droite = self.terme()
+          valeur = valeur + droite if op == "+" else valeur - droite
+      return valeur
+  ```
+
+  La boucle `while` (plutôt que la récursion à droite) garantit l'**associativité à
+  gauche** : `8 - 3 - 2` vaut 3, pas 7.
+
+  ## Gérer les erreurs
+
+  - à la fin, tous les jetons doivent avoir été consommés (sinon `"2 3"` passerait) ;
+  - une parenthèse ouvrante doit être suivie de sa fermante ;
+  - un jeton manquant (`"2 +"`) doit lever `ValueError`, pas `IndexError`.
+
+  La division par zéro peut être traduite en `ValueError` ou laissée telle quelle selon
+  l'énoncé.
+
+  ## Pourquoi pas `eval` ?
+
+  `eval` exécute **n'importe quel code Python** : `eval("__import__('os').system('rm -rf
+  ~')")`. Ne jamais l'appliquer à une entrée non fiable. Pour des littéraux, il existe
+  `ast.literal_eval`. Les compilateurs et interpréteurs réels (dont celui de Python) suivent
+  ce même schéma lexer → parser → évaluation.
+docs:
+  - title: Wikipédia — Analyse syntaxique descendante récursive
+    url: https://fr.wikipedia.org/wiki/Analyse_LL
+  - title: Référence — priorité des opérateurs Python
+    url: https://docs.python.org/fr/3/reference/expressions.html#operator-precedence

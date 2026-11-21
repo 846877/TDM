@@ -1,0 +1,103 @@
+title: Sécurité des ports
+level: avance
+order: 3
+device: switch
+tags: [port-security, sécurité, vlan]
+summary: Limiter les adresses MAC et neutraliser les ports inutilisés.
+description: |
+  1. Sur `Fa0/1` à `Fa0/4` (déjà en access VLAN 10), active la **port-security** :
+     maximum **2** adresses MAC, apprentissage **sticky**, violation en mode **restrict**.
+  2. Crée le VLAN `999` nommé `PARKING`.
+  3. Les ports `Fa0/20` à `Fa0/24` sont inutilisés : mets-les en access dans le VLAN 999
+     et **désactive-les** (`shutdown`).
+initial: |
+  vlan 10
+  name ADMIN
+  interface range fa0/1 - 4
+  switchport mode access
+  switchport access vlan 10
+checks:
+  - desc: Port-security active sur Fa0/1-4
+    expr: all(i.port_security for i in ports("fa0/1-4"))
+  - desc: Maximum 2 adresses MAC
+    expr: all(i.port_security_max == 2 for i in ports("fa0/1-4"))
+  - desc: Apprentissage sticky
+    expr: all(i.port_security_sticky for i in ports("fa0/1-4"))
+  - desc: Violation en mode restrict
+    expr: all(i.port_security_violation == "restrict" for i in ports("fa0/1-4"))
+  - desc: VLAN 999 PARKING
+    expr: vlan(999) == "PARKING"
+  - desc: Fa0/20-24 dans le VLAN 999 et désactivés
+    expr: all(i.access_vlan == 999 and i.shutdown and i.mode == "access" for i in ports("fa0/20-24"))
+solution: |
+  configure terminal
+  interface range fa0/1 - 4
+  switchport port-security
+  switchport port-security maximum 2
+  switchport port-security mac-address sticky
+  switchport port-security violation restrict
+  vlan 999
+  name PARKING
+  interface range fa0/20 - 24
+  switchport mode access
+  switchport access vlan 999
+  shutdown
+  end
+cours: |
+  ## Limiter qui peut se brancher
+
+  La **port-security** limite le nombre d'adresses MAC autorisées sur un port d'accès et réagit
+  quand une adresse non autorisée apparaît. Elle bloque un mini-switch apporté par un
+  utilisateur, un PC pirate branché à la place du poste légitime, ou une attaque par saturation
+  de la table MAC (*MAC flooding*).
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# interface range fa0/30 - 36
+  SW1(config-if-range)# switchport mode access
+  SW1(config-if-range)# switchport port-security
+  SW1(config-if-range)# switchport port-security maximum 3
+  SW1(config-if-range)# switchport port-security mac-address sticky
+  SW1(config-if-range)# switchport port-security violation protect
+  SW1# show port-security
+  Secure Port  MaxSecureAddr  CurrentAddr  SecurityViolation  Security Action
+  Fa0/30       3              1            0                  Protect
+  ```
+
+  - le port doit être en mode **access** (ou trunk explicite) : pas de port-security sur un port
+    dynamique ;
+  - `sticky` transforme les adresses apprises en lignes de configuration (à sauvegarder) ;
+  - par défaut : maximum 1, violation `shutdown`.
+
+  ### Les modes de violation
+
+  | Mode       | Trafic interdit | Journal / compteur | Port coupé (err-disabled) |
+  |------------|-----------------|--------------------|---------------------------|
+  | protect    | jeté            | non                | non                       |
+  | restrict   | jeté            | oui                | non                       |
+  | shutdown   | —               | oui                | **oui**                   |
+
+  Un port en *err-disabled* se réactive par `shutdown` puis `no shutdown`, ou automatiquement
+  avec `errdisable recovery cause psecure-violation`.
+
+  ### Les ports inutilisés
+
+  Compléments de durcissement : placer les ports libres dans un VLAN **parking** non routé et les
+  éteindre.
+
+  ### Pièges fréquents
+
+  - Oublier le téléphone IP (PC + téléphone = au moins 2 adresses).
+  - Oublier de sauvegarder après un apprentissage sticky.
+  - Appliquer la port-security sur un uplink.
+
+  ### Pour le CCNA
+
+  Port-security (maximum, sticky, modes de violation, err-disabled) est au programme du domaine
+  sécurité.
+docs:
+  - title: "Wikipédia — Adresse MAC"
+    url: https://fr.wikipedia.org/wiki/Adresse_MAC
+  - title: "Cisco Catalyst 2960-X — guides de configuration"
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html

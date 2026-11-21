@@ -1,0 +1,144 @@
+title: VPN IPsec site à site avec exemption de NAT
+level: expert
+order: 16
+device: router
+hostname: R-AGENCE
+tags: [ipsec, vpn, isakmp, crypto map, nat]
+summary: Chiffrer le trafic entre l'agence et le siège sans casser l'accès Internet.
+description: |
+  L'agence (`192.168.1.0/24`, `G0/0`) sort sur Internet par `G0/1` (`203.0.113.2`) avec un NAT
+  en surcharge déjà en place. Le siège (`192.168.2.0/24`) a configuré son côté du VPN ; son
+  routeur public est `198.51.100.2`.
+
+  Paramètres convenus :
+
+  | Phase 1 (ISAKMP)  | Valeur          | Phase 2 (IPsec)   | Valeur                          |
+  |-------------------|-----------------|-------------------|---------------------------------|
+  | politique         | `10`            | transform-set     | `TS-AES` : `esp-aes 256 esp-sha256-hmac`, mode tunnel |
+  | chiffrement       | `aes 256`       | trafic intéressant | ACL étendue `VPN-SIEGE` : `192.168.1.0/24` → `192.168.2.0/24` |
+  | hachage           | `sha256`        | crypto map        | `CM-SIEGE`, séquence `10`, sur `G0/1` |
+  | authentification  | `pre-share`, clé `Ag3nce-VPN!` |       |                                 |
+  | groupe DH / durée | `14` / `86400`  |                   |                                 |
+
+  **Piège** : le NAT est appliqué **avant** le chiffrement. Si le trafic vers le siège est
+  traduit, il ne correspond plus à l'ACL du VPN. Ajoute en **séquence 5** de l'ACL `NAT-LAN` un
+  `deny` du trafic `192.168.1.0/24` → `192.168.2.0/24`.
+initial: |
+  interface g0/0
+  ip address 192.168.1.1 255.255.255.0
+  ip nat inside
+  no shutdown
+  interface g0/1
+  ip address 203.0.113.2 255.255.255.252
+  ip nat outside
+  no shutdown
+  ip route 0.0.0.0 0.0.0.0 203.0.113.1
+  ip access-list extended NAT-LAN
+  permit ip 192.168.1.0 0.0.0.255 any
+  exit
+  ip nat inside source list NAT-LAN interface g0/1 overload
+checks:
+  - desc: Politique ISAKMP 10 (aes 256, sha256, pre-share, groupe 14, 86400 s)
+    expr: 'd.isakmp_policies.get(10) == {"encryption": "aes 256", "hash": "sha256", "authentication": "pre-share", "group": "14", "lifetime": "86400"}'
+  - desc: Clé partagée avec 198.51.100.2 et transform-set TS-AES en mode tunnel
+    expr: 'd.isakmp_keys.get("198.51.100.2") == "Ag3nce-VPN!" and d.transform_sets.get("TS-AES") == {"transforms": ["esp-aes 256", "esp-sha256-hmac"], "mode": "tunnel"}'
+  - desc: ACL VPN-SIEGE et crypto map CM-SIEGE 10
+    expr: 'acl("VPN-SIEGE") == ["permit ip 192.168.1.0 0.0.0.255 192.168.2.0 0.0.0.255"] and d.crypto_maps["CM-SIEGE"][10] == {"peers": ["198.51.100.2"], "transform_set": "TS-AES", "acl": "VPN-SIEGE"}'
+  - desc: Crypto map appliquée sur G0/1
+    expr: intf("g0/1").crypto_map == "CM-SIEGE"
+  - desc: Trafic vers le siège exempté de NAT (séquence 5)
+    expr: acl("NAT-LAN") == ["deny ip 192.168.1.0 0.0.0.255 192.168.2.0 0.0.0.255", "permit ip 192.168.1.0 0.0.0.255 any"]
+solution: |
+  configure terminal
+  crypto isakmp policy 10
+  encryption aes 256
+  hash sha256
+  authentication pre-share
+  group 14
+  lifetime 86400
+  exit
+  crypto isakmp key Ag3nce-VPN! address 198.51.100.2
+  crypto ipsec transform-set TS-AES esp-aes 256 esp-sha256-hmac
+  mode tunnel
+  exit
+  ip access-list extended VPN-SIEGE
+  permit ip 192.168.1.0 0.0.0.255 192.168.2.0 0.0.0.255
+  exit
+  crypto map CM-SIEGE 10 ipsec-isakmp
+  set peer 198.51.100.2
+  set transform-set TS-AES
+  match address VPN-SIEGE
+  exit
+  interface g0/1
+  crypto map CM-SIEGE
+  exit
+  ip access-list extended NAT-LAN
+  5 deny ip 192.168.1.0 0.0.0.255 192.168.2.0 0.0.0.255
+  end
+cours: |
+  ## IPsec en deux phases
+
+  Un VPN IPsec site à site relie deux réseaux privés à travers Internet en **chiffrant** et
+  **authentifiant** les paquets entre deux routeurs.
+
+  1. **Phase 1 — IKE/ISAKMP** : les deux routeurs s'authentifient (clé partagée ou certificats)
+     et négocient un canal sécurisé de gestion. Paramètres : chiffrement, hachage, méthode
+     d'authentification, groupe **Diffie-Hellman**, durée de vie. Il suffit qu'**une**
+     politique soit identique des deux côtés.
+  2. **Phase 2 — IPsec** : dans ce canal, ils négocient les associations de sécurité (SA) qui
+     protégeront les données : protocole **ESP**, algorithmes (le *transform-set*), et **quel
+     trafic** chiffrer (l'ACL « intéressante », qui doit être le **miroir** de celle d'en face).
+
+  ### Configuration avec crypto map (autres valeurs)
+
+  ```
+  R1(config)# crypto isakmp policy 20
+  R1(config-isakmp)# encryption aes 256
+  R1(config-isakmp)# hash sha256
+  R1(config-isakmp)# authentication pre-share
+  R1(config-isakmp)# group 19
+  R1(config)# crypto isakmp key Lab-S2S address 192.0.2.10
+  R1(config)# crypto ipsec transform-set TS-LAB esp-aes 256 esp-sha256-hmac
+  R1(config)# ip access-list extended VERS-DC
+  R1(config-ext-nacl)# permit ip 10.30.0.0 0.0.255.255 10.40.0.0 0.0.255.255
+  R1(config)# crypto map VPN-DC 20 ipsec-isakmp
+  R1(config-crypto-map)# set peer 192.0.2.10
+  R1(config-crypto-map)# set transform-set TS-LAB
+  R1(config-crypto-map)# match address VERS-DC
+  R1(config)# interface gi0/1
+  R1(config-if)# crypto map VPN-DC
+  R1# show crypto isakmp sa
+  dst             src             state          conn-id status
+  192.0.2.10      198.18.0.2      QM_IDLE           1001 ACTIVE
+  R1# show crypto ipsec sa | include pkts
+      #pkts encaps: 1530, #pkts encrypt: 1530
+  ```
+
+  Le tunnel ne monte qu'au **premier paquet** correspondant à l'ACL : un ping depuis le LAN
+  (pas depuis le routeur lui-même) le déclenche.
+
+  ### NAT et IPsec
+
+  Sur l'interface de sortie, IOS applique le **NAT avant** la crypto map. Un paquet
+  `192.168.1.10 → 192.168.2.20` traduit en `203.0.113.2 → 192.168.2.20` ne correspond plus à
+  l'ACL du VPN et part en clair vers Internet (où il est jeté). On **exempte** donc ce trafic
+  du NAT par un `deny` placé en tête de l'ACL de NAT (ou par une route-map).
+
+  ### Pièges fréquents
+
+  - ACL intéressantes non symétriques entre les deux sites : la phase 2 échoue.
+  - Groupe DH ou durée différents : la phase 1 échoue (`MM_NO_STATE`).
+  - Pare-feu amont qui bloque UDP 500/4500 et ESP (protocole 50).
+  - DES, 3DES, MD5 et les groupes DH 1, 2, 5 sont obsolètes.
+
+  ### Pour le CCNP ENCOR
+
+  ENCOR décrit IPsec (IKE, ESP, modes tunnel et transport) et sa configuration site à site,
+  y compris l'interaction avec le NAT.
+docs:
+  - title: RFC 4301 — Security Architecture for the Internet Protocol
+    url: https://www.rfc-editor.org/rfc/rfc4301
+  - title: Wikipédia — IPsec
+    url: https://fr.wikipedia.org/wiki/IPsec
+  - title: Cisco — How Virtual Private Networks Work
+    url: https://www.cisco.com/c/en/us/support/docs/security-vpn/ipsec-negotiation-ike-protocols/14106-how-vpn-works.html

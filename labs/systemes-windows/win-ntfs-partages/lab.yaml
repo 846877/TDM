@@ -1,0 +1,533 @@
+title: Droits NTFS et partages SMB
+level: debutant
+order: 2
+tags: [windows, windows server, ntfs, acl, smb, partages, icacls, serveur de fichiers]
+summary: Mettre en place les dossiers d'un serveur de fichiers - droits NTFS, héritage, propriétaire, partages SMB et droits effectifs.
+vagrant: bundled
+description: |
+  **Contexte.** *Ateliers Durand* remplace son vieux NAS par un serveur de fichiers Windows,
+  `SRV-FIC01`. Le prestataire a créé les comptes, les groupes et l'arborescence `C:\Partages`, mais
+  les droits sont à faire et le seul partage existant est mal réglé. Les salariés râlent déjà.
+
+  **Machine.** Une VM Windows Server 2022 (2 Go de RAM). Terminal PowerShell en administrateur.
+
+  Déjà en place :
+
+  | Groupe local    | Membres               |
+  |-----------------|-----------------------|
+  | `Compta`        | mdupont               |
+  | `RH`            | jmartin               |
+  | `Direction`     | pdurand               |
+  | `Atelier`       | (vide)                |
+  | `BureauEtudes`  | crobert               |
+
+  `C:\Partages` (Administrators et SYSTEM : contrôle total, Users : lecture, hérité partout) contient
+  `Compta` (et `Compta\Salaires`), `RH`, `Direction`, `Commun`, `Logiciels`. Le partage `\\SRV-FIC01\Commun`
+  existe déjà.
+
+  Outils : `Get-Acl` / `Set-Acl`, `icacls`, onglet *Sécurité* des propriétés d'un dossier (graphique),
+  `Get-SmbShare`, `New-SmbShare`, `Grant-SmbShareAccess`, `Revoke-SmbShareAccess`, `fsmgmt.msc`.
+cours: |
+  ## Deux couches de droits
+
+  Un fichier partagé sur le réseau est protégé par **deux** listes de contrôle d'accès :
+
+  ```
+  Poste de mdupont ──SMB──▶ \\SRV-FIC01\Compta ──▶ C:\Partages\Compta\budget.xlsx
+                            droits de PARTAGE        droits NTFS
+                            (Full / Change / Read)   (Contrôle total, Modification,
+                                                      Lecture et exécution, Lecture, Écriture)
+  ```
+
+  - Les **droits de partage** ne s'appliquent qu'à l'accès par le réseau, à tout le partage.
+  - Les **droits NTFS** s'appliquent toujours (réseau et session locale), dossier par dossier.
+  - Accès réseau : le droit **effectif** est le **plus restrictif** des deux. Lecture côté partage +
+    Modification côté NTFS = lecture seule.
+
+  La pratique courante en PME : droits de partage larges (*Utilisateurs authentifiés* : contrôle total,
+  ou *Tout le monde* : modification) et toute la finesse en NTFS. On ne gère ainsi qu'une seule couche.
+
+  ## ACL, ACE et héritage
+
+  Chaque dossier a une **ACL** (liste) faite d'**ACE** (entrées) : *qui* (un SID), *quoi* (des droits),
+  *autoriser ou refuser*, et *jusqu'où* (ce dossier, sous-dossiers, fichiers). Par défaut, un dossier
+  **hérite** des ACE de son parent : on règle les droits en haut de l'arborescence et ils descendent.
+
+  - Les droits hérités et explicites **s'additionnent** : impossible de retirer à un sous-dossier un
+    droit hérité sans **désactiver l'héritage** (en convertissant les ACE héritées en explicites, puis
+    en les retouchant).
+  - Un **refus** l'emporte sur une autorisation de même niveau ; on l'évite, il devient vite ingérable.
+  - Le **propriétaire** d'un objet peut toujours modifier ses droits ; un administrateur peut
+    **s'approprier** n'importe quel fichier.
+
+  | Droit simple | icacls | Usage |
+  |--------------|--------|-------|
+  | Contrôle total | `F` | administrateurs |
+  | Modification | `M` | utilisateurs d'un service (lire, écrire, supprimer) |
+  | Lecture et exécution | `RX` | consultation |
+
+  Héritage dans icacls : `(OI)` fichiers, `(CI)` sous-dossiers, `(IO)` seulement les enfants.
+
+  ```powershell
+  icacls C:\Partages\Compta                                   # afficher
+  icacls C:\Partages\Compta /grant "SRV-FIC01\Compta:(OI)(CI)M"
+  icacls C:\Partages\RH /inheritance:d                        # désactiver en copiant
+  icacls C:\Partages\RH /remove:g "*S-1-5-32-545"             # retirer Users
+  (Get-Acl C:\Partages\RH).Access | Format-Table IdentityReference, FileSystemRights, IsInherited
+  ```
+
+  Côté graphique : propriétés du dossier › *Sécurité* › *Avancé* (héritage, propriétaire, **Accès
+  effectif** pour simuler les droits d'un utilisateur).
+
+  ## Partages SMB
+
+  ```powershell
+  New-SmbShare -Name Compta -Path C:\Partages\Compta -ChangeAccess "SRV-FIC01\Compta" -FullAccess Administrators
+  Get-SmbShareAccess Compta
+  Grant-SmbShareAccess Commun -AccountName "NT AUTHORITY\Authenticated Users" -AccessRight Change -Force
+  ```
+
+  - Un nom terminé par `$` crée un **partage caché** (absent de la liste `\\serveur`, mais accessible
+    à qui connaît le nom) ; `C$`, `ADMIN$` sont les partages administratifs.
+  - L'**énumération basée sur l'accès** (ABE) masque les dossiers qu'un utilisateur ne peut pas lire.
+  - Le **cache hors connexion** (`CachingMode`) se désactive pour les dossiers partagés en équipe.
+
+  ## Pièges courants
+
+  - Donner des droits à des utilisateurs au lieu de groupes.
+  - Oublier que *Tout le monde : Lecture* est le droit de partage par défaut de `New-SmbShare`.
+  - Supprimer l'héritage sans convertir : le dossier se retrouve sans aucun droit (même pour
+    l'administrateur, qui devra s'approprier le dossier).
+  - Tester avec son propre compte administrateur : utilise *Accès effectif* ou un vrai compte.
+docs:
+  - title: icacls (commandes Windows)
+    url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/icacls
+  - title: Vue d'ensemble du protocole SMB
+    url: https://learn.microsoft.com/fr-fr/windows-server/storage/file-server/file-server-smb-overview
+  - title: New-SmbShare
+    url: https://learn.microsoft.com/fr-fr/powershell/module/smbshare/new-smbshare
+exercises:
+  - id: win-ntfs-arborescence
+    title: Dossier de l'atelier
+    description: |
+      Le chef d'atelier veut un espace pour son équipe. Crée `C:\Partages\Atelier` avec les
+      sous-dossiers `Plans`, `Commandes` et `Photos`, puis ajoute `lgarnier` (Luc Garnier, chef
+      d'atelier) au groupe `Atelier`.
+    hint: New-Item C:\Partages\Atelier\Plans -ItemType Directory -Force (idem pour les autres) ; Add-LocalGroupMember Atelier -Member lgarnier
+    cours: |
+      `New-Item <chemin> -ItemType Directory -Force` crée un dossier et, grâce à `-Force`, tous ses
+      parents manquants (sans erreur s'il existe déjà) : c'est l'équivalent de `mkdir -p`. L'alias
+      `mkdir` existe aussi en PowerShell.
+
+      Un nouveau dossier **hérite** des droits de son parent : `C:\Partages\Atelier` reçoit donc
+      automatiquement Administrators et SYSTEM en contrôle total, et Users en lecture. Vérifie avec
+      `icacls C:\Partages\Atelier` : les ACE héritées sont marquées `(I)`.
+
+      Avant de régler les droits, on prépare toujours les **groupes** : les droits se donnent au
+      groupe `Atelier`, et l'arrivée d'un nouvel ouvrier ne demandera qu'un ajout dans ce groupe.
+    ci: true
+    checks:
+      - desc: Les dossiers Plans, Commandes et Photos existent dans C:\Partages\Atelier
+        run: |
+          @('Plans', 'Commandes', 'Photos' | Where-Object { Test-Path "C:\Partages\Atelier\$_" -PathType Container }).Count -eq 3
+      - desc: lgarnier est membre du groupe Atelier
+        run: |
+          [bool](Get-LocalGroupMember Atelier | Where-Object Name -like '*\lgarnier')
+    solution: |
+      foreach ($d in 'Plans', 'Commandes', 'Photos') { New-Item "C:\Partages\Atelier\$d" -ItemType Directory -Force | Out-Null }
+      Add-LocalGroupMember Atelier -Member lgarnier
+
+  - id: win-ntfs-compta-modifier
+    title: Droits du service comptable
+    description: |
+      Les comptables doivent pouvoir créer, modifier et supprimer des fichiers dans
+      `C:\Partages\Compta` et tous ses sous-dossiers. Donne au groupe `Compta` le droit
+      **Modification** sur ce dossier, **hérité** par les sous-dossiers et les fichiers (et pas le
+      contrôle total : un comptable n'a pas à changer les droits).
+    hint: icacls C:\Partages\Compta /grant "$env:COMPUTERNAME\Compta:(OI)(CI)M"
+    cours: |
+      Le droit **Modification** (`M`) permet de lire, écrire, créer et supprimer, mais pas de modifier
+      les autorisations ni de s'approprier les fichiers : c'est le bon niveau pour les utilisateurs d'un
+      service. Le **contrôle total** (`F`) est réservé aux administrateurs.
+
+      Pour que le droit s'applique « à ce dossier, aux sous-dossiers et aux fichiers », il faut les
+      indicateurs d'héritage `(OI)(CI)` :
+
+      ```
+      icacls C:\Partages\Compta /grant "SRV-FIC01\Compta:(OI)(CI)M"
+      ```
+
+      En PowerShell pur : `Get-Acl`, ajout d'un objet `FileSystemAccessRule` avec
+      `ContainerInherit, ObjectInherit`, puis `Set-Acl`. Contrôle : `icacls C:\Partages\Compta` doit
+      afficher `SRV-FIC01\Compta:(OI)(CI)(M)` (sans `(I)` : c'est une ACE explicite).
+    ci: true
+    checks:
+      - desc: Compta a le droit Modification (pas Contrôle total) sur C:\Partages\Compta
+        run: |
+          $r = (Get-Acl C:\Partages\Compta).Access | Where-Object { $_.IdentityReference.Value -like '*\Compta' -and $_.AccessControlType -eq 'Allow' }
+          $rights = [Security.AccessControl.FileSystemRights]0
+          foreach ($x in $r) { $rights = $rights -bor $x.FileSystemRights }
+          $r -and $rights.HasFlag([Security.AccessControl.FileSystemRights]::Modify) -and
+            -not $rights.HasFlag([Security.AccessControl.FileSystemRights]::FullControl)
+      - desc: Le droit est hérité par les sous-dossiers et les fichiers
+        run: |
+          $r = (Get-Acl C:\Partages\Compta).Access | Where-Object { $_.IdentityReference.Value -like '*\Compta' -and -not $_.IsInherited }
+          [bool]($r | Where-Object { $_.InheritanceFlags -eq [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit' -and $_.PropagationFlags -eq 'None' })
+    solution: |
+      icacls.exe C:\Partages\Compta /grant "$env:COMPUTERNAME\Compta:(OI)(CI)M"
+
+  - id: win-ntfs-atelier-plans
+    title: Plans en lecture seule pour l'atelier
+    description: |
+      1. Le groupe `Atelier` a le droit **Modification** sur `C:\Partages\Atelier` (hérité).
+      2. Mais les **plans** sont produits par le bureau d'études : dans `C:\Partages\Atelier\Plans`,
+         `BureauEtudes` a **Modification** et `Atelier` seulement **Lecture et exécution**.
+
+      Indice : un droit hérité ne se retire pas, il faut d'abord désactiver l'héritage sur `Plans`.
+    hint: icacls ...\Atelier /grant "$env:COMPUTERNAME\Atelier:(OI)(CI)M" ; icacls ...\Plans /inheritance:d ; /remove:g Atelier ; /grant Atelier:(OI)(CI)RX et BureauEtudes:(OI)(CI)M
+    cours: |
+      Les droits hérités et les droits explicites **s'additionnent**. Si `Atelier` a Modification sur
+      le dossier parent, ajouter « Lecture » sur `Plans` ne change rien : il garde Modification par
+      héritage. Il faut **désactiver l'héritage** du sous-dossier :
+
+      ```
+      icacls C:\Partages\Atelier\Plans /inheritance:d        # d = convertir les ACE héritées en explicites
+      icacls C:\Partages\Atelier\Plans /remove:g "SRV-FIC01\Atelier"
+      icacls C:\Partages\Atelier\Plans /grant "SRV-FIC01\Atelier:(OI)(CI)RX" "SRV-FIC01\BureauEtudes:(OI)(CI)M"
+      ```
+
+      `/inheritance:r` supprime les ACE héritées **sans** les copier (attention à ne pas se retrouver
+      sans aucun droit). Dans l'interface : *Avancé* › *Désactiver l'héritage* › « Convertir les
+      autorisations héritées en autorisations explicites ».
+
+      Une rupture d'héritage est une exception : documente-la, elles rendent les audits difficiles.
+    ci: true
+    checks:
+      - desc: Atelier a Modification sur C:\Partages\Atelier
+        run: |
+          $r = (Get-Acl C:\Partages\Atelier).Access | Where-Object { $_.IdentityReference.Value -like '*\Atelier' -and $_.AccessControlType -eq 'Allow' }
+          [bool]($r | Where-Object { $_.FileSystemRights.HasFlag([Security.AccessControl.FileSystemRights]::Modify) -and $_.InheritanceFlags -eq [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit' })
+      - desc: Dans Plans, Atelier peut lire mais pas écrire
+        run: |
+          $r = @((Get-Acl C:\Partages\Atelier\Plans).Access | Where-Object { $_.IdentityReference.Value -like '*\Atelier' -and $_.AccessControlType -eq 'Allow' })
+          $rights = [Security.AccessControl.FileSystemRights]0
+          foreach ($x in $r) { $rights = $rights -bor $x.FileSystemRights }
+          $r.Count -gt 0 -and $rights.HasFlag([Security.AccessControl.FileSystemRights]::ReadAndExecute) -and
+            -not ($rights -band [Security.AccessControl.FileSystemRights]'WriteData, AppendData, Delete')
+      - desc: Dans Plans, BureauEtudes a Modification
+        run: |
+          [bool]((Get-Acl C:\Partages\Atelier\Plans).Access | Where-Object { $_.IdentityReference.Value -like '*\BureauEtudes' -and $_.FileSystemRights.HasFlag([Security.AccessControl.FileSystemRights]::Modify) })
+    solution: |
+      $pc = $env:COMPUTERNAME
+      icacls.exe C:\Partages\Atelier /grant "${pc}\Atelier:(OI)(CI)M"
+      icacls.exe C:\Partages\Atelier\Plans /inheritance:d
+      icacls.exe C:\Partages\Atelier\Plans /remove:g "${pc}\Atelier"
+      icacls.exe C:\Partages\Atelier\Plans /grant "${pc}\Atelier:(OI)(CI)RX" "${pc}\BureauEtudes:(OI)(CI)M"
+
+  - id: win-ntfs-rh-heritage
+    title: Dossier RH confidentiel
+    description: |
+      Les entretiens annuels sont dans `C:\Partages\RH` et **tout le monde** peut les lire (Users hérite
+      de la lecture depuis `C:\Partages`). Corrige :
+
+      - plus d'héritage depuis `C:\Partages` sur `RH` ;
+      - **Administrators** et **SYSTEM** : contrôle total ;
+      - groupe `RH` : modification ;
+      - plus aucun droit pour **Users**.
+    hint: icacls C:\Partages\RH /inheritance:d puis /remove:g "*S-1-5-32-545" puis /grant "$env:COMPUTERNAME\RH:(OI)(CI)M"
+    cours: |
+      Classique des tickets : un dossier sensible (RH, paie, direction) hérite des droits trop larges du
+      dossier parent. La correction se fait en trois temps : désactiver l'héritage en **copiant** les
+      droits, supprimer les ACE en trop, ajouter le groupe autorisé.
+
+      Pour viser un groupe intégré quelle que soit la langue, icacls accepte un SID précédé de `*` :
+      `icacls C:\Partages\RH /remove:g "*S-1-5-32-545"` retire *Users* / *Utilisateurs*.
+
+      Vérifie ensuite que les fichiers déjà présents ont suivi : `icacls C:\Partages\RH\entretiens.docx`
+      ne doit plus montrer Users. Si un fichier a des droits explicites bizarres, `icacls <dossier>
+      /reset /t` rétablit l'héritage sur toute la sous-arborescence.
+
+      Côté utilisateurs, n'oublie pas les profils itinérants, sauvegardes ou copies locales : retirer un
+      droit ne fait pas disparaître les copies déjà faites.
+    ci: true
+    checks:
+      - desc: L'héritage est désactivé sur C:\Partages\RH
+        run: |
+          (Get-Acl C:\Partages\RH).AreAccessRulesProtected
+      - desc: Users n'a plus aucun droit (ni sur le dossier, ni sur entretiens.docx)
+        run: |
+          $sids = foreach ($p in 'C:\Partages\RH', 'C:\Partages\RH\entretiens.docx') {
+            (Get-Acl $p).Access | ForEach-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
+          }
+          (Get-Acl C:\Partages\RH).AreAccessRulesProtected -and $sids -notcontains 'S-1-5-32-545'
+      - desc: RH a Modification, Administrators et SYSTEM le contrôle total
+        run: |
+          $a = (Get-Acl C:\Partages\RH).Access
+          $full = [Security.AccessControl.FileSystemRights]::FullControl
+          [bool]($a | Where-Object { $_.IdentityReference.Value -like '*\RH' -and $_.FileSystemRights.HasFlag([Security.AccessControl.FileSystemRights]::Modify) }) -and
+          [bool]($a | Where-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq 'S-1-5-32-544' -and $_.FileSystemRights -eq $full }) -and
+          [bool]($a | Where-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq 'S-1-5-18' -and $_.FileSystemRights -eq $full })
+    solution: |
+      icacls.exe C:\Partages\RH /inheritance:d
+      icacls.exe C:\Partages\RH /remove:g '*S-1-5-32-545'
+      icacls.exe C:\Partages\RH /grant "$env:COMPUTERNAME\RH:(OI)(CI)M"
+
+  - id: win-ntfs-salaires
+    title: Le dossier des salaires
+    description: |
+      `C:\Partages\Compta\Salaires` ne doit être accessible qu'à la **Direction** (modification), aux
+      **Administrators** et à **SYSTEM** (contrôle total). Les comptables (`Compta`) et *Users* ne
+      doivent **rien** voir dedans.
+    hint: icacls ...\Salaires /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "$env:COMPUTERNAME\Direction:(OI)(CI)M"
+    cours: |
+      Ici, plus simple que de retirer les ACE une à une : `/inheritance:r` supprime **toutes** les ACE
+      héritées, et `/grant:r` **remplace** les droits explicites du compte cité. En une commande, on
+      repart d'une ACL propre :
+
+      ```
+      icacls C:\Partages\Compta\Salaires /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "SRV-FIC01\Direction:(OI)(CI)M"
+      ```
+
+      Attention : si tu oublies Administrators dans la même commande, plus personne n'a de droit sur le
+      dossier. Ce n'est pas irrémédiable (un administrateur peut s'approprier le dossier puis remettre des
+      droits), mais c'est une belle frayeur.
+
+      Contrôle « Accès effectif » (graphique) : propriétés › Sécurité › Avancé › *Accès effectif*, choisir
+      `mdupont` : aucune case cochée.
+    ci: true
+    checks:
+      - desc: Héritage coupé, Compta et Users absents de l'ACL
+        run: |
+          $acl = Get-Acl C:\Partages\Compta\Salaires
+          $ids = $acl.Access | ForEach-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
+          $compta = (New-Object Security.Principal.NTAccount("$env:COMPUTERNAME\Compta")).Translate([Security.Principal.SecurityIdentifier]).Value
+          $acl.AreAccessRulesProtected -and $ids -notcontains 'S-1-5-32-545' -and $ids -notcontains $compta
+      - desc: Direction a Modification, Administrators le contrôle total
+        run: |
+          $a = (Get-Acl C:\Partages\Compta\Salaires).Access
+          [bool]($a | Where-Object { $_.IdentityReference.Value -like '*\Direction' -and $_.FileSystemRights.HasFlag([Security.AccessControl.FileSystemRights]::Modify) }) -and
+          [bool]($a | Where-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq 'S-1-5-32-544' -and $_.FileSystemRights -eq 'FullControl' })
+      - desc: Le fichier des salaires a suivi (Compta n'y a plus accès)
+        run: |
+          $ids = (Get-Acl C:\Partages\Compta\Salaires\salaires-2024.xlsx).Access.IdentityReference.Value
+          [bool]($ids -like '*\Direction') -and -not ($ids -like '*\Compta')
+    solution: |
+      icacls.exe C:\Partages\Compta\Salaires /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' "$env:COMPUTERNAME\Direction:(OI)(CI)M"
+
+  - id: win-ntfs-proprietaire
+    title: Fichier d'un ancien salarié
+    description: |
+      `C:\Partages\Commun\archive-2019.zip` appartient encore à `pleroy`, parti depuis longtemps.
+      Donne la **propriété** de ce fichier au groupe **Administrators** (règle de l'entreprise pour
+      les fichiers orphelins).
+    hint: icacls C:\Partages\Commun\archive-2019.zip /setowner "*S-1-5-32-544"   (ou takeown /F ... /A)
+    cours: |
+      Le **propriétaire** d'un fichier peut toujours en modifier les droits, même s'il n'a plus
+      d'autorisation. Quand un salarié part, ses fichiers restent à son nom ; si son compte est supprimé,
+      le propriétaire s'affiche comme un SID inconnu (`S-1-5-21-...`).
+
+      Un administrateur a le privilège **SeTakeOwnershipPrivilege** : il peut s'approprier n'importe quel
+      fichier, même sans y avoir accès :
+
+      ```
+      takeown /F C:\Partages\Commun\archive-2019.zip /A        # /A : au groupe Administrators
+      icacls C:\Partages\Commun\archive-2019.zip /setowner "*S-1-5-32-544"
+      (Get-Acl C:\Partages\Commun\archive-2019.zip).Owner      # contrôle
+      ```
+
+      Pour toute une arborescence : `takeown /F dossier /R /A /D Y`. Dans l'interface : Sécurité ›
+      Avancé › Propriétaire › *Modifier*.
+    ci: true
+    checks:
+      - desc: Le propriétaire de archive-2019.zip est le groupe Administrators
+        run: |
+          $owner = (Get-Acl C:\Partages\Commun\archive-2019.zip).Owner
+          (New-Object Security.Principal.NTAccount($owner)).Translate([Security.Principal.SecurityIdentifier]).Value -eq 'S-1-5-32-544'
+    solution: |
+      icacls.exe C:\Partages\Commun\archive-2019.zip /setowner '*S-1-5-32-544'
+
+  - id: win-ntfs-partage-compta
+    title: Partager le dossier de la comptabilité
+    description: |
+      Partage `C:\Partages\Compta` sous le nom **`Compta`** (description `Service comptabilité`) avec ces
+      droits de **partage** :
+
+      - groupe `Compta` : **Modifier** (Change) ;
+      - **Administrators** : **Contrôle total** (Full) ;
+      - personne d'autre (pas de *Everyone*).
+    hint: New-SmbShare -Name Compta -Path C:\Partages\Compta -ChangeAccess "$env:COMPUTERNAME\Compta" -FullAccess Administrators -Description 'Service comptabilité'
+    cours: |
+      `New-SmbShare` crée un partage ; sans option de droits, il donne **Everyone : Read**. On précise
+      donc les comptes avec `-FullAccess`, `-ChangeAccess`, `-ReadAccess` (ou `-NoAccess`) :
+
+      ```powershell
+      New-SmbShare -Name Compta -Path C:\Partages\Compta -ChangeAccess 'SRV-FIC01\Compta' -FullAccess Administrators
+      Get-SmbShare ; Get-SmbShareAccess Compta
+      ```
+
+      Les droits de partage sont plus grossiers que NTFS : **Full** (contrôle total), **Change**
+      (lecture, écriture, suppression), **Read**. Ici on les aligne sur NTFS (approche « deux couches
+      cohérentes »). Côté postes, le partage s'utilise par son chemin UNC `\\SRV-FIC01\Compta` ou un
+      lecteur réseau (`net use K: \\SRV-FIC01\Compta`, `New-PSDrive`, ou GPO).
+
+      Équivalents : `net share`, et `fsmgmt.msc` (Dossiers partagés) en graphique.
+    ci: true
+    checks:
+      - desc: Le partage Compta pointe vers C:\Partages\Compta
+        run: |
+          $s = Get-SmbShare Compta
+          $s.Path -eq 'C:\Partages\Compta' -and $s.Description -eq 'Service comptabilité'
+      - desc: Compta en Change, Administrators en Full, pas de Everyone
+        run: |
+          $a = Get-SmbShareAccess Compta | Where-Object AccessControlType -eq 'Allow'
+          [bool]($a | Where-Object { $_.AccountName -like '*\Compta' -and $_.AccessRight -eq 'Change' }) -and
+          [bool]($a | Where-Object { $_.AccountName -like '*Administrators' -and $_.AccessRight -eq 'Full' }) -and
+          -not ($a | Where-Object AccountName -eq 'Everyone')
+    solution: |
+      New-SmbShare -Name Compta -Path C:\Partages\Compta -ChangeAccess "$env:COMPUTERNAME\Compta" -FullAccess Administrators -Description 'Service comptabilité' | Out-Null
+
+  - id: win-ntfs-partage-atelier
+    title: Partage de l'atelier avec énumération basée sur l'accès
+    description: |
+      Partage `C:\Partages\Atelier` sous le nom **`Atelier`** selon le modèle « partage ouvert, NTFS
+      fermé » :
+
+      - droit de partage : `NT AUTHORITY\Authenticated Users` en **contrôle total** (c'est NTFS qui filtre) ;
+      - **énumération basée sur l'accès** activée (chacun ne voit que les dossiers qu'il peut ouvrir) ;
+      - **pas de mise en cache hors connexion** (CachingMode `None`).
+    hint: New-SmbShare -Name Atelier -Path C:\Partages\Atelier -FullAccess 'NT AUTHORITY\Authenticated Users' -FolderEnumerationMode AccessBased -CachingMode None
+    cours: |
+      Beaucoup d'administrateurs simplifient en donnant le **contrôle total** aux *Utilisateurs
+      authentifiés* sur le partage, et en gérant tout en NTFS : une seule couche à maintenir, et les
+      droits sont les mêmes en local et à distance.
+
+      Deux options de partage améliorent le confort :
+
+      - **ABE** (*Access-Based Enumeration*, `-FolderEnumerationMode AccessBased`) : un utilisateur ne
+        voit pas les sous-dossiers qu'il ne peut pas ouvrir (moins de questions au support, moins de
+        curiosité) ;
+      - **CachingMode** : `Manual` (défaut, l'utilisateur choisit « Toujours disponible hors connexion »),
+        `None` (interdit), `Documents`/`Programs` (automatique). Les fichiers hors connexion posent des
+        conflits sur les dossiers d'équipe : on les désactive.
+
+      Pour un partage existant : `Set-SmbShare Atelier -FolderEnumerationMode AccessBased -CachingMode None`.
+    ci: true
+    checks:
+      - desc: Le partage Atelier existe avec ABE et sans cache hors connexion
+        run: |
+          $s = Get-SmbShare Atelier
+          $s.Path -eq 'C:\Partages\Atelier' -and $s.FolderEnumerationMode -eq 'AccessBased' -and $s.CachingMode -eq 'None'
+      - desc: Utilisateurs authentifiés en contrôle total
+        run: |
+          [bool](Get-SmbShareAccess Atelier | Where-Object { $_.AccountName -like '*Authenticated Users' -and $_.AccessRight -eq 'Full' -and $_.AccessControlType -eq 'Allow' })
+    solution: |
+      New-SmbShare -Name Atelier -Path C:\Partages\Atelier -FullAccess 'NT AUTHORITY\Authenticated Users' -FolderEnumerationMode AccessBased -CachingMode None | Out-Null
+
+  - id: win-ntfs-commun-effectif
+    title: « Je ne peux pas enregistrer dans Commun ! »
+    description: |
+      Ticket de Marie Dupont : « Je vois le dossier `\\SRV-FIC01\Commun` mais Excel me dit qu'il est en
+      lecture seule. » Pourtant, en NTFS, *Users* a bien **Modification** sur `C:\Partages\Commun`.
+
+      Trouve la cause (droits effectifs = le plus restrictif des deux couches) et corrige les **droits du
+      partage** pour que les utilisateurs authentifiés puissent modifier, **sans** toucher au NTFS.
+    hint: Get-SmbShareAccess Commun ... Revoke-SmbShareAccess Commun -AccountName Everyone -Force ; Grant-SmbShareAccess Commun -AccountName 'NT AUTHORITY\Authenticated Users' -AccessRight Change -Force
+    cours: |
+      Méthode de diagnostic d'un accès refusé sur un partage :
+
+      1. **Droits de partage** : `Get-SmbShareAccess Commun` ;
+      2. **Droits NTFS** : `icacls C:\Partages\Commun` ou *Accès effectif* ;
+      3. **Appartenance** de l'utilisateur aux groupes (`whoami /groups` sur sa session, qui doit avoir
+         été rouverte après un ajout de groupe) ;
+      4. ce n'est qu'ensuite qu'on soupçonne le réseau, l'antivirus ou l'application.
+
+      Accès réseau = **le plus restrictif** des deux couches. Ici : partage *Everyone : Read* + NTFS
+      *Users : Modification* = lecture seule. On corrige le partage :
+
+      ```powershell
+      Grant-SmbShareAccess Commun -AccountName 'NT AUTHORITY\Authenticated Users' -AccessRight Change -Force
+      Revoke-SmbShareAccess Commun -AccountName Everyone -Force
+      ```
+
+      Les modifications de droits de partage s'appliquent aux nouvelles connexions : l'utilisateur doit
+      parfois fermer ses fichiers ou rouvrir sa session.
+    ci: true
+    checks:
+      - desc: Les utilisateurs authentifiés (ou Everyone) peuvent modifier via le partage
+        run: |
+          $a = Get-SmbShareAccess Commun
+          -not ($a | Where-Object AccessControlType -eq 'Deny') -and
+          [bool]($a | Where-Object { $_.AccountName -match 'Authenticated Users$|^Everyone$' -and $_.AccessRight -in 'Change', 'Full' -and $_.AccessControlType -eq 'Allow' })
+      - desc: Plus d'entrée Everyone en lecture seule
+        run: |
+          [bool](Get-SmbShare Commun) -and -not (Get-SmbShareAccess Commun | Where-Object { $_.AccountName -eq 'Everyone' -and $_.AccessRight -eq 'Read' })
+      - desc: Le NTFS n'a pas été élargi (Users garde Modification, pas de contrôle total pour Users ou Everyone)
+        run: |
+          $a = (Get-Acl C:\Partages\Commun).Access | Where-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -in 'S-1-5-32-545', 'S-1-1-0' }
+          [bool]($a | Where-Object { $_.FileSystemRights.HasFlag([Security.AccessControl.FileSystemRights]::Modify) }) -and
+          -not ($a | Where-Object { $_.FileSystemRights -eq 'FullControl' })
+    solution: |
+      Grant-SmbShareAccess Commun -AccountName 'NT AUTHORITY\Authenticated Users' -AccessRight Change -Force | Out-Null
+      Revoke-SmbShareAccess Commun -AccountName Everyone -Force | Out-Null
+
+  - id: win-ntfs-logiciels-cache
+    title: Partage caché des logiciels
+    description: |
+      Le service informatique range les installeurs dans `C:\Partages\Logiciels`. Crée le partage
+      **caché** `Logiciels$` (description `Installeurs`) : lecture seule pour **Everyone**, contrôle total
+      pour **Administrators**.
+    hint: New-SmbShare -Name 'Logiciels$' -Path C:\Partages\Logiciels -ReadAccess Everyone -FullAccess Administrators -Description Installeurs
+    cours: |
+      Un partage dont le nom se termine par **`$`** n'apparaît pas quand on parcourt `\\SRV-FIC01` dans
+      l'explorateur, mais reste accessible à qui tape `\\SRV-FIC01\Logiciels$`. C'est pratique pour les
+      partages techniques (installeurs, scripts de déploiement, journaux)... mais **ce n'est pas une
+      sécurité** : les droits NTFS et de partage restent la vraie protection.
+
+      Windows crée lui-même des partages administratifs cachés : `C$`, `D$` (racines des disques),
+      `ADMIN$` (`C:\Windows`), `IPC$`. `Get-SmbShare` les liste tous.
+
+      En PowerShell, pense aux **guillemets simples** autour de `'Logiciels$'` : entre guillemets doubles,
+      `$` serait interprété comme le début d'une variable.
+    ci: true
+    checks:
+      - desc: Le partage caché Logiciels$ existe sur C:\Partages\Logiciels
+        run: |
+          (Get-SmbShare -Name 'Logiciels$').Path -eq 'C:\Partages\Logiciels'
+      - desc: Everyone en lecture seule, Administrators en contrôle total
+        run: |
+          $a = Get-SmbShareAccess -Name 'Logiciels$' | Where-Object AccessControlType -eq 'Allow'
+          ($a | Where-Object AccountName -eq 'Everyone').AccessRight -eq 'Read' -and
+          [bool]($a | Where-Object { $_.AccountName -like '*Administrators' -and $_.AccessRight -eq 'Full' })
+    solution: |
+      New-SmbShare -Name 'Logiciels$' -Path C:\Partages\Logiciels -ReadAccess Everyone -FullAccess Administrators -Description Installeurs | Out-Null
+
+  - id: win-ntfs-sauvegarde-acl
+    title: Sauvegarder les ACL avant les gros travaux
+    description: |
+      Avant une réorganisation, ton responsable te demande une **sauvegarde des droits NTFS** de toute
+      l'arborescence : enregistre les ACL de `C:\Partages` et de tout son contenu dans
+      `C:\Admin\acl-partages.txt` avec `icacls`.
+    hint: icacls C:\Partages\* /save C:\Admin\acl-partages.txt /t /c
+    cours: |
+      `icacls` sait **sauvegarder** et **restaurer** des ACL :
+
+      ```
+      icacls C:\Partages\* /save C:\Admin\acl-partages.txt /t /c      # /t récursif, /c continuer sur erreur
+      icacls C:\Partages\ /restore C:\Admin\acl-partages.txt          # restauration (chemins relatifs !)
+      ```
+
+      Le fichier (UTF-16) contient, pour chaque objet, son chemin relatif et son ACL au format SDDL
+      (`D:PAI(A;OICI;FA;;;BA)...` : `BA` = Builtin Administrators, `FA` = File All). Les chemins sont
+      relatifs au dossier donné à `/save`, d'où la syntaxe `C:\Partages\*` puis `/restore` sur
+      `C:\Partages\`.
+
+      C'est un filet de sécurité précieux avant de lancer un `icacls /reset /t` ou une migration de
+      serveur de fichiers (avec `robocopy /COPYALL` pour copier fichiers **et** droits).
+    ci: true
+    checks:
+      - desc: C:\Admin\acl-partages.txt contient les ACL de l'arborescence (dont Salaires)
+        run: |
+          $t = [IO.File]::ReadAllText('C:\Admin\acl-partages.txt', [Text.Encoding]::Unicode)
+          $t -match 'Salaires' -and $t -match 'D:'
+    solution: |
+      icacls.exe C:\Partages\* /save C:\Admin\acl-partages.txt /t /c | Out-Null

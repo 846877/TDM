@@ -1,0 +1,334 @@
+title: Routage et NAT avec RRAS
+level: avance
+order: 3
+tags: [rras, routage, nat, remote access, netsh, route statique, redirection de port, réseau]
+summary: Transformer un Windows Server en routeur NAT - rôle Accès à distance, routage, NAT entre LAN et Internet, passerelle des postes, route statique, redirection de port et sauvegarde de la configuration.
+vagrant: bundled
+machine: rtr01
+description: |
+  **Contexte.** L'atelier de Villeurbanne des *Ateliers Durand* ouvre avant l'arrivée de son routeur. En
+  attendant, un Windows Server avec deux cartes réseau doit partager l'accès Internet : c'est le rôle
+  **Routage et accès distant** (RRAS). Le poste `PC01` n'a pour l'instant **aucune** route vers Internet.
+
+  **Machines** (prévoir **6 Go de RAM libres**) :
+
+  | VM | Système | Cartes | Rôle |
+  |----|---------|--------|------|
+  | `SRV-RTR01` (terminal) | Windows Server 2022 (2 Go) | `LAN` 192.168.10.254/24, `NAT` (DHCP VirtualBox, accès Internet) | futur routeur NAT |
+  | `PC01` | Windows 11 (3 Go) | `LAN` 192.168.10.101/24, sans passerelle | poste de l'atelier |
+
+  Les machines sont en **groupe de travail**. SRV-RTR01 fait déjà confiance à PC01 pour WinRM : pour agir
+  sur le poste, `$cred = Get-Credential PC01\vagrant` (mot de passe `vagrant`) puis
+  `Invoke-Command -ComputerName 192.168.10.101 -Credential $cred { ... }`. La carte `NAT` de PC01 sert
+  seulement à la gestion par Vagrant : sa route par défaut a été retirée.
+cours: |
+  ## Un serveur Windows peut-il être un routeur ?
+
+  Oui : il suffit d'activer le **transfert IP** entre ses cartes. Le service **Routage et accès distant**
+  (RRAS, rôle *Accès à distance*, service de rôle *Routage*) va plus loin : protocoles de routage, filtres de
+  paquets, **NAT**, VPN. On ne remplace pas un vrai routeur ou pare-feu par un Windows Server en
+  production, mais RRAS dépanne une petite structure, sert de passerelle de laboratoire, ou relie des
+  réseaux virtuels. Comprendre RRAS, c'est surtout comprendre le routage IP lui-même.
+
+  ## La table de routage
+
+  Chaque machine IP choisit la sortie d'un paquet dans sa **table de routage** : la route la plus
+  **spécifique** gagne (plus long préfixe), puis la plus faible **métrique**. La **route par défaut**
+  `0.0.0.0/0` sert pour tout le reste ; sa passerelle doit être sur un réseau directement connecté. Un
+  routeur doit connaître le chemin **retour** : soit les réseaux derrière lui sont directement connectés,
+  soit on ajoute des **routes statiques** (ou un protocole de routage). Côté PowerShell : `Get-NetRoute`,
+  `New-NetRoute`, `Find-NetRoute -RemoteIPAddress` (quelle route sera choisie ?).
+
+  ## Le NAT
+
+  Les adresses privées (RFC 1918 : 10/8, 172.16/12, 192.168/16) ne sont pas routées sur Internet. Le
+  **NAT** (plus exactement NAPT, ou *masquerading*) remplace l'adresse source privée par l'adresse publique
+  de l'interface Internet du routeur et mémorise la correspondance (adresse, port) pour renvoyer les
+  réponses. Dans RRAS, chaque interface du NAT a un **mode** : *publique* connectée à Internet (`full`, avec
+  traduction d'adresses) ou *privée* (le LAN). Pour qu'un serveur interne soit joignable de l'extérieur, on
+  ajoute une **redirection de port** (*port mapping*) : port public de l'interface Internet → adresse et port
+  internes.
+
+  ## Outils
+
+  - `Install-WindowsFeature Routing` puis `Install-RemoteAccess -VpnType RoutingOnly` : installe et active
+    le routage ; la console `rrasmgmt.msc` offre un assistant pour le NAT.
+  - `netsh routing ip nat ...` : configure le NAT en ligne de commande (le module PowerShell `RemoteAccess`
+    gère surtout le VPN et DirectAccess) ; `netsh routing dump` exporte toute la configuration.
+  - Sur le poste : `tracert -d` montre chaque routeur traversé, `Test-NetConnection -Port 443` teste une
+    connexion TCP sans dépendre de l'ICMP, souvent filtré.
+
+  Dans ce lab, l'« Internet » est la carte NAT de VirtualBox : le trafic de PC01 sera donc traduit deux
+  fois (par RRAS puis par VirtualBox), exactement comme derrière une box Internet.
+docs:
+  - title: Routage et accès distant (RRAS)
+    url: https://learn.microsoft.com/fr-fr/windows-server/remote/remote-access/remote-access
+  - title: Module RemoteAccess (PowerShell)
+    url: https://learn.microsoft.com/fr-fr/powershell/module/remoteaccess/
+  - title: Commandes netsh routing
+    url: https://learn.microsoft.com/fr-fr/windows-server/networking/technologies/netsh/netsh-contexts
+exercises:
+  - id: win-rras-role
+    title: Installer le service de rôle Routage
+    description: |
+      Installe sur SRV-RTR01 le rôle **Accès à distance** avec le service de rôle **Routage** et le module
+      PowerShell d'administration de l'accès à distance.
+    hint: Install-WindowsFeature RemoteAccess, Routing, RSAT-RemoteAccess-PowerShell
+    cours: |
+      ```powershell
+      Install-WindowsFeature RemoteAccess, Routing, RSAT-RemoteAccess-PowerShell
+      Get-WindowsFeature *Remote*, Routing | Format-Table Name, InstallState
+      ```
+
+      Le rôle *Accès à distance* regroupe trois services : **DirectAccess et VPN (RAS)**, **Routage** et
+      **Proxy d'application web**. Installer `Routing` ajoute automatiquement `DirectAccess-VPN`, dont il
+      partage le service `RemoteAccess`. Le module `RemoteAccess` apporte `Install-RemoteAccess` et
+      `Get-RemoteAccess` ; la console graphique `rrasmgmt.msc` vient avec `RSAT-RemoteAccess-Mgmt`. À ce
+      stade rien n'est encore routé : le service est installé mais pas configuré.
+    docs:
+      - title: Install-WindowsFeature
+        url: https://learn.microsoft.com/fr-fr/powershell/module/servermanager/install-windowsfeature
+    ci: true
+    checks:
+      - desc: Le service de rôle Routage est installé
+        run: |
+          (Get-WindowsFeature Routing).Installed
+      - desc: Le module PowerShell RemoteAccess est installé
+        run: |
+          (Get-WindowsFeature RSAT-RemoteAccess-PowerShell).Installed -and [bool](Get-Module -ListAvailable RemoteAccess)
+    solution: |
+      Install-WindowsFeature RemoteAccess, Routing, RSAT-RemoteAccess-PowerShell | Out-Null
+
+  - id: win-rras-routage
+    title: Activer le routage
+    description: |
+      Configure RRAS en mode **routage seul** (sans VPN) et vérifie que le service **Routage et accès
+      distant** est démarré et automatique.
+    hint: Install-RemoteAccess -VpnType RoutingOnly ; Get-RemoteAccess ; Get-Service RemoteAccess
+    cours: |
+      ```powershell
+      Install-RemoteAccess -VpnType RoutingOnly
+      Get-RemoteAccess | Select-Object RoutingStatus, VpnStatus
+      Get-Service RemoteAccess
+      Get-NetIPInterface -AddressFamily IPv4 | Format-Table InterfaceAlias, Forwarding
+      ```
+
+      `RoutingOnly` configure le service sans ouvrir de ports VPN : c'est l'équivalent de l'option
+      *Configuration personnalisée* › *Routage réseau* de l'assistant. Le service `RemoteAccess` active alors
+      le **transfert IP** entre les interfaces qu'il gère. Sans RRAS, on obtient le même transfert avec
+      `Set-NetIPInterface -Forwarding Enabled` sur chaque carte, mais sans NAT ni filtres. En cas de
+      problème, `Uninstall-RemoteAccess` remet le service à zéro avant de recommencer.
+    docs:
+      - title: Install-RemoteAccess
+        url: https://learn.microsoft.com/fr-fr/powershell/module/remoteaccess/install-remoteaccess
+      - title: Get-RemoteAccess
+        url: https://learn.microsoft.com/fr-fr/powershell/module/remoteaccess/get-remoteaccess
+    ci: true
+    checks:
+      - desc: RRAS est configuré pour le routage
+        run: |
+          (Get-RemoteAccess).RoutingStatus -eq 'Installed'
+      - desc: Le service RemoteAccess est démarré et automatique
+        run: |
+          $s = Get-Service RemoteAccess
+          $s.Status -eq 'Running' -and $s.StartType -eq 'Automatic'
+    solution: |
+      Install-RemoteAccess -VpnType RoutingOnly
+      Set-Service RemoteAccess -StartupType Automatic
+      Start-Service RemoteAccess
+
+  - id: win-rras-nat
+    title: Le NAT entre le LAN et Internet
+    description: |
+      Active le protocole **NAT** de RRAS : la carte `NAT` est l'interface **publique** (traduction
+      d'adresses complète), la carte `LAN` l'interface **privée**.
+    hint: netsh routing ip nat install ; netsh routing ip nat add interface name=NAT mode=full ; netsh routing ip nat add interface name=LAN mode=private
+    cours: |
+      ```powershell
+      netsh routing ip nat install
+      netsh routing ip nat add interface name=NAT mode=full
+      netsh routing ip nat add interface name=LAN mode=private
+      netsh routing ip nat show interface
+      ```
+
+      Dans la console `rrasmgmt.msc` : *IPv4* › *NAT* › *Nouvelle interface*. `install` ajoute le protocole
+      NAT au service ; chaque interface est ensuite déclarée avec son mode : `full` (publique, traduction
+      d'adresses et de ports), `addressonly` ou `private`. Les noms d'interfaces sont ceux de
+      `Get-NetAdapter` : d'où l'intérêt de cartes renommées clairement (`LAN`, `NAT`, `WAN`...). Le NAT
+      de RRAS sait aussi distribuer des adresses (DHCP allocator) et relayer le DNS : inutile ici, les postes
+      ont une adresse fixe.
+    docs:
+      - title: Contextes netsh
+        url: https://learn.microsoft.com/fr-fr/windows-server/networking/technologies/netsh/netsh-contexts
+    checks:
+      - desc: La carte NAT est l'interface publique du NAT
+        run: |
+          [bool]((netsh routing ip nat dump) -match 'add interface name="?NAT"?\s+mode=full')
+      - desc: La carte LAN est l'interface privée du NAT
+        run: |
+          [bool]((netsh routing ip nat dump) -match 'add interface name="?LAN"?\s+mode=private')
+    solution: |
+      netsh routing ip nat install | Out-Null
+      netsh routing ip nat add interface name=NAT mode=full | Out-Null
+      netsh routing ip nat add interface name=LAN mode=private | Out-Null
+
+  - id: win-rras-passerelle
+    title: La passerelle du poste
+    description: |
+      Sur PC01, configure la carte `LAN` avec la passerelle par défaut **192.168.10.254** (SRV-RTR01).
+    hint: Invoke-Command -ComputerName 192.168.10.101 -Credential $cred { New-NetRoute -DestinationPrefix 0.0.0.0/0 -InterfaceAlias LAN -NextHop 192.168.10.254 }
+    cours: |
+      ```powershell
+      $cred = Get-Credential PC01\vagrant
+      Invoke-Command -ComputerName 192.168.10.101 -Credential $cred {
+          New-NetRoute -DestinationPrefix 0.0.0.0/0 -InterfaceAlias LAN -NextHop 192.168.10.254
+          Get-NetRoute -DestinationPrefix 0.0.0.0/0 }
+      ```
+
+      La passerelle par défaut n'est rien d'autre que la route `0.0.0.0/0`. `New-NetRoute` l'écrit dans le
+      magasin persistant (elle survit au redémarrage) ; `New-NetIPAddress -DefaultGateway` fait de même lors
+      de la configuration de l'adresse. Si plusieurs routes par défaut existent, la somme *métrique de la
+      route + métrique de l'interface* décide : c'est une source classique de trafic qui « sort par la
+      mauvaise carte ». `Find-NetRoute -RemoteIPAddress 1.1.1.1` indique la route qui sera réellement utilisée.
+    docs:
+      - title: New-NetRoute
+        url: https://learn.microsoft.com/fr-fr/powershell/module/nettcpip/new-netroute
+    checks:
+      - desc: PC01 a une route par défaut vers 192.168.10.254 sur la carte LAN
+        machine: pc01
+        run: |
+          [bool](Get-NetRoute -DestinationPrefix 0.0.0.0/0 -InterfaceAlias LAN -ErrorAction SilentlyContinue | Where-Object NextHop -eq '192.168.10.254')
+    solution: |
+      $cred = New-Object PSCredential 'PC01\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force)
+      Invoke-Command -ComputerName 192.168.10.101 -Credential $cred { New-NetRoute -DestinationPrefix 0.0.0.0/0 -InterfaceAlias LAN -NextHop 192.168.10.254 | Out-Null }
+
+  - id: win-rras-internet
+    title: Le poste sort sur Internet par le routeur
+    description: |
+      Depuis PC01, vérifie qu'une connexion TCP vers `1.1.1.1` port **443** aboutit, puis enregistre le
+      résultat de `tracert -d -h 3 1.1.1.1` dans `C:\Admin\trace.txt` **sur PC01** : le premier saut doit être
+      SRV-RTR01.
+    hint: Invoke-Command ... { Test-NetConnection 1.1.1.1 -Port 443 ; tracert -d -h 3 1.1.1.1 > C:\Admin\trace.txt }
+    cours: |
+      ```powershell
+      Invoke-Command -ComputerName 192.168.10.101 -Credential $cred {
+          Test-NetConnection 1.1.1.1 -Port 443 | Select-Object TcpTestSucceeded, InterfaceAlias, SourceAddress
+          tracert -d -h 3 1.1.1.1 | Out-File C:\Admin\trace.txt }
+      ```
+
+      `Test-NetConnection -Port` ouvre une vraie connexion TCP : c'est plus fiable qu'un `ping`, l'ICMP étant
+      souvent filtré (et mal traduit par certains NAT). `tracert -d` (sans résolution de noms) affiche
+      chaque routeur : 192.168.10.254 (RRAS), puis 10.0.2.2 (le NAT de VirtualBox), puis la box. Si la
+      connexion échoue, remonte la chaîne : passerelle du poste, `Find-NetRoute` sur le routeur, interfaces
+      du NAT (`netsh routing ip nat show interface`), journal *RemoteAccess*.
+    docs:
+      - title: Test-NetConnection
+        url: https://learn.microsoft.com/fr-fr/powershell/module/nettcpip/test-netconnection
+      - title: tracert
+        url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/tracert
+    checks:
+      - desc: PC01 joint 1.1.1.1 en TCP 443 par sa carte LAN
+        machine: pc01
+        timeout: 60
+        run: |
+          $t = Test-NetConnection 1.1.1.1 -Port 443 -WarningAction SilentlyContinue
+          $t.TcpTestSucceeded -and $t.InterfaceAlias -eq 'LAN'
+      - desc: C:\Admin\trace.txt montre 192.168.10.254 comme premier saut
+        machine: pc01
+        run: |
+          [bool](Select-String -Path C:\Admin\trace.txt -Pattern '^\s*1\s.*192\.168\.10\.254' -ErrorAction SilentlyContinue)
+    solution: |
+      $cred = New-Object PSCredential 'PC01\vagrant', (ConvertTo-SecureString 'vagrant' -AsPlainText -Force)
+      Invoke-Command -ComputerName 192.168.10.101 -Credential $cred { tracert -d -h 3 1.1.1.1 | Out-File C:\Admin\trace.txt }
+
+  - id: win-rras-route
+    title: Une route statique vers la future agence
+    description: |
+      Le réseau de l'agence de Grenoble, `172.16.50.0/24`, sera joignable par un routeur VPN d'adresse
+      `192.168.10.1` sur le LAN. Ajoute sur SRV-RTR01 une route **persistante** vers ce réseau, avec une
+      métrique de **20**.
+    hint: New-NetRoute -DestinationPrefix 172.16.50.0/24 -InterfaceAlias LAN -NextHop 192.168.10.1 -RouteMetric 20
+    cours: |
+      ```powershell
+      New-NetRoute -DestinationPrefix 172.16.50.0/24 -InterfaceAlias LAN -NextHop 192.168.10.1 -RouteMetric 20
+      Get-NetRoute -DestinationPrefix 172.16.50.0/24 -PolicyStore PersistentStore
+      Find-NetRoute -RemoteIPAddress 172.16.50.10
+      ```
+
+      Une route statique dit « pour joindre ce réseau, passe par ce routeur voisin ». Le routeur suivant doit
+      être sur un réseau **directement connecté**. Sans cette route, SRV-RTR01 enverrait le trafic de
+      l'agence vers Internet par sa route par défaut. `route print` affiche la même table, `route -p add`
+      l'ancienne syntaxe. Dans un réseau plus grand, on éviterait de multiplier les routes statiques : un
+      protocole de routage (OSPF, BGP) sur de vrais routeurs propage les réseaux automatiquement.
+    docs:
+      - title: New-NetRoute
+        url: https://learn.microsoft.com/fr-fr/powershell/module/nettcpip/new-netroute
+      - title: Find-NetRoute
+        url: https://learn.microsoft.com/fr-fr/powershell/module/nettcpip/find-netroute
+    checks:
+      - desc: Une route persistante vers 172.16.50.0/24 passe par 192.168.10.1 avec la métrique 20
+        run: |
+          [bool](Get-NetRoute -DestinationPrefix 172.16.50.0/24 -PolicyStore PersistentStore -ErrorAction SilentlyContinue | Where-Object { $_.NextHop -eq '192.168.10.1' -and $_.RouteMetric -eq 20 })
+    solution: |
+      New-NetRoute -DestinationPrefix 172.16.50.0/24 -InterfaceAlias LAN -NextHop 192.168.10.1 -RouteMetric 20 | Out-Null
+
+  - id: win-rras-redirection
+    title: Publier le Bureau à distance de PC01
+    description: |
+      Le prestataire doit pouvoir se connecter en Bureau à distance à PC01 depuis l'extérieur. Ajoute sur
+      l'interface publique `NAT` une **redirection de port** TCP : port public **3390** vers
+      `192.168.10.101:3389`.
+    hint: netsh routing ip nat add portmapping name=NAT proto=tcp publicip=0.0.0.0 publicport=3390 privateip=192.168.10.101 privateport=3389
+    cours: |
+      ```powershell
+      netsh routing ip nat add portmapping name=NAT proto=tcp publicip=0.0.0.0 publicport=3390 privateip=192.168.10.101 privateport=3389
+      netsh routing ip nat show interface name=NAT
+      ```
+
+      Une redirection de port (*port forwarding*, « service » dans la console RRAS) fait l'inverse du NAT
+      sortant : une connexion arrivant sur l'interface publique est envoyée à une machine interne.
+      `publicip=0.0.0.0` signifie « l'adresse de l'interface ». Utiliser un port public différent (3390)
+      évite les robots qui balaient le 3389, mais ce n'est **pas** une protection : en réalité, on publie
+      le Bureau à distance derrière une passerelle RD avec authentification forte, ou un VPN, jamais en
+      accès direct.
+    docs:
+      - title: Contextes netsh
+        url: https://learn.microsoft.com/fr-fr/windows-server/networking/technologies/netsh/netsh-contexts
+      - title: Passerelle des services Bureau à distance
+        url: https://learn.microsoft.com/fr-fr/windows-server/remote/remote-desktop-services/rds-roles
+    checks:
+      - desc: Une redirection TCP 3390 vers 192.168.10.101:3389 existe sur l'interface NAT
+        run: |
+          $d = (netsh routing ip nat dump) -join "`n"
+          $d -match 'add portmapping name="?NAT"?\s+proto=tcp.*publicport=3390\s+privateip=192\.168\.10\.101\s+privateport=3389'
+    solution: |
+      netsh routing ip nat add portmapping name=NAT proto=tcp publicip=0.0.0.0 publicport=3390 privateip=192.168.10.101 privateport=3389 | Out-Null
+
+  - id: win-rras-sauvegarde
+    title: Sauvegarder la configuration du routeur
+    description: |
+      Exporte toute la configuration de routage de SRV-RTR01 dans `C:\Admin\rras-config.txt`, dans un format
+      rejouable avec `netsh -f`.
+    hint: netsh routing dump > C:\Admin\rras-config.txt
+    cours: |
+      ```powershell
+      netsh routing dump | Out-File C:\Admin\rras-config.txt -Encoding ascii
+      netsh -f C:\Admin\rras-config.txt        # pour restaurer sur un serveur réinstallé
+      ```
+
+      `dump` produit la liste des commandes `netsh` qui recréent la configuration : interfaces, NAT,
+      redirections, filtres. C'est la sauvegarde la plus simple d'un routeur RRAS, à versionner avec la
+      documentation réseau. La console `rrasmgmt.msc` n'a pas d'export lisible ; la configuration vit dans le
+      registre (`HKLM\SYSTEM\CurrentControlSet\Services\RemoteAccess`). Les routes statiques ajoutées par
+      `New-NetRoute` sont dans la pile TCP/IP, pas dans RRAS : documente-les à part
+      (`Get-NetRoute -PolicyStore PersistentStore`).
+    docs:
+      - title: Contextes netsh
+        url: https://learn.microsoft.com/fr-fr/windows-server/networking/technologies/netsh/netsh-contexts
+    checks:
+      - desc: C:\Admin\rras-config.txt contient la configuration NAT et la redirection
+        run: |
+          $t = Get-Content C:\Admin\rras-config.txt -Raw -ErrorAction SilentlyContinue
+          $t -match 'routing ip nat' -and $t -match 'portmapping'
+    solution: |
+      netsh routing dump | Out-File C:\Admin\rras-config.txt -Encoding ascii

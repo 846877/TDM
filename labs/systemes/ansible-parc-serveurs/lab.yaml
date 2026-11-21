@@ -1,0 +1,382 @@
+title: Automatiser un parc de serveurs avec Ansible
+level: expert
+order: 8
+tags: [ansible, automatisation, playbook, idempotence, role, vault, ssh]
+summary: Inventaire et ansible.cfg, commandes ad hoc, playbook de socle (compte d'exploitation, sudoers validé), idempotence, variables de groupe et modèles Jinja2, handlers, rôles et secrets chiffrés avec Ansible Vault.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Le parc d'*Ateliers Durand* grandit et les réglages faits à la main divergent d'un serveur
+  à l'autre. Tu vas décrire l'état voulu des serveurs avec **Ansible**, depuis le poste d'administration,
+  pour que la configuration soit reproductible, relue et rejouable sans risque.
+
+  | Machine | Adresse | Rôle |
+  |---|---|---|
+  | `admin` | 10.178.0.5 | ton poste (`ansible-core` installé) — terminal du lab |
+  | `srv1`, `srv2` | 10.178.0.11, 10.178.0.12 | serveurs **web** |
+  | `srv3` | 10.178.0.13 | serveur de **base de données** |
+
+  - `ssh srv1`, `ssh srv2`, `ssh srv3` : root par clé (c'est aussi ce qu'utilisera Ansible).
+  - Les serveurs n'ont pas systemd et pas d'accès Internet : Python 3 est déjà installé, c'est tout ce
+    qu'Ansible demande côté serveur.
+  - Travaille dans le dossier **`/root/parc`** (un ancien playbook s'y trouve déjà).
+
+  Réponses à écrire dans `/root/reponses.txt` d'admin, au format `cle=valeur`.
+cours: |
+  ## Pourquoi automatiser
+
+  Configurer trois serveurs à la main, c'est trois occasions d'oublier une ligne. À trente serveurs, plus
+  personne ne sait exactement ce qui tourne où. Les outils de **gestion de configuration** (Ansible,
+  Puppet, Salt, Chef) inversent la logique : on **décrit l'état voulu** dans des fichiers texte, versionnés
+  avec Git et relus comme du code, et l'outil fait converger les machines vers cet état.
+
+  Ansible a deux atouts : il est **sans agent** (il se connecte en SSH et exécute de petits programmes
+  Python sur la cible, puis les supprime) et ses fichiers sont en **YAML**, lisibles par un
+  administrateur qui ne développe pas.
+
+  ## Les pièces du puzzle
+
+  ```
+  /root/parc/
+  ├── ansible.cfg          réglages (inventaire par défaut, fichier du mot de passe vault…)
+  ├── inventaire.ini       QUELLES machines, rangées en groupes
+  ├── group_vars/          variables par groupe (web.yml, bdd.yml, all.yml)
+  ├── templates/motd.j2    modèles Jinja2
+  ├── socle.yml            playbook : QUOI faire, sur quels groupes
+  ├── site.yml             playbook principal qui applique les rôles
+  └── roles/socle/         rôle réutilisable (tasks/, handlers/, defaults/, templates/…)
+  ```
+
+  - L'**inventaire** liste les hôtes et les groupes. Un groupe peut contenir d'autres groupes
+    (`[parc:children]`). Le groupe `all` existe toujours.
+  - Un **module** est une action unitaire : `ping`, `copy`, `file`, `user`, `lineinfile`, `template`,
+    `service`… On l'appelle soit en **ad hoc** (`ansible web -m file -a "path=/srv state=directory"`),
+    soit dans une **tâche** de playbook.
+  - Un **playbook** est une liste de *plays* ; chaque play vise des hôtes (`hosts: web`) et enchaîne des
+    tâches dans l'ordre.
+
+  ```yaml
+  - name: Socle commun
+    hosts: parc
+    tasks:
+      - name: Compte d'exploitation
+        ansible.builtin.user:
+          name: exploit
+          uid: 2000
+          shell: /bin/bash
+  ```
+
+  ## Idempotence : la propriété essentielle
+
+  Un module Ansible vérifie d'abord l'état présent et **n'agit que s'il faut** : il répond `ok` (rien à
+  faire) ou `changed` (modification appliquée). Rejouer un playbook correct doit donc donner
+  **`changed=0`** : c'est ce qui permet de le relancer chaque nuit pour corriger les dérives sans rien
+  casser. Les modules `shell` et `command` ne savent pas si leur commande a déjà été faite : ils sont
+  toujours `changed` et souvent dangereux à rejouer (un `echo … >>` ajoute une ligne à chaque passage).
+  Préfère toujours le module dédié (`lineinfile`, `user`, `file`…) ; à défaut, utilise `creates:` ou
+  `changed_when:`.
+
+  Le récapitulatif `PLAY RECAP` résume chaque hôte : `ok`, `changed`, `unreachable`, `failed`. Avant
+  d'appliquer, `--check --diff` montre ce qui **serait** modifié.
+
+  ## Variables, modèles et faits
+
+  Les variables viennent de plusieurs endroits : `group_vars/<groupe>.yml`, `host_vars/<hôte>.yml`,
+  `vars:` dans le playbook, `defaults/main.yml` d'un rôle (priorité la plus faible). Ansible collecte aussi
+  des **faits** sur chaque machine (`ansible srv1 -m setup`) : `ansible_hostname`, `ansible_distribution`…
+  Un **modèle Jinja2** (`template`) produit un fichier différent par hôte : `{{ inventory_hostname }}`,
+  `{{ role_serveur }}`, des boucles `{% for %}`.
+
+  ## Handlers et validation
+
+  Redémarrer un service à chaque exécution coupe les utilisateurs pour rien. Un **handler** n'est exécuté
+  qu'à la fin du play, et **seulement si une tâche qui le notifie (`notify:`) a été `changed`**. Pour les
+  fichiers critiques (sudoers, sshd_config), l'option **`validate:`** fait tester le fichier temporaire
+  avant de le mettre en place (`visudo -cf %s`, `sshd -t -f %s`) : une erreur de syntaxe n'enferme plus
+  dehors.
+
+  ## Rôles et secrets
+
+  Un **rôle** range tâches, handlers, modèles et valeurs par défaut dans une arborescence standard
+  (`roles/socle/tasks/main.yml`…) pour les réutiliser d'un projet à l'autre : `roles: [socle]` dans le
+  playbook suffit. Les **secrets** (mots de passe de base, clés d'API) ne doivent jamais être en clair dans
+  le dépôt Git : **Ansible Vault** chiffre un fichier de variables en AES-256 (`ansible-vault create`,
+  `encrypt`, `view`, `edit`). Le mot de passe vault reste hors du dépôt, dans un fichier lisible par root
+  seul, référencé par `vault_password_file`. Pense aussi à `no_log: true` sur les tâches qui manipulent un
+  secret, pour qu'il n'apparaisse pas dans la sortie.
+docs:
+  - title: Documentation Ansible - Introduction aux inventaires
+    url: https://docs.ansible.com/ansible/latest/inventory_guide/intro_inventory.html
+  - title: Documentation Ansible - Utiliser les playbooks
+    url: https://docs.ansible.com/ansible/latest/playbook_guide/index.html
+  - title: Documentation Ansible - Ansible Vault
+    url: https://docs.ansible.com/ansible/latest/vault_guide/index.html
+  - title: sudoers(5) - syntaxe de sudo (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/sudoers.5.html
+exercises:
+  - id: ans-inventaire
+    title: Inventaire et ansible.cfg
+    cours: |
+      L'inventaire au format INI range les hôtes en groupes entre crochets ; `[parc:children]` déclare un
+      groupe composé d'autres groupes. Ansible cherche sa configuration dans `ANSIBLE_CONFIG`, puis
+      **`./ansible.cfg`** (dossier courant), puis `~/.ansible.cfg`, puis `/etc/ansible/ansible.cfg`. Un
+      `ansible.cfg` dans le dossier du projet évite de retaper `-i inventaire.ini` à chaque commande.
+
+      ```ini
+      [defaults]
+      inventory = inventaire.ini
+      interpreter_python = auto_silent
+      ```
+
+      `ansible-inventory --graph` affiche l'arbre des groupes, `ansible web --list-hosts` les machines d'un
+      groupe, et le module **`ping`** vérifie toute la chaîne : connexion SSH, élévation éventuelle et
+      présence de Python sur la cible (ce n'est pas un ping ICMP).
+    description: |
+      Dans `/root/parc`, crée `inventaire.ini` avec les groupes `web` (`srv1`, `srv2`) et `bdd` (`srv3`),
+      et un groupe `parc` qui contient `web` et `bdd`. Crée `ansible.cfg` pour que cet inventaire soit
+      utilisé par défaut, puis vérifie que `ansible parc -m ping` répond pour les trois serveurs.
+    hint: |
+      printf '[web]\nsrv1\nsrv2\n\n[bdd]\nsrv3\n\n[parc:children]\nweb\nbdd\n' > inventaire.ini ; printf '[defaults]\ninventory = inventaire.ini\ninterpreter_python = auto_silent\n' > ansible.cfg ; ansible parc -m ping
+    checks:
+      - desc: Les trois serveurs répondent au module ping, sans option -i
+        run: |
+          cd /root/parc && test "$(ansible parc -m ping -o 2>/dev/null | grep -c SUCCESS)" -eq 3
+      - desc: Le groupe web contient srv1 et srv2, le groupe bdd srv3
+        run: |
+          cd /root/parc && test "$(ansible web --list-hosts 2>/dev/null | tail -n +2 | tr -d ' ' | sort | tr '\n' ' ')" = "srv1 srv2 " && test "$(ansible bdd --list-hosts 2>/dev/null | tail -n +2 | tr -d ' ')" = "srv3"
+
+  - id: ans-adhoc
+    title: Commandes ad hoc
+    cours: |
+      Une commande **ad hoc** lance un seul module sur un groupe, sans écrire de playbook : idéal pour une
+      question ponctuelle ou une action urgente.
+
+      ```
+      ansible web -m command -a "uptime"
+      ansible parc -m file -a "path=/srv/x state=directory mode=0750"
+      ansible srv1 -m setup -a "filter=ansible_distribution*"
+      ```
+
+      `-m` choisit le module, `-a` ses arguments, `-o` affiche une ligne par hôte. Le module `command`
+      exécute un programme sans shell (pas de `|` ni `>`), `shell` passe par `/bin/sh`. Pour une
+      **modification**, préfère un module qui décrit l'état (`file`, `copy`, `user`) : rejoué, il ne fait
+      rien de plus, alors qu'une commande shell recommencerait.
+    description: |
+      En **commandes ad hoc** :
+      1. relève la version de l'application métier installée sur les serveurs web (fichier
+         `/etc/tdm/version-appli`) et note-la : `version_srv1=…` et `version_srv2=…` ;
+      2. crée sur les trois serveurs le dossier `/srv/depot`, propriétaire root, droits `750`.
+    hint: |
+      ansible web -m command -a "cat /etc/tdm/version-appli" -o ; ansible parc -m file -a "path=/srv/depot state=directory owner=root group=root mode=0750"
+    checks:
+      - desc: Versions de srv1 et srv2 notées
+        run: |
+          grep -qx "version_srv1=$(ssh srv1 cat /etc/tdm/version-appli)" /root/reponses.txt && grep -qx "version_srv2=$(ssh srv2 cat /etc/tdm/version-appli)" /root/reponses.txt
+      - desc: /srv/depot en 750 sur les trois serveurs
+        run: |
+          for s in srv1 srv2 srv3; do test "$(ssh $s stat -c %a:%U /srv/depot 2>/dev/null)" = "750:root" || exit 1; done
+
+  - id: ans-socle
+    title: Playbook de socle et sudoers validé
+    cours: |
+      Un playbook décrit l'état voulu. Le module **`user`** crée ou ajuste un compte (`uid`, `shell`,
+      `groups`) ; **`copy`** dépose un fichier, avec `content:` pour un contenu court, et règle
+      `owner`, `group` et `mode` (toujours entre guillemets : `"0440"`).
+
+      Un fichier de `/etc/sudoers.d/` mal écrit peut rendre sudo inutilisable sur tout le serveur. L'option
+      **`validate: visudo -cf %s`** fait vérifier le fichier temporaire **avant** de le mettre en place : en
+      cas d'erreur, la tâche échoue et le fichier en place n'est pas touché. Les fichiers de sudoers.d
+      doivent être en `0440` et ne pas contenir de point dans leur nom (sudo ignore les noms avec `.`).
+
+      Lance le playbook avec `ansible-playbook socle.yml` ; ajoute `--check --diff` pour simuler d'abord.
+    description: |
+      Écris `/root/parc/socle.yml` qui, sur tout le groupe `parc` :
+      - crée le compte `exploit` (uid `2000`, shell `/bin/bash`) ;
+      - dépose `/etc/sudoers.d/exploit` (`exploit ALL=(ALL) NOPASSWD: ALL`), root:root, `0440`, **validé
+        par visudo** avant installation.
+
+      Exécute-le.
+    hint: |
+      Tâches : ansible.builtin.user (name, uid, shell) puis ansible.builtin.copy avec content, dest, owner, group, mode "0440" et validate: visudo -cf %s
+    checks:
+      - desc: exploit a l'uid 2000 et le shell bash sur les trois serveurs
+        run: |
+          for s in srv1 srv2 srv3; do test "$(ssh $s getent passwd exploit | cut -d: -f3,7)" = "2000:/bin/bash" || exit 1; done
+      - desc: /etc/sudoers.d/exploit valide, en 440, donnant les droits root
+        run: |
+          for s in srv1 srv2 srv3; do ssh $s "test \"\$(stat -c %a:%U /etc/sudoers.d/exploit)\" = 440:root && visudo -cf /etc/sudoers.d/exploit >/dev/null && sudo -l -U exploit | grep -q NOPASSWD" || exit 1; done
+
+  - id: ans-idempotence
+    title: Rendre un playbook idempotent
+    cours: |
+      Un playbook est **idempotent** quand le rejouer ne change plus rien : le récapitulatif affiche
+      `changed=0`. C'est la condition pour l'exécuter régulièrement (chaque nuit, ou à chaque commit) afin de
+      corriger les dérives.
+
+      `shell: echo … >> fichier` ajoute une ligne à **chaque** exécution. Le module **`lineinfile`** garantit
+      au contraire qu'une ligne est présente (ou absente avec `state: absent`) : `path`, `line`, et
+      éventuellement `regexp` pour remplacer une ligne existante. Pour nettoyer des doublons déjà créés,
+      une commande ad hoc ponctuelle suffit (par exemple `lineinfile` avec `state: absent` puis le
+      playbook corrigé, ou `sed`).
+
+      Vérifie toujours en lançant deux fois de suite : la seconde exécution doit être entièrement `ok`.
+    description: |
+      L'ancien playbook `/root/parc/maj-annuaire.yml` ajoute une ligne en double à chaque exécution.
+      Réécris-le avec le module adapté pour qu'il soit **idempotent** (deuxième exécution : `changed=0` sur
+      les trois serveurs) et que `/etc/parc/hosts-parc` contienne **une seule fois** la ligne
+      `10.178.0.5 admin.parc.lan` (supprime les doublons si tu as lancé l'ancienne version).
+    hint: |
+      Remplace la tâche shell par ansible.builtin.lineinfile avec path: /etc/parc/hosts-parc et line: "10.178.0.5 admin.parc.lan"
+    checks:
+      - desc: Le playbook n'utilise plus de redirection shell
+        run: |
+          cd /root/parc && test -f maj-annuaire.yml && ! grep -q '>>' maj-annuaire.yml
+      - desc: Deuxième exécution sans changement sur les trois serveurs
+        run: |
+          cd /root/parc && ansible-playbook maj-annuaire.yml >/dev/null 2>&1 && test "$(ansible-playbook maj-annuaire.yml 2>/dev/null | grep -c 'changed=0 .*failed=0')" -eq 3
+      - desc: La ligne est présente une seule fois partout
+        run: |
+          for s in srv1 srv2 srv3; do test "$(ssh $s grep -c 'admin.parc.lan' /etc/parc/hosts-parc)" = 1 || exit 1; done
+
+  - id: ans-modele-motd
+    title: Variables de groupe et modèle Jinja2
+    cours: |
+      Les fichiers **`group_vars/<groupe>.yml`** (à côté de l'inventaire ou du playbook) définissent des
+      variables pour tous les hôtes d'un groupe ; `group_vars/all.yml` vaut pour tout le monde. Une valeur
+      plus précise l'emporte (groupe enfant sur parent, `host_vars` sur `group_vars`).
+
+      Le module **`template`** lit un modèle **Jinja2** côté admin et produit un fichier propre à chaque
+      hôte : `{{ variable }}` insère une valeur, `{% if %}` et `{% for %}` structurent. La variable
+      magique `inventory_hostname` donne le nom de l'hôte dans l'inventaire.
+
+      ```
+      Serveur {{ inventory_hostname }} ({{ role_serveur }}) - {{ societe }}
+      ```
+
+      `ansible-inventory --host srv1` montre les variables vues par un hôte.
+    description: |
+      Crée les variables `societe: Ateliers Durand` (tous les serveurs), `role_serveur: web` (groupe `web`)
+      et `role_serveur: bdd` (groupe `bdd`) dans `group_vars/`, un modèle `templates/motd.j2` qui les
+      utilise avec le nom de l'hôte, et un playbook `motd.yml` qui génère `/etc/motd` sur tout le parc.
+      Par exemple sur srv3 : `Serveur srv3 (bdd) - Ateliers Durand`.
+    hint: |
+      mkdir -p group_vars templates ; echo 'societe: Ateliers Durand' > group_vars/all.yml ; echo 'role_serveur: web' > group_vars/web.yml ; echo 'role_serveur: bdd' > group_vars/bdd.yml ; puis une tâche ansible.builtin.template (src: templates/motd.j2, dest: /etc/motd)
+    checks:
+      - desc: Le modèle utilise les variables (pas de valeur en dur)
+        run: |
+          cd /root/parc && grep -q '{{ *role_serveur *}}' templates/motd.j2 && grep -q '{{ *societe *}}' templates/motd.j2 && grep -rq 'role_serveur' group_vars/
+      - desc: /etc/motd propre à chaque serveur
+        run: |
+          ssh srv1 "grep -q srv1 /etc/motd && grep -qw web /etc/motd && grep -q 'Ateliers Durand' /etc/motd" && ssh srv2 "grep -q srv2 /etc/motd && grep -qw web /etc/motd" && ssh srv3 "grep -q srv3 /etc/motd && grep -qw bdd /etc/motd && ! grep -qw web /etc/motd"
+
+  - id: ans-handler-ssh
+    title: Durcir SSH avec un handler
+    cours: |
+      Modifier `sshd_config` ne sert à rien tant que sshd n'a pas relu sa configuration, mais le recharger à
+      chaque exécution est inutile. Un **handler** est une tâche spéciale, déclarée sous `handlers:`, qui ne
+      s'exécute qu'**à la fin du play** et **seulement si** une tâche qui le notifie (`notify: nom du
+      handler`) a été `changed`.
+
+      `lineinfile` avec `regexp: '^#?PasswordAuthentication'` remplace la ligne, commentée ou non. Ajoute
+      **`validate: sshd -t -f %s`** : une faute de frappe dans sshd_config peut sinon empêcher toute
+      connexion au prochain rechargement. Sans systemd, le handler peut utiliser
+      `ansible.builtin.service` (name: `ssh`, state: `reloaded`) ou `command: service ssh reload`.
+
+      Pour vérifier depuis un client : `ssh -o PreferredAuthentications=none srv1` affiche les méthodes
+      acceptées par le serveur (`Permission denied (publickey,password)`).
+    description: |
+      Écris `/root/parc/ssh.yml` qui, sur tout le parc, règle dans `/etc/ssh/sshd_config`
+      `PasswordAuthentication no` et `PermitRootLogin prohibit-password` (fichier **validé** par
+      `sshd -t` avant installation) et **recharge sshd par un handler**. Le serveur ne doit plus proposer
+      l'authentification par mot de passe.
+    hint: |
+      Deux tâches lineinfile (regexp '^#?PasswordAuthentication', '^#?PermitRootLogin', validate: sshd -t -f %s, notify: recharger sshd) et un handler ansible.builtin.service name=ssh state=reloaded
+    checks:
+      - desc: Le playbook utilise validate et un handler
+        run: |
+          cd /root/parc && grep -q 'handlers:' ssh.yml && grep -q 'notify:' ssh.yml && grep -q 'sshd -t' ssh.yml
+      - desc: Configuration correcte sur les trois serveurs
+        run: |
+          for s in srv1 srv2 srv3; do ssh $s "sshd -T | grep -qx 'passwordauthentication no' && sshd -T | grep -qx 'permitrootlogin without-password'" || exit 1; done
+      - desc: sshd rechargé (le mot de passe n'est plus proposé)
+        run: |
+          for s in srv1 srv2 srv3; do ssh -o PreferredAuthentications=none -o BatchMode=yes $s true 2>&1 | grep -q 'Permission denied (publickey)' || exit 1; done
+
+  - id: ans-role
+    title: Ranger le socle dans un rôle
+    cours: |
+      Un **rôle** est une arborescence standard qu'Ansible sait charger :
+
+      ```
+      roles/socle/
+      ├── tasks/main.yml       tâches (liste YAML, sans "hosts:")
+      ├── handlers/main.yml    handlers
+      ├── defaults/main.yml    valeurs par défaut des variables (faciles à surcharger)
+      ├── templates/  files/   modèles et fichiers à copier
+      ```
+
+      Le playbook principal devient très court : `hosts: parc` puis `roles: [socle]`. On met dans
+      `defaults/main.yml` tout ce qui peut varier d'un site à l'autre (uid, nom du compte), pour réutiliser
+      le rôle ailleurs. Dans `copy`, `src:` est cherché dans `files/` du rôle, ou peut être un chemin absolu
+      sur le poste d'administration (par exemple une clé publique).
+    description: |
+      Transforme le socle en rôle `roles/socle` : variable `exploit_uid` (valeur `2000`) dans
+      `defaults/main.yml`, tâches dans `tasks/main.yml`. Le rôle doit en plus installer la clé publique
+      d'admin (`/root/.ssh/id_ed25519.pub`) dans `/home/exploit/.ssh/authorized_keys` (dossier `700`,
+      fichier `600`, propriétaire exploit). Écris `site.yml` qui applique le rôle au parc et exécute-le :
+      `ssh exploit@srv1` doit fonctionner, puis `sudo` sans mot de passe.
+    hint: |
+      mkdir -p roles/socle/tasks roles/socle/defaults ; echo 'exploit_uid: 2000' > roles/socle/defaults/main.yml ; tâches user (uid "{{ exploit_uid }}"), copy sudoers, file /home/exploit/.ssh (state directory, mode "0700"), copy src=/root/.ssh/id_ed25519.pub
+    checks:
+      - desc: Rôle socle avec la variable exploit_uid, appliqué par site.yml
+        run: |
+          cd /root/parc && grep -q 'exploit_uid' roles/socle/defaults/main.yml && grep -q 'exploit_uid' roles/socle/tasks/main.yml && grep -q 'socle' site.yml
+      - desc: site.yml s'exécute sans erreur sur les trois serveurs
+        run: |
+          cd /root/parc && test "$(ansible-playbook site.yml 2>/dev/null | grep -c 'unreachable=0 .*failed=0')" -eq 3
+      - desc: Connexion exploit par clé et sudo sans mot de passe
+        run: |
+          for s in srv1 srv2 srv3; do test "$(ssh exploit@$s sudo -n id -u 2>/dev/null)" = 0 || exit 1; done && ssh srv1 "test \"\$(stat -c %a:%U /home/exploit/.ssh/authorized_keys)\" = 600:exploit"
+
+  - id: ans-vault
+    title: Protéger un secret avec Ansible Vault
+    cours: |
+      **Ansible Vault** chiffre un fichier de variables (AES-256) pour qu'il puisse vivre dans le dépôt Git
+      sans exposer le secret :
+
+      ```
+      ansible-vault create secrets.yml      # crée et ouvre l'éditeur
+      ansible-vault encrypt secrets.yml     # chiffre un fichier existant
+      ansible-vault view secrets.yml        # affiche en clair
+      ```
+
+      Un fichier chiffré commence par `$ANSIBLE_VAULT;1.1;AES256`. Le playbook le charge normalement
+      (`vars_files: [secrets.yml]`) et Ansible déchiffre en mémoire. Le mot de passe vault se range dans un
+      fichier **hors du dépôt**, lisible par root seul (`600`), déclaré par `vault_password_file` dans
+      `ansible.cfg` : plus besoin de `--ask-vault-pass`. Ajoute `no_log: true` sur la tâche pour que le
+      secret n'apparaisse pas dans la sortie, et dépose le fichier final en `0600`.
+    description: |
+      Range le mot de passe de base de données `bdd_mdp_admin` (valeur `S3cret-Bdd!`) dans
+      `/root/parc/secrets.yml` **chiffré** avec Ansible Vault. Le mot de passe vault (au choix) est dans
+      `/root/.vault_pass` (droits `600`), déclaré dans `ansible.cfg`. Écris `bdd.yml` qui dépose sur le
+      groupe `bdd` le fichier `/root/.my.cnf` (`600`) :
+
+      ```
+      [client]
+      user=admin
+      password=S3cret-Bdd!
+      ```
+    hint: |
+      echo 'MonMotDePasseVault' > /root/.vault_pass ; chmod 600 /root/.vault_pass ; echo 'vault_password_file = /root/.vault_pass' >> ansible.cfg ; echo 'bdd_mdp_admin: "S3cret-Bdd!"' > secrets.yml ; ansible-vault encrypt secrets.yml
+    checks:
+      - desc: secrets.yml chiffré, lisible avec le mot de passe déclaré dans ansible.cfg
+        run: |
+          cd /root/parc && head -1 secrets.yml | grep -q '^\$ANSIBLE_VAULT' && ! grep -q 'S3cret' secrets.yml && grep -q 'vault_password_file' ansible.cfg && ansible-vault view secrets.yml 2>/dev/null | grep -q 'bdd_mdp_admin'
+      - desc: /root/.vault_pass en 600
+        run: |
+          test "$(stat -c %a /root/.vault_pass 2>/dev/null)" = 600
+      - desc: /root/.my.cnf en 600 sur srv3 avec le bon mot de passe
+        run: |
+          ssh srv3 "test \"\$(stat -c %a /root/.my.cnf)\" = 600 && grep -qx 'password=S3cret-Bdd!' /root/.my.cnf && grep -qx 'user=admin' /root/.my.cnf"

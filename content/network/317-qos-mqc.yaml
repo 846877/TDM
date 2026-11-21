@@ -1,0 +1,140 @@
+title: QoS MQC sur le lien WAN
+level: expert
+order: 17
+device: router
+hostname: R-WAN
+tags: [qos, mqc, dscp, llq, cbwfq]
+summary: Classer et prioriser voix, visio et signalisation sur un lien WAN saturé.
+description: |
+  Le lien WAN de `G0/1` est saturé aux heures de pointe : la voix hache et la visio se fige. Le
+  marquage DSCP est déjà fait par les téléphones et les codecs. Construis une politique MQC :
+
+  1. classes (`class-map match-any`) :
+     - `VOIX` : `match dscp ef` ;
+     - `VISIO` : `match dscp af41` ;
+     - `SIGNALISATION` : `match dscp cs3` ;
+  2. politique `WAN-SORTIE` :
+     - `VOIX` : file prioritaire, `priority percent 20` ;
+     - `VISIO` : `bandwidth percent 30` ;
+     - `SIGNALISATION` : `bandwidth percent 5` ;
+     - `class-default` : `fair-queue` ;
+  3. applique-la en **sortie** de `G0/1`.
+
+  Contrôle avec `show policy-map interface g0/1`.
+initial: |
+  interface g0/0
+  ip address 10.1.0.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 203.0.113.2 255.255.255.252
+  bandwidth 20000
+  no shutdown
+checks:
+  - desc: Classes VOIX (ef), VISIO (af41) et SIGNALISATION (cs3)
+    expr: cmap("VOIX").get("matches") == ["dscp ef"] and cmap("VISIO").get("matches") == ["dscp af41"] and cmap("SIGNALISATION").get("matches") == ["dscp cs3"]
+  - desc: VOIX en file prioritaire 20 %
+    expr: pmap("WAN-SORTIE").get("VOIX") == ["priority percent 20"]
+  - desc: VISIO 30 % et SIGNALISATION 5 % garantis
+    expr: pmap("WAN-SORTIE").get("VISIO") == ["bandwidth percent 30"] and pmap("WAN-SORTIE").get("SIGNALISATION") == ["bandwidth percent 5"]
+  - desc: class-default en fair-queue
+    expr: pmap("WAN-SORTIE").get("class-default") == ["fair-queue"]
+  - desc: Politique appliquée en sortie de G0/1
+    expr: 'intf("g0/1").service_policies == {"output": "WAN-SORTIE"}'
+solution: |
+  configure terminal
+  class-map match-any VOIX
+  match dscp ef
+  class-map match-any VISIO
+  match dscp af41
+  class-map match-any SIGNALISATION
+  match dscp cs3
+  exit
+  policy-map WAN-SORTIE
+  class VOIX
+  priority percent 20
+  class VISIO
+  bandwidth percent 30
+  class SIGNALISATION
+  bandwidth percent 5
+  class class-default
+  fair-queue
+  exit
+  exit
+  interface g0/1
+  service-policy output WAN-SORTIE
+  end
+cours: |
+  ## Pourquoi la QoS ?
+
+  Tant qu'un lien n'est pas saturé, tous les paquets passent. Quand il l'est, des files d'attente
+  se forment : la latence et la gigue augmentent, des paquets sont jetés. Un transfert de fichier
+  le supporte (TCP renvoie) ; la **voix** non : au-delà de ~150 ms de délai, ~30 ms de gigue ou
+  1 % de pertes, la conversation devient pénible. La QoS décide **qui passe en premier** et
+  **qui est jeté**.
+
+  ### Classer et marquer
+
+  Le champ **DSCP** (6 bits de l'en-tête IP) porte la classe du paquet. Valeurs usuelles :
+
+  | Trafic            | DSCP   | Valeur |
+  |-------------------|--------|--------|
+  | voix              | EF     | 46     |
+  | visio interactive | AF41   | 34     |
+  | signalisation     | CS3    | 24     |
+  | données critiques | AF21   | 18     |
+  | best effort       | 0 (BE) | 0      |
+
+  Le marquage se fait au plus près de la source (téléphone, switch d'accès) ; les routeurs
+  suivants **font confiance** au marquage et appliquent la politique.
+
+  ### MQC en trois étapes
+
+  ```
+  R1(config)# class-map match-any TEMPS-REEL
+  R1(config-cmap)# match dscp ef
+  R1(config)# class-map match-any METIER
+  R1(config-cmap)# match dscp af21
+  R1(config)# policy-map SORTIE-MPLS
+  R1(config-pmap)# class TEMPS-REEL
+  R1(config-pmap-c)# priority percent 15
+  R1(config-pmap)# class METIER
+  R1(config-pmap-c)# bandwidth percent 40
+  R1(config-pmap)# class class-default
+  R1(config-pmap-c)# fair-queue
+  R1(config)# interface s0/1/0
+  R1(config-if)# service-policy output SORTIE-MPLS
+  R1# show policy-map interface s0/1/0
+  ```
+
+  1. `class-map` : **quoi** (critères : DSCP, ACL, protocole...) ; `match-any` = un critère
+     suffit, `match-all` = tous ;
+  2. `policy-map` : **que faire** de chaque classe ;
+  3. `service-policy` : **où** (interface, sens).
+
+  ### LLQ et CBWFQ
+
+  - `priority` crée une file **prioritaire stricte** (LLQ) : servie avant toutes les autres,
+    mais **limitée** à son débit en cas de congestion pour ne pas affamer le reste ;
+  - `bandwidth` **garantit** un minimum en cas de congestion (CBWFQ) ; la classe peut utiliser
+    plus si le lien est libre ;
+  - `class-default` reçoit tout ce qui n'a pas été classé.
+
+  Les pourcentages se calculent sur la bande passante de l'interface (`bandwidth`) : sur un
+  accès Internet dont le débit réel est inférieur au port, on ajoute un **shaping** parent
+  (`shape average`) pour créer la congestion là où on la contrôle.
+
+  ### Pièges fréquents
+
+  - Mettre la visio en `priority` avec la voix : la file prioritaire grossit et la voix souffre.
+  - Dépasser 100 % de bande réservée (IOS refuse au-delà de 75 % par défaut sur certains modèles).
+  - Appliquer la politique en **entrée** : les files d'attente n'existent qu'en sortie.
+
+  ### Pour le CCNA / CCNP ENCOR
+
+  Le CCNA décrit classification, marquage, files et policing ; ENCOR attend la lecture et la
+  configuration d'une politique MQC.
+docs:
+  - title: RFC 2474 — Definition of the Differentiated Services Field
+    url: https://www.rfc-editor.org/rfc/rfc2474
+  - title: Wikipédia — Qualité de service
+    url: https://fr.wikipedia.org/wiki/Qualit%C3%A9_de_service

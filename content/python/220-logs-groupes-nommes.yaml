@@ -1,0 +1,173 @@
+title: Rapport de logs avec groupes nommés
+level: avance
+order: 20
+tags: [regex, re, stdin, collections]
+summary: Lire des logs sur l'entrée standard et produire un rapport.
+mode: stdio
+description: |
+  Ton programme lit des lignes de log sur l'**entrée standard** (jusqu'à la fin du flux) au format :
+
+  ```
+  2026-10-18 10:00:01 [ERROR] auth: Mot de passe invalide
+  ```
+
+  c'est-à-dire : date `AAAA-MM-JJ`, heure `HH:MM:SS`, niveau entre crochets (`DEBUG`, `INFO`,
+  `WARNING`, `ERROR` ou `CRITICAL`), nom de module (lettres, chiffres, `_` et `.`), deux-points,
+  puis le message. Toute ligne qui ne respecte pas ce format est **ignorée**.
+
+  Affiche ensuite :
+
+  ```
+  lignes valides: 5
+  ERROR: 2
+  INFO: 2
+  WARNING: 1
+  module le plus bavard: auth (3)
+  premiere erreur: 2026-10-18 10:00:04 auth - Mot de passe invalide
+  ```
+
+  - les niveaux présents, par ordre **alphabétique**, avec leur nombre ;
+  - le module qui a écrit le plus de lignes (en cas d'égalité, le premier par ordre alphabétique) ;
+  - la première ligne de niveau `ERROR` ou `CRITICAL` (date, heure, module, message), ou
+    `premiere erreur: aucune`.
+
+  S'il n'y a aucune ligne valide, affiche seulement `lignes valides: 0`.
+
+  Utilise des **groupes nommés** : `(?P<niveau>...)` puis `m["niveau"]` ou `m.groupdict()`.
+  Pour tout lire : `sys.stdin.read().splitlines()`.
+starter: |
+  import re
+  import sys
+  from collections import Counter
+
+  MOTIF = re.compile(r"")
+
+  for ligne in sys.stdin.read().splitlines():
+      pass
+cases:
+  - name: Exemple de l'énoncé
+    input: |
+      2026-10-18 10:00:01 [INFO] auth: Connexion de alice
+      2026-10-18 10:00:02 [INFO] web.api: GET /status
+      ligne de bruit sans format
+      2026-10-18 10:00:03 [WARNING] auth: Trop de tentatives
+      2026-10-18 10:00:04 [ERROR] auth: Mot de passe invalide
+      2026-10-18 10:00:05 [ERROR] db: Connexion perdue
+    output: |
+      lignes valides: 5
+      ERROR: 2
+      INFO: 2
+      WARNING: 1
+      module le plus bavard: auth (3)
+      premiere erreur: 2026-10-18 10:00:04 auth - Mot de passe invalide
+  - name: Aucune erreur, égalité entre modules
+    input: |
+      2026-01-02 08:00:00 [DEBUG] zeta: démarrage
+      2026-01-02 08:00:01 [DEBUG] alpha: démarrage
+      2026-01-02 08:00:02 [INFO] zeta: prêt
+      2026-01-02 08:00:03 [INFO] alpha: prêt
+    output: |
+      lignes valides: 4
+      DEBUG: 2
+      INFO: 2
+      module le plus bavard: alpha (2)
+      premiere erreur: aucune
+  - name: Lignes presque valides
+    input: |
+      2026-10-18 10:00:01 [FATAL] auth: niveau inconnu
+      2026-10-18 10:00 [ERROR] auth: heure incomplète
+      2026-10-18 10:00:01 ERROR auth: sans crochets
+      2026-10-18 10:00:01 [ERROR] auth sans deux-points
+      2026-10-18 10:00:01 [CRITICAL] kernel.mem: Plus de mémoire : arrêt
+    output: |
+      lignes valides: 1
+      CRITICAL: 1
+      module le plus bavard: kernel.mem (1)
+      premiere erreur: 2026-10-18 10:00:01 kernel.mem - Plus de mémoire : arrêt
+  - name: Entrée vide
+    input: ""
+    output: |
+      lignes valides: 0
+solution: |
+  import re
+  import sys
+  from collections import Counter
+
+  MOTIF = re.compile(
+      r"(?P<date>\d{4}-\d{2}-\d{2}) (?P<heure>\d{2}:\d{2}:\d{2}) "
+      r"\[(?P<niveau>DEBUG|INFO|WARNING|ERROR|CRITICAL)\] "
+      r"(?P<module>[\w.]+): (?P<message>.*)"
+  )
+
+  niveaux, modules = Counter(), Counter()
+  premiere = None
+  for ligne in sys.stdin.read().splitlines():
+      m = MOTIF.fullmatch(ligne.strip())
+      if not m:
+          continue
+      niveaux[m["niveau"]] += 1
+      modules[m["module"]] += 1
+      if premiere is None and m["niveau"] in ("ERROR", "CRITICAL"):
+          premiere = f"{m['date']} {m['heure']} {m['module']} - {m['message']}"
+
+  print(f"lignes valides: {sum(niveaux.values())}")
+  if niveaux:
+      for niveau in sorted(niveaux):
+          print(f"{niveau}: {niveaux[niveau]}")
+      module, nombre = min(modules.items(), key=lambda kv: (-kv[1], kv[0]))
+      print(f"module le plus bavard: {module} ({nombre})")
+      print(f"premiere erreur: {premiere or 'aucune'}")
+cours: |
+  ## Groupes nommés
+
+  Dans une regex, `(?P<nom>...)` capture une partie sous un **nom**. On la récupère avec
+  `m["nom"]`, `m.group("nom")` ou `m.groupdict()` :
+
+  ```python
+  import re
+  MOTIF = re.compile(
+      r"(?P<ip>\d{1,3}(?:\.\d{1,3}){3}) - (?P<methode>GET|POST) (?P<chemin>\S+)"
+  )
+  m = MOTIF.fullmatch("10.0.0.5 - GET /index.html")
+  m["ip"], m["chemin"]     # ('10.0.0.5', '/index.html')
+  m.groupdict()            # {'ip': ..., 'methode': ..., 'chemin': ...}
+  ```
+
+  C'est bien plus lisible que `m.group(3)` et résiste mieux aux modifications du motif.
+
+  ## Compiler une fois
+
+  `re.compile(motif)` crée un objet réutilisable : à préférer quand on applique le même
+  motif à des milliers de lignes. Le flag `re.VERBOSE` permet d'écrire le motif sur
+  plusieurs lignes avec des commentaires.
+
+  ## `match`, `search`, `fullmatch`
+
+  - `search` cherche n'importe où ;
+  - `match` ancre au **début** ;
+  - `fullmatch` exige que **toute** la ligne corresponde : idéal pour valider un format et
+    ignorer les lignes mal formées.
+
+  Une alternative `(?:DEBUG|INFO|WARNING)` limite un champ à une liste de valeurs.
+
+  ## Agréger en un passage
+
+  Pour chaque ligne valide, on met à jour plusieurs agrégats : un `Counter` par niveau, un
+  autre par module, et la première erreur (enregistrée seulement si elle n'a pas encore été
+  trouvée). Un seul parcours, mémoire constante.
+
+  ## Départager
+
+  « Le plus fréquent, puis alphabétique » : `min(compteur.items(), key=lambda p: (-p[1],
+  p[0]))` ou un tri avec la même clé. Pense au cas où aucune ligne n'est valide.
+
+  ## Le métier
+
+  Analyser des journaux (syslog, Apache, journald) est un travail quotidien d'admin. Pour les
+  gros volumes on utilise des outils dédiés (ELK, Loki), mais un script Python avec regex et
+  `Counter` reste imbattable pour une analyse rapide.
+docs:
+  - title: Module re — syntaxe (?P<nom>...)
+    url: https://docs.python.org/fr/3/library/re.html#regular-expression-syntax
+  - title: HOWTO — expressions régulières
+    url: https://docs.python.org/fr/3/howto/regex.html

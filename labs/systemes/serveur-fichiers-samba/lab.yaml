@@ -1,0 +1,336 @@
+title: Serveur de fichiers Samba pour postes Windows
+level: intermediaire
+order: 8
+tags: [samba, smb, partages, windows, droits, corbeille]
+summary: Configurer Samba, créer comptes et groupes, partages par service, droits de création, corbeille réseau, dossiers personnels et restriction par réseau.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Les postes Windows d'*Ateliers Durand* enregistrent encore leurs fichiers sur une vieille
+  clé USB partagée. Tu installes un vrai **serveur de fichiers** Linux avec **Samba**, qui parle le
+  protocole SMB des partages Windows (`\\FICHIERS\compta`). Chaque service doit avoir son partage, les
+  procédures doivent être lisibles par tous, et le Wi-Fi des visiteurs ne doit rien voir.
+
+  | Machine | Adresse | Rôle |
+  |---|---|---|
+  | `admin` | 10.171.0.5 (LAN) | ton poste, client SMB (`smbclient`) — terminal du lab |
+  | `srv-fichiers` | 10.171.0.10 (LAN), 10.171.1.10 (invités) | Samba installé, **non configuré ni démarré** |
+  | `invite` | 10.171.1.50 (Wi-Fi invités) | poste d'un visiteur |
+
+  | Compte | Mot de passe | Service |
+  |---|---|---|
+  | `mdupont` | `Compta2026!` | comptabilité (groupe `compta`) |
+  | `jmartin` | `Direction2026!` | direction (groupe `direction`) |
+
+  - `ssh srv-fichiers` (root, par clé) pour administrer le serveur ; `ssh invite` pour tester depuis le
+    réseau invités.
+  - Pas de systemd : démarre Samba avec `smbd -D`, recharge avec `smbcontrol all reload-config`.
+  - Teste depuis admin : `smbclient -L //10.171.0.10 -U 'mdupont%Compta2026!'`,
+    `smbclient //10.171.0.10/compta -U 'mdupont%Compta2026!'`.
+cours: |
+  ## SMB et Samba
+
+  **SMB** (*Server Message Block*, aussi appelé CIFS) est le protocole des partages de fichiers et
+  d'imprimantes Windows : `\\serveur\partage` dans l'explorateur, lecteurs réseau `Z:`. **Samba** est
+  l'implémentation libre de SMB sous Linux : un serveur Linux peut ainsi servir des postes Windows, macOS
+  et Linux, et même devenir contrôleur de domaine Active Directory.
+
+  ```
+   poste Windows                         srv-fichiers (Linux)
+   \\FICHIERS\compta  ── TCP 445 ──▶  smbd ── vérifie le compte (base Samba)
+                                        │      vérifie les droits du partage (smb.conf)
+                                        └──▶  /srv/partages/compta  (droits Linux : propriétaire, groupe, mode)
+  ```
+
+  Deux niveaux de droits s'appliquent **ensemble** : ceux du partage (`smb.conf`) et ceux du système de
+  fichiers Linux. L'accès effectif est le plus restrictif des deux.
+
+  ## smb.conf
+
+  ```ini
+  [global]
+     workgroup = DURAND
+     netbios name = FICHIERS
+     server string = Serveur de fichiers Durand
+     hosts allow = 10.171.0.0/24 127.0.0.1
+
+  [compta]
+     path = /srv/partages/compta
+     valid users = @compta          ← @ = groupe
+     read only = no
+     create mask = 0660
+     directory mask = 2770
+     force group = compta
+     vfs objects = recycle
+  ```
+
+  | Directive          | Rôle                                                       |
+  |--------------------|------------------------------------------------------------|
+  | `valid users`      | qui peut se connecter au partage (comptes, `@groupes`)     |
+  | `read only` / `writable` | lecture seule ou lecture-écriture pour tous les autorisés |
+  | `write list`       | comptes/groupes autorisés à écrire même si `read only = yes` |
+  | `browseable`       | visible ou non dans la liste des partages                  |
+  | `guest ok`         | accès anonyme (à éviter)                                   |
+  | `create mask`, `directory mask` | droits maximum des fichiers et dossiers créés |
+  | `force group`      | groupe propriétaire imposé aux nouveaux fichiers           |
+  | `hosts allow`      | réseaux autorisés à se connecter                           |
+
+  La section spéciale `[homes]` crée automatiquement un partage personnel par utilisateur
+  (`\\FICHIERS\mdupont`), avec `%S` = nom du partage demandé.
+
+  ## Comptes Samba
+
+  Un utilisateur Samba doit exister **côté Linux** (UID, groupes, dossier personnel) **et** dans la base
+  de mots de passe de Samba, car SMB n'utilise pas le format de `/etc/shadow` :
+
+  ```bash
+  useradd -m -s /usr/sbin/nologin -G compta mdupont    # compte Linux sans shell
+  smbpasswd -a mdupont                                 # mot de passe SMB
+  pdbedit -L                                           # liste des comptes Samba
+  ```
+
+  En entreprise, on joint plutôt le serveur à un domaine Active Directory : les comptes et mots de passe
+  viennent alors de l'annuaire.
+
+  ## Mémo
+
+  | Besoin                         | Commande                                         |
+  |--------------------------------|--------------------------------------------------|
+  | Valider smb.conf               | `testparm -s`                                    |
+  | Démarrer / recharger           | `smbd -D` ; `smbcontrol all reload-config`       |
+  | Lister les partages            | `smbclient -L //serveur -U 'compte%motdepasse'`  |
+  | Ouvrir un partage              | `smbclient //serveur/partage -U ...` puis `ls`, `put`, `get`, `mkdir`, `del` |
+  | Une commande sans session interactive | `smbclient //serveur/partage -U ... -c 'ls'` |
+  | Qui est connecté ?             | `smbstatus`                                      |
+  | Journaux                       | `/var/log/samba/log.<client>`                    |
+
+  ## Pièges courants
+
+  - Oublier `smbpasswd -a` : le compte Linux existe mais l'authentification SMB échoue.
+  - Droits Samba corrects mais dossier Linux en `755 root:root` : écriture refusée.
+  - Fichiers créés par un utilisateur illisibles par ses collègues : `create mask` et `force group`.
+  - Modifier `smb.conf` sans `testparm` : une faute de frappe peut désactiver un partage.
+  - Laisser `guest ok = yes` ou `map to guest` permissif : accès anonyme aux données.
+
+  ## Bonnes pratiques en entreprise
+
+  - Droits par **groupes** (un groupe par service), jamais par utilisateur.
+  - Corbeille réseau et clichés instantanés (`shadow_copy2`) pour les restaurations courantes, plus une
+    vraie sauvegarde.
+  - SMB2/SMB3 uniquement (SMB1 est désactivé par défaut depuis Samba 4.11) et filtrage du port 445.
+  - Jonction à l'Active Directory pour une gestion centralisée des comptes.
+docs:
+  - title: smb.conf(5) - configuration de Samba (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/smb.conf.5.html
+  - title: Samba Wiki - configurer un serveur autonome
+    url: https://wiki.samba.org/index.php/Setting_up_Samba_as_a_Standalone_Server
+  - title: vfs_recycle(8) - corbeille réseau (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man8/vfs_recycle.8.html
+  - title: Ubuntu Server - partage de fichiers avec Samba
+    url: https://documentation.ubuntu.com/server/how-to/samba/file-server/
+exercises:
+  - id: smb-demarrer
+    title: Configurer l'identité du serveur et démarrer Samba
+    cours: |
+      La section `[global]` de `/etc/samba/smb.conf` décrit le serveur lui-même :
+
+      - `workgroup` : le groupe de travail (ou le domaine) affiché par Windows ;
+      - `netbios name` : le nom court du serveur (`\\FICHIERS`), 15 caractères maximum ;
+      - `server string` : la description affichée dans les détails du partage.
+
+      `testparm -s` vérifie la syntaxe et affiche la configuration effective (sans les commentaires). Sans
+      systemd, `smbd -D` lance le démon en arrière-plan ; `ss -ltnp | grep 445` vérifie qu'il écoute.
+      Garde une copie du fichier d'origine : il contient de nombreux exemples commentés.
+    description: |
+      Sur `srv-fichiers`, configure dans la section `[global]` le groupe de travail **`DURAND`**, le nom
+      NetBIOS **`FICHIERS`** et la description `Serveur de fichiers Durand`. Démarre Samba : le port 445
+      doit répondre depuis admin.
+    hint: |
+      ssh srv-fichiers ; cp /etc/samba/smb.conf /etc/samba/smb.conf.orig ; nano /etc/samba/smb.conf (workgroup = DURAND, netbios name = FICHIERS, server string = ...) ; testparm -s ; smbd -D
+    checks:
+      - desc: Samba répond sur le port 445
+        run: nc -z -w 3 10.171.0.10 445
+      - desc: Groupe de travail et nom NetBIOS
+        run: |
+          c=$(ssh srv-fichiers testparm -s 2>/dev/null); echo "$c" | grep -Eqi '^\s*workgroup = DURAND$' && echo "$c" | grep -Eqi '^\s*netbios name = FICHIERS$'
+
+  - id: smb-comptes
+    title: Créer les groupes et les comptes Samba
+    cours: |
+      Un compte Samba repose sur un compte Linux :
+
+      1. `groupadd <groupe>` crée le groupe du service ;
+      2. `useradd -m -s /usr/sbin/nologin -G <groupe> <login>` crée le compte avec un dossier personnel mais
+         **sans** shell : il ne pourra pas ouvrir de session SSH, seulement accéder aux partages ;
+      3. `smbpasswd -a <login>` ajoute le compte à la base de Samba et définit son mot de passe SMB
+         (`-s` pour le lire sur l'entrée standard, deux fois, dans un script).
+
+      `pdbedit -L` liste les comptes Samba. `smbclient -L //serveur -U 'login%motdepasse'` teste
+      l'authentification depuis un poste.
+    description: |
+      Sur `srv-fichiers`, crée les groupes `compta` et `direction`, puis les comptes `mdupont` (groupe
+      `compta`) et `jmartin` (groupe `direction`) **avec un dossier personnel** et sans shell de connexion,
+      et leurs mots de passe Samba (voir le tableau du contexte).
+    hint: |
+      groupadd compta ; groupadd direction ; useradd -m -s /usr/sbin/nologin -G compta mdupont ; (echo 'Compta2026!'; echo 'Compta2026!') | smbpasswd -s -a mdupont ; idem pour jmartin
+    checks:
+      - desc: Groupes et appartenances
+        run: ssh srv-fichiers 'id -nG mdupont | grep -qw compta && id -nG jmartin | grep -qw direction'
+      - desc: Dossiers personnels et pas de shell de connexion
+        run: |
+          ssh srv-fichiers 'for u in mdupont jmartin; do test -d /home/$u && getent passwd $u | grep -Eq "(nologin|false)$" || exit 1; done'
+      - desc: Authentification SMB de mdupont et jmartin
+        run: smbclient -L //10.171.0.10 -U 'mdupont%Compta2026!' >/dev/null 2>&1 && smbclient -L //10.171.0.10 -U 'jmartin%Direction2026!' >/dev/null 2>&1
+
+  - id: smb-partage-compta
+    title: Un partage réservé à la comptabilité
+    cours: |
+      Un partage est une section `[nom]` de `smb.conf` :
+
+      - `path` : le dossier partagé ;
+      - `valid users = @<groupe>` : seuls les membres du groupe peuvent s'y connecter ;
+      - `read only = no` : lecture-écriture.
+
+      Côté Linux, le dossier doit aussi autoriser le groupe : propriétaire `root:<groupe>`, droits `2770`.
+      Le `2` (bit **setgid**) fait hériter le groupe du dossier aux fichiers créés dedans ; `770` : rien pour
+      les autres. Après modification, `testparm -s` puis `smbcontrol all reload-config`. Teste avec un
+      compte autorisé **et** un compte qui doit être refusé.
+    description: |
+      Crée le partage **`compta`** sur le dossier `/srv/partages/compta`, accessible en lecture-écriture au
+      seul groupe `compta`. La direction ne doit pas y avoir accès.
+    hint: |
+      mkdir -p /srv/partages/compta ; chown root:compta /srv/partages/compta ; chmod 2770 /srv/partages/compta ; [compta] path = /srv/partages/compta / valid users = @compta / read only = no ; smbcontrol all reload-config
+    checks:
+      - desc: mdupont peut écrire dans compta
+        run: smbclient //10.171.0.10/compta -U 'mdupont%Compta2026!' -c 'put /etc/hostname test-ecriture.txt; del test-ecriture.txt' >/dev/null 2>&1
+      - desc: jmartin est refusé
+        run: |
+          ! smbclient //10.171.0.10/compta -U 'jmartin%Direction2026!' -c 'ls' >/dev/null 2>&1
+      - desc: Dossier Linux en root:compta 2770
+        run: test "$(ssh srv-fichiers "stat -c '%U:%G %a' /srv/partages/compta")" = "root:compta 2770"
+
+  - id: smb-procedures-lecture
+    title: Un partage en lecture seule, modifiable par la direction
+    cours: |
+      Pour un partage de documents de référence (procédures, modèles), tout le monde lit mais peu de
+      personnes écrivent :
+
+      - `read only = yes` : lecture seule pour tous les utilisateurs autorisés ;
+      - `write list = @<groupe>` : exception, ces comptes peuvent écrire ;
+      - `valid users` liste tous ceux qui peuvent entrer (plusieurs groupes séparés par des espaces).
+
+      Comme toujours, le dossier Linux doit permettre l'écriture au groupe concerné (propriétaire de groupe
+      et droits `2775` par exemple), sinon `write list` ne suffit pas.
+    description: |
+      Partage le dossier existant `/srv/partages/procedures` sous le nom **`procedures`** : les groupes
+      `compta` et `direction` peuvent le lire, mais seule la **direction** peut y écrire.
+    hint: |
+      chgrp direction /srv/partages/procedures ; chmod 2775 /srv/partages/procedures ; [procedures] path = /srv/partages/procedures / valid users = @compta @direction / read only = yes / write list = @direction
+    checks:
+      - desc: mdupont lit les procédures
+        run: smbclient //10.171.0.10/procedures -U 'mdupont%Compta2026!' -c 'ls' 2>/dev/null | grep -q guide-arrivee.txt
+      - desc: mdupont ne peut pas écrire
+        run: |
+          smbclient //10.171.0.10/procedures -U 'mdupont%Compta2026!' -c 'ls' >/dev/null 2>&1 && smbclient //10.171.0.10/procedures -U 'mdupont%Compta2026!' -c 'put /etc/hostname essai-compta.txt' >/dev/null 2>&1; ! ssh srv-fichiers test -e /srv/partages/procedures/essai-compta.txt
+      - desc: jmartin peut écrire
+        run: smbclient //10.171.0.10/procedures -U 'jmartin%Direction2026!' -c 'put /etc/hostname essai-direction.txt; del essai-direction.txt' >/dev/null 2>&1
+
+  - id: smb-masques
+    title: Des fichiers partagés lisibles par tout le service
+    cours: |
+      Par défaut, un fichier créé par `mdupont` lui appartient avec des droits qui peuvent empêcher ses
+      collègues de le modifier. Samba permet d'imposer les droits des nouveaux fichiers :
+
+      - `create mask = 0660` : droits **maximum** d'un fichier créé (lecture-écriture pour le propriétaire et
+        le groupe, rien pour les autres) ;
+      - `directory mask = 2770` : idem pour les dossiers, avec le bit setgid ;
+      - `force group = <groupe>` : le groupe propriétaire est imposé.
+
+      Vérifie côté serveur avec `ls -l` ou `stat -c '%a %G' <fichier>` après avoir créé un fichier et un
+      dossier depuis le client.
+    description: |
+      Dans le partage `compta`, les fichiers créés doivent être en `660` et les dossiers en `2770`, avec le
+      groupe `compta`, quel que soit le poste du client.
+    hint: dans [compta] → create mask = 0660 / directory mask = 2770 / force group = compta ; smbcontrol all reload-config
+    checks:
+      - desc: Un fichier créé est en 660, groupe compta
+        run: |
+          smbclient //10.171.0.10/compta -U 'mdupont%Compta2026!' -c 'put /etc/hostname verif-masque.txt' >/dev/null 2>&1; r=$(ssh srv-fichiers "stat -c '%a %G' /srv/partages/compta/verif-masque.txt"); ssh srv-fichiers rm -f /srv/partages/compta/verif-masque.txt; test "$r" = "660 compta"
+      - desc: Un dossier créé est en 2770, groupe compta
+        run: |
+          smbclient //10.171.0.10/compta -U 'mdupont%Compta2026!' -c 'mkdir verif-dossier' >/dev/null 2>&1; r=$(ssh srv-fichiers "stat -c '%a %G' /srv/partages/compta/verif-dossier"); ssh srv-fichiers rmdir /srv/partages/compta/verif-dossier; test "$r" = "2770 compta"
+
+  - id: smb-corbeille
+    title: Une corbeille réseau
+    cours: |
+      Un fichier supprimé sur un partage réseau ne passe **pas** par la corbeille de Windows : il est perdu.
+      Le module VFS **recycle** de Samba déplace les fichiers supprimés dans un dossier au lieu de les
+      effacer :
+
+      ```ini
+      vfs objects = recycle
+      recycle:repository = .corbeille/%U    ← %U = nom de l'utilisateur
+      recycle:keeptree = yes                ← garde l'arborescence d'origine
+      recycle:versions = yes                ← garde plusieurs versions d'un même nom
+      ```
+
+      Une purge régulière (par exemple `find .corbeille -mtime +30 -delete` dans cron) évite que la
+      corbeille ne remplisse le disque.
+    description: |
+      Active une corbeille sur le partage `compta` : un fichier supprimé par `mdupont` doit se retrouver dans
+      `/srv/partages/compta/.corbeille/mdupont/`, avec son arborescence.
+    hint: dans [compta] → vfs objects = recycle / recycle:repository = .corbeille/%U / recycle:keeptree = yes / recycle:versions = yes
+    checks:
+      - desc: Un fichier supprimé arrive dans la corbeille de mdupont
+        run: |
+          smbclient //10.171.0.10/compta -U 'mdupont%Compta2026!' -c 'put /etc/hostname verif-corbeille.txt; del verif-corbeille.txt' >/dev/null 2>&1; ssh srv-fichiers 'f=/srv/partages/compta/.corbeille/mdupont/verif-corbeille.txt; test -f $f && rm -f $f'
+
+  - id: smb-homes
+    title: Un dossier personnel par utilisateur
+    cours: |
+      La section spéciale **`[homes]`** évite de déclarer un partage par salarié : quand un utilisateur
+      demande `\\FICHIERS\<son login>`, Samba partage son dossier personnel Linux (`/home/<login>`).
+
+      - `browseable = no` : le partage générique `homes` n'apparaît pas dans la liste (chacun voit
+        seulement le sien) ;
+      - `valid users = %S` : seul le propriétaire (`%S` = nom du partage demandé) peut s'y connecter ;
+      - `read only = no` : lecture-écriture.
+
+      Le fichier par défaut d'Ubuntu contient un exemple `[homes]` en commentaire.
+    description: |
+      Active les dossiers personnels : `mdupont` doit pouvoir écrire dans `\\FICHIERS\mdupont`, mais
+      `jmartin` ne doit pas pouvoir y entrer.
+    hint: '[homes] / browseable = no / read only = no / valid users = %S'
+    checks:
+      - desc: mdupont écrit dans son dossier personnel
+        run: smbclient //10.171.0.10/mdupont -U 'mdupont%Compta2026!' -c 'put /etc/hostname perso.txt; del perso.txt' >/dev/null 2>&1
+      - desc: jmartin ne peut pas entrer dans celui de mdupont
+        run: |
+          ! smbclient //10.171.0.10/mdupont -U 'jmartin%Direction2026!' -c 'ls' >/dev/null 2>&1
+
+  - id: smb-restriction-reseau
+    title: Interdire l'accès depuis le réseau invités
+    cours: |
+      Samba peut filtrer les clients par adresse, dans `[global]` (tout le serveur) ou dans un partage :
+
+      - `hosts allow = 10.171.0.0/24 127.0.0.1` : seuls ces réseaux sont acceptés ;
+      - `hosts deny = ALL` est implicite dès qu'un `hosts allow` existe.
+
+      Une autre solution, complémentaire, est de n'écouter que sur l'interface du LAN
+      (`interfaces = 10.171.0.10/24 lo` et `bind interfaces only = yes`). En entreprise, on ajoute un
+      pare-feu : le port 445 ne doit jamais être joignable depuis un réseau invités ou Internet.
+
+      Pour cette directive globale, redémarre smbd (`pkill smbd; smbd -D`).
+    description: |
+      Le serveur est aussi raccordé au réseau Wi-Fi des visiteurs (10.171.1.0/24). Fais en sorte que
+      Samba n'accepte que le LAN (10.171.0.0/24) et la machine elle-même. Le poste `invite` doit être
+      refusé, admin doit continuer à fonctionner.
+    hint: dans [global] → hosts allow = 10.171.0.0/24 127.0.0.1 ; pkill smbd ; smbd -D ; test depuis ssh invite smbclient -L //10.171.1.10 -U ...
+    checks:
+      - desc: Le poste invite est refusé
+        run: |
+          ! ssh invite "smbclient -L //10.171.1.10 -U 'mdupont%Compta2026!'" >/dev/null 2>&1
+      - desc: admin accède toujours aux partages
+        run: smbclient //10.171.0.10/compta -U 'mdupont%Compta2026!' -c 'ls' >/dev/null 2>&1

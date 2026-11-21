@@ -1,0 +1,33 @@
+# DNS d'« Ateliers Durand » : ns1 (primaire) et ns2 (secondaire) à configurer avec BIND 9,
+# ns-lyon (déjà configuré) sert la sous-zone lyon.durand.lan et la zone d'un fournisseur.
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.30.0.5}
+  ns1:
+    build: {context: ., dockerfile: ns/Dockerfile}
+    hostname: ns1
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.30.0.53}
+  ns2:
+    build: {context: ., dockerfile: ns/Dockerfile}
+    hostname: ns2
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 10.30.0.54}
+  ns-lyon:
+    build: {context: ., dockerfile: ns-lyon/Dockerfile}
+    hostname: ns-lyon
+    networks:
+      lan: {ipv4_address: 10.30.0.60}
+volumes:
+  cles:
+networks:
+  lan:
+    internal: true
+    ipam:
+      config: [{subnet: 10.30.0.0/24, ip_range: 10.30.0.0/28}]

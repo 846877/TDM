@@ -1,0 +1,236 @@
+title: Intégrité de fichiers avec hashlib
+level: avance
+order: 40
+tags: [hashlib, fichiers, sécurité, sysadmin]
+summary: Calculer des empreintes par blocs, vérifier un SHA256SUMS et trouver les doublons.
+description: |
+  Utilise `hashlib` et `pathlib`.
+
+  1. `empreinte(chemin, algo="sha256", bloc=65536)` renvoie l'empreinte hexadécimale d'un
+     fichier, lu **par blocs** de `bloc` octets (jamais en entier en mémoire). `algo` est un
+     nom accepté par `hashlib.new` ; un nom inconnu lève `ValueError`.
+  2. `verifier(fichier_sommes)` lit un fichier au format de `sha256sum` : chaque ligne
+     contient `<empreinte>  <nom>` (deux espaces), les noms étant relatifs au dossier du
+     fichier de sommes ; les lignes vides et celles qui commencent par `#` sont ignorées.
+     Renvoie un dictionnaire `{nom: statut}` où statut vaut `"OK"`, `"ÉCHEC"` (empreinte
+     différente, comparaison insensible à la casse) ou `"ABSENT"`.
+  3. `doublons(dossier)` cherche récursivement les fichiers au contenu identique. Pour aller
+     vite, on ne calcule l'empreinte que des fichiers qui partagent la même **taille**.
+     Renvoie une liste de groupes ; chaque groupe est la liste triée des chemins **relatifs**
+     au dossier (avec `/`), d'au moins deux fichiers ; les groupes sont triés. Les fichiers
+     vides sont ignorés.
+
+  ```python
+  empreinte("iso/debian.iso")          # "3b4c..." (64 caractères hexadécimaux)
+  verifier("iso/SHA256SUMS")           # {"debian.iso": "OK", "ubuntu.iso": "ABSENT"}
+  doublons("photos")                   # [["2023/a.jpg", "copie/a.jpg"]]
+  ```
+starter: |
+  import hashlib
+  from pathlib import Path
+
+
+  def empreinte(chemin, algo="sha256", bloc=65536):
+      pass
+
+
+  def verifier(fichier_sommes):
+      pass
+
+
+  def doublons(dossier):
+      pass
+tests: |
+  import hashlib
+  import tempfile
+  from pathlib import Path
+
+  def test_empreinte():
+      "empreinte sha256 et md5"
+      with tempfile.TemporaryDirectory() as d:
+          p = Path(d) / "f.bin"
+          donnees = bytes(range(256)) * 1000
+          p.write_bytes(donnees)
+          assert solution.empreinte(p) == hashlib.sha256(donnees).hexdigest()
+          assert solution.empreinte(str(p), "md5", bloc=7) == hashlib.md5(donnees).hexdigest()
+          vide = Path(d) / "vide"
+          vide.write_bytes(b"")
+          assert solution.empreinte(vide) == hashlib.sha256(b"").hexdigest()
+
+  def test_lecture_par_blocs():
+      "empreinte lit par blocs"
+      lectures = []
+      class Espion:
+          def __init__(self, donnees):
+              self.donnees, self.pos = donnees, 0
+          def read(self, n=-1):
+              assert n is not None and n > 0, "lis par blocs : read(bloc), pas read()"
+              lectures.append(n)
+              morceau = self.donnees[self.pos:self.pos + n]
+              self.pos += len(morceau)
+              return morceau
+          def __enter__(self):
+              return self
+          def __exit__(self, *a):
+              return False
+      import builtins
+      original = builtins.open
+      builtins.open = lambda *a, **k: Espion(b"x" * 1000)
+      try:
+          r = solution.empreinte("peu-importe", bloc=100)
+      finally:
+          builtins.open = original
+      assert r == hashlib.sha256(b"x" * 1000).hexdigest()
+      assert len(lectures) >= 10
+
+  def test_algo_inconnu():
+      "algorithme inconnu"
+      with tempfile.TemporaryDirectory() as d:
+          p = Path(d) / "f"
+          p.write_bytes(b"a")
+          try:
+              solution.empreinte(p, "sha999")
+          except ValueError:
+              pass
+          else:
+              raise AssertionError("ValueError attendue")
+
+  def test_verifier():
+      "verifier un fichier SHA256SUMS"
+      with tempfile.TemporaryDirectory() as d:
+          d = Path(d)
+          (d / "a.iso").write_bytes(b"contenu A")
+          (d / "b.iso").write_bytes(b"contenu B")
+          (d / "sub").mkdir()
+          (d / "sub" / "c.txt").write_bytes(b"C")
+          h = lambda b: hashlib.sha256(b).hexdigest()
+          (d / "SHA256SUMS").write_text(
+              "# sommes officielles\n"
+              f"{h(b'contenu A')}  a.iso\n"
+              "\n"
+              f"{h(b'autre chose')}  b.iso\n"
+              f"{h(b'C').upper()}  sub/c.txt\n"
+              f"{h(b'x')}  manquant.iso\n", encoding="utf-8")
+          r = solution.verifier(d / "SHA256SUMS")
+          assert r == {"a.iso": "OK", "b.iso": "ÉCHEC", "sub/c.txt": "OK", "manquant.iso": "ABSENT"}, r
+
+  def test_verifier_nom_avec_espaces():
+      "Les noms peuvent contenir des espaces"
+      with tempfile.TemporaryDirectory() as d:
+          d = Path(d)
+          (d / "mon fichier.txt").write_bytes(b"z")
+          (d / "S").write_text(f"{hashlib.sha256(b'z').hexdigest()}  mon fichier.txt\n", encoding="utf-8")
+          assert solution.verifier(str(d / "S")) == {"mon fichier.txt": "OK"}
+
+  def test_doublons():
+      "doublons"
+      with tempfile.TemporaryDirectory() as d:
+          d = Path(d)
+          (d / "2023").mkdir()
+          (d / "copie").mkdir()
+          (d / "2023" / "a.jpg").write_bytes(b"IMAGE-A")
+          (d / "copie" / "a.jpg").write_bytes(b"IMAGE-A")
+          (d / "copie" / "a2.jpg").write_bytes(b"IMAGE-A")
+          (d / "b.jpg").write_bytes(b"IMAGE-B")       # même taille, contenu différent
+          (d / "c.txt").write_bytes(b"texte")
+          (d / "c-bis.txt").write_bytes(b"texte")
+          (d / "vide1").write_bytes(b"")
+          (d / "vide2").write_bytes(b"")
+          assert solution.doublons(d) == [["2023/a.jpg", "copie/a.jpg", "copie/a2.jpg"], ["c-bis.txt", "c.txt"]]
+          assert solution.doublons(d / "2023") == []
+solution: |
+  import hashlib
+  from collections import defaultdict
+  from pathlib import Path
+
+
+  def empreinte(chemin, algo="sha256", bloc=65536):
+      h = hashlib.new(algo)          # ValueError si l'algorithme est inconnu
+      with open(chemin, "rb") as f:
+          while morceau := f.read(bloc):
+              h.update(morceau)
+      return h.hexdigest()
+
+
+  def verifier(fichier_sommes):
+      fichier_sommes = Path(fichier_sommes)
+      base = fichier_sommes.parent
+      resultat = {}
+      for ligne in fichier_sommes.read_text(encoding="utf-8").splitlines():
+          if not ligne.strip() or ligne.startswith("#"):
+              continue
+          attendue, nom = ligne.split("  ", 1)
+          cible = base / nom
+          if not cible.is_file():
+              resultat[nom] = "ABSENT"
+          elif empreinte(cible) == attendue.strip().lower():
+              resultat[nom] = "OK"
+          else:
+              resultat[nom] = "ÉCHEC"
+      return resultat
+
+
+  def doublons(dossier):
+      dossier = Path(dossier)
+      par_taille = defaultdict(list)
+      for f in dossier.rglob("*"):
+          if f.is_file() and f.stat().st_size > 0:
+              par_taille[f.stat().st_size].append(f)
+      groupes = []
+      for fichiers in par_taille.values():
+          if len(fichiers) < 2:
+              continue
+          par_empreinte = defaultdict(list)
+          for f in fichiers:
+              par_empreinte[empreinte(f)].append(f.relative_to(dossier).as_posix())
+          groupes.extend(sorted(g) for g in par_empreinte.values() if len(g) > 1)
+      return sorted(groupes)
+cours: |
+  ## Qu'est-ce qu'une empreinte ?
+
+  Une **fonction de hachage cryptographique** (SHA-256, SHA-512, BLAKE2…) transforme des
+  données de taille quelconque en une empreinte de taille fixe. Changer un seul bit change
+  toute l'empreinte, et il est impossible en pratique de fabriquer deux fichiers différents
+  de même empreinte. D'où ses usages : vérifier un téléchargement (une ISO et son
+  `SHA256SUMS`), détecter une modification (outils d'intégrité comme AIDE ou Tripwire),
+  dédupliquer des sauvegardes.
+
+  MD5 et SHA-1 sont **cassés** pour la sécurité (on sait fabriquer des collisions) : ils
+  restent acceptables pour détecter une corruption accidentelle, jamais contre un attaquant.
+  Et pour stocker des mots de passe, il faut une fonction **lente et salée** (`hashlib.scrypt`,
+  Argon2), pas un simple SHA-256.
+
+  ## `hashlib` par blocs
+
+  ```python
+  import hashlib
+  h = hashlib.sha256()          # ou hashlib.new("sha256")
+  h.update(b"premier bloc")
+  h.update(b"second bloc")      # équivaut à hacher la concaténation
+  h.hexdigest()                 # chaîne hexadécimale
+  ```
+
+  Lire un fichier de 4 Go avec `f.read()` remplit la mémoire. On lit par blocs, souvent avec
+  l'opérateur morse : `while bloc := f.read(65536): h.update(bloc)`. Depuis Python 3.11,
+  `hashlib.file_digest(f, "sha256")` fait exactement cela.
+
+  ## Le format `sha256sum`
+
+  `sha256sum fichiers > SHA256SUMS` écrit `empreinte␣␣nom` ; `sha256sum -c SHA256SUMS`
+  vérifie. Pour découper la ligne, on sépare **une seule fois** (`split("  ", 1)`) : un nom
+  de fichier peut contenir des espaces. Compare les empreintes après normalisation de la casse.
+
+  ## Dédupliquer intelligemment
+
+  Hacher chaque fichier d'un disque prend du temps. Deux fichiers de tailles différentes ne
+  peuvent pas être identiques : on regroupe d'abord par **taille** (une métadonnée gratuite),
+  et on ne hache que les groupes de plusieurs fichiers. Les outils comme `fdupes` ajoutent une
+  étape intermédiaire : hacher seulement le premier bloc avant le fichier complet.
+
+  `rglob("*")` parcourt récursivement ; `relative_to` et `as_posix()` produisent des chemins
+  relatifs portables avec des `/`.
+docs:
+  - title: Module hashlib
+    url: https://docs.python.org/fr/3/library/hashlib.html
+  - title: Module pathlib
+    url: https://docs.python.org/fr/3/library/pathlib.html

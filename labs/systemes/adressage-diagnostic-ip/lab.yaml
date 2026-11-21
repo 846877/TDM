@@ -1,0 +1,484 @@
+title: Adressage IP et diagnostic réseau
+level: debutant
+order: 3
+tags: [ip, masque, passerelle, dns, ping, traceroute, ss, tcpdump, nmap]
+summary: Lire et calculer un plan d'adressage, configurer passerelle et DNS, diagnostiquer avec ping, traceroute, dig, ss et tcpdump.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Premier jour chez *Ateliers Durand*. Ton poste d'administration est branché sur le LAN
+  des utilisateurs mais « Internet ne marche pas » : il n'a pas de passerelle et utilise un mauvais DNS.
+  Avant de le réparer, tu dois comprendre le plan d'adressage, puis cartographier le réseau.
+
+  **Topologie.**
+
+  ```
+   LAN 192.168.10.0/24                      SERVEURS 10.0.20.0/24
+   admin       192.168.10.50 ──┐        ┌── srv-web  10.0.20.10  (intranet)
+   imprimante  192.168.10.?? ──┼─ routeur ─┼── srv-bdd  10.0.20.30
+                               │ .254  .254 └── srv-dns  10.0.20.53  (DNS durand.lan)
+  ```
+
+  Ton terminal est sur **admin** (`root`). Les réponses demandées s'écrivent dans
+  `/root/reponses.txt`, une par ligne, au format `cle=valeur` (par exemple `ip=10.1.2.3`).
+
+  Outils : `ip a`, `ip route`, `ipcalc`, `ping`, `traceroute`, `mtr`, `dig`, `getent hosts`, `ss`,
+  `nc`, `nmap`, `curl`, `tcpdump`.
+cours: |
+  ## Une adresse IPv4, c'est deux parties
+
+  Une adresse IPv4 fait 32 bits, écrits en 4 octets décimaux. Le **préfixe** (`/24`) ou le **masque**
+  (`255.255.255.0`) indique combien de bits, en partant de la gauche, désignent le **réseau** ; le reste
+  désigne la **machine**.
+
+  ```
+  192.168.10.50/24
+  11000000.10101000.00001010 . 00110010
+  └────────── réseau ──────┘   └ hôte ┘
+  masque  255.255.255.0   →   24 bits à 1
+  réseau  192.168.10.0         (bits hôte à 0)
+  broadcast 192.168.10.255     (bits hôte à 1)
+  hôtes   .1 à .254  →  2^8 - 2 = 254 adresses utilisables
+  ```
+
+  Formule : avec un préfixe `/n`, il y a `2^(32-n) - 2` adresses de machines (on retire l'adresse de
+  réseau et celle de diffusion).
+
+  | Préfixe | Masque          | Taille du bloc | Hôtes   |
+  |---------|-----------------|----------------|---------|
+  | /30     | 255.255.255.252 | 4              | 2       |
+  | /29     | 255.255.255.248 | 8              | 6       |
+  | /27     | 255.255.255.224 | 32             | 30      |
+  | /26     | 255.255.255.192 | 64             | 62      |
+  | /24     | 255.255.255.0   | 256            | 254     |
+  | /22     | 255.255.252.0   | 4 (3e octet)   | 1022    |
+  | /21     | 255.255.248.0   | 8 (3e octet)   | 2046    |
+  | /16     | 255.255.0.0     | 256 (3e octet) | 65534   |
+
+  **Méthode du « nombre magique »** : dans l'octet où le masque n'est ni 255 ni 0, calcule
+  `256 - valeur du masque`. C'est la taille des blocs : les réseaux commencent aux multiples de ce nombre.
+  Exemple `/21` : 256 - 248 = 8, donc les réseaux sont `172.16.0.0`, `.8.0`, `.16.0`... `.40.0`, `.48.0`.
+
+  Plages privées (RFC 1918) : `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`.
+
+  ## Comment un paquet part du poste
+
+  ```
+  destination dans mon réseau ?  ── oui ──▶ ARP : « qui a 192.168.10.77 ? » puis envoi direct
+            │ non
+            ▼
+  route plus précise dans la table ? ── non ──▶ route par défaut (passerelle)
+            │                                   ARP sur l'adresse de la passerelle, envoi à elle
+            ▼                                   pas de route du tout → « Network is unreachable »
+  envoi au routeur indiqué
+  ```
+
+  Une machine a donc besoin de **quatre** informations : adresse, masque, passerelle, serveur DNS. Il
+  suffit qu'une seule soit fausse pour que « Internet ne marche pas ».
+
+  ## Démarche de diagnostic (du bas vers le haut)
+
+  1. **Lien** : l'interface est-elle UP ? (`ip -br link`)
+  2. **Adresse** : bonne IP, bon masque ? (`ip -br addr`)
+  3. **Réseau local** : la passerelle répond-elle ? (`ping` passerelle, `ip neigh`)
+  4. **Routage** : une route par défaut existe-t-elle ? (`ip route`, `traceroute`)
+  5. **Nom** : le DNS répond-il ? (`dig`, `getent hosts`) ; tester avec l'IP pour isoler le DNS
+  6. **Service** : le port est-il ouvert ? (`nc -zv`, `ss -ltn` côté serveur, `curl -v`)
+
+  ## Mémo des commandes
+
+  | Besoin                         | Commande                                       |
+  |--------------------------------|------------------------------------------------|
+  | Adresses en bref               | `ip -br addr`, `ip -br link`                   |
+  | Ajouter une adresse (temporaire) | `ip addr add 192.168.10.50/24 dev eth0`       |
+  | Table de routage               | `ip route`, `ip route get 10.0.20.10`          |
+  | Route par défaut               | `ip route add default via 192.168.10.254`      |
+  | Table ARP (voisins)            | `ip neigh`                                     |
+  | Calcul de réseau               | `ipcalc 172.16.40.0/21`                        |
+  | Chemin                         | `traceroute -n hôte`, `mtr -n hôte`            |
+  | DNS                            | `dig nom`, `dig MX domaine`, `dig -x IP`, `dig @serveur nom` |
+  | Ports en écoute (local)        | `ss -ltnp` (TCP), `ss -lunp` (UDP)             |
+  | Tester un port distant         | `nc -zv hôte 443`, `nmap -p- hôte`             |
+  | Balayage du réseau             | `nmap -sn 192.168.10.0/24`                      |
+  | Capture                        | `tcpdump -ni eth0 port 53 -w fichier.pcap`      |
+
+  ## Le résolveur DNS d'un poste Linux
+
+  `/etc/resolv.conf` contient les serveurs (`nameserver`) et le domaine de recherche (`search`) ajouté
+  aux noms courts. Sur un Ubuntu de bureau ou serveur, ce fichier est souvent géré par
+  `systemd-resolved` (et la configuration permanente passe par Netplan) ; dans le lab on l'édite
+  directement. `getent hosts nom` utilise la même chaîne de résolution que les applications
+  (`/etc/hosts` puis DNS selon `/etc/nsswitch.conf`), alors que `dig` interroge le DNS seul.
+
+  ## Pièges courants
+
+  - Les commandes `ip addr add` / `ip route add` sont **perdues au redémarrage** : en production, la
+    configuration permanente se fait dans Netplan (`/etc/netplan/*.yaml`) ou `/etc/network/interfaces`.
+  - Un ping qui échoue ne prouve pas que la machine est éteinte : beaucoup de pare-feu bloquent l'ICMP.
+  - Deux machines avec la même IP (conflit) donnent des coupures aléatoires : regarde `ip neigh` et la MAC.
+  - Un masque différent entre deux machines du même LAN crée des pannes « à sens unique ».
+
+  ## Bonnes pratiques en entreprise
+
+  - Tenir un **plan d'adressage** à jour (tableau ou outil IPAM) : plages par VLAN, adresses fixes des
+    serveurs, plage DHCP, passerelles.
+  - Réserver les adresses basses ou hautes aux équipements (passerelle en `.254` ou `.1`, toujours la même
+    convention).
+  - Noter les résultats de diagnostic dans le ticket : commande lancée et sortie obtenue.
+docs:
+  - title: ip(8) - configuration réseau sous Linux
+    url: https://man7.org/linux/man-pages/man8/ip.8.html
+  - title: Wikipédia - Sous-réseau
+    url: https://fr.wikipedia.org/wiki/Sous-r%C3%A9seau
+  - title: Manuel de tcpdump
+    url: https://www.tcpdump.org/manpages/tcpdump.1.html
+  - title: Guide de référence Nmap (français)
+    url: https://nmap.org/man/fr/
+exercises:
+  - id: ma-config
+    title: Lire la configuration de son poste
+    cours: |
+      `ip -br addr` affiche une ligne par interface : nom, état, adresses avec leur préfixe. `ip link`
+      affiche l'adresse **MAC** (ligne `link/ether`), l'identifiant matériel de la carte sur le réseau local.
+
+      À partir de l'adresse et du préfixe, on déduit le reste :
+      - le **masque** : `n` bits à 1 en partant de la gauche, écrits en 4 octets ;
+      - l'**adresse de réseau** : bits « hôte » mis à 0 ;
+      - l'adresse de **diffusion** (broadcast) : bits « hôte » mis à 1.
+
+      `ipcalc <adresse>/<préfixe>` fait ces calculs, mais entraîne-toi d'abord à les faire de tête pour un
+      `/24` : c'est la question la plus posée en entretien technique.
+    description: |
+      Avec `ip -br addr` et `ip link`, relève la configuration de l'interface `eth0` d'admin et écris dans
+      `/root/reponses.txt` :
+
+      ```
+      ip=<adresse IPv4>
+      prefixe=<longueur du préfixe, ex. 16>
+      masque=<masque en notation décimale pointée>
+      mac=<adresse MAC>
+      reseau=<adresse du réseau>
+      broadcast=<adresse de diffusion>
+      ```
+    hint: "ipcalc 192.168.10.50/24 donne réseau, masque et broadcast ; la MAC est sur la ligne link/ether de ip link"
+    checks:
+      - desc: ip, prefixe et masque
+        run: |
+          f=/root/reponses.txt
+          grep -Eqi '^ip *= *192\.168\.10\.50 *$' $f && grep -Eqi '^prefixe *= */?24 *$' $f && grep -Eqi '^masque *= *255\.255\.255\.0 *$' $f
+      - desc: adresse MAC
+        run: grep -Eqi '^mac *= *02:42:c0:a8:0a:32 *$' /root/reponses.txt
+      - desc: réseau et broadcast
+        run: grep -Eqi '^reseau *= *192\.168\.10\.0(/24)? *$' /root/reponses.txt && grep -Eqi '^broadcast *= *192\.168\.10\.255 *$' /root/reponses.txt
+
+  - id: calcul
+    title: Calculs de sous-réseaux
+    cours: |
+      Pour un préfixe qui ne tombe pas sur un octet entier, travaille sur l'octet « intéressant » :
+
+      1. valeur du masque dans cet octet : bits à 1 sur 8 (`/21` → 5 bits dans le 3e octet → 248) ;
+      2. taille de bloc = `256 - valeur` ;
+      3. le réseau commence au multiple du bloc juste inférieur ou égal ; le broadcast est le début du bloc
+         suivant moins 1 ;
+      4. nombre d'hôtes = `2^(bits hôte) - 2`.
+
+      Découper un réseau en `2^k` sous-réseaux égaux revient à ajouter `k` bits au préfixe. Une adresse
+      appartient à un réseau si elle est comprise entre l'adresse de réseau et le broadcast. Vérifie chaque
+      résultat avec `ipcalc`.
+    description: |
+      Le responsable prépare l'extension du réseau. Calcule (à la main, puis vérifie avec `ipcalc`) et ajoute
+      à `/root/reponses.txt` :
+
+      1. Pour le réseau des sites distants `172.16.40.0/21` :
+         - `c1_masque=` le masque décimal,
+         - `c1_broadcast=` l'adresse de diffusion,
+         - `c1_hotes=` le nombre d'adresses utilisables pour des machines,
+         - `c1_appartient=` `oui` ou `non` : l'adresse `172.16.45.200` fait-elle partie de ce réseau ?
+      2. Le réseau `192.168.50.0/24` est découpé en **4 sous-réseaux de même taille** (pour 4 étages).
+         Pour le **quatrième** (le dernier) :
+         - `c2_masque=` le masque décimal,
+         - `c2_reseau=` l'adresse de réseau,
+         - `c2_premier=` la première adresse utilisable,
+         - `c2_dernier=` la dernière adresse utilisable.
+    hint: "/21 = 255.255.248.0 (blocs de 8 sur le 3e octet) ; 4 sous-réseaux d'un /24 = des /26 (blocs de 64)"
+    checks:
+      - desc: Réseau 172.16.40.0/21
+        run: |
+          f=/root/reponses.txt
+          grep -Eqi '^c1_masque *= *255\.255\.248\.0 *$' $f && grep -Eqi '^c1_broadcast *= *172\.16\.47\.255 *$' $f &&
+          grep -Eqi '^c1_hotes *= *2046 *$' $f && grep -Eqi '^c1_appartient *= *oui *$' $f
+      - desc: Quatrième sous-réseau de 192.168.50.0/24
+        run: |
+          f=/root/reponses.txt
+          grep -Eqi '^c2_masque *= *255\.255\.255\.192 *$' $f && grep -Eqi '^c2_reseau *= *192\.168\.50\.192(/26)? *$' $f &&
+          grep -Eqi '^c2_premier *= *192\.168\.50\.193 *$' $f && grep -Eqi '^c2_dernier *= *192\.168\.50\.254 *$' $f
+
+  - id: passerelle
+    title: Configurer la passerelle par défaut
+    cours: |
+      La **passerelle par défaut** est le routeur à qui le poste confie tout paquet destiné à un réseau qu'il
+      ne connaît pas. Elle doit être dans le **même réseau** que le poste.
+
+      - `ip route` affiche la table ; une ligne `default via ...` est la route par défaut ;
+      - `ip route add` ajoute une route ; `ip route del` en supprime une ;
+      - `ip route get <destination>` montre quelle route serait utilisée.
+
+      « Network is unreachable » signifie qu'aucune route ne correspond à la destination ; « Destination host
+      unreachable » qu'un routeur ou l'ARP n'a pas trouvé la machine. Distinguer les deux fait gagner beaucoup
+      de temps.
+    description: |
+      `ping 10.0.20.10` échoue : `Network is unreachable`. Affiche la table de routage (`ip route`) : il n'y a
+      que le réseau directement connecté.
+
+      Vérifie que le routeur répond (`ping -c2 192.168.10.254`), puis ajoute-le comme **passerelle par
+      défaut** du poste. Le serveur web `10.0.20.10` doit alors répondre au ping et en HTTP.
+    hint: ip route add default via 192.168.10.254
+    checks:
+      - desc: La route par défaut passe par 192.168.10.254
+        run: ip route show default | grep -q 'via 192.168.10.254'
+      - desc: srv-web répond au ping
+        run: ping -c2 -W2 10.0.20.10 >/dev/null
+      - desc: L'intranet répond en HTTP
+        run: curl -fsS -m5 http://10.0.20.10/ | grep -q Intranet
+
+  - id: traceroute
+    title: Suivre le chemin des paquets
+    cours: |
+      `traceroute` envoie des paquets avec un **TTL** croissant (1, 2, 3...). Chaque routeur décrémente le TTL ;
+      celui qui le fait tomber à 0 renvoie un message ICMP « Time exceeded », ce qui révèle son adresse.
+      Chaque ligne de la sortie est donc un **saut**.
+
+      - `-n` évite la résolution DNS des adresses (plus rapide, plus lisible) ;
+      - des `* * *` signifient que le routeur ne répond pas (filtrage), pas forcément une panne ;
+      - `mtr` combine ping et traceroute en continu, idéal pour repérer des pertes.
+
+      Un routeur répond avec l'adresse de l'interface **par laquelle il renvoie** le message d'erreur.
+      `tee` permet d'afficher une sortie tout en l'enregistrant dans un fichier.
+    description: |
+      Lance `traceroute -n 10.0.20.30` et enregistre sa sortie dans `/root/traceroute.txt`.
+
+      Ajoute ensuite à `/root/reponses.txt` :
+      - `sauts=` le nombre de sauts (lignes) pour atteindre srv-bdd ;
+      - `routeur_lan=` l'adresse par laquelle le routeur apparaît dans le traceroute.
+
+      Question à te poser : pourquoi le routeur apparaît-il avec son adresse du LAN et pas celle du réseau
+      serveurs ?
+    hint: traceroute -n 10.0.20.30 | tee /root/traceroute.txt
+    checks:
+      - desc: traceroute.txt montre le routeur puis srv-bdd
+        run: grep -q '192\.168\.10\.254' /root/traceroute.txt && grep -q '10\.0\.20\.30' /root/traceroute.txt
+      - desc: Réponses sauts et routeur_lan
+        run: grep -Eqi '^sauts *= *2 *$' /root/reponses.txt && grep -Eqi '^routeur_lan *= *192\.168\.10\.254 *$' /root/reponses.txt
+
+  - id: dns
+    title: Configurer et interroger le DNS interne
+    cours: |
+      Le DNS traduit des noms en adresses. Les types d'enregistrements les plus courants :
+
+      | Type    | Rôle                                  |
+      |---------|---------------------------------------|
+      | `A`     | nom → adresse IPv4                    |
+      | `CNAME` | alias vers un autre nom               |
+      | `MX`    | serveur de messagerie du domaine      |
+      | `PTR`   | adresse → nom (zone inverse)          |
+
+      Côté poste, `/etc/resolv.conf` contient `nameserver <IP>` et `search <domaine>` (ajouté aux noms
+      courts). `dig <type> <nom>` interroge le DNS (`+short` pour la réponse seule), `dig -x <IP>` fait la
+      résolution inverse, et `getent hosts <nom>` teste la résolution comme le ferait une application.
+    description: |
+      Le DNS de l'entreprise est `srv-dns` (`10.0.20.53`), il sert la zone `durand.lan`.
+
+      1. Configure le résolveur du poste dans `/etc/resolv.conf` : serveur `10.0.20.53` et domaine de
+         recherche `durand.lan` (pour que `ping srv-web` fonctionne sans le nom complet).
+      2. Avec `dig`, trouve et ajoute à `/root/reponses.txt` :
+         - `dns_mx=` le serveur de messagerie de `durand.lan` (enregistrement MX) ;
+         - `dns_intranet=` le nom canonique vers lequel pointe `intranet.durand.lan` (CNAME) ;
+         - `dns_inverse=` le nom associé à l'adresse `10.0.20.30` (résolution inverse, `dig -x`).
+    hint: "printf 'nameserver 10.0.20.53\nsearch durand.lan\n' > /etc/resolv.conf ; dig MX durand.lan ; dig -x 10.0.20.30"
+    checks:
+      - desc: resolv.conf utilise 10.0.20.53 et le domaine durand.lan
+        run: grep -Eq '^nameserver +10\.0\.20\.53' /etc/resolv.conf && grep -Eq '^(search|domain) +.*durand\.lan' /etc/resolv.conf
+      - desc: Le nom court srv-web se résout
+        run: getent hosts srv-web | grep -q '^10\.0\.20\.10'
+      - desc: Réponses MX, CNAME et inverse
+        run: |
+          f=/root/reponses.txt
+          grep -Eqi '^dns_mx *= *messagerie\.durand\.lan\.? *$' $f &&
+          grep -Eqi '^dns_intranet *= *srv-web\.durand\.lan\.? *$' $f &&
+          grep -Eqi '^dns_inverse *= *srv-bdd\.durand\.lan\.? *$' $f
+
+  - id: ports
+    title: Ports et services
+    cours: |
+      Un service réseau écoute sur un **port** (TCP ou UDP). Quelques ports à connaître : 22 SSH, 53 DNS,
+      80/443 HTTP/HTTPS, 3389 RDP, 445 SMB, 3306 MySQL, 5432 PostgreSQL.
+
+      - Depuis une autre machine : `nmap -p <plage> <hôte>` (ou `-p-` pour les 65535 ports) liste les ports
+        ouverts ; `nc -zv <hôte> <port>` teste un port précis ; `nc <hôte> <port>` affiche la **bannière**
+        que certains services envoient à la connexion.
+      - Sur la machine elle-même : `ss -ltnp` liste les sockets TCP en écoute (`l`), sans résolution (`n`),
+        avec le processus (`p`, nécessite root).
+    description: |
+      1. Le serveur `srv-bdd` héberge une base de données, mais personne ne sait sur quel port. Trouve-le
+         avec `nmap` (ou `nc -zv srv-bdd 1-10000`), puis récupère la bannière avec `nc`. Réponse : `bdd_port=`.
+      2. Sur **ton propre poste**, un agent d'inventaire écoute en TCP. Avec `ss -ltnp`, trouve son port et
+         le nom de son processus. Réponses : `agent_port=` et `agent_processus=`.
+    hint: "nmap -p- srv-bdd ; ss -ltnp"
+    checks:
+      - desc: Port de la base de données
+        run: grep -Eqi '^bdd_port *= *5432 *$' /root/reponses.txt
+      - desc: Port et processus de l'agent local
+        run: grep -Eqi '^agent_port *= *8731 *$' /root/reponses.txt && grep -Eqi '^agent_processus *= *inventaire-agt *$' /root/reponses.txt
+
+  - id: decouverte
+    title: Retrouver une machine sur le LAN
+    cours: |
+      Pour retrouver une machine sur le réseau local :
+
+      - `nmap -sn <réseau>/<préfixe>` fait un **balayage ping** (sans scan de ports) et liste les adresses
+        qui répondent ; sur un LAN, nmap utilise des requêtes ARP, impossibles à filtrer ;
+      - `ip neigh` affiche la **table ARP** : les correspondances IP ↔ MAC apprises récemment. Les premiers
+        octets d'une MAC (OUI) identifient souvent le fabricant ;
+      - la plupart des imprimantes, onduleurs et équipements réseau ont une page d'administration web
+        (`curl http://<adresse>/`).
+
+      Une fois trouvée, une imprimante devrait recevoir une **réservation DHCP** ou une adresse fixe
+      documentée.
+    description: |
+      Une imprimante a été branchée sur le LAN mais personne n'a noté son adresse. Fais un balayage du réseau
+      (`nmap -sn 192.168.10.0/24`, ou une boucle de `ping`), consulte la table ARP (`ip neigh`) puis sa page
+      web d'administration.
+
+      Réponses : `imprimante_ip=` et `imprimante_serie=` (le numéro de série affiché sur sa page).
+    hint: "nmap -sn 192.168.10.0/24 puis curl http://<adresse>/"
+    checks:
+      - desc: Adresse de l'imprimante
+        run: grep -Eqi '^imprimante_ip *= *192\.168\.10\.77 *$' /root/reponses.txt
+      - desc: Numéro de série
+        run: grep -Eqi '^imprimante_serie *= *IMP-4821-DR *$' /root/reponses.txt
+
+  - id: capture
+    title: Capturer le trafic avec tcpdump
+    cours: |
+      `tcpdump` capture les paquets qui passent sur une interface.
+
+      - `-i <interface>` choisit l'interface, `-n` désactive la résolution des noms ;
+      - un **filtre** à la fin limite la capture : `port 53`, `host 10.0.20.53`, `tcp port 443`... ;
+      - `-w fichier.pcap` enregistre les paquets bruts (lisibles ensuite avec `tcpdump -r` ou Wireshark) ;
+      - `-r fichier.pcap` relit une capture.
+
+      Pour capturer pendant qu'on fait autre chose, on lance tcpdump en arrière-plan (`&`), puis on l'arrête
+      avec `kill %1` (ou `fg` puis Ctrl+C). Laisse une seconde à tcpdump pour démarrer avant de générer le
+      trafic.
+    description: |
+      Pour prouver à un collègue que le poste interroge bien le bon DNS, capture le trafic DNS
+      (port 53) dans le fichier `/root/capture-dns.pcap` pendant que tu résous `srv-bdd.durand.lan`.
+
+      Lance la capture en arrière-plan, fais la requête, puis arrête tcpdump. Relis la capture avec
+      `tcpdump -nr /root/capture-dns.pcap` : on doit y voir la question **et** la réponse du serveur.
+    hint: "tcpdump -i eth0 -w /root/capture-dns.pcap port 53 &  puis  dig srv-bdd.durand.lan  puis  kill %1"
+    checks:
+      - desc: La capture contient la requête A pour srv-bdd.durand.lan
+        run: tcpdump -nr /root/capture-dns.pcap 2>/dev/null | grep -q 'A? srv-bdd\.durand\.lan'
+      - desc: La capture contient la réponse 10.0.20.30 envoyée par 10.0.20.53
+        run: tcpdump -nr /root/capture-dns.pcap 2>/dev/null | grep '10\.0\.20\.53\.53 >' | grep -q 'A 10\.0\.20\.30'
+
+  - id: ip-adresse-secondaire
+    title: Ajouter une seconde adresse IP
+    cours: |
+      Une interface peut porter **plusieurs adresses IP**, du même réseau ou de réseaux différents. C'est
+      utile lors d'une migration (l'ancienne adresse reste joignable), pour héberger plusieurs services ou
+      pour joindre temporairement un autre sous-réseau sur le même câble.
+
+      - `ip addr add <adresse>/<préfixe> dev <interface>` ajoute une adresse ;
+      - `ip addr del ...` la retire ;
+      - `ip -br addr show <interface>` liste toutes les adresses de l'interface.
+
+      Comme toute commande `ip`, l'ajout est perdu au redémarrage : en production, on déclare les deux
+      adresses dans Netplan (liste `addresses:`). Sous Windows, c'est le bouton « Avancé » des propriétés IPv4.
+    description: |
+      Pendant une migration, le poste admin doit répondre aussi sur l'adresse de l'ancien poste
+      d'administration, `192.168.10.51`. Ajoute cette **seconde adresse** (même réseau, préfixe `/24`) sur
+      `eth0`, sans retirer la première.
+
+      Vérifie avec `ip -br addr show eth0` : les deux adresses doivent apparaître.
+    hint: ip addr add 192.168.10.51/24 dev eth0
+    checks:
+      - desc: eth0 porte 192.168.10.51/24
+        run: ip -4 addr show dev eth0 | grep -q 'inet 192\.168\.10\.51/24'
+      - desc: L'adresse d'origine est conservée
+        run: ip -4 addr show dev eth0 | grep -q 'inet 192\.168\.10\.50/24'
+
+  - id: ip-fichier-hosts
+    title: Résolution locale avec /etc/hosts
+    cours: |
+      Avant (ou à la place) du DNS, le système consulte le fichier **`/etc/hosts`** : une ligne par adresse,
+      suivie d'un ou plusieurs noms. L'ordre de consultation est défini par la ligne `hosts:` de
+      `/etc/nsswitch.conf` (`files` = /etc/hosts, `dns` = serveurs DNS).
+
+      - `getent hosts <nom>` suit cet ordre, comme les applications ;
+      - `dig` et `nslookup` interrogent **uniquement** le DNS et ignorent /etc/hosts.
+
+      Sous Windows, l'équivalent est `C:\Windows\System32\drivers\etc\hosts`. C'est une solution de
+      dépannage : un nom défini localement sur 50 postes devient vite impossible à maintenir.
+    description: |
+      Une vieille application cherche le serveur de base de données sous le nom court `bdd`, qui n'existe pas
+      dans le DNS. En attendant sa reconfiguration, fais en sorte que **le poste admin** résolve `bdd` en
+      `10.0.20.30` grâce au fichier `/etc/hosts`.
+
+      Compare ensuite `getent hosts bdd` (utilise /etc/hosts) et `dig bdd` (interroge seulement le DNS).
+    hint: echo '10.0.20.30 bdd' >> /etc/hosts
+    checks:
+      - desc: getent résout bdd en 10.0.20.30
+        run: getent hosts bdd | grep -q '^10\.0\.20\.30'
+      - desc: Le nom est bien défini dans /etc/hosts
+        run: grep -Eq '^10\.0\.20\.30[[:space:]].*\bbdd\b' /etc/hosts
+
+  - id: ip-dns-txt
+    title: Lire un enregistrement TXT
+    cours: |
+      Un enregistrement **TXT** contient du texte libre. On le rencontre surtout pour :
+
+      - **SPF** (`v=spf1 ...`) : quels serveurs ont le droit d'envoyer du courrier pour le domaine ;
+      - **DKIM** et **DMARC** : signature et politique anti-usurpation de la messagerie ;
+      - les **vérifications de propriété** demandées par Microsoft 365, Google ou une autorité de certification.
+
+      `dig TXT <domaine>` affiche l'enregistrement, `+short` ne garde que la valeur (entre guillemets).
+      Grâce au domaine de recherche configuré plus tôt, le nom de domaine s'écrit en entier ici.
+    description: |
+      Le domaine `durand.lan` publie un enregistrement **TXT** (texte libre, utilisé aussi pour SPF ou les
+      vérifications de domaine). Lis-le avec `dig` et ajoute à `/root/reponses.txt` la ligne
+      `dns_txt=<texte, sans les guillemets>`.
+    hint: dig +short TXT durand.lan
+    checks:
+      - desc: Texte de l'enregistrement TXT
+        run: grep -Eqi '^dns_txt *= *"?Ateliers Durand - service informatique"? *$' /root/reponses.txt
+
+  - id: ip-mac-routeur
+    title: Adresse MAC de la passerelle
+    cours: |
+      L'**ARP** (Address Resolution Protocol) fait le lien entre une adresse IP et l'adresse **MAC** sur le
+      réseau local : avant d'envoyer une trame à la passerelle, le poste demande « qui a 192.168.10.254 ? » en
+      broadcast et mémorise la réponse quelques minutes.
+
+      - `ip neigh` (ou `arp -n`) affiche ce cache ; l'état `REACHABLE` indique une entrée récente ;
+      - sous Windows : `arp -a`.
+
+      Un conflit d'adresses ou une attaque par **usurpation ARP** se repère quand la MAC associée à une IP
+      change : comparer avec l'étiquette ou la configuration de l'équipement.
+    description: |
+      Un collègue soupçonne un conflit d'adresse sur la passerelle. Relève l'**adresse MAC** associée à
+      `192.168.10.254` dans la table ARP (voisins) du poste admin et ajoute à `/root/reponses.txt` :
+      `routeur_mac=<adresse MAC>`.
+
+      Si la passerelle n'apparaît pas, envoie-lui d'abord un ping : la table ARP ne contient que les machines
+      avec qui le poste a parlé récemment.
+    hint: "ping -c1 192.168.10.254 ; ip neigh show 192.168.10.254"
+    checks:
+      - desc: MAC de 192.168.10.254
+        run: |
+          ping -c1 -W2 192.168.10.254 >/dev/null 2>&1
+          m=$(ip neigh show 192.168.10.254 | awk '{for(i=1;i<NF;i++) if($i=="lladdr") print $(i+1)}')
+          test -n "$m" && grep -Eqi "^routeur_mac *= *$m *$" /root/reponses.txt

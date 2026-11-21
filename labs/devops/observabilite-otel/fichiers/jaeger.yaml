@@ -1,0 +1,40 @@
+# Jaeger v2 tout-en-un, stockage en mémoire (les traces disparaissent à l'arrêt).
+# Il reçoit l'OTLP sur des ports décalés (14317 gRPC, 14318 HTTP) pour laisser 4317/4318
+# au collecteur OpenTelemetry ; interface web et API sur 16686.
+service:
+  extensions: [jaeger_storage, jaeger_query]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [jaeger_storage_exporter]
+  telemetry:
+    metrics:
+      level: none
+    logs:
+      level: info
+
+extensions:
+  jaeger_query:
+    storage:
+      traces: memoire
+  jaeger_storage:
+    backends:
+      memoire:
+        memory:
+          max_traces: 100000
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:14317
+      http:
+        endpoint: 0.0.0.0:14318
+
+processors:
+  batch:
+
+exporters:
+  jaeger_storage_exporter:
+    trace_storage: memoire

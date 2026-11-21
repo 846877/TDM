@@ -1,0 +1,10 @@
+application: boutique
+environnement: prod
+base:
+  hote: db.interne
+	port: 5432
+fonctions:
+  - panier
+  - paiement
+   - suivi
+responsable: equipe-web

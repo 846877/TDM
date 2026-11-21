@@ -1,0 +1,103 @@
+title: ACL étendue nommée
+level: expert
+order: 2
+device: router
+hostname: R1
+tags: [acl, sécurité, tcp]
+summary: Filtrer par protocole et par port.
+description: |
+  Le VLAN invités (`192.168.30.0/24`, derrière `G0/0`) ne doit avoir accès **qu'au web**.
+
+  Crée l'ACL étendue nommée `INVITES-WEB` :
+
+  - autoriser `tcp` depuis `192.168.30.0 0.0.0.255` vers `any` port `80` (`eq 80`),
+  - idem pour le port `443`,
+  - autoriser `udp` depuis ce réseau vers `any` port `53` (DNS),
+  - refuser tout le reste : `deny ip any any`.
+
+  Applique-la en **entrée** de `G0/0` (au plus près de la **source** pour une ACL étendue).
+initial: |
+  interface g0/0
+  ip address 192.168.30.1 255.255.255.0
+  no shutdown
+checks:
+  - desc: HTTP autorisé
+    expr: '"permit tcp 192.168.30.0 0.0.0.255 any eq 80" in acl("INVITES-WEB") or "permit tcp 192.168.30.0 0.0.0.255 any eq www" in acl("INVITES-WEB")'
+  - desc: HTTPS autorisé
+    expr: '"permit tcp 192.168.30.0 0.0.0.255 any eq 443" in acl("INVITES-WEB")'
+  - desc: DNS autorisé
+    expr: '"permit udp 192.168.30.0 0.0.0.255 any eq 53" in acl("INVITES-WEB") or "permit udp 192.168.30.0 0.0.0.255 any eq domain" in acl("INVITES-WEB")'
+  - desc: Le reste est refusé
+    expr: acl("INVITES-WEB")[-1:] == ["deny ip any any"]
+  - desc: ACL appliquée en entrée de G0/0
+    expr: intf("g0/0").access_groups.get("in") == "INVITES-WEB"
+solution: |
+  configure terminal
+  ip access-list extended INVITES-WEB
+  permit tcp 192.168.30.0 0.0.0.255 any eq 80
+  permit tcp 192.168.30.0 0.0.0.255 any eq 443
+  permit udp 192.168.30.0 0.0.0.255 any eq 53
+  deny ip any any
+  exit
+  interface g0/0
+  ip access-group INVITES-WEB in
+  end
+cours: |
+  ## Filtrer finement
+
+  Une ACL **étendue** (numéros 100-199, 2000-2699, ou **nommée**) examine :
+
+  - le **protocole** (`ip`, `tcp`, `udp`, `icmp`, `ospf`...) ;
+  - l'adresse **source** et l'adresse **destination** ;
+  - les **ports** TCP/UDP (`eq`, `neq`, `lt`, `gt`, `range`) ;
+  - d'autres critères (`established`, type ICMP, DSCP...).
+
+  ```
+  {permit|deny} <protocole> <source> <wildcard> [port] <destination> <wildcard> [port]
+  ```
+
+  ### ACL nommée (autres valeurs)
+
+  ```
+  R1(config)# ip access-list extended STAGIAIRES
+  R1(config-ext-nacl)# permit tcp 172.16.70.0 0.0.0.255 any eq 443
+  R1(config-ext-nacl)# permit udp 172.16.70.0 0.0.0.255 host 172.16.100.53 eq 53
+  R1(config-ext-nacl)# permit icmp 172.16.70.0 0.0.0.255 any echo
+  R1(config-ext-nacl)# deny ip any any log
+  R1(config)# interface gi0/1.70
+  R1(config-subif)# ip access-group STAGIAIRES in
+  R1# show access-lists STAGIAIRES
+  ```
+
+  Les ACL nommées sont plus lisibles et s'éditent ligne par ligne (numéros de séquence). IOS
+  affiche les ports connus par leur nom : `eq www` (80), `eq domain` (53), `eq 443`.
+
+  ### Ports à connaître
+
+  | Service | Port      | Service | Port     |
+  |---------|-----------|---------|----------|
+  | HTTP    | TCP 80    | DNS     | UDP/TCP 53 |
+  | HTTPS   | TCP 443   | DHCP    | UDP 67/68 |
+  | SSH     | TCP 22    | SNMP    | UDP 161  |
+  | Telnet  | TCP 23    | Syslog  | UDP 514  |
+
+  ### Où placer une ACL étendue ?
+
+  **Près de la source** : le trafic indésirable est jeté avant de traverser le réseau. Une ACL
+  en entrée filtre aussi le trafic destiné au routeur (DHCP, ping de la passerelle, protocoles de
+  routage) : il faut parfois l'autoriser explicitement.
+
+  ### Pièges fréquents
+
+  - Oublier le DNS : « Internet ne marche pas » alors que HTTP/HTTPS sont autorisés.
+  - Inverser source et destination.
+  - `deny ip any any` explicite inutile... sauf pour ajouter `log`.
+
+  ### Pour le CCNA
+
+  Les ACL étendues nommées et numérotées, leur syntaxe et leur placement sont incontournables.
+docs:
+  - title: "Cisco — Configure Commonly Used IP ACLs"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/access-lists/26448-ACLsamples.html
+  - title: "Wikipédia — Liste des ports logiciels"
+    url: https://fr.wikipedia.org/wiki/Liste_de_ports_logiciels

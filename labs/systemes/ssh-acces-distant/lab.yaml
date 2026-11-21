@@ -1,0 +1,435 @@
+title: Administrer des serveurs à distance avec SSH
+level: debutant
+order: 4
+tags: [ssh, clés, scp, rsync, sudo, accès distant]
+summary: Connexion par mot de passe puis par clé, fichier ~/.ssh/config, commandes distantes, scp, rsync et sudo à distance.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Les serveurs d'*Ateliers Durand* sont dans une baie au sous-sol : on les administre
+  depuis le poste du service informatique, en **SSH**. Ton chef te demande de mettre en place un accès par
+  clé, plus sûr et plus pratique que le mot de passe, puis de réaliser quelques opérations courantes.
+
+  **Machines.**
+
+  | Machine        | Rôle               | Compte SSH                   |
+  |----------------|--------------------|------------------------------|
+  | `admin`        | ton poste (root)   | -                            |
+  | `srv-fichiers` | serveur de fichiers| `tech` / `Tech2024!` (sudo)  |
+  | `srv-web`      | serveur intranet   | `tech` / `Tech2024!` (sudo)  |
+
+  Sur ton poste : `/root/site/` (nouvelle version du site intranet) et `/root/outils/maj.sh`
+  (script de maintenance).
+cours: |
+  ## SSH en deux mots
+
+  **SSH** (port TCP 22) ouvre un canal **chiffré et authentifié** vers une machine distante : shell,
+  commandes, copie de fichiers, tunnels. Il a remplacé Telnet et rsh qui faisaient passer les mots de passe
+  en clair. Sous Linux, c'est **OpenSSH** : le client `ssh` et le serveur `sshd` ; Windows 10/11 et
+  Windows Server l'intègrent aussi.
+
+  ## Deux authentifications distinctes
+
+  ```
+  poste admin                                      srv-web
+  ───────────                                      ───────
+  1. Le SERVEUR prouve son identité  ◀──────────── clé d'hôte /etc/ssh/ssh_host_ed25519_key
+     empreinte comparée à ~/.ssh/known_hosts
+  2. L'UTILISATEUR prouve la sienne  ────────────▶ ~tech/.ssh/authorized_keys
+     mot de passe, ou signature avec ~/.ssh/id_ed25519 (clé privée, ne quitte jamais le poste)
+  ```
+
+  1. **Le serveur** s'authentifie avec sa clé d'hôte. À la première connexion, le client affiche son
+     empreinte et demande confirmation (*TOFU*, « trust on first use ») ; elle est ensuite mémorisée dans
+     `known_hosts`. Si elle change, SSH refuse avec un gros avertissement : serveur réinstallé... ou
+     attaque de l'homme du milieu. On ne supprime l'ancienne entrée (`ssh-keygen -R hôte`) qu'après avoir
+     compris pourquoi.
+  2. **L'utilisateur** s'authentifie par mot de passe ou par **clé** : le serveur vérifie une signature
+     produite par la clé privée avec la clé publique listée dans `authorized_keys`. Aucun secret ne transite.
+
+  ## Les fichiers à connaître
+
+  | Fichier (côté)                         | Rôle                                                   |
+  |----------------------------------------|--------------------------------------------------------|
+  | `~/.ssh/id_ed25519` (client)           | clé privée, droits **600**                             |
+  | `~/.ssh/id_ed25519.pub` (client)       | clé publique, à distribuer                             |
+  | `~/.ssh/known_hosts` (client)          | empreintes des serveurs déjà vus                       |
+  | `~/.ssh/config` (client)               | alias et options par hôte                              |
+  | `~/.ssh/authorized_keys` (serveur)     | clés publiques autorisées pour ce compte (600, dossier 700) |
+  | `/etc/ssh/sshd_config` (serveur)       | configuration du démon                                 |
+
+  Exemple de `~/.ssh/config` :
+
+  ```
+  Host web
+      HostName srv-web.durand.lan
+      User tech
+      Port 22
+  Host *
+      ServerAliveInterval 30
+  ```
+
+  Pour chaque option, **la première valeur trouvée gagne** : on écrit les blocs précis avant `Host *`.
+  `ssh -G alias` affiche la configuration finale calculée, idéal pour vérifier.
+
+  ## Mémo des commandes
+
+  | Besoin                                | Commande                                            |
+  |---------------------------------------|-----------------------------------------------------|
+  | Se connecter                          | `ssh tech@srv-web`, `ssh -p 2222 ...`               |
+  | Générer une clé                       | `ssh-keygen -t ed25519 -C "commentaire"`            |
+  | Déployer sa clé publique              | `ssh-copy-id tech@srv-web`                          |
+  | Empreinte d'une clé                   | `ssh-keygen -lf ~/.ssh/id_ed25519.pub`              |
+  | Retrouver / oublier un hôte           | `ssh-keygen -F hôte` / `ssh-keygen -R hôte`         |
+  | Commande distante                     | `ssh web 'df -h /'`                                  |
+  | Commande distante avec sudo           | `ssh -t web 'sudo systemctl restart nginx'`         |
+  | Copier                                | `scp fichier web:/tmp/`, `scp web:/var/log/x .`     |
+  | Synchroniser                          | `rsync -avz --delete src/ web:/dest/`               |
+  | Déboguer                              | `ssh -v` (puis `-vv`, `-vvv`)                        |
+
+  ## rsync : la règle du slash final
+
+  ```
+  rsync -a site/  web:/var/www/site/    copie le CONTENU de site dans /var/www/site
+  rsync -a site   web:/var/www/site/    copie le DOSSIER : crée /var/www/site/site
+  ```
+
+  `--delete` supprime à la destination ce qui n'existe plus à la source : toujours le précéder d'un
+  `--dry-run` (`-n`). rsync ne transfère que les différences, ce qui le rend idéal pour publier ou
+  sauvegarder.
+
+  ## Pièges courants
+
+  - Droits trop ouverts : sshd ignore `authorized_keys` si le dossier personnel, `~/.ssh` ou le fichier
+    sont modifiables par d'autres. Le journal du serveur (`/var/log/auth.log`) le dit clairement.
+  - Clé privée lisible par d'autres : le client refuse de l'utiliser (« UNPROTECTED PRIVATE KEY FILE »).
+  - `sudo` à distance sans `-t` : pas de terminal pour taper le mot de passe.
+  - Guillemets : `ssh web "echo $HOME"` est développé **localement**, `ssh web 'echo $HOME'` sur le serveur.
+
+  ## Bonnes pratiques en entreprise
+
+  - Clés **ed25519** protégées par une passphrase, chargées dans `ssh-agent` ; une clé par personne.
+  - Côté serveur : `PermitRootLogin no`, `PasswordAuthentication no` une fois les clés en place,
+    `AllowGroups` pour restreindre les comptes autorisés.
+  - Révoquer l'accès d'un partant = retirer sa clé de tous les `authorized_keys` : d'où l'intérêt d'un
+    inventaire des clés (ou d'une gestion centralisée par Ansible, un bastion ou des certificats SSH).
+  - Vérifier l'empreinte d'un nouveau serveur par un autre canal (console, documentation).
+docs:
+  - title: ssh(1) - client OpenSSH (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man1/ssh.1.html
+  - title: ssh_config(5) - fichier ~/.ssh/config
+    url: https://manpages.ubuntu.com/manpages/noble/man5/ssh_config.5.html
+  - title: Debian Wiki - SSH
+    url: https://wiki.debian.org/SSH
+  - title: Wikipédia - Secure Shell
+    url: https://fr.wikipedia.org/wiki/Secure_Shell
+exercises:
+  - id: premiere-connexion
+    title: Première connexion et empreinte du serveur
+    cours: |
+      À la toute première connexion à un serveur, le client SSH ne le connaît pas : il affiche l'**empreinte**
+      (fingerprint, un condensé SHA256 de la clé d'hôte) et demande `yes/no`. Répondre `yes` ajoute la clé du
+      serveur dans `~/.ssh/known_hosts`.
+
+      - `ssh <utilisateur>@<machine>` ouvre la session ; `exit` ou Ctrl+D la ferme ;
+      - `ssh-keygen -F <machine>` cherche une machine dans `known_hosts` ;
+      - côté serveur, l'empreinte se lit avec `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`.
+
+      En entreprise, cette empreinte est communiquée par l'administrateur ou lue sur la console du serveur
+      avant la première connexion.
+    description: |
+      Connecte-toi à `srv-fichiers` avec le compte `tech` (mot de passe `Tech2024!`). À la première
+      connexion, SSH affiche l'**empreinte** de la clé du serveur : en entreprise, on la compare avec celle
+      communiquée par l'administrateur avant de répondre `yes`. Elle est alors enregistrée dans
+      `~/.ssh/known_hosts` et toute modification future (serveur réinstallé... ou attaque de
+      l'homme du milieu) déclenchera une alerte.
+
+      Fais de même avec `srv-web`, puis déconnecte-toi (`exit`).
+    hint: ssh tech@srv-fichiers
+    checks:
+      - desc: srv-fichiers est dans known_hosts
+        run: ssh-keygen -F srv-fichiers -f /root/.ssh/known_hosts >/dev/null
+      - desc: srv-web est dans known_hosts
+        run: ssh-keygen -F srv-web -f /root/.ssh/known_hosts >/dev/null
+
+  - id: ssh-cles
+    title: Générer une paire de clés
+    cours: |
+      `ssh-keygen` génère une paire de clés :
+
+      - `-t` le type : **ed25519** (moderne, court, recommandé) ou `rsa -b 4096` pour de vieux serveurs ;
+      - `-C` un commentaire, ajouté à la fin de la clé publique (on y met souvent `utilisateur@machine`) ;
+      - `-f` le chemin du fichier ; `-N ''` une passphrase vide (sinon, elle est demandée).
+
+      Le fichier sans extension est la clé **privée**, le `.pub` la clé **publique**. `ssh-keygen -lf` affiche
+      l'empreinte et le commentaire d'une clé. La clé privée doit être lisible par son seul propriétaire
+      (`600`), sinon le client SSH refuse de s'en servir.
+    description: |
+      Génère une paire de clés **ed25519** dans `~/.ssh/id_ed25519` avec le commentaire `admin@durand`.
+      Pour ce lab, laisse la passphrase vide (en production, on protège la clé par une passphrase et on
+      utilise `ssh-agent`).
+
+      La clé **privée** ne quitte jamais ton poste et doit être lisible par toi seul.
+    hint: ssh-keygen -t ed25519 -C admin@durand -f ~/.ssh/id_ed25519
+    checks:
+      - desc: Clé ed25519 présente avec le bon commentaire
+        run: ssh-keygen -l -f /root/.ssh/id_ed25519.pub | grep -q 'admin@durand (ED25519)'
+      - desc: La clé privée est en 600
+        run: test "$(stat -c %a /root/.ssh/id_ed25519)" = 600
+
+  - id: deployer-cle
+    title: Déployer la clé sur les serveurs
+    cours: |
+      Pour autoriser une clé, sa partie **publique** doit être ajoutée (une ligne) au fichier
+      `~/.ssh/authorized_keys` du compte cible sur le serveur.
+
+      `ssh-copy-id <utilisateur>@<machine>` fait tout : il se connecte une dernière fois avec le mot de passe,
+      crée `~/.ssh` avec les bons droits et ajoute la clé sans doublon. Sans cet outil, on peut faire
+      `cat ~/.ssh/id_ed25519.pub | ssh <cible> 'cat >> ~/.ssh/authorized_keys'`.
+
+      Pour vérifier qu'aucun mot de passe n'est plus demandé, l'option `-o BatchMode=yes` interdit toute
+      question interactive : la connexion réussit ou échoue immédiatement.
+    description: |
+      Copie ta clé publique dans `~/.ssh/authorized_keys` du compte `tech` sur **les deux serveurs**
+      (avec `ssh-copy-id`). Ensuite, la connexion ne doit plus demander de mot de passe.
+    hint: ssh-copy-id tech@srv-fichiers && ssh-copy-id tech@srv-web
+    checks:
+      - desc: Connexion par clé vers srv-fichiers
+        run: ssh -o BatchMode=yes -o ConnectTimeout=5 tech@srv-fichiers true
+      - desc: Connexion par clé vers srv-web
+        run: ssh -o BatchMode=yes -o ConnectTimeout=5 tech@srv-web true
+
+  - id: ssh-config-client
+    title: Fichier ~/.ssh/config
+    cours: |
+      `~/.ssh/config` évite de retaper utilisateur, port ou nom complet. Chaque bloc commence par
+      `Host <alias>` et contient des options indentées (`HostName`, `User`, `Port`, `IdentityFile`...).
+
+      - un bloc `Host *` s'applique à tous les hôtes ; place-le **à la fin**, car la première valeur trouvée
+        pour une option l'emporte ;
+      - `ServerAliveInterval` envoie un message de maintien de connexion toutes les N secondes ;
+      - `ssh -G <alias>` affiche la configuration résultante (noms d'options en minuscules) sans se connecter.
+
+      Le fichier ne doit pas être modifiable par d'autres utilisateurs (`600` conseillé). Les alias
+      fonctionnent aussi avec `scp`, `rsync` et `sftp`.
+    description: |
+      Pour ne plus taper `tech@srv-fichiers`, crée `~/.ssh/config` avec deux alias :
+
+      | Alias      | Machine        | Utilisateur |
+      |------------|----------------|-------------|
+      | `fichiers` | `srv-fichiers` | `tech`      |
+      | `web`      | `srv-web`      | `tech`      |
+
+      `ssh fichiers` doit suffire. Ajoute aussi, pour tous les hôtes, `ServerAliveInterval 30` (évite les
+      coupures des sessions inactives).
+    hint: "Host fichiers / HostName srv-fichiers / User tech  (un bloc Host par alias, puis Host * / ServerAliveInterval 30)"
+    checks:
+      - desc: L'alias fichiers pointe vers srv-fichiers avec tech
+        run: ssh -G fichiers | grep -qx 'hostname srv-fichiers' && ssh -G fichiers | grep -qx 'user tech'
+      - desc: L'alias web pointe vers srv-web avec tech
+        run: ssh -G web | grep -qx 'hostname srv-web' && ssh -G web | grep -qx 'user tech'
+      - desc: ServerAliveInterval 30
+        run: ssh -G web | grep -qx 'serveraliveinterval 30'
+      - desc: ssh fichiers fonctionne sans mot de passe
+        run: test "$(ssh -o BatchMode=yes fichiers hostname)" = srv-fichiers
+
+  - id: commandes-distantes
+    title: Lancer des commandes à distance
+    cours: |
+      `ssh <hôte> '<commande>'` exécute une commande sur le serveur et renvoie sa sortie, puis ferme la
+      connexion : c'est la base de l'automatisation sans outil supplémentaire.
+
+      - plusieurs commandes se séparent par `;` à l'intérieur des guillemets simples ;
+      - la sortie standard revient sur le poste : on peut la rediriger dans un fichier local avec `>` ;
+      - une boucle shell `for s in a b; do ...; done` répète l'opération sur plusieurs serveurs, et la
+        redirection placée après `done` regroupe toutes les sorties.
+
+      Utile à connaître : `hostname`, `uname -r` (version du noyau), `df -h /` (espace disque).
+    description: |
+      Sans ouvrir de session interactive, collecte pour **chaque** serveur son nom (`hostname`), sa version du
+      noyau (`uname -r`) et l'occupation de son disque racine (`df -h /`), et enregistre le tout dans
+      `/root/inventaire.txt` (une boucle `for s in fichiers web; do ssh $s '...'; done` est idéale).
+    hint: "for s in fichiers web; do ssh $s 'hostname; uname -r; df -h /'; done > /root/inventaire.txt"
+    checks:
+      - desc: L'inventaire contient les deux serveurs
+        run: grep -qx srv-fichiers /root/inventaire.txt && grep -qx srv-web /root/inventaire.txt
+      - desc: L'inventaire contient le noyau et l'espace disque
+        run: grep -q "$(uname -r)" /root/inventaire.txt && grep -q 'Filesystem\|Sys. de fichiers' /root/inventaire.txt
+
+  - id: scp
+    title: Copier des fichiers avec scp
+    cours: |
+      `scp` copie des fichiers à travers SSH, avec la syntaxe `scp <source> <destination>` où un chemin
+      distant s'écrit `hôte:chemin`.
+
+      - `hôte:` seul désigne le dossier personnel du compte distant ;
+      - `-r` copie un dossier, `-p` conserve dates et droits ;
+      - on peut copier vers le serveur ou depuis le serveur, selon l'ordre des arguments.
+
+      Pour exécuter un script copié, il doit être exécutable (`chmod +x`) ou lancé via son interpréteur
+      (`bash script.sh`). Pense à créer le dossier de destination local s'il n'existe pas.
+    description: |
+      1. Copie `/root/outils/maj.sh` dans le dossier personnel de `tech` sur `srv-web`, puis **exécute-le à
+         distance** (il crée le fichier `~/maj-ok`).
+      2. Rapatrie le journal `/var/log/app/app.log` de `srv-fichiers` dans `/root/logs/srv-fichiers-app.log`
+         sur ton poste.
+    hint: "scp /root/outils/maj.sh web: && ssh web ./maj.sh ; scp fichiers:/var/log/app/app.log /root/logs/srv-fichiers-app.log"
+    checks:
+      - desc: Le script a été exécuté sur srv-web
+        run: ssh -o BatchMode=yes tech@srv-web 'grep -q "maintenance effectuee sur srv-web" ~/maj-ok'
+      - desc: Le journal de srv-fichiers a été rapatrié
+        run: grep -q 'ERROR disque presque plein' /root/logs/srv-fichiers-app.log
+
+  - id: rsync
+    title: Synchroniser un site avec rsync
+    cours: |
+      `rsync` synchronise une source et une destination en ne transférant que les différences :
+
+      | Option          | Effet                                                         |
+      |-----------------|---------------------------------------------------------------|
+      | `-a`            | archive : récursif, conserve droits, dates, liens             |
+      | `-v`            | affiche les fichiers transférés                               |
+      | `-z`            | compresse pendant le transfert                                |
+      | `--delete`      | supprime à la destination ce qui a disparu de la source       |
+      | `-n` / `--dry-run` | simulation : montre ce qui serait fait                     |
+
+      Le **slash final de la source** change tout : avec `/`, on copie le contenu du dossier ; sans, on copie
+      le dossier lui-même dans la destination.
+    description: |
+      Publie la nouvelle version du site : synchronise le **contenu** de `/root/site/` vers
+      `/var/www/site/` sur `srv-web` avec `rsync` (archive, compression, affichage des fichiers transférés).
+      Le serveur contient une vieille page `obsolete.html` qui doit **disparaître** : le dossier distant doit
+      être le reflet exact du dossier local.
+
+      Commence par un essai à blanc (`--dry-run`) : c'est le réflexe à avoir avant tout `--delete`.
+    hint: "rsync -avz --delete /root/site/ web:/var/www/site/   (attention au / final de la source)"
+    checks:
+      - desc: index.html et contact.html sont publiés à l'identique
+        run: |
+          for f in index.html contact.html; do
+            test "$(ssh -o BatchMode=yes tech@srv-web md5sum /var/www/site/$f | cut -d' ' -f1)" = "$(md5sum /root/site/$f | cut -d' ' -f1)" || exit 1
+          done
+      - desc: obsolete.html a été supprimée et aucun sous-dossier site/ n'a été créé
+        run: ssh -o BatchMode=yes tech@srv-web 'test ! -e /var/www/site/obsolete.html && test ! -e /var/www/site/site'
+
+  - id: sudo-distant
+    title: Administrer avec sudo à distance
+    cours: |
+      `sudo` a besoin d'un **terminal** pour demander le mot de passe. Or `ssh hôte 'commande'` n'en alloue
+      pas : il faut l'option `-t`.
+
+      Autre piège : la redirection `>` est faite par **ton shell** (non privilégié), pas par sudo. Une
+      commande comme `sudo echo texte > /etc/fichier` échoue donc. La solution classique est de passer par
+      `tee`, lancé lui-même avec sudo, qui écrit ce qu'il reçoit sur son entrée standard dans un fichier.
+
+      `/etc/motd` (message of the day) est affiché à chaque ouverture de session : on y met les avertissements
+      légaux et le rôle du serveur.
+    description: |
+      Sur `srv-fichiers`, crée le message d'accueil `/etc/motd` contenant `Serveur de fichiers - acces
+      reserve au service informatique`. Le fichier appartient à root : il faut `sudo` (mot de passe de
+      `tech`), donc un terminal (`ssh -t`).
+    hint: "ssh -t fichiers \"echo 'Serveur de fichiers - acces reserve au service informatique' | sudo tee /etc/motd\""
+    checks:
+      - desc: /etc/motd de srv-fichiers contient le message et appartient à root
+        run: |
+          ssh -o BatchMode=yes tech@srv-fichiers 'grep -q "Serveur de fichiers - acces reserve au service informatique" /etc/motd && test "$(stat -c %U /etc/motd)" = root'
+
+  - id: ssh-sftp
+    title: Transférer en mode interactif avec sftp
+    cours: |
+      **SFTP** est un protocole de transfert de fichiers qui passe dans SSH (même port 22, même
+      authentification). Il n'a rien à voir avec FTP/FTPS malgré son nom.
+
+      Dans une session `sftp`, les commandes existent en deux versions : la version simple agit sur le
+      serveur (`ls`, `cd`, `pwd`, `mkdir`), la version préfixée par `l` agit sur le poste local (`lls`, `lcd`,
+      `lpwd`). `put` envoie, `get` récupère, `bye` quitte. `sftp -b fichier` exécute des commandes à la suite
+      (mode script).
+
+      Les alias de `~/.ssh/config` fonctionnent aussi avec sftp. Côté Windows, WinSCP et FileZilla parlent
+      SFTP.
+    description: |
+      `sftp` offre une session de transfert interactive (comme un client FTP, mais chiffrée par SSH). C'est
+      aussi ce qu'utilisent WinSCP ou FileZilla depuis un poste Windows.
+
+      Avec `sftp fichiers` :
+      1. crée le dossier `depot` dans le dossier personnel de `tech` sur srv-fichiers ;
+      2. dépose-y `/root/site/contact.html` ;
+      3. récupère `/etc/nom-serveur` du serveur dans `/root/logs/nom-fichiers.txt`.
+
+      Commandes sftp utiles : `pwd`/`lpwd`, `ls`/`lls`, `cd`/`lcd`, `mkdir`, `put`, `get`, `bye`.
+    hint: "sftp fichiers puis : mkdir depot / put /root/site/contact.html depot/ / get /etc/nom-serveur /root/logs/nom-fichiers.txt / bye"
+    checks:
+      - desc: depot/contact.html est présent sur srv-fichiers
+        run: ssh -o BatchMode=yes tech@srv-fichiers 'test -f ~/depot/contact.html'
+      - desc: Le fichier nom-serveur a été récupéré
+        run: grep -qx srv-fichiers /root/logs/nom-fichiers.txt
+
+  - id: ssh-cle-restreinte
+    title: Clé dédiée à une seule commande
+    cours: |
+      Chaque ligne d'`authorized_keys` peut commencer par des **options** qui limitent ce que permet la clé :
+
+      | Option                 | Effet                                                         |
+      |------------------------|---------------------------------------------------------------|
+      | `command="..."`        | exécute toujours cette commande, quelle que soit la demande   |
+      | `restrict`             | interdit redirections de ports, agent, X11 et terminal        |
+      | `from="10.0.0.0/8"`    | n'accepte la clé que depuis ces adresses                      |
+
+      Les options se séparent par des virgules, sans espace, avant le type de clé. C'est la technique classique
+      pour les clés de sauvegarde ou de supervision, qui n'ont pas de passphrase. `-i <fichier>` choisit la
+      clé, `-o IdentitiesOnly=yes` empêche d'en essayer d'autres.
+    description: |
+      La supervision doit pouvoir lire l'espace disque de srv-fichiers **sans** obtenir de shell.
+
+      1. Génère une seconde paire de clés sans passphrase : `/root/.ssh/supervision` (ed25519).
+      2. Ajoute sa clé publique dans `~/.ssh/authorized_keys` de `tech` sur srv-fichiers, précédée des
+         options `command="df -h /",restrict` : quelle que soit la commande demandée, le serveur
+         n'exécutera que `df -h /`.
+
+      Teste : `ssh -i /root/.ssh/supervision tech@srv-fichiers hostname` doit afficher l'espace disque, pas
+      le nom du serveur.
+    hint: "ssh-keygen -t ed25519 -N '' -f /root/.ssh/supervision ; puis ajoute la ligne : command=\"df -h /\",restrict ssh-ed25519 AAAA... dans authorized_keys (avec ssh fichiers)"
+    checks:
+      - desc: La clé de supervision existe
+        run: test -f /root/.ssh/supervision && test -f /root/.ssh/supervision.pub
+      - desc: La clé ne permet que df -h /
+        run: |
+          out=$(ssh -o BatchMode=yes -o IdentitiesOnly=yes -i /root/.ssh/supervision tech@srv-fichiers hostname 2>/dev/null)
+          echo "$out" | grep -q '/$' && ! echo "$out" | grep -qx srv-fichiers
+      - desc: Ta clé principale donne toujours un shell
+        run: test "$(ssh -o BatchMode=yes tech@srv-fichiers hostname)" = srv-fichiers
+
+  - id: ssh-durcissement
+    title: Durcir le serveur SSH
+    cours: |
+      Le démon lit `/etc/ssh/sshd_config` puis les fichiers de `/etc/ssh/sshd_config.d/*.conf` (inclus au
+      début : pour chaque directive, **la première valeur lue gagne**).
+
+      Directives de durcissement courantes : `PermitRootLogin no`, `PasswordAuthentication no`,
+      `KbdInteractiveAuthentication no`, `AllowGroups`, `MaxAuthTries 3`.
+
+      Toujours dans cet ordre : écrire la configuration, la **tester** avec `sshd -t` (n'affiche rien si
+      tout va bien), **recharger** le service sans couper les sessions ouvertes, puis tester une **nouvelle**
+      connexion depuis un autre terminal avant de fermer l'ancienne. Le signal `HUP` demande à sshd de relire
+      sa configuration.
+    description: |
+      Maintenant que l'accès par clé fonctionne, durcis **srv-web** :
+      - interdis la connexion directe de `root` (`PermitRootLogin no`) ;
+      - interdis l'authentification par mot de passe (`PasswordAuthentication no`).
+
+      Écris ces directives dans `/etc/ssh/sshd_config.d/durcissement.conf` (avec sudo), vérifie la syntaxe
+      avec `sudo sshd -t`, puis fais relire sa configuration à sshd : il tourne ici en processus n°1, donc
+      `sudo kill -HUP 1` (sur un vrai serveur : `sudo systemctl reload ssh`).
+
+      **Garde ta session ouverte** pendant le test : si tu t'es enfermé dehors, elle te permettra de corriger.
+    hint: "ssh -t web \"printf 'PermitRootLogin no\\nPasswordAuthentication no\\n' | sudo tee /etc/ssh/sshd_config.d/durcissement.conf && sudo sshd -t && sudo kill -HUP 1\""
+    checks:
+      - desc: srv-web refuse le mot de passe (seule la clé est proposée)
+        run: |
+          ssh -o BatchMode=yes -o PubkeyAuthentication=no -o StrictHostKeyChecking=no tech@srv-web true 2>&1 | grep -q 'Permission denied (publickey)'
+      - desc: La connexion par clé fonctionne toujours
+        run: ssh -o BatchMode=yes tech@srv-web true
+      - desc: PermitRootLogin no est configuré
+        run: ssh -o BatchMode=yes tech@srv-web 'grep -Eqi "^\s*PermitRootLogin\s+no" /etc/ssh/sshd_config.d/durcissement.conf'

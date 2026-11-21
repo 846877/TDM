@@ -1,0 +1,250 @@
+title: Prochaine exécution d'une tâche cron
+level: expert
+order: 36
+tags: [datetime, parsing, sysadmin, cron]
+summary: Analyser une expression crontab et calculer ses prochaines dates d'exécution.
+description: |
+  Une expression cron a 5 champs séparés par des espaces : minute (0-59), heure (0-23), jour
+  du mois (1-31), mois (1-12), jour de la semaine (0-7, où 0 et 7 désignent le dimanche).
+  Chaque champ est une liste séparée par des virgules d'éléments de la forme `*`, `a`, `a-b`,
+  éventuellement suivis de `/pas` (`*/15`, `10-20/5`, et `5/20` qui signifie « de 5 au
+  maximum, de 20 en 20 »).
+
+  1. `analyser_champ(champ, mini, maxi)` renvoie l'**ensemble** des valeurs désignées. Une
+     valeur hors de `[mini, maxi]`, une plage décroissante, un pas nul ou un texte invalide
+     lèvent `ValueError`.
+  2. `analyser(expression)` renvoie un dictionnaire avec les clés `"minute"`, `"heure"`,
+     `"jour"`, `"mois"`, `"jour_semaine"` (ensembles ; dans le dernier, 7 est converti en 0).
+     Un nombre de champs différent de 5 lève `ValueError`.
+  3. `prochaine(expression, apres)` renvoie le premier `datetime` **strictement postérieur**
+     à `apres` (secondes et microsecondes à 0) qui correspond à l'expression. Règle
+     historique de cron : si les champs jour du mois **et** jour de la semaine sont tous deux
+     restreints (ne commencent pas par `*`), une date convient si **l'un ou l'autre**
+     correspond ; sinon, les deux doivent correspondre. Si rien ne correspond dans les 5 ans,
+     lève `ValueError` (par exemple `"0 0 30 2 *"`). Ne teste pas minute par minute :
+     avance jour par jour, puis choisis directement l'heure et la minute.
+  4. `prochaines(expression, apres, n)` renvoie la liste des `n` prochaines dates.
+
+  ```python
+  prochaine("*/15 9-17 * * 1-5", datetime(2024, 3, 8, 17, 50))   # lundi 11 mars 2024, 9 h 00
+  prochaine("0 0 29 2 *", datetime(2024, 3, 1))                  # 29 février 2028, 0 h 00
+  ```
+starter: |
+  from datetime import date, datetime, time, timedelta
+
+
+  def analyser_champ(champ, mini, maxi):
+      pass
+
+
+  def analyser(expression):
+      pass
+
+
+  def prochaine(expression, apres):
+      pass
+
+
+  def prochaines(expression, apres, n):
+      pass
+tests: |
+  from datetime import datetime
+  import time as chrono
+
+  def test_analyser_champ():
+      "analyser_champ"
+      a = solution.analyser_champ
+      assert a("*", 0, 5) == {0, 1, 2, 3, 4, 5}
+      assert a("*/15", 0, 59) == {0, 15, 30, 45}
+      assert a("1-5", 0, 7) == {1, 2, 3, 4, 5}
+      assert a("10-20/5", 0, 59) == {10, 15, 20}
+      assert a("5/20", 0, 59) == {5, 25, 45}
+      assert a("1,15,1-3", 1, 31) == {1, 2, 3, 15}
+      for mauvais in ["60", "5-1", "*/0", "a", "", "1,,2", "-1", "1-", "3/x"]:
+          try:
+              a(mauvais, 0, 59)
+          except ValueError:
+              continue
+          raise AssertionError(f"{mauvais!r} devrait lever ValueError")
+
+  def test_analyser():
+      "analyser"
+      r = solution.analyser("30 2 * * 0,7")
+      assert r == {"minute": {30}, "heure": {2}, "jour": set(range(1, 32)), "mois": set(range(1, 13)),
+                   "jour_semaine": {0}}, r
+      for mauvais in ["* * * *", "* * * * * *", "* * 0 * *", "* * * 13 *", "* * * * 8"]:
+          try:
+              solution.analyser(mauvais)
+          except ValueError:
+              continue
+          raise AssertionError(f"{mauvais!r} devrait lever ValueError")
+
+  def test_prochaine_simple():
+      "prochaine : cas simples"
+      p = solution.prochaine
+      assert p("* * * * *", datetime(2024, 1, 1, 10, 0, 30)) == datetime(2024, 1, 1, 10, 1)
+      assert p("0 * * * *", datetime(2024, 1, 1, 10, 0)) == datetime(2024, 1, 1, 11, 0), "strictement après"
+      assert p("30 2 * * *", datetime(2024, 1, 1, 3, 0)) == datetime(2024, 1, 2, 2, 30)
+      assert p("0 0 1 1 *", datetime(2024, 6, 15)) == datetime(2025, 1, 1)
+      assert p("59 23 31 12 *", datetime(2024, 12, 31, 23, 58)) == datetime(2024, 12, 31, 23, 59)
+
+  def test_prochaine_semaine():
+      "prochaine : jours ouvrés"
+      # 8 mars 2024 est un vendredi
+      assert solution.prochaine("*/15 9-17 * * 1-5", datetime(2024, 3, 8, 17, 50)) == datetime(2024, 3, 11, 9, 0)
+      assert solution.prochaine("*/15 9-17 * * 1-5", datetime(2024, 3, 8, 16, 50)) == datetime(2024, 3, 8, 17, 0)
+      assert solution.prochaine("0 3 * * 7", datetime(2024, 3, 8)) == datetime(2024, 3, 10, 3, 0)
+
+  def test_regle_ou():
+      "prochaine : jour du mois OU jour de la semaine"
+      # le 13 ou un vendredi : après le mercredi 6 mars 2024 vient le vendredi 8
+      assert solution.prochaine("0 12 13 * 5", datetime(2024, 3, 6)) == datetime(2024, 3, 8, 12, 0)
+      assert solution.prochaine("0 12 13 * 5", datetime(2024, 3, 8, 13)) == datetime(2024, 3, 13, 12, 0)
+      # */2 commence par * : les deux conditions s'appliquent (ET)
+      assert solution.prochaine("0 0 */2 * 1", datetime(2024, 3, 1)) == datetime(2024, 3, 11, 0, 0)
+
+  def test_annees():
+      "prochaine : années bissextiles et dates impossibles"
+      debut = chrono.perf_counter()
+      assert solution.prochaine("0 0 29 2 *", datetime(2024, 3, 1)) == datetime(2028, 2, 29)
+      try:
+          solution.prochaine("0 0 30 2 *", datetime(2024, 1, 1))
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("ValueError attendue")
+      assert chrono.perf_counter() - debut < 2, "trop lent : n'avance pas minute par minute"
+
+  def test_prochaines():
+      "prochaines"
+      r = solution.prochaines("0 */6 * * *", datetime(2024, 1, 1, 5, 0), 4)
+      assert r == [datetime(2024, 1, 1, 6), datetime(2024, 1, 1, 12), datetime(2024, 1, 1, 18), datetime(2024, 1, 2, 0)]
+solution: |
+  import re
+  from datetime import date, datetime, time, timedelta
+
+  _ELEMENT = re.compile(r"(\*|\d+(?:-\d+)?)(?:/(\d+))?")
+
+
+  def analyser_champ(champ, mini, maxi):
+      valeurs = set()
+      for element in champ.split(","):
+          m = _ELEMENT.fullmatch(element)
+          if not m:
+              raise ValueError(f"élément invalide : {element!r}")
+          base, pas = m.group(1), m.group(2)
+          if base == "*":
+              debut, fin = mini, maxi
+          elif "-" in base:
+              debut, fin = map(int, base.split("-"))
+          else:
+              debut = int(base)
+              fin = maxi if pas else debut
+          pas = int(pas) if pas else 1
+          if pas == 0 or debut > fin or debut < mini or fin > maxi:
+              raise ValueError(f"élément hors limites : {element!r}")
+          valeurs.update(range(debut, fin + 1, pas))
+      return valeurs
+
+
+  def analyser(expression):
+      champs = expression.split()
+      if len(champs) != 5:
+          raise ValueError("5 champs attendus")
+      minute, heure, jour, mois, semaine = champs
+      return {
+          "minute": analyser_champ(minute, 0, 59),
+          "heure": analyser_champ(heure, 0, 23),
+          "jour": analyser_champ(jour, 1, 31),
+          "mois": analyser_champ(mois, 1, 12),
+          "jour_semaine": {v % 7 for v in analyser_champ(semaine, 0, 7)},
+      }
+
+
+  def prochaine(expression, apres):
+      c = analyser(expression)
+      champs = expression.split()
+      jour_restreint = not champs[2].startswith("*")
+      semaine_restreinte = not champs[4].startswith("*")
+      heures, minutes = sorted(c["heure"]), sorted(c["minute"])
+
+      def jour_convient(j):
+          ok_jour = j.day in c["jour"]
+          ok_semaine = (j.weekday() + 1) % 7 in c["jour_semaine"]
+          if jour_restreint and semaine_restreinte:
+              return ok_jour or ok_semaine
+          return ok_jour and ok_semaine
+
+      depart = apres.replace(second=0, microsecond=0) + timedelta(minutes=1)
+      j = depart.date()
+      for _ in range(366 * 5 + 2):
+          if j.month in c["mois"] and jour_convient(j):
+              h0, m0 = (depart.hour, depart.minute) if j == depart.date() else (0, 0)
+              for h in heures:
+                  if h < h0:
+                      continue
+                  for m in minutes:
+                      if h == h0 and m < m0:
+                          continue
+                      return datetime.combine(j, time(h, m))
+          j += timedelta(days=1)
+      raise ValueError(f"aucune exécution dans les 5 ans pour {expression!r}")
+
+
+  def prochaines(expression, apres, n):
+      dates = []
+      for _ in range(n):
+          apres = prochaine(expression, apres)
+          dates.append(apres)
+      return dates
+cours: |
+  ## Le format crontab
+
+  ```
+  # m   h    jdm  mois  jds   commande
+  */5   *    *    *     *     /usr/local/bin/sonde.sh
+  30    2    *    *     0     /usr/local/bin/sauvegarde.sh     # dimanche 2 h 30
+  0     9-18 *    *     1-5   /usr/local/bin/rapport.sh        # heures ouvrées
+  ```
+
+  Chaque champ accepte `*`, une valeur, une plage `a-b`, une liste `a,b,c` et un pas `/n`.
+  Pour le jour de la semaine, 0 et 7 désignent tous les deux le dimanche.
+
+  ## Analyser : des ensembles
+
+  Transformer chaque champ en **ensemble de valeurs autorisées** simplifie tout le reste : une
+  date convient si chacune de ses composantes appartient à l'ensemble correspondant. Une
+  expression régulière par élément (`(\*|\d+(-\d+)?)(/\d+)?`) suivie de vérifications de
+  bornes donne un analyseur robuste. Refuser explicitement les entrées invalides évite les
+  tâches qui ne s'exécutent jamais sans que personne s'en aperçoive.
+
+  ## Le piège du jour
+
+  Quand le jour du mois **et** le jour de la semaine sont restreints, cron exécute la tâche si
+  **l'un ou l'autre** correspond : `0 12 13 * 5` signifie « le 13 **ou** chaque vendredi », et
+  non « les vendredis 13 ». Cette règle surprend beaucoup d'administrateurs. Un champ qui
+  commence par `*` (même `*/2`) compte comme non restreint.
+
+  ## Chercher efficacement
+
+  Tester chaque minute sur cinq ans représente 2,6 millions d'itérations. On avance plutôt
+  **jour par jour** (au plus ~1800 jours) ; pour un jour valide, on prend directement la
+  première heure et la première minute autorisées (en partant de l'heure courante si c'est le
+  jour de départ). On pourrait aller plus loin en sautant des mois entiers.
+
+  ## `datetime` en pratique
+
+  - `dt.replace(second=0, microsecond=0)` tronque ;
+  - `timedelta(days=1)` gère les fins de mois et les années bissextiles ;
+  - `dt.weekday()` renvoie 0 pour lundi : il faut convertir vers la convention cron
+    (`(weekday + 1) % 7`, 0 = dimanche) ;
+  - `datetime.combine(date, time)` assemble une date et une heure.
+
+  Une expression impossible (`0 0 30 2 *`, un 30 février) doit être détectée : on borne la recherche
+  et on lève une exception. Enfin, les changements d'heure (heure d'été) sont une source de
+  bugs réels : cron peut sauter ou doubler une exécution entre 2 h et 3 h du matin.
+docs:
+  - title: Module datetime
+    url: https://docs.python.org/fr/3/library/datetime.html
+  - title: Module re
+    url: https://docs.python.org/fr/3/library/re.html

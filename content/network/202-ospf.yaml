@@ -1,0 +1,95 @@
+title: Routage dynamique OSPF
+level: avance
+order: 2
+device: router
+hostname: R1
+tags: [ospf, routage dynamique, wildcard]
+summary: Annoncer ses réseaux en OSPF zone 0.
+description: |
+  Active **OSPF** (processus `1`) sur `R1` :
+
+  - router-id `1.1.1.1` ;
+  - annonce le LAN `192.168.1.0/24` et le lien WAN `10.0.0.0/30` dans la **zone 0** ;
+  - rends l'interface LAN `G0/0` **passive** (pas d'annonces OSPF vers les PC).
+
+  Rappel : OSPF utilise des **masques génériques** (wildcard) : `/24` → `0.0.0.255`, `/30` → `0.0.0.3`.
+initial: |
+  interface g0/0
+  ip address 192.168.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 10.0.0.1 255.255.255.252
+  no shutdown
+checks:
+  - desc: Processus OSPF 1 avec router-id 1.1.1.1
+    expr: 1 in d.ospf and d.ospf[1].router_id == "1.1.1.1"
+  - desc: Réseau 192.168.1.0/24 annoncé en zone 0
+    expr: ospf_net("192.168.1.0", "0.0.0.255", 0)
+    hint: "network 192.168.1.0 0.0.0.255 area 0"
+  - desc: Réseau 10.0.0.0/30 annoncé en zone 0
+    expr: ospf_net("10.0.0.0", "0.0.0.3", 0)
+  - desc: G0/0 passive
+    expr: 1 in d.ospf and "GigabitEthernet0/0" in d.ospf[1].passive
+solution: |
+  configure terminal
+  router ospf 1
+  router-id 1.1.1.1
+  network 192.168.1.0 0.0.0.255 area 0
+  network 10.0.0.0 0.0.0.3 area 0
+  passive-interface g0/0
+  end
+cours: |
+  ## Le principe d'OSPF
+
+  OSPF est un protocole de routage à **état de liens** : chaque routeur décrit ses liens dans des
+  **LSA**, les diffuse à tous les routeurs de la zone, et chacun construit la même carte du
+  réseau. L'algorithme **SPF** (Dijkstra) calcule alors le plus court chemin selon le **coût**
+  (inversement proportionnel à la bande passante). Convergence rapide, sans boucle, standard
+  ouvert (RFC 2328).
+
+  Les routeurs voisins se découvrent par des **hellos** (multicast `224.0.0.5`, toutes les 10 s
+  sur Ethernet) et forment des **adjacences**.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# router ospf 10
+  R1(config-router)# router-id 4.4.4.4
+  R1(config-router)# network 172.16.40.0 0.0.0.255 area 0
+  R1(config-router)# network 10.0.0.4 0.0.0.3 area 0
+  R1(config-router)# passive-interface gi0/0
+  R1# show ip ospf neighbor
+  Neighbor ID  Pri  State     Dead Time  Address    Interface
+  5.5.5.5      1    FULL/DR   00:00:36   10.0.0.6   GigabitEthernet0/1
+  R1# show ip route ospf
+  O    172.16.50.0/24 [110/2] via 10.0.0.6, GigabitEthernet0/1
+  ```
+
+  - le numéro de processus (`10`) est local ; il peut différer entre routeurs ;
+  - `network <adresse> <wildcard> area <n>` active OSPF sur les interfaces dont l'adresse
+    correspond ; le **masque générique** est l'inverse du masque (`/30` → `0.0.0.3`) ;
+  - le **router-id** identifie le routeur : à fixer explicitement (sinon plus haute loopback,
+    puis plus haute adresse d'interface) ;
+  - `passive-interface` : le réseau du LAN est annoncé, mais aucun hello n'y est envoyé (pas de
+    voisin à trouver, et personne ne peut s'y faire passer pour un routeur).
+
+  ### Vérifier
+
+  `show ip protocols`, `show ip ospf interface brief`, `show ip ospf neighbor`,
+  `show ip route ospf`. L'état normal d'un voisin est **FULL**.
+
+  ### Pièges fréquents
+
+  - Wildcard erroné : l'interface n'est pas activée, ou dans la mauvaise zone.
+  - Router-id dupliqué entre deux routeurs.
+  - Oublier `passive-interface` côté utilisateurs.
+
+  ### Pour le CCNA
+
+  OSPFv2 en zone unique (configuration, router-id, passive, vérification) est l'un des sujets
+  les plus importants.
+docs:
+  - title: "RFC 2328 — OSPF Version 2"
+    url: https://www.rfc-editor.org/rfc/rfc2328
+  - title: "Wikipédia — Open Shortest Path First"
+    url: https://fr.wikipedia.org/wiki/Open_Shortest_Path_First

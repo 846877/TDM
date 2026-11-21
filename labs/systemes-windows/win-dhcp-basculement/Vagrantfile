@@ -1,0 +1,11 @@
+# Lab « Basculement DHCP » : SRV-DC01 (Windows Server 2022, 2 Go, contrôleur de durand.lan et serveur DHCP en
+# service) et SRV-DHCP02 (Windows Server 2022, 2 Go, serveur membre, futur partenaire). Prévoir 6 Go de RAM.
+require_relative "../_commun/tdm"
+
+Vagrant.configure("2") do |config|
+  TDM.lab(config, __dir__) do |lab|
+    lab.server "dc01", hostname: "SRV-DC01", ip: "192.168.10.10", domain: :forest, primary: true,
+               scenario: "scenario-dc01.ps1"
+    lab.server "dhcp02", hostname: "SRV-DHCP02", ip: "192.168.10.12", dns: "192.168.10.10", join: true
+  end
+end

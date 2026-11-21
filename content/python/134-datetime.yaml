@@ -1,0 +1,178 @@
+title: Dates et durées avec datetime
+level: intermediaire
+order: 34
+tags: [datetime, dates, chaînes]
+summary: Analyser, calculer et formater des dates avec le module datetime.
+description: |
+  Utilise le module `datetime` (`date`, `datetime`, `timedelta`).
+
+  1. `jour_semaine(texte)` reçoit une date `AAAA-MM-JJ` et renvoie le nom du jour en
+     français, en minuscules (`"lundi"` … `"dimanche"`).
+  2. `jours_restants(aujourdhui, echeance)` : nombre de jours entre deux dates `AAAA-MM-JJ`
+     (négatif si l'échéance est passée).
+  3. `expiration(texte, jours)` : la date `JJ/MM/AAAA` obtenue en ajoutant `jours` jours à la
+     date `AAAA-MM-JJ` (pratique pour un certificat ou un mot de passe qui expire).
+  4. `duree_session(debut, fin)` reçoit deux horodatages `AAAA-MM-JJ HH:MM:SS` et renvoie la
+     durée au format `"Xh YYmin"` (minutes sur deux chiffres, secondes ignorées).
+  5. `est_ouvre(texte)` : `True` si la date `AAAA-MM-JJ` tombe du lundi au vendredi.
+
+  ```python
+  jour_semaine("2026-10-19")                     # "lundi"
+  jours_restants("2026-10-19", "2026-12-25")     # 67
+  expiration("2026-10-19", 90)                   # "17/01/2027"
+  duree_session("2026-10-19 08:15:00", "2026-10-19 17:42:30")   # "9h 27min"
+  ```
+
+  Une date invalide (`"2026-02-30"`) doit lever `ValueError` (c'est le comportement
+  naturel de `datetime`).
+starter: |
+  def jour_semaine(texte):
+      pass
+
+
+  def jours_restants(aujourdhui, echeance):
+      pass
+
+
+  def expiration(texte, jours):
+      pass
+
+
+  def duree_session(debut, fin):
+      pass
+
+
+  def est_ouvre(texte):
+      pass
+tests: |
+  def test_jour_semaine():
+      "jour_semaine"
+      assert solution.jour_semaine("2026-10-19") == "lundi"
+      assert solution.jour_semaine("2026-10-25") == "dimanche"
+      assert solution.jour_semaine("2000-01-01") == "samedi"
+
+  def test_jours_restants():
+      "jours_restants"
+      assert solution.jours_restants("2026-10-19", "2026-12-25") == 67
+      assert solution.jours_restants("2026-10-19", "2026-10-19") == 0
+      assert solution.jours_restants("2026-10-19", "2026-10-01") == -18
+      assert solution.jours_restants("2024-02-28", "2024-03-01") == 2
+
+  def test_expiration():
+      "expiration"
+      assert solution.expiration("2026-10-19", 90) == "17/01/2027"
+      assert solution.expiration("2026-12-31", 1) == "01/01/2027"
+
+  def test_duree():
+      "duree_session"
+      assert solution.duree_session("2026-10-19 08:15:00", "2026-10-19 17:42:30") == "9h 27min"
+      assert solution.duree_session("2026-10-19 23:30:00", "2026-10-20 01:05:00") == "1h 35min"
+      assert solution.duree_session("2026-10-19 10:00:00", "2026-10-21 10:00:00") == "48h 00min"
+
+  def test_ouvre():
+      "est_ouvre"
+      assert solution.est_ouvre("2026-10-23") is True
+      assert solution.est_ouvre("2026-10-24") is False
+
+  def test_invalide():
+      "Date invalide -> ValueError"
+      try:
+          solution.jour_semaine("2026-02-30")
+      except ValueError:
+          return
+      raise AssertionError("ValueError attendue")
+solution: |
+  from datetime import date, datetime, timedelta
+
+  JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+
+
+  def lire(texte):
+      return date.fromisoformat(texte)
+
+
+  def jour_semaine(texte):
+      return JOURS[lire(texte).weekday()]
+
+
+  def jours_restants(aujourdhui, echeance):
+      return (lire(echeance) - lire(aujourdhui)).days
+
+
+  def expiration(texte, jours):
+      return (lire(texte) + timedelta(days=jours)).strftime("%d/%m/%Y")
+
+
+  def duree_session(debut, fin):
+      fmt = "%Y-%m-%d %H:%M:%S"
+      delta = datetime.strptime(fin, fmt) - datetime.strptime(debut, fmt)
+      minutes = int(delta.total_seconds()) // 60
+      heures, minutes = divmod(minutes, 60)
+      return f"{heures}h {minutes:02d}min"
+
+
+  def est_ouvre(texte):
+      return lire(texte).weekday() < 5
+cours: |
+  ## Les types du module `datetime`
+
+  | Type | Représente | Exemple |
+  |------|-----------|---------|
+  | `date` | un jour | `date(2026, 10, 19)` |
+  | `datetime` | un instant (jour + heure) | `datetime(2026, 10, 19, 8, 15)` |
+  | `timedelta` | une **durée** | `timedelta(days=3, hours=2)` |
+
+  `date.today()` et `datetime.now()` donnent la date et l'heure actuelles.
+
+  ## Du texte à la date (analyse)
+
+  ```python
+  from datetime import date, datetime
+  date.fromisoformat("2026-10-19")                         # format ISO AAAA-MM-JJ
+  datetime.strptime("19/10/2026 08:15", "%d/%m/%Y %H:%M")  # format libre
+  ```
+
+  Une date impossible (30 février) lève `ValueError` : la validation est gratuite.
+
+  ## De la date au texte (formatage)
+
+  ```python
+  d.strftime("%d/%m/%Y")      # "19/10/2026"
+  d.isoformat()               # "2026-10-19"
+  f"{d:%A %d %B}"             # les f-strings acceptent aussi les codes strftime
+  ```
+
+  Codes courants : `%Y` année, `%m` mois, `%d` jour, `%H` heure, `%M` minutes, `%S`
+  secondes. Mnémotechnique : `strptime` = *parse* (lire), `strftime` = *format* (écrire).
+  Les noms de jours avec `%A` dépendent de la langue du système : pour un résultat fiable en
+  français, utilise ta propre liste indexée par `weekday()` (0 = lundi, 6 = dimanche).
+
+  ## L'arithmétique des dates
+
+  ```python
+  echeance - aujourdhui          # un timedelta
+  (echeance - aujourdhui).days   # nombre de jours
+  d + timedelta(days=90)         # une date
+  delta.total_seconds()          # durée totale en secondes
+  ```
+
+  Python gère les mois de longueurs différentes et les années bissextiles. Attention :
+  l'attribut `.seconds` d'un `timedelta` ne contient que la partie « secondes » **sans les
+  jours** : utilise `total_seconds()` pour une durée complète.
+
+  ## Fuseaux horaires
+
+  Un `datetime` sans fuseau est dit **naïf**. Pour des horodatages venant de plusieurs
+  serveurs, travaille en UTC (`datetime.now(timezone.utc)`) et convertis à l'affichage avec
+  `zoneinfo.ZoneInfo("Europe/Paris")`. Les changements d'heure (été/hiver) créent des heures
+  qui n'existent pas ou qui existent deux fois.
+
+  ## Format ISO 8601
+
+  `AAAA-MM-JJ` a une propriété précieuse : l'ordre alphabétique est l'ordre chronologique.
+  Utilise-le dans les noms de fichiers (sauvegardes, journaux).
+docs:
+  - title: Module datetime
+    url: https://docs.python.org/fr/3/library/datetime.html
+  - title: Codes de format strftime / strptime
+    url: https://docs.python.org/fr/3/library/datetime.html#strftime-and-strptime-format-codes

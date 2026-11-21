@@ -1,0 +1,334 @@
+title: Disques, espace et systèmes de fichiers
+level: debutant
+order: 5
+tags: [linux, disque, df, du, partitions, ext4, swap, fstab, archives]
+summary: Trouver ce qui remplit un disque, nettoyer, libérer un fichier supprimé encore ouvert, partitionner et formater des images disque, écrire un fstab et archiver.
+build: .
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Le serveur de fichiers d'*Ateliers Durand* est presque plein et un nouveau serveur, avec
+  des disques supplémentaires, doit être préparé. Tu dois comprendre où part l'espace, faire le ménage sans
+  rien casser, puis t'entraîner à partitionner, formater et déclarer des disques. Pour ne prendre aucun
+  risque, les « disques » sont ici des **fichiers image** : les commandes sont exactement celles d'un vrai
+  disque (`/dev/sdb`).
+
+  **Machine.** Serveur Ubuntu, terminal `root`. Le prestataire a laissé l'inventaire des disques du
+  nouveau serveur dans `/root/inventaire-disques.txt`.
+
+  Réponses à écrire dans `/root/reponses.txt`, au format `cle=valeur`.
+
+  Outils : `df -h`, `du -sh`, `find -mtime`, `lsof +L1`, `truncate`, `sfdisk`, `mkfs.ext4`, `mkswap`,
+  `blkid`, `findmnt`, `zip`, `tar -cJf`.
+cours: |
+  ## Du disque au fichier
+
+  Avant de stocker un fichier, un disque passe par plusieurs couches :
+
+  ```
+  disque physique /dev/sdb  (ou /dev/nvme0n1, /dev/vdb dans une VM)
+   └── table de partitions (GPT, ou MBR sur les vieux systèmes)
+        ├── /dev/sdb1  ── système de fichiers ext4 ── monté sur /srv/donnees
+        └── /dev/sdb2  ── espace d'échange (swap)
+  ```
+
+  | Couche                 | Outils                                   |
+  |------------------------|------------------------------------------|
+  | disques et partitions  | `lsblk`, `fdisk -l`, `sfdisk`, `parted`  |
+  | système de fichiers    | `mkfs.ext4`, `mkfs.xfs`, `mkswap`, `blkid` |
+  | montage                | `mount`, `umount`, `findmnt`, `/etc/fstab` |
+  | occupation             | `df -h`, `du -sh`, `ncdu`                |
+
+  Sous Linux, il n'y a pas de lettres de lecteur : chaque système de fichiers est **monté** dans un dossier
+  de l'arborescence (le *point de montage*).
+
+  ## GPT et MBR
+
+  | Table | Limites                                          | Usage                         |
+  |-------|--------------------------------------------------|-------------------------------|
+  | MBR   | 4 partitions primaires, disques de 2 To maximum  | anciens systèmes, BIOS        |
+  | GPT   | 128 partitions, disques de plusieurs Po          | standard actuel, UEFI         |
+
+  `sfdisk` lit une description texte de la table, pratique pour l'automatiser :
+
+  ```
+  label: gpt
+  size=256MiB, type=linux
+  type=linux                 ← sans taille : tout le reste du disque
+  ```
+
+  ## Les systèmes de fichiers courants
+
+  | Type   | Points forts                                      |
+  |--------|---------------------------------------------------|
+  | ext4   | standard Debian/Ubuntu, robuste, redimensionnable |
+  | xfs    | standard Red Hat, gros fichiers et gros volumes   |
+  | vfat / exfat | clés USB, partition EFI, échange avec Windows |
+  | swap   | extension de la mémoire vive sur disque           |
+
+  Chaque système de fichiers reçoit un **UUID** unique (et une étiquette facultative), affiché par `blkid`.
+
+  ## /etc/fstab : les montages au démarrage
+
+  ```
+  # <source>                                 <point>          <type> <options>          <dump> <ordre>
+  UUID=3f2b6c1e-8a4d-4f1e-9c2a-7d5e1b0a9f34  /srv/donnees     ext4   defaults,noatime   0      2
+  UUID=9c1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f  none             swap   sw                 0      0
+  ```
+
+  On désigne les disques par **UUID** : les noms `/dev/sdb`, `/dev/sdc` peuvent changer d'un démarrage à
+  l'autre (ajout d'un disque, clé USB). La dernière colonne fixe l'ordre de vérification (`1` pour `/`,
+  `2` pour les autres, `0` jamais). L'option `nofail` laisse démarrer le serveur si le disque est absent.
+  `findmnt --verify` et `mount -a` testent le fichier **avant** de redémarrer.
+
+  ## Où est passé l'espace ?
+
+  | Situation                                         | Commande                       |
+  |---------------------------------------------------|--------------------------------|
+  | Quel système de fichiers est plein ?              | `df -h`                        |
+  | Quel dossier est gros ?                           | `du -sh /srv/* \| sort -h`     |
+  | Quels fichiers sont vieux ou gros ?               | `find /srv -mtime +30`, `find / -xdev -size +100M` |
+  | `df` dit plein mais `du` ne trouve rien           | `lsof +L1` (fichiers supprimés encore ouverts) |
+  | Plus de place alors que `df -h` montre de l'espace | `df -i` (plus d'inodes libres) |
+
+  ## Pièges courants
+
+  - Se tromper de disque avec `mkfs` ou `sfdisk` : tout est effacé. Vérifier avec `lsblk` juste avant.
+  - Une erreur dans `/etc/fstab` peut empêcher le serveur de démarrer : tester avec `findmnt --verify`.
+  - Supprimer un journal ouvert par un service : l'espace n'est pas libéré.
+  - Lancer `find ... -delete` sans avoir d'abord regardé la liste produite par le même `find`.
+
+  ## Bonnes pratiques en entreprise
+
+  - Séparer système et données (partitions ou disques différents), pour qu'un partage plein ne bloque
+    pas le système.
+  - Superviser l'occupation des disques avec des seuils d'alerte (80 %, 90 %).
+  - Rotation des journaux et purge automatique des fichiers temporaires.
+  - Documenter chaque disque (UUID, rôle, point de montage) dans le dossier du serveur.
+docs:
+  - title: sfdisk(8) - partitionner en ligne de commande (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man8/sfdisk.8.html
+  - title: fstab(5) - montages au démarrage (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/fstab.5.html
+  - title: findmnt(8) - lister et vérifier les montages (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man8/findmnt.8.html
+  - title: Wikipédia - GUID Partition Table
+    url: https://fr.wikipedia.org/wiki/GUID_Partition_Table
+exercises:
+  - id: dk-occupation
+    title: Mesurer l'occupation des disques et des dossiers
+    cours: |
+      Deux commandes complémentaires :
+
+      - `df -h` affiche chaque **système de fichiers** monté : taille, utilisé, disponible, pourcentage et
+        point de montage ;
+      - `du -sh <dossier>` mesure ce qu'occupe un **dossier** ; `du -sh /srv/partage/*` mesure chacun de
+        ses sous-dossiers, et `| sort -h` les trie du plus petit au plus gros (en comprenant `K`, `M`, `G`).
+
+      `-h` (*human readable*) affiche des tailles lisibles. Pour descendre dans l'arborescence, on répète
+      `du` sur le plus gros dossier trouvé, jusqu'à identifier le coupable.
+    description: |
+      Le partage `/srv/partage` grossit. Trouve lequel de ses sous-dossiers occupe le plus de place.
+
+      Réponse : `plus_gros_dossier=` (son chemin complet).
+    hint: du -sh /srv/partage/* | sort -h
+    checks:
+      - desc: Le plus gros sous-dossier de /srv/partage
+        run: grep -Eq '^plus_gros_dossier *= */srv/partage/atelier/? *$' /root/reponses.txt
+
+  - id: dk-nettoyage-ancien
+    title: Purger les fichiers anciens
+    cours: |
+      `find <dossier> -type f -mtime +30` liste les fichiers modifiés il y a **plus de 30 jours**
+      (`-mtime -2` : moins de 2 jours). On ajoute `-delete` pour les supprimer, ou `-exec rm {} \;`.
+
+      Méthode sûre en deux temps :
+
+      1. lancer le `find` **sans** `-delete` et vérifier la liste (`| wc -l` pour compter) ;
+      2. relancer **exactement** la même commande avec `-delete` à la fin.
+
+      `ls -lt` trie par date, `stat <fichier>` affiche les dates précises. Ce genre de purge s'automatise
+      ensuite avec cron ou un timer systemd.
+    description: |
+      Le dossier `/srv/cache/sessions` contient des fichiers de session abandonnés. Supprime ceux qui n'ont
+      pas été modifiés depuis **plus de 30 jours**, sans toucher aux plus récents.
+
+      Réponse : `nb_supprimes=` (le nombre de fichiers supprimés).
+    hint: find /srv/cache/sessions -type f -mtime +30 | wc -l ; find /srv/cache/sessions -type f -mtime +30 -delete
+    checks:
+      - desc: Plus aucun fichier de plus de 30 jours
+        run: test -z "$(find /srv/cache/sessions -type f -mtime +30)"
+      - desc: Les sessions récentes sont conservées
+        run: test "$(ls /srv/cache/sessions | grep -c '^sess-recent-')" -eq 10
+      - desc: Nombre de fichiers supprimés
+        run: grep -Eq '^nb_supprimes *= *40 *$' /root/reponses.txt
+
+  - id: dk-fichier-ouvert
+    title: Libérer l'espace d'un fichier supprimé mais ouvert
+    cours: |
+      Un fichier n'est réellement effacé que lorsque **plus aucun processus ne l'a ouvert**. Si on supprime
+      un journal pendant qu'une application écrit dedans, son nom disparaît (`du` ne le voit plus) mais ses
+      données restent sur le disque (`df` les compte toujours).
+
+      - `lsof +L1` liste les fichiers ouverts dont le nombre de liens est 0, c'est-à-dire supprimés : on y
+        lit le nom du processus (`COMMAND`), son `PID` et la taille ;
+      - on libère l'espace en arrêtant ou en redémarrant le processus (`kill <PID>`).
+
+      Pour vider un journal sans ce problème, on le tronque (`truncate -s 0 fichier`) au lieu de le supprimer.
+    description: |
+      Quelqu'un a supprimé le gros journal `/var/log/appli/debug.log` pour faire de la place, mais l'espace
+      n'est pas revenu. Trouve le processus qui le garde ouvert, puis arrête-le pour libérer l'espace.
+
+      Réponse : `processus=` (le nom du processus).
+    hint: lsof +L1 ; kill <PID>
+    checks:
+      - desc: Nom du processus
+        run: grep -Eq '^processus *= *appli-dbg *$' /root/reponses.txt
+      - desc: Plus aucun processus ne garde le journal supprimé
+        run: |
+          ! lsof +L1 2>/dev/null | grep -q 'debug.log'
+
+  - id: dk-partitionner
+    title: Partitionner un disque en GPT
+    cours: |
+      `truncate -s 1G disque.img` crée un fichier de 1 Gio « creux » (*sparse*) : il n'occupe presque rien
+      tant qu'on n'y écrit pas. Il se partitionne comme un vrai disque.
+
+      `sfdisk <disque>` lit la description de la table sur son entrée standard :
+
+      ```
+      label: gpt
+      size=<taille>, type=linux
+      type=linux
+      ```
+
+      La dernière partition sans taille prend tout l'espace restant. `sfdisk -l <disque>` (ou `fdisk -l`)
+      affiche le résultat, `sfdisk -d` le réexporte au même format (utile pour sauvegarder ou copier une
+      table). Les tailles s'expriment en `MiB`/`GiB` (puissances de 1024).
+    description: |
+      Crée l'image disque `/root/disque.img` de **1 Gio**, puis partitionne-la en **GPT** avec deux
+      partitions de type Linux : la première de **256 Mio**, la seconde occupant tout le reste.
+    hint: |
+      truncate -s 1G /root/disque.img ; printf 'label: gpt\nsize=256MiB, type=linux\ntype=linux\n' | sfdisk /root/disque.img ; sfdisk -l /root/disque.img
+    checks:
+      - desc: Image de 1 Gio avec une table GPT
+        run: |
+          test "$(stat -c %s /root/disque.img)" -eq 1073741824 && sfdisk -d /root/disque.img 2>/dev/null | grep -q '^label: gpt'
+      - desc: Deux partitions, la première de 256 Mio
+        run: |
+          test "$(sfdisk -d /root/disque.img | grep -c '^/root/disque.img')" -eq 2 && sfdisk -d /root/disque.img | grep '^/root/disque.img1' | grep -q 'size= *524288,'
+      - desc: La seconde partition occupe le reste du disque
+        run: |
+          s=$(sfdisk -d /root/disque.img | grep '^/root/disque.img2' | sed 's/.*size= *\([0-9]*\),.*/\1/'); test "$s" -gt 1500000
+
+  - id: dk-formater
+    title: Créer un système de fichiers ext4
+    cours: |
+      Formater, c'est créer un **système de fichiers** vide : `mkfs.ext4 <périphérique>` (ou `mkfs -t ext4`).
+      Options utiles :
+
+      - `-L <étiquette>` donne un nom lisible (16 caractères maximum) ;
+      - `-m <pourcentage>` règle l'espace réservé à root (5 % par défaut).
+
+      `blkid <périphérique>` affiche ensuite le type, l'étiquette et l'**UUID** généré.
+      `tune2fs -l` donne tous les détails d'un ext4, et `e2label` change l'étiquette après coup.
+
+      Sur un vrai serveur, vérifie **trois fois** le nom du périphérique avec `lsblk` : `mkfs` efface tout
+      sans demander confirmation.
+    description: |
+      Crée l'image `/root/donnees.img` de **200 Mio** et formate-la en **ext4** avec l'étiquette `DONNEES`.
+
+      Réponse : `uuid_donnees=` (l'UUID attribué).
+    hint: truncate -s 200M /root/donnees.img ; mkfs.ext4 -L DONNEES /root/donnees.img ; blkid /root/donnees.img
+    checks:
+      - desc: ext4 avec l'étiquette DONNEES
+        run: test "$(blkid -p -o value -s TYPE /root/donnees.img)" = ext4 && test "$(blkid -p -o value -s LABEL /root/donnees.img)" = DONNEES
+      - desc: UUID correct
+        run: |
+          test "$(grep -E '^uuid_donnees *=' /root/reponses.txt | tail -n1 | cut -d= -f2 | tr -d ' ')" = "$(blkid -p -o value -s UUID /root/donnees.img)"
+
+  - id: dk-swap
+    title: Préparer un fichier d'échange (swap)
+    cours: |
+      L'espace d'**échange** (*swap*) sert de débordement à la mémoire vive : le noyau y déplace les pages
+      peu utilisées. Il peut être une partition ou un simple **fichier** :
+
+      1. créer le fichier : `fallocate -l 256M /swapfile` (ou `dd if=/dev/zero of=/swapfile bs=1M count=256`) ;
+      2. le protéger : `chmod 600` (il peut contenir des morceaux de mémoire, donc des secrets) ;
+      3. le préparer : `mkswap [-L étiquette] /swapfile` ;
+      4. l'activer : `swapon /swapfile` (impossible dans un conteneur), et l'ajouter à `/etc/fstab`.
+
+      `swapon --show` et `free -h` affichent le swap actif. Un serveur qui « swappe » beaucoup manque de
+      mémoire : le swap est un filet de sécurité, pas une solution.
+    description: |
+      Prépare le fichier d'échange `/root/swap.img` de **256 Mio**, lisible et modifiable par root
+      uniquement, avec l'étiquette `SWAP`. (L'activation par `swapon` est impossible dans ce conteneur.)
+    hint: fallocate -l 256M /root/swap.img ; chmod 600 /root/swap.img ; mkswap -L SWAP /root/swap.img
+    checks:
+      - desc: Fichier de 256 Mio en droits 600
+        run: test "$(stat -c '%s %a' /root/swap.img)" = "268435456 600"
+      - desc: Signature swap avec l'étiquette SWAP
+        run: test "$(blkid -p -o value -s TYPE /root/swap.img)" = swap && test "$(blkid -p -o value -s LABEL /root/swap.img)" = SWAP
+
+  - id: dk-fstab
+    title: Déclarer les montages dans un fstab
+    cours: |
+      Chaque ligne de `/etc/fstab` comporte six champs séparés par des espaces :
+
+      | Champ | Contenu                         | Exemple                      |
+      |-------|---------------------------------|------------------------------|
+      | 1     | source (par UUID)               | `UUID=3f2b...`               |
+      | 2     | point de montage                | `/srv/donnees` (`none` pour le swap) |
+      | 3     | type                            | `ext4`, `xfs`, `swap`        |
+      | 4     | options                         | `defaults,noatime`, `sw`     |
+      | 5     | dump (obsolète)                 | `0`                          |
+      | 6     | ordre de vérification au démarrage | `2` (`0` pour le swap)    |
+
+      `noatime` évite d'écrire la date de lecture à chaque accès ; `nofail` permet de démarrer sans le
+      disque. `findmnt -F <fichier>` lit un fichier au format fstab et l'affiche en tableau : une ligne mal
+      écrite saute aux yeux.
+    description: |
+      À partir de `/root/inventaire-disques.txt`, rédige le fichier `/root/fstab.nouveau` (au format de
+      `/etc/fstab`) qui sera installé sur le nouveau serveur : les trois volumes désignés **par UUID**, avec
+      les points de montage, types et options demandés dans l'inventaire.
+    hint: UUID=3f2b6c1e-... /srv/donnees ext4 defaults,noatime 0 2 ; UUID=9c1d2e3f-... none swap sw 0 0 ; UUID=d4e5f6a7-... /srv/sauvegardes xfs defaults,nofail 0 2 ; vérifie avec findmnt -F /root/fstab.nouveau
+    checks:
+      - desc: DONNEES sur /srv/donnees (ext4, noatime, ordre 2)
+        run: |
+          findmnt -F /root/fstab.nouveau -n -S UUID=3f2b6c1e-8a4d-4f1e-9c2a-7d5e1b0a9f34 -o TARGET,FSTYPE,PASSNO | grep -Eq '^/srv/donnees +ext4 +2$' && findmnt -F /root/fstab.nouveau -n -S UUID=3f2b6c1e-8a4d-4f1e-9c2a-7d5e1b0a9f34 -o OPTIONS | grep -q noatime
+      - desc: Swap déclaré
+        run: findmnt -F /root/fstab.nouveau -n -S UUID=9c1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f -o FSTYPE | grep -qx swap
+      - desc: SAUVEGARDES sur /srv/sauvegardes (xfs, nofail)
+        run: |
+          findmnt -F /root/fstab.nouveau -n -S UUID=d4e5f6a7-b8c9-4d0e-a1f2-b3c4d5e6f708 -o TARGET,FSTYPE | grep -Eq '^/srv/sauvegardes +xfs$' && findmnt -F /root/fstab.nouveau -n -S UUID=d4e5f6a7-b8c9-4d0e-a1f2-b3c4d5e6f708 -o OPTIONS | grep -q nofail
+      - desc: Aucun volume désigné par /dev/sdX
+        run: |
+          ! grep -Eq '^ */dev/sd' /root/fstab.nouveau
+
+  - id: dk-archives
+    title: Archiver et compresser
+    cours: |
+      Deux formats selon le destinataire :
+
+      | Format     | Création                                   | Contrôle            | Pour qui ?                |
+      |------------|--------------------------------------------|---------------------|---------------------------|
+      | `.zip`     | `zip -r archive.zip dossier`               | `unzip -l archive.zip` | utilisateurs Windows   |
+      | `.tar.xz`  | `tar -cJf archive.tar.xz dossier`          | `tar -tJf archive.tar.xz` | archivage Linux (très compressé) |
+      | `.tar.gz`  | `tar -czf archive.tar.gz dossier`          | `tar -tzf`          | compromis vitesse/taille  |
+
+      `tar` conserve droits et propriétaires, `zip` est lisible partout. Avec `-C <dossier>`, `tar` se place
+      dans un dossier avant d'archiver, ce qui évite d'enregistrer les chemins absolus. On **vérifie**
+      toujours une archive avant de supprimer les originaux.
+    description: |
+      1. La comptable veut récupérer le dossier `/srv/partage/compta/2025` sur son poste Windows : crée
+         `/root/compta-2025.zip`.
+      2. Archive `/srv/archives-2023` dans `/root/archives-2023.tar.xz`, vérifie l'archive, puis supprime le
+         dossier d'origine pour libérer de la place.
+    hint: zip -r /root/compta-2025.zip /srv/partage/compta/2025 ; tar -cJf /root/archives-2023.tar.xz -C /srv archives-2023 ; tar -tJf /root/archives-2023.tar.xz ; rm -r /srv/archives-2023
+    checks:
+      - desc: L'archive zip contient le bilan
+        run: unzip -l /root/compta-2025.zip 2>/dev/null | grep -q 'bilan.txt'
+      - desc: L'archive tar.xz est valide et contient les 6 rapports
+        run: test "$(tar -tJf /root/archives-2023.tar.xz 2>/dev/null | grep -c 'rapport-2023-')" -eq 6
+      - desc: Le dossier d'origine a été supprimé
+        run: test ! -e /srv/archives-2023

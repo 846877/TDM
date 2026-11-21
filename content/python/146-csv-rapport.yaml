@@ -1,0 +1,185 @@
+title: Rapport CSV avec le module csv
+level: intermediaire
+order: 46
+tags: [csv, fichiers, dictionnaires, io]
+summary: Lire un export CSV, agréger par catégorie et écrire un rapport CSV.
+description: |
+  Un export d'inventaire au format CSV (séparateur `;`, comme dans les tableurs français)
+  ressemble à ceci :
+
+  ```
+  machine;site;type;ram_go
+  pc-001;Lyon;poste;16
+  srv-db;Paris;serveur;128
+  "pc-002; compta";Lyon;poste;8
+  ```
+
+  Utilise le module `csv` (les valeurs entre guillemets peuvent contenir le séparateur).
+
+  1. `lire(texte)` renvoie la liste des lignes sous forme de dictionnaires (`csv.DictReader`
+     sur un `io.StringIO`), avec `ram_go` converti en `int`.
+  2. `ram_par_site(lignes)` renvoie un dictionnaire `{site: total de RAM}`.
+  3. `compter(lignes, colonne)` renvoie un dictionnaire `{valeur: nombre de lignes}` pour la
+     colonne donnée.
+  4. `rapport(lignes)` renvoie un **texte CSV** (séparateur `;`, lignes terminées par `\n`)
+     avec l'en-tête `site;machines;ram_totale_go;ram_moyenne_go` puis une ligne par site,
+     triée par nom de site ; la moyenne est arrondie à 1 décimale.
+
+  ```python
+  lignes = lire(TEXTE)
+  ram_par_site(lignes)          # {"Lyon": 24, "Paris": 128}
+  compter(lignes, "type")       # {"poste": 2, "serveur": 1}
+  print(rapport(lignes))
+  # site;machines;ram_totale_go;ram_moyenne_go
+  # Lyon;2;24;12.0
+  # Paris;1;128;128.0
+  ```
+starter: |
+  import csv
+  import io
+
+
+  def lire(texte):
+      pass
+
+
+  def ram_par_site(lignes):
+      pass
+
+
+  def compter(lignes, colonne):
+      pass
+
+
+  def rapport(lignes):
+      pass
+tests: |
+  TEXTE = 'machine;site;type;ram_go\npc-001;Lyon;poste;16\nsrv-db;Paris;serveur;128\n"pc-002; compta";Lyon;poste;8\n'
+
+  def test_lire():
+      "lire gère les guillemets et convertit la RAM"
+      lignes = solution.lire(TEXTE)
+      assert len(lignes) == 3, f"{len(lignes)} lignes lues"
+      assert lignes[2]["machine"] == "pc-002; compta", lignes[2]
+      assert lignes[1] == {"machine": "srv-db", "site": "Paris", "type": "serveur", "ram_go": 128}
+      assert all(isinstance(l["ram_go"], int) for l in lignes)
+
+  def test_ram_par_site():
+      "ram_par_site"
+      assert solution.ram_par_site(solution.lire(TEXTE)) == {"Lyon": 24, "Paris": 128}
+      assert solution.ram_par_site([]) == {}
+
+  def test_compter():
+      "compter"
+      lignes = solution.lire(TEXTE)
+      assert solution.compter(lignes, "type") == {"poste": 2, "serveur": 1}
+      assert solution.compter(lignes, "site") == {"Lyon": 2, "Paris": 1}
+
+  def test_rapport():
+      "rapport"
+      r = solution.rapport(solution.lire(TEXTE))
+      att = "site;machines;ram_totale_go;ram_moyenne_go\nLyon;2;24;12.0\nParis;1;128;128.0\n"
+      assert r == att, f"\nattendu {att!r}\nobtenu  {r!r}"
+
+  def test_rapport_arrondi():
+      "rapport : moyenne arrondie et tri des sites"
+      texte = "machine;site;type;ram_go\na;Nantes;poste;8\nb;Brest;poste;4\nc;Nantes;poste;16\nd;Nantes;poste;16\n"
+      r = solution.rapport(solution.lire(texte))
+      att = "site;machines;ram_totale_go;ram_moyenne_go\nBrest;1;4;4.0\nNantes;3;40;13.3\n"
+      assert r == att, f"\nattendu {att!r}\nobtenu  {r!r}"
+solution: |
+  import csv
+  import io
+
+
+  def lire(texte):
+      lignes = []
+      for ligne in csv.DictReader(io.StringIO(texte), delimiter=";"):
+          ligne["ram_go"] = int(ligne["ram_go"])
+          lignes.append(ligne)
+      return lignes
+
+
+  def ram_par_site(lignes):
+      totaux = {}
+      for l in lignes:
+          totaux[l["site"]] = totaux.get(l["site"], 0) + l["ram_go"]
+      return totaux
+
+
+  def compter(lignes, colonne):
+      resultat = {}
+      for l in lignes:
+          resultat[l[colonne]] = resultat.get(l[colonne], 0) + 1
+      return resultat
+
+
+  def rapport(lignes):
+      totaux = ram_par_site(lignes)
+      nombres = compter(lignes, "site")
+      sortie = io.StringIO()
+      ecrivain = csv.writer(sortie, delimiter=";", lineterminator="\n")
+      ecrivain.writerow(["site", "machines", "ram_totale_go", "ram_moyenne_go"])
+      for site in sorted(totaux):
+          ecrivain.writerow([site, nombres[site], totaux[site], round(totaux[site] / nombres[site], 1)])
+      return sortie.getvalue()
+cours: |
+  ## Pourquoi le module `csv` ?
+
+  Découper avec `split(";")` casse dès qu'une valeur contient le séparateur, des guillemets
+  ou un retour à la ligne. Le module `csv` applique les règles du format (RFC 4180) :
+  valeurs entre guillemets, guillemets doublés (`""`) à l'intérieur, etc.
+
+  ## Lire
+
+  ```python
+  import csv
+  with open("inventaire.csv", newline="", encoding="utf-8") as f:
+      for ligne in csv.reader(f, delimiter=";"):       # chaque ligne : une liste
+          ...
+  with open("inventaire.csv", newline="", encoding="utf-8") as f:
+      for ligne in csv.DictReader(f, delimiter=";"):   # chaque ligne : un dict
+          print(ligne["machine"])
+  ```
+
+  `DictReader` utilise la première ligne comme noms de colonnes : on accède aux champs par
+  leur nom, ce qui résiste à l'ajout ou au déplacement d'une colonne. Ouvre les fichiers CSV
+  avec `newline=""` (recommandation de la documentation) et le bon encodage (les exports
+  Excel français sont souvent en `cp1252` ou en `utf-8-sig` avec BOM).
+
+  **Tout est texte** : les nombres doivent être convertis (`int`, `float`).
+
+  ## Écrire
+
+  ```python
+  ecrivain = csv.writer(f, delimiter=";", lineterminator="\n")
+  ecrivain.writerow(["site", "total"])
+  ecrivain.writerows([["Lyon", 24], ["Paris", 128]])
+  ```
+
+  Le module ajoute les guillemets si nécessaire. Par défaut, il termine les lignes par `\r\n`
+  (norme du format) ; `lineterminator="\n"` choisit la fin de ligne Unix. `csv.DictWriter`
+  écrit des dictionnaires avec `writeheader()` puis `writerow(d)`.
+
+  ## Travailler en mémoire avec `io.StringIO`
+
+  `io.StringIO(texte)` se comporte comme un fichier ouvert en lecture ; `io.StringIO()` vide
+  sert de fichier en écriture, et `getvalue()` renvoie tout ce qui a été écrit. Pratique pour
+  tester, ou pour produire un CSV à envoyer par e-mail ou par une API.
+
+  ## Agréger
+
+  Le motif « dictionnaire de totaux » (`d[cle] = d.get(cle, 0) + valeur`) produit un total
+  par catégorie en un seul passage : c'est un `GROUP BY` de base de données. Combiner deux
+  agrégations (somme et nombre) donne la moyenne.
+
+  ## Pour aller plus loin
+
+  Pour de gros volumes ou des analyses poussées, la bibliothèque externe `pandas` fait tout
+  cela en une ligne (`df.groupby("site")["ram_go"].agg(["count", "sum", "mean"])`), mais le
+  module `csv` suffit pour la plupart des scripts d'administration.
+docs:
+  - title: Module csv
+    url: https://docs.python.org/fr/3/library/csv.html
+  - title: Module io (StringIO)
+    url: https://docs.python.org/fr/3/library/io.html#io.StringIO

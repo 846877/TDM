@@ -1,0 +1,164 @@
+title: Paramètres par défaut et nommés
+level: debutant
+order: 43
+tags: [fonctions, paramètres, f-string]
+summary: Rendre une fonction souple avec des valeurs par défaut et des arguments nommés.
+description: |
+  1. `formater_taille(octets, unite="Mo", decimales=1)` convertit une taille en octets dans
+     l'unité demandée (`"Ko"`, `"Mo"` ou `"Go"`, avec 1 Ko = 1024 octets) et renvoie une
+     chaîne avec le nombre de décimales demandé, suivi d'une espace et de l'unité.
+     Une unité inconnue lève `ValueError`.
+
+     ```python
+     formater_taille(5_242_880)                    # "5.0 Mo"
+     formater_taille(1536, "Ko")                   # "1.5 Ko"
+     formater_taille(3_221_225_472, decimales=2, unite="Go")   # "3.00 Go"
+     ```
+
+  2. `message(texte, niveau="INFO", horodatage=None)` renvoie une ligne de journal :
+     `"[NIVEAU] texte"`, précédée de `horodatage` et d'une espace si un horodatage est
+     fourni. Le niveau est toujours affiché en majuscules.
+
+     ```python
+     message("Démarrage")                                   # "[INFO] Démarrage"
+     message("Disque plein", niveau="error")                # "[ERROR] Disque plein"
+     message("Arrêt", horodatage="2026-10-19 08:00")        # "2026-10-19 08:00 [INFO] Arrêt"
+     ```
+
+  3. `ajouter_tag(tag, tags=None)` ajoute `tag` à la liste `tags` et la renvoie ; si `tags`
+     n'est pas fourni, une **nouvelle** liste est créée à chaque appel.
+starter: |
+  def formater_taille(octets, unite="Mo", decimales=1):
+      pass
+
+
+  def message(texte, niveau="INFO", horodatage=None):
+      pass
+
+
+  def ajouter_tag(tag, tags=None):
+      pass
+tests: |
+  def test_taille_defaut():
+      "formater_taille avec les valeurs par défaut"
+      assert solution.formater_taille(5_242_880) == "5.0 Mo", solution.formater_taille(5_242_880)
+
+  def test_taille_unites():
+      "formater_taille en Ko et en Go"
+      assert solution.formater_taille(1536, "Ko") == "1.5 Ko"
+      assert solution.formater_taille(3_221_225_472, decimales=2, unite="Go") == "3.00 Go"
+      assert solution.formater_taille(1000, "Ko", 0) == "1 Ko"
+
+  def test_taille_inconnue():
+      "Unité inconnue -> ValueError"
+      try:
+          solution.formater_taille(10, "To")
+      except ValueError:
+          return
+      raise AssertionError("formater_taille(10, 'To') aurait dû lever ValueError")
+
+  def test_message():
+      "message"
+      assert solution.message("Démarrage") == "[INFO] Démarrage"
+      assert solution.message("Disque plein", niveau="error") == "[ERROR] Disque plein"
+      r = solution.message("Arrêt", horodatage="2026-10-19 08:00")
+      assert r == "2026-10-19 08:00 [INFO] Arrêt", f"obtenu {r!r}"
+
+  def test_tag_nouvelle_liste():
+      "ajouter_tag crée une nouvelle liste à chaque appel"
+      a = solution.ajouter_tag("web")
+      b = solution.ajouter_tag("db")
+      assert a == ["web"] and b == ["db"], f"obtenu {a!r} et {b!r} : liste par défaut partagée ?"
+
+  def test_tag_liste_fournie():
+      "ajouter_tag sur une liste fournie"
+      tags = ["prod"]
+      r = solution.ajouter_tag("web", tags)
+      assert r is tags and tags == ["prod", "web"]
+solution: |
+  def formater_taille(octets, unite="Mo", decimales=1):
+      facteurs = {"Ko": 1024, "Mo": 1024 ** 2, "Go": 1024 ** 3}
+      if unite not in facteurs:
+          raise ValueError(f"unité inconnue : {unite}")
+      valeur = octets / facteurs[unite]
+      return f"{valeur:.{decimales}f} {unite}"
+
+
+  def message(texte, niveau="INFO", horodatage=None):
+      ligne = f"[{niveau.upper()}] {texte}"
+      if horodatage is not None:
+          ligne = f"{horodatage} {ligne}"
+      return ligne
+
+
+  def ajouter_tag(tag, tags=None):
+      if tags is None:
+          tags = []
+      tags.append(tag)
+      return tags
+cours: |
+  ## Valeurs par défaut
+
+  Un paramètre peut recevoir une valeur par défaut, utilisée quand l'appelant ne le fournit
+  pas :
+
+  ```python
+  def ping(hote, essais=4, delai=1.0):
+      ...
+
+  ping("10.0.0.1")             # essais=4, delai=1.0
+  ping("10.0.0.1", 10)         # essais=10
+  ```
+
+  Les paramètres avec valeur par défaut se placent **après** ceux qui n'en ont pas.
+
+  ## Arguments nommés
+
+  À l'appel, on peut nommer les arguments, dans n'importe quel ordre :
+
+  ```python
+  ping("10.0.0.1", delai=0.2)          # on saute essais
+  ping(delai=0.2, hote="10.0.0.1")     # l'ordre n'importe plus
+  ```
+
+  C'est plus lisible (`delai=0.2` dit ce que représente 0.2) et cela permet de ne préciser
+  que ce qui change. Les arguments positionnels doivent venir avant les arguments nommés.
+
+  ## Le piège de la valeur par défaut mutable
+
+  La valeur par défaut est créée **une seule fois**, quand Python lit le `def`, et non à
+  chaque appel :
+
+  ```python
+  def ajouter(x, liste=[]):      # piège !
+      liste.append(x)
+      return liste
+
+  ajouter(1)    # [1]
+  ajouter(2)    # [1, 2]  : la même liste est réutilisée
+  ```
+
+  La forme correcte utilise `None` comme marqueur, puis crée l'objet dans la fonction :
+  `if liste is None: liste = []`. Ce piège est l'un des plus célèbres de Python.
+
+  ## `None` comme « non fourni »
+
+  `None` est la valeur par défaut idéale pour un paramètre optionnel. On le teste avec
+  `is None` (une chaîne vide `""` est une valeur fournie, différente de `None`).
+
+  ## Formatage dynamique
+
+  Dans une f-string, la précision peut elle-même être une variable, grâce à des accolades
+  imbriquées : `f"{valeur:.{decimales}f}"`.
+
+  ## Lever une erreur pour un paramètre invalide
+
+  Une valeur incorrecte doit être signalée tôt avec `raise ValueError("...")` plutôt que de
+  produire un résultat faux en silence.
+
+  `print` lui-même utilise des paramètres nommés avec défauts : `sep=" "`, `end="\n"`.
+docs:
+  - title: Tutoriel — valeurs par défaut des arguments
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html#default-argument-values
+  - title: Tutoriel — arguments nommés
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html#keyword-arguments

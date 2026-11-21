@@ -1,0 +1,151 @@
+title: Tranches de listes
+level: debutant
+order: 45
+tags: [slicing, listes]
+summary: Extraire, découper et faire tourner des listes avec le slicing.
+description: |
+  Utilise le **slicing** (`liste[debut:fin:pas]`) plutôt que des boucles.
+
+  1. `extremites(elements, n)` renvoie le tuple `(n premiers, n derniers)` (deux listes).
+     Si `n` vaut 0, les deux listes sont vides.
+  2. `un_sur_deux(elements)` renvoie les éléments d'indice pair (0, 2, 4…).
+  3. `rotation(elements, k)` renvoie une **nouvelle** liste décalée de `k` positions vers la
+     **gauche** ; `k` peut dépasser la longueur (utilise `%`). Une liste vide reste vide.
+  4. `paquets(elements, taille)` renvoie la liste des morceaux consécutifs de `taille`
+     éléments (le dernier peut être plus court).
+
+  ```python
+  extremites([1, 2, 3, 4, 5], 2)      # ([1, 2], [4, 5])
+  un_sur_deux(["a", "b", "c", "d"])   # ["a", "c"]
+  rotation([1, 2, 3, 4, 5], 2)        # [3, 4, 5, 1, 2]
+  paquets([1, 2, 3, 4, 5], 2)         # [[1, 2], [3, 4], [5]]
+  ```
+starter: |
+  def extremites(elements, n):
+      pass
+
+
+  def un_sur_deux(elements):
+      pass
+
+
+  def rotation(elements, k):
+      pass
+
+
+  def paquets(elements, taille):
+      pass
+tests: |
+  def test_extremites():
+      "extremites"
+      assert solution.extremites([1, 2, 3, 4, 5], 2) == ([1, 2], [4, 5])
+      assert solution.extremites([1, 2, 3], 5) == ([1, 2, 3], [1, 2, 3])
+
+  def test_extremites_zero():
+      "extremites avec n = 0 (piège : l[-0:] est la liste entière !)"
+      r = solution.extremites([1, 2, 3], 0)
+      assert r == ([], []), f"obtenu {r!r}"
+
+  def test_un_sur_deux():
+      "un_sur_deux"
+      assert solution.un_sur_deux(["a", "b", "c", "d"]) == ["a", "c"]
+      assert solution.un_sur_deux([7]) == [7]
+      assert solution.un_sur_deux([]) == []
+
+  def test_rotation():
+      "rotation"
+      l = [1, 2, 3, 4, 5]
+      assert solution.rotation(l, 2) == [3, 4, 5, 1, 2]
+      assert solution.rotation(l, 7) == [3, 4, 5, 1, 2], "k plus grand que la longueur"
+      assert solution.rotation(l, 0) == l
+      assert l == [1, 2, 3, 4, 5], "la liste d'origine ne doit pas changer"
+      assert solution.rotation([], 3) == []
+
+  def test_paquets():
+      "paquets"
+      assert solution.paquets([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]
+      assert solution.paquets([1, 2, 3], 3) == [[1, 2, 3]]
+      assert solution.paquets([], 4) == []
+solution: |
+  def extremites(elements, n):
+      if n == 0:
+          return ([], [])
+      return (elements[:n], elements[-n:])
+
+
+  def un_sur_deux(elements):
+      return elements[::2]
+
+
+  def rotation(elements, k):
+      if not elements:
+          return []
+      k = k % len(elements)
+      return elements[k:] + elements[:k]
+
+
+  def paquets(elements, taille):
+      return [elements[i:i + taille] for i in range(0, len(elements), taille)]
+cours: |
+  ## Le slicing marche sur toutes les séquences
+
+  Comme pour les chaînes, `liste[debut:fin:pas]` extrait une **nouvelle** liste ; `debut` est
+  inclus, `fin` exclue, et chaque partie est facultative.
+
+  ```python
+  l = [10, 20, 30, 40, 50]
+  l[1:3]     # [20, 30]
+  l[:2]      # [10, 20]       les 2 premiers
+  l[-2:]     # [40, 50]       les 2 derniers
+  l[::2]     # [10, 30, 50]   un sur deux
+  l[1::2]    # [20, 40]
+  l[:]       # copie de toute la liste
+  ```
+
+  Le slicing ne lève jamais d'erreur d'indice : `l[2:100]` renvoie simplement ce qui
+  existe.
+
+  ## Le piège de `-0`
+
+  `-0` vaut `0` : `l[-0:]` signifie donc `l[0:]`, c'est-à-dire **toute** la liste, et non
+  « les 0 derniers ». Les indices négatifs calculés (`l[-n:]`) doivent donc traiter le cas
+  `n == 0` à part.
+
+  ## Concaténer des tranches
+
+  Recoller deux tranches avec `+` permet de réorganiser une liste sans boucle. Toute
+  rotation est l'assemblage de deux morceaux : ce qui est après la position de coupe, puis
+  ce qui est avant.
+
+  Le modulo ramène un décalage quelconque dans l'intervalle `0 .. len - 1` : tourner de 7
+  une liste de 5 éléments revient à tourner de 2. Attention : `x % 0` lève une
+  `ZeroDivisionError`, d'où le cas de la liste vide à traiter.
+
+  ## Découper par paquets
+
+  Une boucle sur `range(0, len(l), taille)` donne les débuts des paquets ; la tranche
+  `l[i:i + taille]` donne chaque paquet, et la tolérance du slicing gère le dernier paquet
+  incomplet.
+
+  ## Tranches et copies
+
+  Une tranche est une **copie superficielle** : modifier `copie = l[:]` ne modifie pas `l`.
+  En revanche, si `l` contient des listes, elles sont partagées.
+
+  ## Modifier avec une tranche
+
+  Une tranche peut aussi être à gauche d'une affectation, pour remplacer ou supprimer une
+  portion **sur place** :
+
+  ```python
+  l[1:3] = ["a", "b", "c"]    # remplace deux éléments par trois
+  del l[:2]                   # supprime les deux premiers
+  ```
+
+  Usage pratique : pagination de résultats, envoi de données par blocs, traitement de
+  journaux par lots.
+docs:
+  - title: Tutoriel — les listes et les tranches
+    url: https://docs.python.org/fr/3/tutorial/introduction.html#lists
+  - title: Opérations communes sur les séquences
+    url: https://docs.python.org/fr/3/library/stdtypes.html#common-sequence-operations

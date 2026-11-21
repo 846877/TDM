@@ -1,0 +1,98 @@
+title: Interface cliente DHCP vers la box
+level: debutant
+order: 27
+device: router
+hostname: R-MAISON
+tags: [dhcp, client, interfaces]
+summary: Laisser le fournisseur d'accès attribuer l'adresse de l'interface Internet.
+description: |
+  Le petit routeur de l'agence est branché sur la box du fournisseur d'accès, qui distribue les
+  adresses par DHCP. Plutôt que de fixer une adresse, le routeur va la **demander**.
+
+  Sur `G0/1` (vers la box) :
+
+  1. description `BOX-FAI` ;
+  2. adresse obtenue par DHCP : `ip address dhcp` ;
+  3. active l'interface.
+
+  Sur un vrai routeur, `show ip interface brief` affiche alors la méthode `DHCP`, et la route
+  par défaut fournie par la box apparaît dans `show ip route` (code `S*`, distance 254).
+initial: |
+  interface g0/0
+  description LAN
+  ip address 192.168.10.1 255.255.255.0
+  no shutdown
+checks:
+  - desc: G0/1 obtient son adresse par DHCP
+    expr: intf("g0/1").ip == "dhcp"
+    hint: "interface g0/1 puis ip address dhcp"
+  - desc: Description BOX-FAI sur G0/1
+    expr: intf("g0/1").description == "BOX-FAI"
+  - desc: G0/1 activée
+    expr: not intf("g0/1").shutdown
+solution: |
+  configure terminal
+  interface g0/1
+  description BOX-FAI
+  ip address dhcp
+  no shutdown
+  end
+cours: |
+  ## Un routeur peut aussi être client DHCP
+
+  Sur un accès Internet grand public ou professionnel d'entrée de gamme, l'adresse publique est
+  souvent attribuée par DHCP par l'opérateur (ou par la box placée devant). L'interface du routeur
+  se comporte alors comme n'importe quel poste client : elle envoie un DHCP Discover et applique
+  l'offre reçue.
+
+  ### Syntaxe
+
+  ```
+  R1(config)# interface g0/2
+  R1(config-if)# description FIBRE-OPERATEUR
+  R1(config-if)# ip address dhcp
+  R1(config-if)# no shutdown
+  %DHCP-6-ADDRESS_ASSIGN: Interface GigabitEthernet0/2 assigned DHCP address 100.64.3.27, mask 255.255.255.0
+  R1# show ip interface brief
+  GigabitEthernet0/2   100.64.3.27   YES DHCP   up   up
+  R1# show dhcp lease
+  ```
+
+  ### La route par défaut automatique
+
+  L'offre DHCP contient généralement une **passerelle**. IOS l'installe comme route par défaut
+  avec une **distance administrative de 254** : une route statique configurée à la main
+  (distance 1) restera donc prioritaire. C'est pratique en secours : un lien principal avec une
+  route statique, et un lien DHCP qui ne sert que si le premier disparaît.
+
+  Pour ne pas installer cette route : `ip address dhcp` + `no ip dhcp client request router`
+  (selon les versions).
+
+  ### Autres usages
+
+  - un **switch** peut obtenir son adresse de gestion par DHCP : `interface vlan 1` puis
+    `ip address dhcp` (pratique avec une réservation sur le serveur) ;
+  - avec **NAT/PAT**, l'adresse obtenue sert directement à la traduction :
+    `ip nat inside source list 1 interface g0/1 overload` suit l'adresse même si elle change.
+
+  ### Renouveler à la main
+
+  `release dhcp g0/1` puis `renew dhcp g0/1` (mode privilégié), l'équivalent d'`ipconfig
+  /release` et `/renew` sous Windows.
+
+  ### Pièges fréquents
+
+  - Oublier `no shutdown` : sur un routeur, les interfaces sont éteintes par défaut.
+  - Utiliser l'adresse obtenue dans une ACL ou une règle NAT statique : elle peut changer.
+    Préfère le nom de l'interface (`interface g0/1`) quand la commande le permet.
+  - Attendre une adresse d'une box en mode « bridge » qui n'a pas de serveur DHCP actif.
+
+  ### Pour le CCNA
+
+  Savoir configurer `ip address dhcp`, reconnaître la méthode `DHCP` dans
+  `show ip interface brief` et connaître la distance 254 de la route par défaut apprise par DHCP.
+docs:
+  - title: Wikipédia — Dynamic Host Configuration Protocol
+    url: https://fr.wikipedia.org/wiki/Dynamic_Host_Configuration_Protocol
+  - title: Wikipédia (EN) — Default route
+    url: https://en.wikipedia.org/wiki/Default_route

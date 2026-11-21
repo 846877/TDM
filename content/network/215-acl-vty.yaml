@@ -1,0 +1,97 @@
+title: Restreindre l'administration à distance
+level: avance
+order: 15
+device: router
+hostname: R-SIEGE
+tags: [acl, vty, access-class, ssh]
+summary: Seul le réseau d'administration peut ouvrir une session SSH.
+description: |
+  SSH est déjà configuré sur `R-SIEGE`, mais n'importe quel poste peut tenter de s'y connecter.
+  Limite l'accès aux lignes VTY avec une **ACL nommée** appliquée par `access-class`.
+
+  1. crée l'ACL standard nommée `ADMIN-VTY` :
+     - autoriser le réseau d'administration `192.168.99.0/24`,
+     - autoriser le poste du prestataire `10.0.0.50`,
+     - refuser et **journaliser** tout le reste : `deny any log` ;
+  2. applique-la en entrée des lignes `vty 0 4` : `access-class ADMIN-VTY in`.
+
+  ⚠️ Sur une ligne VTY, c'est `access-class` ; `ip access-group` s'applique à une interface.
+initial: |
+  ip domain-name tdm.local
+  username admin privilege 15 secret Adm1nS1ege
+  crypto key generate rsa general-keys modulus 2048
+  ip ssh version 2
+  line vty 0 4
+  login local
+  transport input ssh
+checks:
+  - desc: ACL ADMIN-VTY autorise 192.168.99.0/24
+    expr: '"permit 192.168.99.0 0.0.0.255" in acl("ADMIN-VTY")'
+    hint: "ip access-list standard ADMIN-VTY puis permit 192.168.99.0 0.0.0.255"
+  - desc: ACL ADMIN-VTY autorise l'hôte 10.0.0.50
+    expr: '"permit host 10.0.0.50" in acl("ADMIN-VTY") or "permit 10.0.0.50 0.0.0.0" in acl("ADMIN-VTY")'
+  - desc: Le reste est refusé et journalisé
+    expr: acl("ADMIN-VTY")[-1:] == ["deny any log"]
+  - desc: ACL appliquée en entrée des lignes VTY
+    expr: line("vty").access_class.get("in") == "ADMIN-VTY"
+    hint: "line vty 0 4 puis access-class ADMIN-VTY in"
+solution: |
+  configure terminal
+  ip access-list standard ADMIN-VTY
+  permit 192.168.99.0 0.0.0.255
+  permit host 10.0.0.50
+  deny any log
+  exit
+  line vty 0 4
+  access-class ADMIN-VTY in
+  end
+cours: |
+  ## Qui peut administrer l'équipement ?
+
+  Même protégé par SSH et des comptes nominatifs, un équipement qui accepte des connexions
+  depuis **n'importe quelle adresse** est exposé aux attaques par force brute. On restreint les
+  lignes VTY au **réseau d'administration** avec une ACL standard appliquée par `access-class`.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# ip access-list standard GESTION-SSH
+  R1(config-std-nacl)# permit 10.199.0.0 0.0.0.255
+  R1(config-std-nacl)# permit host 172.16.100.40
+  R1(config-std-nacl)# deny any log
+  R1(config-std-nacl)# exit
+  R1(config)# line vty 0 15
+  R1(config-line)# access-class GESTION-SSH in
+  R1# show access-lists GESTION-SSH
+  Standard IP access list GESTION-SSH
+      10 permit 10.199.0.0, wildcard bits 0.0.0.255 (12 matches)
+      20 permit 172.16.100.40
+      30 deny   any log (3 matches)
+  ```
+
+  - une ACL **standard** suffit : on filtre sur l'adresse **source** de la connexion ;
+  - `access-class ... in` filtre les connexions **entrantes** sur les VTY, quelle que soit
+    l'interface par laquelle elles arrivent (plus simple qu'une ACL sur chaque interface) ;
+  - `deny any log` rend visibles les tentatives refusées dans les journaux ;
+  - `access-class ... out` limiterait les connexions sortantes **depuis** l'équipement.
+
+  ### Masque générique
+
+  `0.0.0.255` = les trois premiers octets doivent correspondre, le dernier est libre (un /24).
+  `host 172.16.100.40` = `172.16.100.40 0.0.0.0`.
+
+  ### Pièges fréquents
+
+  - Oublier sa propre adresse : on se ferme la porte (garder la console sous la main).
+  - Appliquer l'ACL sur `vty 0 4` seulement : les lignes 5 à 15 restent ouvertes.
+  - Confondre `access-class` (lignes) et `ip access-group` (interfaces).
+  - L'ACL ne remplace pas SSH ni les mots de passe : c'est une couche de plus.
+
+  ### Pour le CCNA
+
+  Restreindre l'accès VTY par une ACL standard est un exemple classique de l'examen.
+docs:
+  - title: "Cisco — Configure Commonly Used IP ACLs"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/access-lists/26448-ACLsamples.html
+  - title: "Wikipédia — Liste de contrôle d'accès"
+    url: https://fr.wikipedia.org/wiki/Liste_de_contr%C3%B4le_d%27acc%C3%A8s

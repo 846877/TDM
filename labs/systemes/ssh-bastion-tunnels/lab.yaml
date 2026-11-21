@@ -1,0 +1,406 @@
+title: Bastion SSH, durcissement et tunnels
+level: intermediaire
+order: 4
+tags: [ssh, bastion, proxyjump, durcissement, tunnel, socks, sécurité]
+summary: Durcir sshd sur un bastion, rebondir avec ProxyJump, tunnels local, dynamique (SOCKS) et inverse, clé restreinte.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** Suite à un audit, *Ateliers Durand* isole ses serveurs dans un réseau **interne** que le
+  réseau bureautique ne peut plus joindre directement. Le seul point d'entrée est un **bastion** SSH, qui
+  doit être durci. Tu dois ensuite continuer à travailler sur les serveurs internes à travers lui.
+
+  **Topologie.**
+
+  ```
+   bureau 10.50.1.0/24              interne 10.50.2.0/24
+   admin 10.50.1.10 ── bastion ──┬── srv-interne 10.50.2.10 (intranet web)
+                    .1.2    .2.2 └── srv-bdd     10.50.2.20 (console sur 127.0.0.1:8080)
+  ```
+
+  Compte `tech` / `Tech2024!` sur bastion, srv-interne et srv-bdd. Sur le **bastion**, `tech` a `sudo` sans
+  mot de passe. Ton terminal est `root` sur admin, qui ne voit **pas** le réseau interne.
+
+  ⚠️ Sur le bastion, sshd tourne en arrière-plan : avant chaque rechargement
+  (`sudo kill -HUP $(cat /run/sshd.pid)`), **teste la configuration** avec `sudo sshd -t`. Une erreur
+  arrêterait sshd et te couperait l'accès (il faudrait réinitialiser le lab) : c'est exactement ce qui
+  arrive en production.
+cours: |
+  ## Le bastion : un seul point d'entrée
+
+  Un **bastion** (ou *jump host*) est un serveur durci, seul autorisé à joindre le réseau d'administration.
+  Les administrateurs s'y authentifient puis rebondissent vers les serveurs internes. Avantages : une seule
+  porte à surveiller, des journaux centralisés de qui se connecte, et des serveurs internes invisibles
+  depuis le réseau bureautique.
+
+  ```
+   admin ──ssh──▶ bastion ──ssh──▶ srv-interne
+   (bureau)       (2 cartes)        (réseau interne, aucun accès direct)
+  ```
+
+  ## Durcir sshd
+
+  | Directive                        | Valeur conseillée | Effet                                    |
+  |----------------------------------|-------------------|------------------------------------------|
+  | `PermitRootLogin`                | `no`              | root passe par un compte nominatif + sudo |
+  | `PasswordAuthentication`         | `no`              | clés uniquement, force brute inutile     |
+  | `KbdInteractiveAuthentication`   | `no`              | ferme l'autre voie « mot de passe »       |
+  | `AllowUsers` / `AllowGroups`     | liste blanche     | comptes autorisés                        |
+  | `MaxAuthTries`                   | `3`               | essais par connexion                     |
+  | `LoginGraceTime`                 | `30`              | délai pour s'authentifier                |
+  | `LogLevel`                       | `VERBOSE`         | journalise l'empreinte de la clé utilisée |
+  | `Banner`                         | `/etc/issue.net`  | avertissement légal                      |
+
+  Méthode sûre, à suivre **à chaque fois** :
+
+  1. écrire dans `/etc/ssh/sshd_config.d/xx-nom.conf` (n'altère pas le fichier livré par le paquet) ;
+  2. `sshd -t` : test de syntaxe ;
+  3. recharger (`systemctl reload ssh`, ou `kill -HUP` sur le PID de sshd) : les sessions ouvertes restent ;
+  4. tester une **nouvelle** connexion depuis un autre terminal avant de fermer la session de secours ;
+  5. `sshd -T` affiche la configuration effective (toutes directives, en minuscules).
+
+  ## Rebondir : ProxyJump
+
+  ```
+  # ~/.ssh/config
+  Host bastion
+      HostName 10.50.1.2
+      User tech
+  Host interne
+      HostName srv-interne
+      User tech
+      ProxyJump bastion
+  ```
+
+  Avec `ProxyJump` (ou `ssh -J bastion srv-interne`), le client ouvre d'abord une connexion au bastion, puis
+  une seconde connexion SSH **chiffrée de bout en bout** jusqu'au serveur interne, à travers la première. La
+  clé privée reste sur le poste : rien n'est déposé sur le bastion (contrairement à l'*agent forwarding*,
+  `-A`, à éviter).
+
+  ## Les trois tunnels
+
+  ```
+  -L local     admin:9080 ──▶ (via bdd) ──▶ 127.0.0.1:8080 de srv-bdd
+               « amène chez moi un service distant »
+  -D dynamique admin:1080 = proxy SOCKS : chaque connexion est relayée par le serveur SSH
+               « navigue comme si j'étais sur le bastion »
+  -R inverse   bastion:9022 ──▶ (via srv-interne) ──▶ srv-interne:22
+               « expose un service de chez moi sur le serveur distant »
+  ```
+
+  | Option | Syntaxe                                     | Exemple                                  |
+  |--------|---------------------------------------------|------------------------------------------|
+  | `-L`   | `port_local:hôte_cible:port_cible`           | `ssh -L 9080:127.0.0.1:8080 bdd`         |
+  | `-D`   | `port_local`                                 | `ssh -D 1080 bastion`                    |
+  | `-R`   | `port_distant:hôte_cible:port_cible`         | `ssh -R 9022:127.0.0.1:22 bastion`       |
+  | `-f -N`| arrière-plan, sans commande                  | `ssh -f -N -L ...`                       |
+
+  L'hôte cible est résolu **depuis le serveur SSH** : `127.0.0.1` dans un `-L` désigne le serveur distant
+  lui-même, pas ton poste.
+
+  ## Pièges courants
+
+  - Recharger sshd avec une configuration invalide : le démon s'arrête et plus personne n'entre. Toujours
+    `sshd -t` avant.
+  - Désactiver les mots de passe avant d'avoir vérifié que la clé fonctionne.
+  - `AllowTcpForwarding no` sur un bastion casse ProxyJump et les tunnels.
+  - Un tunnel inverse ouvert par un utilisateur peut contourner la politique de pare-feu : sur les serveurs
+    sensibles, on interdit `-R` (`AllowStreamLocalForwarding`, `PermitListen`).
+
+  ## Bonnes pratiques en entreprise
+
+  - Bastion dédié, mis à jour, avec journaux envoyés vers un serveur central ; idéalement authentification
+    à deux facteurs.
+  - Clés nominatives, inventoriées et révoquées au départ des personnes ; clés de service restreintes
+    (`command=`, `from=`, `restrict`).
+  - Des solutions dédiées (Teleport, Apache Guacamole, bastions commerciaux) ajoutent l'enregistrement
+    des sessions et la gestion des accès temporaires.
+docs:
+  - title: sshd_config(5) - directives du serveur SSH (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/sshd_config.5.html
+  - title: ssh(1) - options -L, -R, -D et -J
+    url: https://manpages.ubuntu.com/manpages/noble/man1/ssh.1.html
+  - title: Debian Wiki - SSH
+    url: https://wiki.debian.org/SSH
+exercises:
+  - id: cle-bastion
+    title: Accès par clé au bastion
+    cours: |
+      Rappel du fonctionnement par clé : la clé **publique** est copiée dans `~/.ssh/authorized_keys` du
+      compte distant, la clé **privée** reste sur le poste.
+
+      - `ssh-keygen -t ed25519 -f <fichier> -N ''` génère une paire sans passphrase (pour un lab ou une tâche
+        automatique ; en production, protège ta clé personnelle par une passphrase et utilise `ssh-agent`) ;
+      - `ssh-copy-id <compte>@<hôte>` installe la clé publique en utilisant une dernière fois le mot de passe.
+
+      Cette étape est indispensable **avant** de durcir le bastion : une fois les mots de passe interdits,
+      seule la clé permettra d'entrer.
+    description: |
+      Génère une clé ed25519 sur admin (`~/.ssh/id_ed25519`, sans passphrase pour le lab) et installe-la
+      pour `tech` sur le bastion.
+    hint: ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N '' && ssh-copy-id tech@bastion
+    checks:
+      - desc: Connexion par clé au bastion
+        run: ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 tech@bastion true
+
+  - id: bastion-durcissement
+    title: Durcir le serveur SSH du bastion
+    cours: |
+      sshd lit `/etc/ssh/sshd_config`, qui inclut au début les fichiers `/etc/ssh/sshd_config.d/*.conf` : pour
+      chaque directive, **la première valeur rencontrée gagne**, donc un fichier de ce dossier l'emporte sur le
+      fichier principal.
+
+      - `sudo sshd -t` vérifie la syntaxe (aucun message = tout va bien) ;
+      - `sudo sshd -T` affiche la configuration effective complète ;
+      - le PID du démon est dans `/run/sshd.pid` ; le signal `HUP` lui fait relire sa configuration sans couper
+        les sessions existantes.
+
+      Garde toujours une session ouverte pendant les tests et vérifie avec une **nouvelle** connexion.
+    description: |
+      Sur le bastion, crée `/etc/ssh/sshd_config.d/10-durcissement.conf` avec :
+
+      | Directive                      | Valeur    | Pourquoi                                   |
+      |--------------------------------|-----------|--------------------------------------------|
+      | `PermitRootLogin`              | `no`      | root ne se connecte jamais directement     |
+      | `PasswordAuthentication`       | `no`      | clés uniquement : plus de force brute      |
+      | `KbdInteractiveAuthentication` | `no`      | idem                                       |
+      | `MaxAuthTries`                 | `3`       | limite les essais par connexion            |
+      | `LoginGraceTime`               | `30`      | délai pour s'authentifier                  |
+      | `AllowUsers`                   | `tech`    | liste blanche des comptes                  |
+      | `X11Forwarding`                | `no`      | inutile sur un bastion                     |
+      | `LogLevel`                     | `VERBOSE` | journalise l'empreinte de la clé utilisée  |
+
+      Ne désactive **pas** le transfert TCP (`AllowTcpForwarding`) : le bastion sert justement à rebondir.
+      Teste (`sudo sshd -t`) puis recharge sshd **sans fermer ta session** ; ouvre une seconde connexion pour
+      vérifier que tu peux toujours entrer.
+    hint: "sudo sshd -t && sudo kill -HUP $(cat /run/sshd.pid)  ;  sudo sshd -T | grep -i passwordauthentication"
+    checks:
+      - desc: Configuration effective de sshd conforme
+        run: |
+          c=$(ssh -o BatchMode=yes tech@bastion 'sudo -n sshd -T' 2>/dev/null) || exit 1
+          for l in 'permitrootlogin no' 'passwordauthentication no' 'kbdinteractiveauthentication no' 'maxauthtries 3' 'logingracetime 30' 'allowusers tech' 'x11forwarding no' 'loglevel VERBOSE'; do
+            echo "$c" | grep -qix "$l" || { echo "manquant : $l"; exit 1; }
+          done
+      - desc: sshd en cours d'exécution refuse désormais les mots de passe
+        run: ssh -o BatchMode=yes -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive tech@bastion true 2>&1 | grep -q 'Permission denied (publickey)'
+      - desc: La connexion par clé fonctionne toujours
+        run: ssh -o BatchMode=yes tech@bastion true
+
+  - id: proxyjump
+    title: Rebondir avec ProxyJump
+    cours: |
+      `ProxyJump` (option `-J` en ligne de commande) fait passer une connexion SSH à travers un autre serveur
+      SSH. La connexion finale est chiffrée de bout en bout : le bastion ne voit qu'un flux chiffré.
+
+      - `ssh-copy-id` accepte des options SSH avec `-o`, par exemple `-o ProxyJump=...` ;
+      - dans `~/.ssh/config`, `ProxyJump` peut désigner un **alias** défini dans le même fichier ;
+      - `ssh -G <alias>` permet de vérifier la configuration calculée.
+
+      Le nom `srv-interne` n'est connu que du bastion : c'est lui qui le résout pour la seconde connexion.
+    description: |
+      1. Installe ta clé pour `tech` sur `srv-interne` et `srv-bdd` **à travers le bastion**
+         (`ssh-copy-id -o ProxyJump=tech@bastion tech@srv-interne`).
+      2. Dans `~/.ssh/config`, crée les alias `bastion` (10.50.1.2, utilisateur tech), `interne`
+         (srv-interne) et `bdd` (srv-bdd), ces deux derniers avec l'utilisateur `tech` et
+         `ProxyJump bastion`.
+
+      `ssh interne` doit ouvrir une session sur srv-interne en une seule commande.
+    hint: "Host interne / HostName srv-interne / User tech / ProxyJump bastion"
+    checks:
+      - desc: ssh interne arrive sur srv-interne
+        run: test "$(ssh -o BatchMode=yes interne hostname 2>/dev/null)" = srv-interne
+      - desc: ssh bdd arrive sur srv-bdd
+        run: test "$(ssh -o BatchMode=yes bdd hostname 2>/dev/null)" = srv-bdd
+      - desc: Les alias utilisent ProxyJump
+        run: ssh -G interne | grep -qi '^proxyjump bastion' && ssh -G bdd | grep -qi '^proxyjump bastion'
+
+  - id: tunnel-local
+    title: Tunnel local vers une console locale
+    cours: |
+      Un **tunnel local** (`-L`) ouvre un port sur **ton poste** et transporte chaque connexion à travers SSH
+      jusqu'au serveur, qui la relaie vers la cible.
+
+      Syntaxe : `-L <port_local>:<hôte_cible>:<port_cible>`, où l'hôte cible est vu **depuis le serveur SSH**.
+      Ainsi `127.0.0.1` désigne le serveur lui-même, ce qui permet d'atteindre un service qui n'écoute que
+      sur sa boucle locale.
+
+      `-f` passe en arrière-plan après l'authentification, `-N` n'exécute aucune commande. Le tunnel se
+      combine avec un alias utilisant ProxyJump.
+
+      Ajoute `-N` pour un tunnel sans shell distant, et `-f` pour le passer en arrière-plan une fois la connexion établie.
+    description: |
+      La console d'administration de la base de données n'écoute que sur `127.0.0.1:8080` **de srv-bdd** :
+      même depuis le bastion, on ne peut pas l'atteindre. Ouvre en arrière-plan (`-f -N`) un **tunnel
+      local** pour que `http://127.0.0.1:9080` sur admin affiche cette console.
+    hint: ssh -f -N -L 9080:127.0.0.1:8080 bdd
+    checks:
+      - desc: http://127.0.0.1:9080 sur admin affiche la console BDD
+        run: curl -fsS -m5 http://127.0.0.1:9080/ | grep -q 'Console BDD'
+
+  - id: socks
+    title: Tunnel dynamique (proxy SOCKS)
+    cours: |
+      Un **tunnel dynamique** (`-D <port>`) transforme le client SSH en **proxy SOCKS** : chaque application
+      configurée pour l'utiliser voit ses connexions relayées par le serveur SSH, vers n'importe quelle
+      destination joignable depuis celui-ci.
+
+      - les navigateurs savent utiliser un proxy SOCKS 5 (paramètres réseau) ;
+      - `curl --socks5-hostname <proxy>` fait aussi résoudre les **noms** par le serveur distant (avec
+        `--socks5` seul, ton poste tenterait de résoudre `srv-interne` et échouerait).
+
+      Un seul tunnel suffit alors pour tous les services web internes.
+    description: |
+      Pour consulter les sites web du réseau interne depuis admin sans créer un tunnel par service, ouvre un
+      **tunnel dynamique** (proxy SOCKS 5) sur le port local **1080**, via le bastion.
+
+      Teste : `curl --socks5-hostname 127.0.0.1:1080 http://srv-interne/` (le nom est résolu côté bastion).
+    hint: ssh -f -N -D 1080 bastion
+    checks:
+      - desc: L'intranet interne est accessible via le proxy SOCKS
+        run: curl -fsS -m5 --socks5-hostname 127.0.0.1:1080 http://srv-interne/ | grep -q 'Intranet interne'
+
+  - id: tunnel-inverse
+    title: Tunnel inverse depuis le réseau interne
+    cours: |
+      Un **tunnel inverse** (`-R <port_distant>:<hôte_cible>:<port_cible>`) est ouvert par la machine **qui
+      offre** le service : elle se connecte au serveur SSH et lui demande d'écouter sur un port, puis relaie
+      les connexions reçues vers la cible.
+
+      C'est utile quand la machine est derrière un pare-feu qui interdit les connexions entrantes mais
+      autorise les sortantes (assistance à distance). Par défaut, le port distant n'écoute que sur la boucle
+      locale du serveur (`GatewayPorts no`).
+
+      Rappel : le bastion n'accepte plus que des clés, et une clé publique peut être transportée par tout
+      moyen (copier-coller, scp via admin).
+    description: |
+      Scénario d'assistance : un serveur interne doit **lui-même** ouvrir un accès vers le bastion (comme
+      un serveur derrière un pare-feu qui n'accepte aucune connexion entrante).
+
+      1. Sur `srv-interne`, en tant que `tech`, génère une clé et autorise-la sur le bastion (attention : le
+         bastion refuse désormais les mots de passe, passe par admin pour copier la clé publique).
+      2. Depuis `srv-interne`, ouvre en arrière-plan un **tunnel inverse** : le port **9022** du bastion
+         (sur sa boucle locale) doit mener au port 22 de srv-interne.
+
+      Depuis le bastion, `ssh -p 9022 tech@127.0.0.1` atteindra alors srv-interne.
+    hint: "Sur srv-interne : ssh -f -N -R 9022:127.0.0.1:22 tech@bastion"
+    checks:
+      - desc: Le port 9022 du bastion mène au serveur SSH de srv-interne
+        run: ssh -o BatchMode=yes tech@bastion 'timeout 3 nc 127.0.0.1 9022 </dev/null | head -1' | grep -q '^SSH-2.0'
+      - desc: Le tunnel a été ouvert depuis srv-interne
+        run: ssh -o BatchMode=yes interne 'pgrep -af "ssh .*-R" ' | grep -q '9022'
+
+  - id: cle-restreinte
+    title: Clé restreinte pour un script automatique
+    cours: |
+      Les options placées en tête d'une ligne d'`authorized_keys` limitent ce que permet une clé :
+
+      - `command="..."` impose la commande exécutée (la commande demandée par le client est ignorée, elle
+        reste lisible dans la variable `SSH_ORIGINAL_COMMAND`) ;
+      - `restrict` désactive en une fois terminal, redirections de ports, agent et X11 ;
+      - `from="<adresses>"` limite les adresses sources.
+
+      Les options sont séparées par des virgules, sans espace, et suivies d'un espace puis de la clé.
+      `-i <clé>` et `-o IdentitiesOnly=yes` forcent le client à utiliser une clé précise.
+    description: |
+      Un script de supervision doit pouvoir lire la charge de `srv-interne` sans jamais obtenir de shell.
+      1. Génère une seconde clé sur admin : `~/.ssh/id_supervision` (sans passphrase).
+      2. Ajoute-la dans `~/.ssh/authorized_keys` de `tech` sur srv-interne avec les options
+         `command="uptime",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding` (ou
+         `restrict,command="uptime"`).
+
+      Quelle que soit la commande demandée, cette clé ne doit exécuter que `uptime`.
+    hint: "Ligne dans authorized_keys : restrict,command=\"uptime\" ssh-ed25519 AAAA... root@admin"
+    checks:
+      - desc: La clé de supervision n'exécute que uptime
+        run: |
+          out=$(ssh -o BatchMode=yes -o IdentitiesOnly=yes -i /root/.ssh/id_supervision -J tech@bastion tech@srv-interne 'cat /etc/passwd' 2>/dev/null)
+          echo "$out" | grep -q 'load average' && ! echo "$out" | grep -q 'root:x'
+      - desc: La clé principale donne toujours un shell
+        run: ssh -o BatchMode=yes interne 'cat /etc/hostname' | grep -qx srv-interne
+
+  - id: bastion-banniere
+    title: Bannière d'avertissement légal
+    cours: |
+      La directive `Banner <fichier>` de sshd envoie le contenu d'un fichier au client **avant**
+      l'authentification. Le fichier conventionnel est `/etc/issue.net`.
+
+      Juridiquement, un avertissement indiquant que l'accès est réservé et journalisé aide à caractériser une
+      intrusion et informe les utilisateurs de la surveillance. On n'y met **jamais** d'information utile à
+      un attaquant (nom du système, version, rôle du serveur).
+
+      Le message de bienvenue **après** connexion, lui, est `/etc/motd`. Comme toujours : `sshd -t` puis
+      rechargement.
+
+      Teste la bannière depuis un poste client en ouvrant une nouvelle connexion : elle doit s'afficher avant la demande d'authentification.
+    description: |
+      Le service juridique exige qu'un avertissement s'affiche **avant** l'authentification sur le bastion.
+      1. Écris dans `/etc/issue.net` du bastion le texte `Acces reserve au personnel autorise - connexions
+         journalisees`.
+      2. Configure sshd pour l'afficher (`Banner /etc/issue.net`, dans un fichier de `sshd_config.d`), teste
+         et recharge.
+
+      La bannière s'affiche à la prochaine connexion, avant la demande d'authentification.
+    hint: "echo 'Banner /etc/issue.net' | sudo tee /etc/ssh/sshd_config.d/20-banniere.conf ; sudo sshd -t && sudo kill -HUP $(cat /run/sshd.pid)"
+    checks:
+      - desc: /etc/issue.net contient l'avertissement
+        run: ssh -o BatchMode=yes tech@bastion 'grep -q "Acces reserve au personnel autorise" /etc/issue.net'
+      - desc: sshd affiche la bannière /etc/issue.net
+        run: ssh -o BatchMode=yes tech@bastion 'sudo -n sshd -T' | grep -qix 'banner /etc/issue.net'
+      - desc: La bannière est envoyée aux clients
+        run: ssh -o BatchMode=yes -o LogLevel=INFO tech@bastion true 2>&1 | grep -q 'Acces reserve au personnel autorise'
+
+  - id: bastion-multiplexage
+    title: Réutiliser une connexion (multiplexage)
+    cours: |
+      Le **multiplexage** fait passer plusieurs sessions SSH vers un même hôte dans une seule connexion TCP
+      déjà authentifiée :
+
+      - `ControlMaster auto` : la première connexion devient « maître », les suivantes s'y raccrochent ;
+      - `ControlPath` : chemin du socket de contrôle ; les jetons `%r` (utilisateur), `%h` (hôte), `%p`
+        (port) le rendent unique ;
+      - `ControlPersist` : durée de vie du maître après la fermeture de la dernière session.
+
+      `ssh -O check <alias>` interroge le maître, `ssh -O exit <alias>` le ferme. Les connexions à travers le
+      bastion (ProxyJump) en profitent aussi.
+    description: |
+      Chaque `ssh interne` refait une authentification complète sur le bastion. Active le **multiplexage**
+      pour l'alias `bastion` dans `~/.ssh/config` : la première connexion ouvre un canal maître, les suivantes
+      passent dedans, instantanément.
+
+      - `ControlMaster auto`
+      - `ControlPath ~/.ssh/cm-%r@%h:%p`
+      - `ControlPersist 10m` (le canal reste ouvert 10 minutes après la dernière session)
+
+      Vérifie avec `ssh -O check bastion` après une première connexion.
+    hint: "Dans le bloc Host bastion : ControlMaster auto / ControlPath ~/.ssh/cm-%r@%h:%p / ControlPersist 10m"
+    checks:
+      - desc: Multiplexage configuré pour bastion
+        run: |
+          c=$(ssh -G bastion)
+          echo "$c" | grep -qix 'controlmaster auto' && echo "$c" | grep -qi '^controlpath ' && echo "$c" | grep -Eqi '^controlpersist (600|10m)$'
+      - desc: Un canal maître est actif après une connexion
+        run: ssh -o BatchMode=yes bastion true && ssh -O check bastion 2>&1 | grep -qi 'master running'
+
+  - id: bastion-scp-rebond
+    title: Copier un fichier à travers le bastion
+    cours: |
+      `scp`, `sftp` et `rsync` s'appuient sur le client `ssh` et sa configuration : un alias défini dans
+      `~/.ssh/config` avec `ProxyJump` fonctionne directement, sans tunnel à préparer.
+
+      Syntaxe : `scp <hôte>:<chemin> <destination locale>` ; un chemin distant relatif part du dossier
+      personnel du compte. Sans alias, l'option `-J <bastion>` joue le même rôle en ligne de commande.
+
+      Pour de gros transferts, `rsync -avP` à travers le même alias permet de reprendre un transfert
+      interrompu.
+
+      `scp -J` et `rsync -e 'ssh -J'` utilisent le même mécanisme que la connexion interactive à travers le bastion.
+    description: |
+      Le DBA a déposé un export dans le dossier personnel de `tech` sur **srv-bdd** : `export-bdd.csv`.
+      Rapatrie-le dans `/root/export-bdd.csv` sur admin **en une seule commande** : `scp` (comme `rsync` et
+      `sftp`) utilise les alias et le `ProxyJump` de `~/.ssh/config`.
+    hint: scp bdd:export-bdd.csv /root/export-bdd.csv
+    checks:
+      - desc: L'export est sur admin
+        run: grep -q 'export clients 2026' /root/export-bdd.csv

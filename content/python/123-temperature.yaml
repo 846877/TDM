@@ -1,0 +1,175 @@
+title: Propriétés et représentation
+level: intermediaire
+order: 23
+tags: [classes, propriétés, méthodes spéciales]
+summary: Contrôler l'accès aux attributs avec @property et soigner __str__.
+description: |
+  Crée une classe `Temperature` :
+
+  - `Temperature(celsius=0)` ;
+  - une **propriété** `celsius` avec un *setter* qui lève `ValueError` si la valeur est
+    inférieure au zéro absolu (`-273.15`) — y compris à la création ;
+  - une propriété `fahrenheit` (`celsius * 9 / 5 + 32`) avec elle aussi un setter qui met à jour
+    la température ;
+  - `__str__` renvoie la température avec **une décimale** suivie de ` °C`, par exemple
+    `"21.5 °C"` ;
+  - `__repr__` renvoie `Temperature(21.5)` ;
+  - deux températures sont égales (`==`) si elles ont la même valeur en Celsius, et on peut les
+    comparer avec `<` (méthodes `__eq__` et `__lt__`).
+
+  ```python
+  t = Temperature(100)
+  t.fahrenheit        # 212.0
+  t.fahrenheit = 32
+  t.celsius           # 0.0
+  str(t)              # "0.0 °C"
+  ```
+starter: |
+  class Temperature:
+      def __init__(self, celsius=0):
+          self.celsius = celsius
+tests: |
+  def test_creation():
+      "Création et lecture"
+      t = solution.Temperature(21.5)
+      assert t.celsius == 21.5
+      assert solution.Temperature().celsius == 0, "la valeur par défaut est 0"
+
+  def test_fahrenheit():
+      "Conversion en Fahrenheit"
+      r = solution.Temperature(100).fahrenheit
+      assert r == 212, f"attendu 212, obtenu {r!r}"
+
+  def test_setter_fahrenheit():
+      "Modifier via fahrenheit"
+      t = solution.Temperature(100)
+      t.fahrenheit = 32
+      assert abs(t.celsius) < 1e-9, f"attendu 0, obtenu {t.celsius!r}"
+
+  def test_zero_absolu():
+      "Refuser une valeur sous -273.15"
+      try:
+          solution.Temperature(-300)
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("Temperature(-300) doit lever ValueError")
+      t = solution.Temperature(10)
+      try:
+          t.celsius = -273.16
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("t.celsius = -273.16 doit lever ValueError")
+      assert t.celsius == 10, "la valeur ne doit pas changer après une erreur"
+      solution.Temperature(-273.15)
+
+  def test_propriete():
+      "celsius est bien une propriété"
+      assert isinstance(getattr(solution.Temperature, "celsius", None), property), \
+          "celsius doit être défini avec @property"
+
+  def test_str_repr():
+      "__str__ et __repr__"
+      t = solution.Temperature(21.46)
+      assert str(t) == "21.5 °C", f"str : obtenu {str(t)!r}"
+      assert repr(solution.Temperature(3)) == "Temperature(3)", f"repr : obtenu {repr(solution.Temperature(3))!r}"
+
+  def test_comparaisons():
+      "Égalité et ordre"
+      T = solution.Temperature
+      assert T(5) == T(5)
+      assert T(5) != T(6)
+      assert T(-5) < T(2)
+      assert sorted([T(30), T(-2), T(12)]) == [T(-2), T(12), T(30)]
+solution: |
+  class Temperature:
+      ZERO_ABSOLU = -273.15
+
+      def __init__(self, celsius=0):
+          self.celsius = celsius
+
+      @property
+      def celsius(self):
+          return self._celsius
+
+      @celsius.setter
+      def celsius(self, valeur):
+          if valeur < self.ZERO_ABSOLU:
+              raise ValueError("en dessous du zéro absolu")
+          self._celsius = valeur
+
+      @property
+      def fahrenheit(self):
+          return self._celsius * 9 / 5 + 32
+
+      @fahrenheit.setter
+      def fahrenheit(self, valeur):
+          self.celsius = (valeur - 32) * 5 / 9
+
+      def __str__(self):
+          return f"{self._celsius:.1f} °C"
+
+      def __repr__(self):
+          return f"Temperature({self._celsius!r})"
+
+      def __eq__(self, autre):
+          if not isinstance(autre, Temperature):
+              return NotImplemented
+          return self._celsius == autre._celsius
+
+      def __lt__(self, autre):
+          if not isinstance(autre, Temperature):
+              return NotImplemented
+          return self._celsius < autre._celsius
+cours: |
+  ## Propriétés avec setter
+
+  Une propriété permet de contrôler l'accès à un attribut tout en gardant la syntaxe
+  `objet.attribut` :
+
+  ```python
+  class Volume:
+      def __init__(self, niveau=50):
+          self.niveau = niveau          # passe déjà par le setter !
+
+      @property
+      def niveau(self):
+          return self._niveau
+
+      @niveau.setter
+      def niveau(self, valeur):
+          if not 0 <= valeur <= 100:
+              raise ValueError("niveau entre 0 et 100")
+          self._niveau = valeur
+  ```
+
+  - La valeur réelle est stockée dans un attribut « privé » (`_niveau`, préfixe `_` par
+    convention). Si le setter écrivait `self.niveau = ...`, il s'appellerait lui-même à
+    l'infini (`RecursionError`).
+  - En affectant via la propriété dans `__init__`, la validation s'applique dès la création.
+  - Une seconde propriété peut lire et écrire **la même** donnée sous une autre unité : une
+    seule source de vérité, plusieurs vues.
+
+  ## `__str__` et `__repr__`
+
+  - `__str__` : représentation lisible pour l'utilisateur (`print`, `str()`, f-strings) ;
+  - `__repr__` : représentation non ambiguë pour le développeur (console, débogueur,
+    listes). Idéalement, elle ressemble à du code qui recrée l'objet.
+
+  `f"{x!r}"` utilise `repr`, et `f"{x:.1f}"` formate un flottant avec une décimale.
+
+  ## Comparaisons
+
+  `__eq__(self, autre)` définit `==`, `__lt__` définit `<`. Si `autre` n'est pas du bon
+  type, renvoie `NotImplemented` (pas `False`) : Python essaiera alors l'opération dans
+  l'autre sens. Le décorateur `functools.total_ordering` complète `<=`, `>`, `>=` à partir
+  de `__eq__` et `__lt__`.
+
+  **Attention** : définir `__eq__` rend l'objet non hachable (sauf si on définit aussi
+  `__hash__`), ce qui est voulu pour un objet modifiable.
+docs:
+  - title: Documentation Python — property
+    url: https://docs.python.org/fr/3/library/functions.html#property
+  - title: Référence — méthodes spéciales (modèle de données)
+    url: https://docs.python.org/fr/3/reference/datamodel.html#special-method-names

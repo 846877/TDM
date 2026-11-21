@@ -1,0 +1,383 @@
+title: Pare-feu Windows piloté par GPO
+level: avance
+order: 4
+tags: [pare-feu, firewall, gpo, netsecurity, ipsec, wfas, durcissement, journalisation]
+summary: Centraliser le pare-feu des postes dans une GPO - profils, règles entrantes ciblées, ICMP, administration à distance, règles locales ignorées, journalisation, filtrage sortant et IPsec.
+vagrant: bundled
+machine: dc01
+description: |
+  **Contexte.** Sur le parc des *Ateliers Durand*, chaque poste a ses propres exceptions de pare-feu,
+  ajoutées au fil des installations. Après un incident (un rançongiciel s'est propagé par SMB entre postes
+  dans une entreprise voisine), la direction veut un pare-feu **défini une fois pour toutes** par GPO,
+  identique sur tous les postes, et que les utilisateurs ne puissent pas contourner.
+
+  **Machines** (prévoir **8 Go de RAM libres**) :
+
+  | VM | Système | Adresse LAN | Rôle |
+  |----|---------|-------------|------|
+  | `SRV-DC01` (terminal) | Windows Server 2022 (2 Go) | 192.168.10.10 | contrôleur de `durand.lan`, GPMC |
+  | `PC01` | Windows 11 (3 Go) | 192.168.10.101 | poste joint, dans l'OU `Postes` |
+
+  Tout se fait depuis SRV-DC01 avec les modules `GroupPolicy` et `NetSecurity`. **Attention** : la
+  plateforme et Vagrant joignent PC01 par sa carte `NAT` (depuis `10.0.2.2`, en SSH 22, WinRM 5985 et RDP
+  3389). Une GPO qui bloquerait ces flux te couperait de la machine.
+cours: |
+  ## Le pare-feu Windows Defender avec fonctions avancées de sécurité
+
+  Le pare-feu de Windows filtre les connexions **entrantes et sortantes** selon des **règles** (programme,
+  service, protocole, ports, adresses, interface, profil) et applique une **action par défaut** quand
+  aucune règle ne correspond : en standard, **entrant bloqué**, **sortant autorisé**. Il tient compte de
+  trois **profils** choisis selon le réseau : **Domaine** (un contrôleur du domaine est joignable),
+  **Privé** et **Public**. Les règles les plus spécifiques ne gagnent pas : une règle de **blocage**
+  explicite l'emporte sur une autorisation, sauf règle d'autorisation « si sécurisé » (IPsec).
+
+  ## Où vivent les règles ?
+
+  Les règles peuvent venir de plusieurs **magasins** (*policy stores*) : `PersistentStore` (les règles
+  locales, celles de `wf.msc` et des installateurs), chaque **GPO** (`durand.lan\Nom de la GPO`),
+  et le magasin résultant `RSOP` qui montre ce qui vient des GPO sur la machine. Le poste fusionne
+  les règles locales et celles des GPO... sauf si la GPO l'interdit : les réglages *Appliquer les règles
+  de pare-feu locales* = Non (`AllowLocalFirewallRules False`) font que **seules les règles des GPO**
+  comptent. C'est ce qui rend le pare-feu réellement centralisé : un logiciel ou un utilisateur
+  administrateur ne peut plus ouvrir un port dans son coin.
+
+  ## Administrer le pare-feu d'une GPO en PowerShell
+
+  Toutes les cmdlets `NetSecurity` acceptent `-PolicyStore 'durand.lan\Nom de la GPO'`. Chaque appel
+  lit et réécrit la GPO dans SYSVOL ; pour de nombreux changements, on ouvre une **session** :
+
+  ```powershell
+  $s = Open-NetGPO -PolicyStore 'durand.lan\C - Pare-feu postes'
+  New-NetFirewallRule -GPOSession $s -DisplayName '...' ...
+  Set-NetFirewallProfile -GPOSession $s -Profile Domain -DefaultInboundAction Block
+  Save-NetGPO -GPOSession $s
+  ```
+
+  ## Le piège du verrouillage
+
+  Ignorer les règles locales sans avoir recréé dans la GPO les flux d'administration indispensables, c'est
+  se couper soi-même : plus de WinRM, plus de Bureau à distance, plus de gestion à distance. La méthode
+  sûre : construire d'abord les règles d'administration (restreintes aux adresses des administrateurs),
+  appliquer sur une OU de test, vérifier, **puis** désactiver les règles locales.
+
+  ## Filtrer aussi en sortie, journaliser, authentifier
+
+  Bloquer certains flux sortants (SMB vers Internet, protocoles hérités) limite les fuites et la
+  propagation. La **journalisation** des paquets rejetés (`pfirewall.log`) aide au diagnostic. Enfin, les
+  **règles de sécurité de connexion** (IPsec) authentifient les machines entre elles par Kerberos : on
+  commence en mode **Demander** (on authentifie quand c'est possible), avant de passer en **Exiger** quand
+  tout le parc suit. Le résultat sur un poste se vérifie avec
+  `Get-NetFirewallRule -PolicyStore RSOP` ou `wf.msc` (les règles de GPO y apparaissent grisées).
+docs:
+  - title: Pare-feu Windows - vue d'ensemble
+    url: https://learn.microsoft.com/fr-fr/windows/security/operating-system-security/network-security/windows-firewall/
+  - title: Configurer le pare-feu avec la stratégie de groupe
+    url: https://learn.microsoft.com/fr-fr/windows/security/operating-system-security/network-security/windows-firewall/configure
+  - title: Module NetSecurity (PowerShell)
+    url: https://learn.microsoft.com/fr-fr/powershell/module/netsecurity/
+exercises:
+  - id: win-fwg-profils
+    title: La GPO et ses profils
+    description: |
+      Crée la GPO `C - Pare-feu postes`, liée à l'OU `Postes`. Dans son pare-feu, pour les **trois profils** :
+      pare-feu **activé**, entrant **bloqué** par défaut, sortant **autorisé** par défaut.
+    hint: New-GPO 'C - Pare-feu postes' | New-GPLink -Target 'OU=Postes,...' ; Set-NetFirewallProfile -PolicyStore 'durand.lan\C - Pare-feu postes' -Profile Domain, Private, Public -Enabled True -DefaultInboundAction Block -DefaultOutboundAction Allow
+    cours: |
+      ```powershell
+      New-GPO -Name 'C - Pare-feu postes' | New-GPLink -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan'
+      $gpo = 'durand.lan\C - Pare-feu postes'
+      Set-NetFirewallProfile -PolicyStore $gpo -Profile Domain, Private, Public -Enabled True `
+          -DefaultInboundAction Block -DefaultOutboundAction Allow
+      Get-NetFirewallProfile -PolicyStore $gpo | Format-Table Name, Enabled, DefaultInboundAction, DefaultOutboundAction
+      ```
+
+      Dans GPMC : *Configuration ordinateur* › *Stratégies* › *Paramètres Windows* › *Paramètres de sécurité* ›
+      *Pare-feu Windows Defender avec fonctions avancées de sécurité* › *Propriétés*. Un réglage laissé à
+      « Non configuré » (`NotConfigured`) laisse la valeur locale : imposer explicitement l'état activé
+      empêche un administrateur local de couper le pare-feu.
+    docs:
+      - title: Set-NetFirewallProfile
+        url: https://learn.microsoft.com/fr-fr/powershell/module/netsecurity/set-netfirewallprofile
+    checks:
+      - desc: C - Pare-feu postes est liée à l'OU Postes
+        run: |
+          [bool]((Get-GPInheritance -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan').GpoLinks | Where-Object DisplayName -eq 'C - Pare-feu postes')
+      - desc: Les trois profils sont activés, entrant bloqué, sortant autorisé
+        run: |
+          $p = Get-NetFirewallProfile -PolicyStore 'durand.lan\C - Pare-feu postes'
+          @($p | Where-Object { $_.Enabled -eq 'True' -and $_.DefaultInboundAction -eq 'Block' -and $_.DefaultOutboundAction -eq 'Allow' }).Count -eq 3
+    solution: |
+      New-GPO -Name 'C - Pare-feu postes' | New-GPLink -Target 'OU=Postes,OU=Ateliers Durand,DC=durand,DC=lan' | Out-Null
+      Set-NetFirewallProfile -PolicyStore 'durand.lan\C - Pare-feu postes' -Profile Domain, Private, Public -Enabled True -DefaultInboundAction Block -DefaultOutboundAction Allow
+
+  - id: win-fwg-rdp
+    title: Bureau à distance depuis le LAN seulement
+    description: |
+      Ajoute à la GPO la règle entrante **`TDM - RDP depuis le LAN`** : TCP **3389**, autorisée, depuis
+      `192.168.10.0/24` uniquement, profil **Domaine**.
+    hint: New-NetFirewallRule -PolicyStore 'durand.lan\C - Pare-feu postes' -DisplayName 'TDM - RDP depuis le LAN' -Direction Inbound -Protocol TCP -LocalPort 3389 -RemoteAddress 192.168.10.0/24 -Profile Domain -Action Allow
+    cours: |
+      ```powershell
+      New-NetFirewallRule -PolicyStore 'durand.lan\C - Pare-feu postes' -DisplayName 'TDM - RDP depuis le LAN' `
+          -Direction Inbound -Protocol TCP -LocalPort 3389 -RemoteAddress 192.168.10.0/24 -Profile Domain -Action Allow
+      ```
+
+      Une règle bien écrite est **la plus étroite possible** : port précis, adresses sources connues, profil
+      Domaine (le poste emporté à l'hôtel bascule en profil Public et ne l'expose plus). `-RemoteAddress`
+      accepte des adresses, des plages (`192.168.10.1-192.168.10.50`), des sous-réseaux et des mots-clés
+      (`LocalSubnet`, `Internet`, `Intranet`, `DefaultGateway`...). Préfixer les noms (`TDM -`) distingue
+      tout de suite les règles de l'entreprise des règles intégrées.
+    docs:
+      - title: New-NetFirewallRule
+        url: https://learn.microsoft.com/fr-fr/powershell/module/netsecurity/new-netfirewallrule
+    checks:
+      - desc: La règle existe dans la GPO, entrante, autorisée, profil Domaine
+        run: |
+          $r = Get-NetFirewallRule -PolicyStore 'durand.lan\C - Pare-feu postes' -DisplayName 'TDM - RDP depuis le LAN' -ErrorAction SilentlyContinue
+          [bool]$r -and $r.Direction -eq 'Inbound' -and $r.Action -eq 'Allow' -and $r.Profile -eq 'Domain'
+      - desc: Elle porte sur TCP 3389 depuis 192.168.10.0/24
+        run: |
+          $r = Get-NetFirewallRule -PolicyStore 'durand.lan\C - Pare-feu postes' -DisplayName 'TDM - RDP depuis le LAN'
+          $port = $r | Get-NetFirewallPortFilter
+          $adr = $r | Get-NetFirewallAddressFilter
+          $port.Protocol -eq 'TCP' -and $port.LocalPort -eq '3389' -and $adr.RemoteAddress -match '^192\.168\.10\.0/(24|255\.255\.255\.0)$'
+    solution: |
+      New-NetFirewallRule -PolicyStore 'durand.lan\C - Pare-feu postes' -DisplayName 'TDM - RDP depuis le LAN' -Direction Inbound -Protocol TCP -LocalPort 3389 -RemoteAddress 192.168.10.0/24 -Profile Domain -Action Allow | Out-Null
+
+  - id: win-fwg-icmp
+    title: Autoriser le ping
+    description: |
+      Ajoute la règle entrante **`TDM - Ping`** : ICMPv4 **type 8** (demande d'écho), autorisée, depuis le
+      sous-réseau local (`LocalSubnet`), profils Domaine et Privé.
+    hint: New-NetFirewallRule ... -DisplayName 'TDM - Ping' -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -RemoteAddress LocalSubnet -Profile Domain, Private -Action Allow
+    cours: |
+      ```powershell
+      New-NetFirewallRule -PolicyStore 'durand.lan\C - Pare-feu postes' -DisplayName 'TDM - Ping' `
+          -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -RemoteAddress LocalSubnet -Profile Domain, Private -Action Allow
+      ```
+
+      Le ping n'est pas dangereux en soi et il est précieux pour le diagnostic : on l'autorise sur le réseau
+      interne, pas depuis Internet. ICMP n'a pas de ports mais des **types** : 8 pour la demande d'écho, 0
+      pour la réponse (autorisée automatiquement comme retour d'un ping sortant, le pare-feu étant *à états*).
+      Pour IPv6, il faut une règle ICMPv6 séparée (type 128) ; et surtout ne pas bloquer les types ICMPv6
+      de découverte de voisins, indispensables au fonctionnement d'IPv6.
+    docs:
+      - title: New-NetFirewallRule
+        url: https://learn.microsoft.com/fr-fr/powershell/module/netsecurity/new-netfirewallrule
+    checks:
+      - desc: TDM - Ping autorise ICMPv4 type 8 depuis LocalSubnet
+        run: |
+          $r = Get-NetFirewallRule -PolicyStore 'durand.lan\C - Pare-feu postes' -DisplayName 'TDM - Ping' -ErrorAction SilentlyContinue
+          $port = $r | Get-NetFirewallPortFilter
+          [bool]$r -and $r.Action -eq 'Allow' -and $port.Protocol -eq 'ICMPv4' -and $port.IcmpType -contains '8' -and ($r | Get-NetFirewallAddressFilter).RemoteAddress -contains 'LocalSubnet'
+    solution: |
+      New-NetFirewallRule -PolicyStore 'durand.lan\C - Pare-feu postes' -DisplayName 'TDM - Ping' -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -RemoteAddress LocalSubnet -Profile Domain, Private -Action Allow | Out-Null
+
+  - id: win-fwg-gestion
+    title: Les flux d'administration
+    description: |
+      Avant de verrouiller, recrée dans la GPO les flux indispensables :
+
+      | Règle | Protocole et port | Source |
+      |-------|-------------------|--------|
+      | `TDM - WinRM depuis SRV-DC01` | TCP 5985 | `192.168.10.10` |
+      | `TDM - Gestion Vagrant` | TCP 22, 3389, 5985 | `10.0.2.2` (passerelle NAT de VirtualBox) |
+
+      Les deux règles sont entrantes, autorisées, sur **tous les profils**.
+    hint: New-NetFirewallRule ... -DisplayName 'TDM - Gestion Vagrant' -Direction Inbound -Protocol TCP -LocalPort 22, 3389, 5985 -RemoteAddress 10.0.2.2 -Profile Any -Action Allow
+    cours: |
+      ```powershell
+      $gpo = 'durand.lan\C - Pare-feu postes'
+      New-NetFirewallRule -PolicyStore $gpo -DisplayName 'TDM - WinRM depuis SRV-DC01' -Direction Inbound `
+          -Protocol TCP -LocalPort 5985 -RemoteAddress 192.168.10.10 -Profile Any -Action Allow
+      New-NetFirewallRule -PolicyStore $gpo -DisplayName 'TDM - Gestion Vagrant' -Direction Inbound `
+          -Protocol TCP -LocalPort 22, 3389, 5985 -RemoteAddress 10.0.2.2 -Profile Any -Action Allow
+      ```
+
+      La règle Vagrant est propre au lab : en entreprise, c'est la règle des **postes d'administration**
+      (PAW) ou du bastion. La carte NAT de VirtualBox est souvent classée en profil **Public** : d'où
+      `-Profile Any`. Avec ces règles en place, l'exercice suivant pourra ignorer les règles locales sans
+      perdre la main. C'est l'ordre à respecter : ouvrir le chemin d'administration **avant** de fermer
+      le reste.
+    docs:
+      - title: Installation et configuration de WinRM
+        url: https://learn.microsoft.com/fr-fr/windows/win32/winrm/installation-and-configuration-for-windows-remote-management
+    checks:
+      - desc: TDM - WinRM depuis SRV-DC01 autorise TCP 5985 depuis 192.168.10.10
+        run: |
+          $r = Get-NetFirewallRule -PolicyStore 'durand.lan\C - Pare-feu postes' -DisplayName 'TDM - WinRM depuis SRV-DC01' -ErrorAction SilentlyContinue
+          [bool]$r -and ($r | Get-NetFirewallPortFilter).LocalPort -contains '5985' -and ($r | Get-NetFirewallAddressFilter).RemoteAddress -contains '192.168.10.10'
+      - desc: TDM - Gestion Vagrant autorise 22, 3389 et 5985 depuis 10.0.2.2 sur tous les profils
+        run: |
+          $r = Get-NetFirewallRule -PolicyStore 'durand.lan\C - Pare-feu postes' -DisplayName 'TDM - Gestion Vagrant' -ErrorAction SilentlyContinue
+          $ports = ($r | Get-NetFirewallPortFilter).LocalPort
+          [bool]$r -and $r.Profile -eq 'Any' -and ($ports -contains '22') -and ($ports -contains '3389') -and ($ports -contains '5985') -and ($r | Get-NetFirewallAddressFilter).RemoteAddress -contains '10.0.2.2'
+    solution: |
+      $gpo = 'durand.lan\C - Pare-feu postes'
+      New-NetFirewallRule -PolicyStore $gpo -DisplayName 'TDM - WinRM depuis SRV-DC01' -Direction Inbound -Protocol TCP -LocalPort 5985 -RemoteAddress 192.168.10.10 -Profile Any -Action Allow | Out-Null
+      New-NetFirewallRule -PolicyStore $gpo -DisplayName 'TDM - Gestion Vagrant' -Direction Inbound -Protocol TCP -LocalPort 22, 3389, 5985 -RemoteAddress 10.0.2.2 -Profile Any -Action Allow | Out-Null
+
+  - id: win-fwg-locales
+    title: Ignorer les règles locales
+    description: |
+      Dans la GPO, pour les trois profils, fais en sorte que les **règles de pare-feu locales** et les
+      **règles de sécurité de connexion locales** ne soient plus appliquées : seules comptent désormais les
+      règles de la GPO.
+    hint: Set-NetFirewallProfile -PolicyStore 'durand.lan\C - Pare-feu postes' -Profile Domain, Private, Public -AllowLocalFirewallRules False -AllowLocalIPsecRules False
+    cours: |
+      ```powershell
+      Set-NetFirewallProfile -PolicyStore 'durand.lan\C - Pare-feu postes' -Profile Domain, Private, Public `
+          -AllowLocalFirewallRules False -AllowLocalIPsecRules False
+      ```
+
+      Dans la console : *Propriétés* du pare-feu › onglet du profil › *Paramètres* › *Personnaliser* ›
+      *Fusion des règles* › « Appliquer les règles de pare-feu locales : Non ». À partir de là, une
+      application qui crée sa règle à l'installation (client de visioconférence, agent de sauvegarde) ne
+      fonctionne plus en entrant tant que la règle n'est pas ajoutée à la GPO : c'est voulu, mais il faut le
+      savoir et prévoir un processus de demande d'ouverture. Les règles locales restent visibles dans
+      `wf.msc` : elles sont simplement ignorées. En production, on importe aussi dans la GPO le groupe
+      intégré *Réseau de base* (*Core Networking* : DHCP, ICMPv6, découverte de voisins), sans quoi le
+      renouvellement DHCP ou IPv6 peuvent se dégrader.
+    docs:
+      - title: Set-NetFirewallProfile
+        url: https://learn.microsoft.com/fr-fr/powershell/module/netsecurity/set-netfirewallprofile
+    checks:
+      - desc: Les règles locales (pare-feu et IPsec) sont ignorées sur les trois profils
+        run: |
+          $p = Get-NetFirewallProfile -PolicyStore 'durand.lan\C - Pare-feu postes'
+          @($p | Where-Object { $_.AllowLocalFirewallRules -eq 'False' -and $_.AllowLocalIPsecRules -eq 'False' }).Count -eq 3
+      - desc: Les flux d'administration existent bien dans la GPO (sinon, verrouillage)
+        run: |
+          [bool](Get-NetFirewallRule -PolicyStore 'durand.lan\C - Pare-feu postes' -DisplayName 'TDM - Gestion Vagrant' -ErrorAction SilentlyContinue)
+    solution: |
+      Set-NetFirewallProfile -PolicyStore 'durand.lan\C - Pare-feu postes' -Profile Domain, Private, Public -AllowLocalFirewallRules False -AllowLocalIPsecRules False
+
+  - id: win-fwg-journal
+    title: Journaliser les paquets rejetés
+    description: |
+      Pour les trois profils, active dans la GPO la **journalisation des paquets ignorés** dans
+      `%SystemRoot%\System32\LogFiles\Firewall\pfirewall.log`, taille maximale **16 384 Ko**.
+    hint: Set-NetFirewallProfile -PolicyStore ... -Profile Domain, Private, Public -LogBlocked True -LogFileName '%SystemRoot%\System32\LogFiles\Firewall\pfirewall.log' -LogMaxSizeKilobytes 16384
+    cours: |
+      ```powershell
+      Set-NetFirewallProfile -PolicyStore 'durand.lan\C - Pare-feu postes' -Profile Domain, Private, Public `
+          -LogBlocked True -LogFileName '%SystemRoot%\System32\LogFiles\Firewall\pfirewall.log' -LogMaxSizeKilobytes 16384
+      ```
+
+      Le journal liste chaque paquet rejeté (date, action, protocole, adresses, ports) : c'est la première
+      chose à regarder quand « une application ne marche plus depuis la GPO ». `LogAllowed` journalise
+      aussi les connexions autorisées, très verbeux, à réserver au diagnostic. Le fichier tourne en
+      `pfirewall.log.old` à la taille maximale. Pour une vision centralisée, on préfère l'audit *Plateforme
+      de filtrage* (événements 5152 et 5157) remonté vers un SIEM.
+    docs:
+      - title: Configurer la journalisation du pare-feu
+        url: https://learn.microsoft.com/fr-fr/windows/security/operating-system-security/network-security/windows-firewall/configure-logging
+    checks:
+      - desc: Journalisation des rejets activée, 16 384 Ko, fichier pfirewall.log, sur les trois profils
+        run: |
+          $p = Get-NetFirewallProfile -PolicyStore 'durand.lan\C - Pare-feu postes'
+          @($p | Where-Object { $_.LogBlocked -eq 'True' -and $_.LogMaxSizeKilobytes -eq 16384 -and $_.LogFileName -like '*pfirewall.log' }).Count -eq 3
+    solution: |
+      Set-NetFirewallProfile -PolicyStore 'durand.lan\C - Pare-feu postes' -Profile Domain, Private, Public -LogBlocked True -LogFileName '%SystemRoot%\System32\LogFiles\Firewall\pfirewall.log' -LogMaxSizeKilobytes 16384
+
+  - id: win-fwg-sortant
+    title: Pas de SMB vers Internet
+    description: |
+      Ajoute la règle **sortante** `TDM - SMB vers Internet` qui **bloque** TCP 445 vers les adresses
+      `Internet` (tout ce qui n'est pas le réseau de l'entreprise), sur tous les profils.
+    hint: New-NetFirewallRule ... -DisplayName 'TDM - SMB vers Internet' -Direction Outbound -Protocol TCP -RemotePort 445 -RemoteAddress Internet -Action Block -Profile Any
+    cours: |
+      ```powershell
+      New-NetFirewallRule -PolicyStore 'durand.lan\C - Pare-feu postes' -DisplayName 'TDM - SMB vers Internet' `
+          -Direction Outbound -Protocol TCP -RemotePort 445 -RemoteAddress Internet -Action Block -Profile Any
+      ```
+
+      Un poste n'a aucune raison d'ouvrir une session SMB sur Internet ; un lien piégé `\\serveur-pirate\x`
+      peut en revanche faire fuiter le condensat NTLM de l'utilisateur. Le mot-clé `Internet` désigne tout
+      ce qui n'est ni local ni dans l'**intranet** (défini par les sous-réseaux des sites AD et la
+      configuration d'isolement réseau). Ici on utilise `-RemotePort` (port **distant**) puisque le poste
+      est client. Une règle de **blocage** l'emporte sur toute autorisation.
+    docs:
+      - title: New-NetFirewallRule
+        url: https://learn.microsoft.com/fr-fr/powershell/module/netsecurity/new-netfirewallrule
+      - title: Sécuriser le trafic SMB
+        url: https://learn.microsoft.com/fr-fr/windows-server/storage/file-server/smb-secure-traffic
+    checks:
+      - desc: Règle sortante de blocage TCP 445 vers Internet
+        run: |
+          $r = Get-NetFirewallRule -PolicyStore 'durand.lan\C - Pare-feu postes' -DisplayName 'TDM - SMB vers Internet' -ErrorAction SilentlyContinue
+          $port = $r | Get-NetFirewallPortFilter
+          [bool]$r -and $r.Direction -eq 'Outbound' -and $r.Action -eq 'Block' -and $port.RemotePort -contains '445' -and ($r | Get-NetFirewallAddressFilter).RemoteAddress -contains 'Internet'
+    solution: |
+      New-NetFirewallRule -PolicyStore 'durand.lan\C - Pare-feu postes' -DisplayName 'TDM - SMB vers Internet' -Direction Outbound -Protocol TCP -RemotePort 445 -RemoteAddress Internet -Action Block -Profile Any | Out-Null
+
+  - id: win-fwg-ipsec
+    title: Authentifier les échanges avec le DC
+    description: |
+      Ajoute la règle de sécurité de connexion **`TDM - IPsec vers SRV-DC01`** qui **demande**
+      l'authentification (entrant et sortant) pour le trafic entre les postes et `192.168.10.10`, avec
+      l'authentification par défaut (Kerberos ordinateur).
+    hint: New-NetIPsecRule -PolicyStore 'durand.lan\C - Pare-feu postes' -DisplayName 'TDM - IPsec vers SRV-DC01' -RemoteAddress 192.168.10.10 -InboundSecurity Request -OutboundSecurity Request
+    cours: |
+      ```powershell
+      New-NetIPsecRule -PolicyStore 'durand.lan\C - Pare-feu postes' -DisplayName 'TDM - IPsec vers SRV-DC01' `
+          -RemoteAddress 192.168.10.10 -InboundSecurity Request -OutboundSecurity Request
+      ```
+
+      Une règle de sécurité de connexion ne filtre rien : elle négocie une **association de sécurité** IPsec
+      (authentification mutuelle des machines, intégrité, éventuellement chiffrement). En mode `Request`,
+      si l'autre côté ne sait pas faire, la communication continue en clair : c'est le mode de **déploiement
+      progressif**. En mode `Require`, sans IPsec, plus de communication. On peut ensuite écrire des règles
+      de pare-feu « autoriser si sécurisé » réservées aux machines authentifiées : c'est le principe de
+      l'**isolement de domaine**. Le DC n'ayant pas de règle symétrique, les négociations échoueront ici
+      en douceur.
+    docs:
+      - title: New-NetIPsecRule
+        url: https://learn.microsoft.com/fr-fr/powershell/module/netsecurity/new-netipsecrule
+      - title: Isolement de domaine et de serveur
+        url: https://learn.microsoft.com/fr-fr/windows/security/operating-system-security/network-security/windows-firewall/isolating-apps-on-your-network
+    checks:
+      - desc: La règle IPsec existe dans la GPO en mode Demander vers 192.168.10.10
+        run: |
+          $r = Get-NetIPsecRule -PolicyStore 'durand.lan\C - Pare-feu postes' -DisplayName 'TDM - IPsec vers SRV-DC01' -ErrorAction SilentlyContinue
+          [bool]$r -and $r.InboundSecurity -eq 'Request' -and $r.OutboundSecurity -eq 'Request' -and ($r | Get-NetFirewallAddressFilter).RemoteAddress -contains '192.168.10.10'
+    solution: |
+      New-NetIPsecRule -PolicyStore 'durand.lan\C - Pare-feu postes' -DisplayName 'TDM - IPsec vers SRV-DC01' -RemoteAddress 192.168.10.10 -InboundSecurity Request -OutboundSecurity Request | Out-Null
+
+  - id: win-fwg-poste
+    title: Vérifier sur le poste
+    description: |
+      Applique les stratégies sur PC01 et vérifie le résultat : le pare-feu de PC01 contient les règles de
+      la GPO (magasin `RSOP`), ignore ses règles locales, et répond au ping de SRV-DC01.
+    hint: Invoke-Command -ComputerName PC01 { gpupdate /target:computer /force ; Get-NetFirewallRule -PolicyStore RSOP | Select DisplayName } ; Test-Connection PC01 -Count 2
+    cours: |
+      ```powershell
+      Invoke-Command -ComputerName PC01 {
+          gpupdate /target:computer /force
+          Get-NetFirewallRule -PolicyStore RSOP | Format-Table DisplayName, Direction, Action
+          Get-NetFirewallProfile -PolicyStore ActiveStore | Format-Table Name, AllowLocalFirewallRules }
+      Test-Connection PC01 -Count 2
+      ```
+
+      `RSOP` contient ce que les GPO ont apporté ; `ActiveStore` ce que le pare-feu applique réellement
+      (fusion des GPO et, si autorisé, des règles locales). Si une règle manque, vérifie le lien de la GPO,
+      le profil réseau du poste (`Get-NetConnectionProfile` : la carte LAN doit être en *DomainAuthenticated*
+      pour le profil Domaine), puis le journal `pfirewall.log`. La gestion par WinRM fonctionne encore :
+      c'est la preuve que les règles d'administration sont bonnes.
+    docs:
+      - title: Get-NetFirewallRule
+        url: https://learn.microsoft.com/fr-fr/powershell/module/netsecurity/get-netfirewallrule
+    checks:
+      - desc: PC01 a reçu les règles TDM de la GPO (magasin RSOP)
+        machine: pc01
+        run: |
+          @(Get-NetFirewallRule -PolicyStore RSOP -ErrorAction SilentlyContinue | Where-Object DisplayName -like 'TDM - *').Count -ge 5
+      - desc: PC01 ignore ses règles locales (magasin actif)
+        machine: pc01
+        run: |
+          (Get-NetFirewallProfile -PolicyStore ActiveStore -Profile Domain).AllowLocalFirewallRules -eq 'False'
+      - desc: PC01 répond au ping de SRV-DC01
+        run: |
+          Test-Connection PC01 -Count 2 -Quiet
+    solution: |
+      Invoke-Command -ComputerName PC01 { gpupdate /target:computer /force } | Out-Null

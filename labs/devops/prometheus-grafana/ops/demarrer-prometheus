@@ -1,0 +1,12 @@
+#!/bin/sh
+# Démarre Prometheus en arrière-plan (journal : /var/log/prometheus.log).
+if pgrep -x prometheus >/dev/null; then
+  echo "Prometheus tourne déjà (recharge la configuration avec : curl -X POST http://localhost:9090/-/reload)"
+  exit 0
+fi
+nohup prometheus \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --storage.tsdb.path=/prometheus \
+  --web.enable-lifecycle \
+  > /var/log/prometheus.log 2>&1 &
+echo "Prometheus démarré"

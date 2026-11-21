@@ -1,0 +1,105 @@
+title: Se protéger des tempêtes de broadcast
+level: intermediaire
+order: 24
+device: switch
+hostname: SW-FORMATION
+tags: [storm-control, broadcast, errdisable]
+summary: Limiter le broadcast et le multicast pour qu'une boucle locale n'écroule pas le réseau.
+description: |
+  Dans la salle de formation, les stagiaires branchent parfois deux prises ensemble ou un vieux
+  switch : une tempête de broadcast sature tout l'étage.
+
+  **Ports bureautiques `Fa0/1` à `Fa0/20`**
+  - broadcast limité à `20` % et multicast à `30` % de la bande passante ;
+  - en cas de dépassement, envoyer une alerte SNMP sans couper (`storm-control action trap`).
+
+  **Ports de la salle de formation `Fa0/21` à `Fa0/24`**
+  - broadcast limité à `10` % ;
+  - en cas de dépassement, **couper** le port (`storm-control action shutdown`) ;
+  - réactiver automatiquement les ports coupés après `300` secondes
+    (`errdisable recovery cause storm-control`, `errdisable recovery interval 300`).
+checks:
+  - desc: Fa0/1-20 limités à 20 % de broadcast et 30 % de multicast
+    expr: all(i.storm_control.get("broadcast") == "20.00" and i.storm_control.get("multicast") == "30.00" for i in ports("fa0/1-20"))
+  - desc: Fa0/1-20 envoient une alerte (action trap)
+    expr: all(i.storm_control.get("action") == "trap" for i in ports("fa0/1-20"))
+  - desc: Fa0/21-24 limités à 10 % de broadcast et coupés en cas de tempête
+    expr: all(i.storm_control.get("broadcast") == "10.00" and i.storm_control.get("action") == "shutdown" for i in ports("fa0/21-24"))
+  - desc: Réactivation automatique après 300 s
+    expr: '"storm-control" in d.errdisable_recovery and d.errdisable_interval == 300'
+solution: |
+  configure terminal
+  interface range fa0/1 - 20
+  storm-control broadcast level 20
+  storm-control multicast level 30
+  storm-control action trap
+  interface range fa0/21 - 24
+  storm-control broadcast level 10
+  storm-control action shutdown
+  exit
+  errdisable recovery cause storm-control
+  errdisable recovery interval 300
+  end
+cours: |
+  ## Qu'est-ce qu'une tempête de broadcast ?
+
+  Une trame de **broadcast** (ARP, DHCP Discover...) est inondée sur tous les ports du VLAN. S'il
+  existe une **boucle** de niveau 2 non bloquée par le spanning tree (deux prises reliées par un
+  mini-switch qui filtre les BPDU, par exemple), chaque broadcast tourne indéfiniment et se
+  multiplie : en quelques secondes, les liens sont saturés, les processeurs des switchs à 100 %, et
+  plus rien ne passe. Une carte réseau défaillante peut produire le même effet.
+
+  Le spanning tree et le BPDU Guard sont les premières défenses ; le **storm control** est le
+  filet de sécurité : il mesure le trafic broadcast/multicast/unicast inconnu reçu sur un port et
+  agit au-delà d'un seuil.
+
+  ### Configuration
+
+  ```
+  SW1(config)# interface range gi1/0/1 - 24
+  SW1(config-if-range)# storm-control broadcast level 15.00
+  SW1(config-if-range)# storm-control multicast level 25.00 20.00
+  SW1(config-if-range)# storm-control unicast level 40.00
+  SW1(config-if-range)# storm-control action shutdown
+  SW1# show storm-control fa0/1 broadcast
+  Interface  Filter State   Upper        Lower        Current
+  Fa0/1      Forwarding     15.00%       15.00%       0.00%
+  ```
+
+  - le seuil est un **pourcentage** de la bande passante du port (ou `pps` / `bps` selon les modèles) ;
+  - deux valeurs = seuil haut (blocage) et seuil bas (reprise) ;
+  - **sans action** configurée, le switch se contente de **jeter** le trafic excédentaire ;
+  - `action trap` envoie une notification SNMP ; `action shutdown` met le port en **err-disabled**.
+
+  ### Réactivation automatique
+
+  ```
+  SW1(config)# errdisable recovery cause storm-control
+  SW1(config)# errdisable recovery interval 300
+  SW1# show errdisable recovery
+  ```
+
+  Sans cela, un technicien doit faire `shutdown` puis `no shutdown` sur le port.
+
+  ### Choisir les seuils
+
+  Un poste de travail émet très peu de broadcast (< 1 %). Des seuils entre 5 et 20 % sur les ports
+  d'accès sont courants. Attention aux ports qui reçoivent beaucoup de multicast légitime
+  (vidéo, clonage d'images système, certains protocoles de serveurs).
+
+  ### Pièges fréquents
+
+  - Appliquer `action shutdown` sur un **uplink** : une tempête venue d'ailleurs coupe tout l'étage.
+  - Des seuils trop bas qui coupent un serveur de déploiement en multicast.
+  - Croire que le storm control remplace le spanning tree : il limite les dégâts, il ne supprime
+    pas la boucle.
+
+  ### Pour le CCNP ENCOR
+
+  Storm control fait partie des mécanismes de protection de la couche 2, avec BPDU Guard, Root
+  Guard, DHCP snooping et DAI.
+docs:
+  - title: Wikipédia (EN) — Broadcast storm
+    url: https://en.wikipedia.org/wiki/Broadcast_storm
+  - title: Cisco Catalyst 2960-X — guides de configuration
+    url: https://www.cisco.com/c/en/us/support/switches/catalyst-2960-x-series-switches/products-installation-and-configuration-guides-list.html

@@ -1,0 +1,333 @@
+title: Gestion des secrets avec Vault
+level: expert
+order: 5
+tags: [vault, secrets, sécurité, postgresql, approle, chiffrement, audit]
+summary: Mettre en service HashiCorp Vault et l'utiliser comme en production - init et descellement, KV v2, politiques, AppRole, identifiants dynamiques PostgreSQL, chiffrement transit et audit.
+compose: docker-compose.yml
+service: ops
+shell: bash
+workdir: /root
+description: |
+  Fini les mots de passe dans les fichiers de configuration ! Un serveur **HashiCorp Vault** vient d'être
+  installé (stockage fichier, conteneur `vault`) mais il n'est **ni initialisé ni descellé**. Une base
+  **PostgreSQL** (`db:5432`, base `boutique`, administrateur `postgres` / `tdm-admin`) attend d'être protégée.
+
+  Ton terminal est sur **ops** : la CLI `vault` y est installée et `VAULT_ADDR=http://vault:8200` est déjà défini.
+  L'interface web est sur **http://localhost:8210**. `jq` et `psql` sont disponibles.
+
+  > Ce lab manipule des clés de descellement et un jeton root : en production, on les distribue à plusieurs
+  > personnes et on révoque le jeton root après la mise en service.
+cours: |
+  ## HashiCorp Vault : centraliser et maîtriser les secrets
+
+  Mots de passe dans des fichiers de configuration, clés d'API dans le dépôt, même compte de base de données
+  partagé par toutes les applications depuis cinq ans : ce sont les causes de nombreuses fuites. **Vault**
+  centralise les secrets, contrôle qui y accède, trace chaque accès et sait même générer des secrets
+  éphémères à la demande.
+
+  ### Architecture
+
+  ```
+   application ──(1) s'authentifie : AppRole, Kubernetes, OIDC, jeton...──▶ ┌───────── Vault ─────────┐
+               ◀─(2) jeton (TTL, politiques)─────────────────────────────── │ méthodes d'auth         │
+               ──(3) lit secret/data/boutique/config ─────────────────────▶ │ politiques (ACL)        │
+                                                                            │ moteurs : kv, database, │
+                                                                            │   transit, pki...       │
+                                                                            │ audit                   │
+                                                                            └──── stockage chiffré ───┘
+  ```
+
+  ### Scellement
+
+  Vault chiffre tout ce qu'il stocke avec une clé de chiffrement, elle-même protégée par une **clé racine**.
+  Au démarrage, Vault est **scellé** : il ne connaît pas cette clé. Avec le partage de secret de **Shamir**,
+  la clé est découpée en N parts dont K suffisent (5 et 3 par défaut) : aucune personne seule ne peut
+  desceller. En production, on utilise souvent le descellement automatique (*auto-unseal*) par un KMS cloud
+  ou un HSM.
+
+  ### Les briques
+
+  | Brique | Rôle |
+  |---|---|
+  | **Méthodes d'authentification** | token, userpass, AppRole, Kubernetes, OIDC, LDAP… : prouver qui l'on est |
+  | **Jetons** | résultat d'une authentification ; portent des politiques et une durée de vie (TTL) |
+  | **Politiques** | règles HCL : chemin + capacités (`read`, `create`, `update`, `delete`, `list`) |
+  | **Moteurs de secrets** | `kv` (statique, versionné), `database` (identifiants dynamiques), `transit` (chiffrement), `pki` (certificats) |
+  | **Audit** | journal de chaque requête, valeurs sensibles hachées |
+
+  ```hcl
+  # boutique-lecture.hcl
+  path "secret/data/boutique/*" {
+    capabilities = ["read"]
+  }
+  ```
+
+  Avec KV v2, l'API sépare `secret/data/...` (les valeurs), `secret/metadata/...` (versions) et
+  `secret/delete|undelete|destroy/...` : les politiques doivent viser ces chemins.
+
+  ### Secrets dynamiques
+
+  Le moteur `database` crée **à la demande** un utilisateur de base de données avec un bail (*lease*) : à
+  expiration, Vault le supprime. Chaque application (voire chaque instance) a ses propres identifiants,
+  traçables et révocables, et plus aucun mot de passe éternel ne circule.
+
+  ### Mémo
+
+  ```bash
+  vault status ; vault operator init -key-shares=5 -key-threshold=3 -format=json
+  vault operator unseal ; vault login
+  vault secrets enable -path=secret kv-v2 ; vault secrets list
+  vault kv put secret/app a=1 ; vault kv patch secret/app b=2 ; vault kv get -version=1 secret/app
+  vault policy write lecture lecture.hcl ; vault token create -policy=lecture
+  vault auth enable approle ; vault read auth/approle/role/app/role-id
+  vault write -f auth/approle/role/app/secret-id
+  vault read database/creds/lecteur ; vault lease revoke ID
+  vault write transit/encrypt/paiement plaintext=$(echo -n "x" | base64)
+  vault audit enable file file_path=/vault/logs/audit.log
+  ```
+
+  ### Pièges courants
+
+  - Utiliser le jeton root au quotidien : il doit être révoqué après la configuration initiale.
+  - Garder toutes les parts de descellement au même endroit, ou dans le dépôt.
+  - Oublier le préfixe `data/` dans les politiques KV v2.
+  - Des TTL trop longs qui annulent l'intérêt des secrets éphémères.
+  - `vault kv put` remplace **tout** le secret : utilise `patch` pour modifier une seule clé.
+
+  ### Bonnes pratiques
+
+  Moindre privilège par politique, authentification des machines par leur identité (AppRole, Kubernetes,
+  cloud), secrets dynamiques quand c'est possible, audit activé sur deux périphériques, haute disponibilité
+  (stockage Raft intégré) et sauvegardes régulières par instantanés.
+docs:
+  - title: Documentation Vault
+    url: https://developer.hashicorp.com/vault/docs
+  - title: Tutoriels Vault
+    url: https://developer.hashicorp.com/vault/tutorials
+  - title: Politiques Vault
+    url: https://developer.hashicorp.com/vault/docs/concepts/policies
+  - title: Moteur de secrets KV v2
+    url: https://developer.hashicorp.com/vault/docs/secrets/kv/kv-v2
+exercises:
+  - id: init
+    title: Initialiser Vault
+    description: |
+      Initialise Vault avec **5 parts** de clé de descellement, dont **3** nécessaires (Shamir), et enregistre la
+      sortie **JSON** dans `/root/init.json` (elle contient les parts et le jeton root : ne la perds pas !).
+
+      Observe `vault status` avant et après.
+    hint: "vault operator init -key-shares=5 -key-threshold=3 -format=json > /root/init.json"
+    cours: |
+      L'**initialisation** n'a lieu qu'une fois dans la vie d'un serveur Vault : elle crée la clé racine, la
+      découpe en parts selon le schéma de **Shamir** et génère le premier **jeton root**.
+
+      `vault operator init` accepte `-key-shares` (nombre de parts) et `-key-threshold` (nombre nécessaire pour
+      desceller). `-format=json` produit une sortie exploitable par `jq` : les parts sont dans `unseal_keys_b64`
+      et le jeton dans `root_token`.
+
+      `vault status` indique `Initialized` et `Sealed`, et renvoie un code de sortie différent selon l'état
+      (2 = scellé). En production, chaque part est confiée à une personne différente, et ce fichier n'existe pas.
+    checks:
+      - desc: Vault est initialisé
+        run: curl -fsS http://vault:8200/v1/sys/init | jq -e '.initialized == true' >/dev/null
+      - desc: /root/init.json contient 5 parts, seuil 3, et le jeton root
+        run: jq -e '(.unseal_keys_b64 | length) == 5 and .unseal_threshold == 3 and (.root_token | length) > 0' /root/init.json >/dev/null
+  - id: descellement
+    title: Desceller et se connecter
+    description: |
+      Vault démarre toujours **scellé** : il ne peut pas déchiffrer ses données. Descelle-le avec 3 des 5 parts,
+      puis connecte-toi avec le jeton root (`vault login`, qui l'enregistre dans `~/.vault-token`).
+    hint: "vault operator unseal $(jq -r '.unseal_keys_b64[0]' /root/init.json), puis [1] et [2] ; vault login $(jq -r .root_token /root/init.json)"
+    cours: |
+      Vault démarre toujours **scellé** : ses données sont chiffrées et il ne peut rien servir. Chaque appel à
+      `vault operator unseal PART` fournit une part ; quand le seuil est atteint, Vault reconstitue la clé et
+      passe à `Sealed false`. Les parts peuvent être fournies par des personnes différentes, sur des machines
+      différentes.
+
+      `vault login JETON` vérifie le jeton et l'enregistre dans `~/.vault-token`, utilisé ensuite par toutes les
+      commandes (la variable `VAULT_TOKEN` a la priorité). `vault token lookup` affiche ses politiques et sa
+      durée de vie.
+
+      Un redémarrage du serveur le rescelle : il faudra recommencer.
+    checks:
+      - desc: Vault est descellé
+        run: curl -fsS http://vault:8200/v1/sys/seal-status | jq -e '.sealed == false' >/dev/null
+      - desc: Le jeton enregistré est valide (politique root)
+        run: vault token lookup -format=json | jq -e '.data.policies | index("root")' >/dev/null
+  - id: kv
+    title: Stocker des secrets versionnés (KV v2)
+    description: |
+      1. Active le moteur **KV version 2** sur le chemin `secret/`.
+      2. Écris le secret `secret/boutique/config` avec `api_key=sk-live-0001` et `mode=prod`.
+      3. La clé a fuité : remplace-la par `sk-live-0002` **sans perdre** `mode` (une nouvelle version est créée).
+
+      Retrouve l'ancienne version avec `vault kv get -version=1`.
+    hint: "vault secrets enable -path=secret -version=2 kv ; vault kv put ... ; vault kv patch secret/boutique/config api_key=sk-live-0002"
+    cours: |
+      Le moteur **KV** stocke des paires clé/valeur sous des chemins. La **version 2** conserve un historique :
+      chaque écriture crée une nouvelle version, et on peut lire, supprimer (de façon réversible) ou détruire
+      une version précise.
+
+      `vault secrets enable -path=secret kv-v2` monte le moteur. Commandes : `vault kv put` (écrit **toutes**
+      les clés : celles qui ne sont pas fournies disparaissent de la nouvelle version), `vault kv patch`
+      (modifie seulement les clés données), `vault kv get` (`-version=N`, `-field=cle`), `vault kv metadata get`.
+
+      La rotation d'une clé compromise devient traçable, et une erreur de saisie se corrige en relisant
+      l'ancienne version.
+    checks:
+      - desc: secret/ est un moteur KV version 2
+        run: vault secrets list -format=json | jq -e '."secret/".type == "kv" and ."secret/".options.version == "2"' >/dev/null
+      - desc: La version courante contient la nouvelle clé et mode=prod
+        run: vault kv get -format=json secret/boutique/config | jq -e '.data.data.api_key == "sk-live-0002" and .data.data.mode == "prod"' >/dev/null
+      - desc: L'ancienne version est conservée
+        run: vault kv get -format=json -version=1 secret/boutique/config | jq -e '.data.data.api_key == "sk-live-0001"' >/dev/null
+  - id: politiques
+    title: Le moindre privilège avec les politiques
+    description: |
+      L'application ne doit pas utiliser le jeton root. Écris la politique **`boutique-lecture`** qui autorise
+      uniquement la **lecture** des secrets sous `secret/boutique/` (attention au préfixe `data/` de KV v2).
+      Crée un jeton portant cette politique et enregistre-le dans `/root/token-app`.
+
+      Teste : avec ce jeton, la lecture fonctionne mais l'écriture est refusée.
+    hint: "path \"secret/data/boutique/*\" { capabilities = [\"read\"] } ; vault policy write boutique-lecture fichier.hcl ; vault token create -policy=boutique-lecture -field=token > /root/token-app"
+    cours: |
+      Une **politique** Vault, écrite en HCL, associe des chemins à des **capacités** : `read`, `list`,
+      `create`, `update`, `patch`, `delete`, `sudo`, `deny`. Tout ce qui n'est pas explicitement permis est
+      refusé. Le joker `*` en fin de chemin couvre tous les sous-chemins.
+
+      Avec KV v2, la CLI `vault kv get secret/boutique/config` appelle en réalité l'API
+      `secret/data/boutique/config` : c'est ce chemin que la politique doit autoriser.
+
+      `vault policy write NOM fichier.hcl` enregistre la politique, `vault token create -policy=NOM` crée un jeton
+      qui la porte (`-field=token` n'affiche que le jeton). Pour tester sans changer de session :
+      `VAULT_TOKEN=... vault kv get ...`.
+    checks:
+      - desc: La politique boutique-lecture existe
+        run: vault policy read boutique-lecture >/dev/null
+      - desc: Le jeton applicatif porte la politique et lit le secret
+        run: |
+          export VAULT_TOKEN="$(cat /root/token-app)"
+          vault token lookup -format=json | jq -e '.data.policies | index("boutique-lecture")' >/dev/null &&
+          vault kv get secret/boutique/config >/dev/null
+      - desc: Le jeton applicatif ne peut ni écrire ni lire ailleurs
+        run: |
+          export VAULT_TOKEN="$(cat /root/token-app)"
+          test -n "$VAULT_TOKEN" && ! vault kv put secret/boutique/intrusion x=1 >/dev/null 2>&1 &&
+          ! vault secrets list >/dev/null 2>&1
+  - id: approle
+    title: Authentifier une application (AppRole)
+    description: |
+      Un jeton créé à la main finit toujours dans un fichier oublié. Les applications s'authentifient plutôt
+      avec **AppRole** :
+      1. active la méthode `approle` ;
+      2. crée le rôle `boutique` qui délivre des jetons portant `boutique-lecture`, valables **1 heure** ;
+      3. enregistre son **role_id** dans `/root/approle/role_id` et un **secret_id** dans `/root/approle/secret_id`.
+
+      Connecte-toi avec ce couple (`vault write auth/approle/login …`) comme le ferait l'application.
+    hint: "vault auth enable approle ; vault write auth/approle/role/boutique token_policies=boutique-lecture token_ttl=1h ; vault read -field=role_id auth/approle/role/boutique/role-id ; vault write -f -field=secret_id auth/approle/role/boutique/secret-id"
+    cours: |
+      **AppRole** est une méthode d'authentification conçue pour les machines. Un rôle a deux identifiants :
+      - le **role_id**, peu sensible, comparable à un nom d'utilisateur, souvent intégré à la configuration ;
+      - le **secret_id**, sensible, livré séparément (par la CI, un orchestrateur), éventuellement à usage
+        unique et à durée limitée.
+
+      L'application envoie le couple à `auth/approle/login` et reçoit un jeton qui porte les politiques du rôle
+      (`token_policies`), avec une durée de vie (`token_ttl`, `token_max_ttl`).
+
+      `vault auth enable approle`, puis `vault write auth/approle/role/NOM ...`. Le role_id se lit sur
+      `.../role-id`, un secret_id se génère avec `vault write -f .../secret-id`.
+    checks:
+      - desc: Le rôle boutique délivre boutique-lecture pour 1 h
+        run: vault read -format=json auth/approle/role/boutique | jq -e '(.data.token_policies | index("boutique-lecture")) and .data.token_ttl == 3600' >/dev/null
+      - desc: Le couple role_id / secret_id permet de se connecter
+        run: |
+          vault write -format=json auth/approle/login role_id="$(cat /root/approle/role_id)" secret_id="$(cat /root/approle/secret_id)" |
+            jq -e '.auth.policies | index("boutique-lecture")' >/dev/null
+  - id: base-dynamique
+    title: Des identifiants de base de données éphémères
+    description: |
+      Plutôt qu'un mot de passe PostgreSQL partagé et éternel, Vault peut créer **à la demande** un utilisateur
+      temporaire. Active le moteur `database`, puis :
+      1. configure la connexion `boutique` (plugin `postgresql-database-plugin`, `db:5432`, base `boutique`,
+         compte `postgres` / `tdm-admin`, rôle autorisé `lecteur`) ;
+      2. crée le rôle **`lecteur`** : il crée un utilisateur qui peut lire **toutes les tables** de `public`,
+         valable 1 heure.
+
+      Demande des identifiants (`vault read database/creds/lecteur`) et connecte-toi avec `psql` pour lire la table `produits`.
+    hint: "connection_url=\"postgresql://{{username}}:{{password}}@db:5432/boutique?sslmode=disable\" ; creation_statements=\"CREATE ROLE \\\"{{name}}\\\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}'; GRANT SELECT ON ALL TABLES IN SCHEMA public TO \\\"{{name}}\\\";\""
+    cours: |
+      Le moteur **database** fabrique des identifiants **dynamiques** : à chaque demande, Vault se connecte à la
+      base avec un compte administrateur, crée un utilisateur temporaire avec les droits définis par un rôle, et
+      l'associe à un **bail** (*lease*). À expiration ou révocation, il le supprime.
+
+      Deux étapes : `database/config/NOM` (plugin, `connection_url` avec les modèles `{{username}}` et
+      `{{password}}`, compte administrateur, `allowed_roles`) puis `database/roles/NOM` (`db_name`,
+      `creation_statements` en SQL utilisant `{{name}}`, `{{password}}` et `{{expiration}}`, `default_ttl`).
+
+      Pour PostgreSQL, l'utilisateur doit pouvoir se connecter (`LOGIN`) et lire les tables (`GRANT SELECT ON ALL
+      TABLES IN SCHEMA public`).
+    checks:
+      - desc: La connexion boutique est configurée
+        run: vault read -format=json database/config/boutique | jq -e '.data.plugin_name == "postgresql-database-plugin"' >/dev/null
+      - desc: Des identifiants dynamiques permettent de lire produits
+        run: |
+          c=$(vault read -format=json database/creds/lecteur) || exit 1
+          u=$(echo "$c" | jq -r .data.username); p=$(echo "$c" | jq -r .data.password)
+          test "$(PGPASSWORD="$p" psql -h db -U "$u" -d boutique -tAc 'SELECT count(*) FROM produits')" = 3
+        timeout: 30
+      - desc: Le rôle lecteur expire au bout d'une heure
+        run: vault read -format=json database/roles/lecteur | jq -e '.data.default_ttl == 3600' >/dev/null
+  - id: transit
+    title: Chiffrement en tant que service (transit)
+    description: |
+      L'équipe paiement veut chiffrer des numéros de carte **sans jamais manipuler de clé**. Active le moteur
+      `transit` et crée la clé **`paiement`**.
+      1. Chiffre `4111-1111-1111-1111` et enregistre le texte chiffré (`vault:v1:…`) dans `/root/carte.chiffre`.
+      2. Fais **tourner** la clé (rotation) : les anciens textes chiffrés doivent rester déchiffrables.
+    hint: "vault write -field=ciphertext transit/encrypt/paiement plaintext=$(printf %s 4111-1111-1111-1111 | base64) > /root/carte.chiffre ; vault write -f transit/keys/paiement/rotate"
+    cours: |
+      Le moteur **transit** fait du **chiffrement en tant que service** : l'application envoie des données et
+      reçoit un texte chiffré, sans jamais voir la clé. Vault ne stocke pas les données, seulement les clés.
+
+      Les données sont transmises en **base64** (`plaintext=$(echo -n "texte" | base64)`). Le texte chiffré a la
+      forme `vault:v1:...`, où `v1` est la version de la clé utilisée.
+
+      La **rotation** (`vault write -f transit/keys/NOM/rotate`) crée une nouvelle version : les nouveaux
+      chiffrements l'utilisent, les anciens textes restent déchiffrables (dans la limite de
+      `min_decryption_version`), et `rewrap` permet de les re-chiffrer avec la dernière version sans les
+      déchiffrer côté client.
+    checks:
+      - desc: /root/carte.chiffre se déchiffre en 4111-1111-1111-1111
+        run: |
+          ct=$(tr -d '[:space:]' < /root/carte.chiffre)
+          case "$ct" in vault:v*) ;; *) exit 1 ;; esac
+          test "$(vault write -field=plaintext transit/decrypt/paiement ciphertext="$ct" | base64 -d)" = 4111-1111-1111-1111
+      - desc: La clé paiement a été tournée
+        run: vault read -format=json transit/keys/paiement | jq -e '.data.latest_version >= 2' >/dev/null
+  - id: audit
+    title: Tracer tous les accès (audit)
+    description: |
+      Qui a lu quel secret, et quand ? Active un **périphérique d'audit** de type `file` qui écrit dans
+      `/vault/logs/audit.log` (sur le conteneur vault) avec le mode `0644`, afin de pouvoir le lire depuis ops dans
+      `/vault-logs/audit.log`. Relis ensuite `secret/boutique/config`, puis retrouve cet accès dans le journal.
+
+      Remarque : les valeurs sensibles y sont **hachées** (HMAC), jamais en clair.
+    hint: "vault audit enable file file_path=/vault/logs/audit.log mode=0644 ; jq 'select(.request.path == \"secret/data/boutique/config\")' /vault-logs/audit.log"
+    cours: |
+      Un **périphérique d'audit** enregistre chaque requête et chaque réponse de Vault : qui (jeton, entité), quoi
+      (chemin, opération), quand, depuis où. Les valeurs sensibles (secrets, jetons) sont remplacées par leur
+      **HMAC** : on peut vérifier si une valeur connue apparaît, sans pouvoir la lire.
+
+      `vault audit enable file file_path=... mode=...` active un périphérique de type fichier ; d'autres types
+      existent (`syslog`, `socket`). Si aucun périphérique d'audit ne peut écrire, Vault **refuse** les requêtes :
+      il préfère s'arrêter que fonctionner sans traçabilité.
+
+      Le journal contient une ligne JSON par événement : `jq` permet de filtrer sur `.request.path` et
+      `.type` (`request` ou `response`).
+    checks:
+      - desc: Un périphérique d'audit file est actif
+        run: vault audit list -format=json | jq -e 'to_entries | any(.value.type == "file")' >/dev/null
+      - desc: La lecture de secret/boutique/config est tracée
+        run: grep -q '"path":"secret/data/boutique/config"' /vault-logs/audit.log
+      - desc: La clé d'API n'apparaît pas en clair dans le journal
+        run: test -s /vault-logs/audit.log && ! grep -q 'sk-live-000' /vault-logs/audit.log

@@ -1,0 +1,103 @@
+title: Liaison série entre deux routeurs
+level: debutant
+order: 35
+device: router
+hostname: R-PARIS
+tags: [serial, clock rate, wan, interfaces]
+summary: Adresser et activer une liaison série point à point côté DCE.
+description: |
+  `R-PARIS` est relié à `R-LYON` par un câble série. L'extrémité **DCE** du câble est branchée
+  sur `S0/0/0` de `R-PARIS` : c'est donc lui qui fournit l'horloge.
+
+  Sur `S0/0/0` :
+
+  1. description `WAN-LYON` ;
+  2. adresse `10.1.1.1/30` ;
+  3. horloge à `64000` bits/s : `clock rate 64000` ;
+  4. bande passante déclarée de `64` kbit/s (`bandwidth 64`) pour que les protocoles de routage
+     calculent un coût réaliste ;
+  5. active l'interface.
+
+  Sur un vrai routeur, `show controllers serial 0/0/0` indique si le câble est DCE ou DTE.
+checks:
+  - desc: S0/0/0 en 10.1.1.1/30 avec la description WAN-LYON
+    expr: intf("s0/0/0").ip == "10.1.1.1" and intf("s0/0/0").mask == "255.255.255.252" and intf("s0/0/0").description == "WAN-LYON"
+  - desc: Horloge de 64000 bit/s (côté DCE)
+    expr: intf("s0/0/0").clock_rate == 64000
+  - desc: Bande passante déclarée de 64 kbit/s
+    expr: intf("s0/0/0").bandwidth == 64
+  - desc: S0/0/0 activée
+    expr: not intf("s0/0/0").shutdown
+solution: |
+  configure terminal
+  interface s0/0/0
+  description WAN-LYON
+  ip address 10.1.1.1 255.255.255.252
+  clock rate 64000
+  bandwidth 64
+  no shutdown
+  end
+cours: |
+  ## Les liaisons série
+
+  Avant la fibre et l'Ethernet longue distance, les sites d'une entreprise étaient reliés par des
+  **liaisons louées** série (E1 à 2 Mbit/s, T1, Frame Relay). On les rencontre encore dans les
+  labos (Packet Tracer, maquettes CCNA) et sur des installations anciennes.
+
+  ### DCE et DTE
+
+  Une liaison série synchrone a besoin d'une **horloge** qui cadence l'envoi des bits :
+
+  - le **DCE** (*Data Communications Equipment*, normalement le modem/CSU-DSU de l'opérateur)
+    fournit l'horloge ;
+  - le **DTE** (*Data Terminal Equipment*, le routeur) la suit.
+
+  En labo, deux routeurs sont reliés directement par un câble croisé DCE/DTE : le routeur côté
+  DCE doit générer l'horloge avec `clock rate`.
+
+  ```
+  R1# show controllers serial 0/1/0 | include DCE|DTE
+  Interface Serial0/1/0 ... DCE V.35, clock rate 128000
+  R1(config)# interface s0/1/0
+  R1(config-if)# ip address 172.30.0.1 255.255.255.252
+  R1(config-if)# clock rate 128000
+  R1(config-if)# bandwidth 128
+  R1(config-if)# no shutdown
+  ```
+
+  ### `clock rate` et `bandwidth` : à ne pas confondre
+
+  | Commande      | Unité  | Effet                                                       |
+  |---------------|--------|-------------------------------------------------------------|
+  | `clock rate`  | bit/s  | débit **réel** de l'horloge (côté DCE uniquement)           |
+  | `bandwidth`   | kbit/s | valeur **déclarative** utilisée par OSPF, EIGRP et la QoS   |
+
+  `bandwidth` ne change jamais le débit réel. Par défaut, une interface série annonce 1544 kbit/s
+  (T1) : OSPF croit alors le lien bien plus rapide qu'il n'est.
+
+  ### L'encapsulation
+
+  Par défaut, IOS utilise **HDLC** (version Cisco) sur les interfaces série. Pour dialoguer avec
+  un autre constructeur ou authentifier le lien, on choisit **PPP** (`encapsulation ppp`, avec
+  PAP ou CHAP). Les deux extrémités doivent utiliser la même.
+
+  ### Un /30 pour un lien point à point
+
+  Un lien entre deux routeurs n'a besoin que de deux adresses : un **/30** (4 adresses dont
+  2 utilisables), voire un **/31** (RFC 3021) sur les équipements qui le gèrent.
+
+  ### Pièges fréquents
+
+  - Configurer `clock rate` côté DTE : sans effet ; oublier côté DCE : le protocole reste `down`.
+  - Encapsulations différentes de chaque côté : `up/down` dans `show ip interface brief`.
+  - Oublier `no shutdown`.
+
+  ### Pour le CCNA
+
+  Savoir lire l'état `up/down` d'une interface, distinguer `clock rate` de `bandwidth` et
+  connaître HDLC et PPP fait partie des bases WAN.
+docs:
+  - title: Wikipédia — Point-to-Point Protocol
+    url: https://fr.wikipedia.org/wiki/Point-to-Point_Protocol
+  - title: RFC 3021 — Using 31-Bit Prefixes on IPv4 Point-to-Point Links
+    url: https://www.rfc-editor.org/rfc/rfc3021

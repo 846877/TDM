@@ -1,0 +1,7 @@
+# Ancien playbook écrit à la va-vite : ajoute le poste d'administration à l'annuaire du parc.
+# Problème : chaque exécution ajoute une ligne de plus.
+- name: Annuaire du parc
+  hosts: all
+  tasks:
+    - name: Ajouter le poste d'administration
+      ansible.builtin.shell: echo "10.178.0.5 admin.parc.lan" >> /etc/parc/hosts-parc

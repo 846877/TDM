@@ -1,0 +1,93 @@
+title: Pyramide d'étoiles
+level: debutant
+order: 18
+tags: [boucles, chaînes, print]
+summary: Dessiner avec des boucles et la multiplication de chaînes.
+mode: stdio
+description: |
+  Lis un entier `n` puis dessine une pyramide de `n` étages avec des `*`.
+  L'étage `i` (de 1 à `n`) contient `2*i - 1` étoiles, précédées de `n - i` espaces.
+
+  Pour `n = 4` :
+
+  ```
+     *
+    ***
+   *****
+  *******
+  ```
+
+  Astuce : `"*" * 3` vaut `"***"`. Si `n` vaut 0, rien n'est affiché.
+starter: |
+  n = int(input())
+cases:
+  - name: "n = 4"
+    input: "4\n"
+    output: "   *\n  ***\n *****\n*******\n"
+  - name: "n = 1"
+    input: "1\n"
+    output: "*\n"
+  - name: "n = 6"
+    input: "6\n"
+    output: "     *\n    ***\n   *****\n  *******\n *********\n***********\n"
+  - name: "n = 0"
+    input: "0\n"
+    output: ""
+solution: |
+  n = int(input())
+  for i in range(1, n + 1):
+      print(" " * (n - i) + "*" * (2 * i - 1))
+cours: |
+  ## Répéter une chaîne
+
+  L'opérateur `*` entre une chaîne et un entier répète la chaîne :
+
+  ```python
+  "ab" * 3      # "ababab"
+  "-" * 20      # une ligne de 20 tirets
+  "x" * 0       # "" (chaîne vide)
+  ```
+
+  Combiné à la concaténation, il permet de dessiner des formes :
+
+  ```python
+  for i in range(1, 4):
+      print("#" * i)
+  # #
+  # ##
+  # ###
+  ```
+
+  ## Trouver la formule d'une ligne
+
+  Pour dessiner une figure, la méthode est toujours la même :
+
+  1. dessine la figure pour une petite taille (n = 3 ou 4) ;
+  2. pour chaque ligne `i`, compte les espaces et les symboles ;
+  3. exprime ces nombres en fonction de `i` et de `n` (l'énoncé te donne ici les formules) ;
+  4. vérifie la première et la dernière ligne.
+
+  ## Espaces de fin de ligne
+
+  Dans une pyramide, seuls les espaces **à gauche** sont nécessaires. Ajouter des espaces à
+  droite est inutile (la moulinette les ignore, mais un œil humain non). Les méthodes
+  `str.rjust(largeur)` et `str.center(largeur)` alignent du texte dans un champ de largeur
+  donnée — pratique, mais `center` ajoute aussi des espaces à droite.
+
+  ## Boucles imbriquées
+
+  On peut aussi construire chaque ligne caractère par caractère avec une boucle dans la
+  boucle. C'est plus long à écrire mais indispensable pour des motifs non réguliers (damier,
+  losange creux…). Exemple de damier :
+
+  ```python
+  for ligne in range(3):
+      print("".join("#" if (ligne + col) % 2 == 0 else "." for col in range(5)))
+  ```
+
+  Cas limite : `n = 0` ne doit rien afficher, ce que `range(1, 1)` gère naturellement.
+docs:
+  - title: Opérations communes sur les séquences (répétition *)
+    url: https://docs.python.org/fr/3/library/stdtypes.html#common-sequence-operations
+  - title: Méthodes str.center, str.rjust…
+    url: https://docs.python.org/fr/3/library/stdtypes.html#str.center

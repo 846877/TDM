@@ -1,0 +1,99 @@
+title: La table d'adresses MAC
+level: debutant
+order: 21
+device: switch
+hostname: SW-ATELIER
+tags: [mac, table cam, commutation]
+summary: Comprendre comment le switch apprend les adresses, et en fixer quelques-unes.
+description: |
+  Un switch apprend tout seul où se trouvent les adresses MAC. On peut toutefois **fixer**
+  certaines entrées et régler la durée de vie des autres. Observe d'abord `show mac address-table`.
+
+  1. le serveur de l'atelier (`0050.56aa.0001`, VLAN `10`) est toujours branché sur `Fa0/10` :
+     ajoute une entrée **statique** ;
+  2. une machine infectée (`0050.56bb.6666`) ne doit plus pouvoir communiquer dans le VLAN `10` :
+     ajoute une entrée statique qui **jette** ses trames (`drop`) ;
+  3. allonge la durée de vie des adresses apprises à `600` secondes.
+
+  ```
+  mac address-table static 0050.56aa.0001 vlan 10 interface fa0/10
+  ```
+initial: |
+  vlan 10
+  name ATELIER
+  interface range fa0/1 - 12
+  switchport mode access
+  switchport access vlan 10
+checks:
+  - desc: Le serveur 0050.56aa.0001 est fixé sur Fa0/10 (VLAN 10)
+    expr: ("0050.56aa.0001", 10, ifname("fa0/10")) in d.mac_static
+  - desc: Les trames de 0050.56bb.6666 sont jetées dans le VLAN 10
+    expr: ("0050.56bb.6666", 10, "drop") in d.mac_static
+    hint: "mac address-table static 0050.56bb.6666 vlan 10 drop"
+  - desc: Durée de vie des adresses apprises 600 s
+    expr: d.mac_aging == 600
+    hint: "mac address-table aging-time 600"
+solution: |
+  configure terminal
+  mac address-table static 0050.56aa.0001 vlan 10 interface fa0/10
+  mac address-table static 0050.56bb.6666 vlan 10 drop
+  mac address-table aging-time 600
+  end
+cours: |
+  ## Comment un switch sait-il où envoyer une trame ?
+
+  Un switch travaille au **niveau 2** : il lit les adresses MAC des trames Ethernet. Il tient une
+  table (appelée **table CAM**) qui associe chaque adresse MAC à un **port** et à un **VLAN**.
+
+  Pour chaque trame reçue :
+
+  1. **apprentissage** : il note l'adresse MAC **source** et le port d'arrivée ;
+  2. **acheminement** : il cherche l'adresse MAC **destination** dans la table ;
+     - trouvée : la trame part uniquement sur ce port (*forwarding*) ;
+     - absente, ou broadcast `ffff.ffff.ffff` : la trame est **inondée** sur tous les ports du
+       VLAN sauf celui d'arrivée (*flooding*) ;
+     - le port de destination est le port d'arrivée : la trame est jetée (*filtering*).
+
+  Les entrées apprises **vieillissent** : sans trafic pendant 300 secondes (valeur par défaut),
+  elles disparaissent. Cela permet de suivre un PC qui change de prise.
+
+  ### Commandes
+
+  ```
+  SW1# show mac address-table
+  Vlan    Mac Address       Type        Ports
+  ----    -----------       --------    -----
+    20    0011.2233.4455    DYNAMIC     Fa0/3
+    20    00aa.bbcc.ddee    STATIC      Fa0/7
+  SW1(config)# mac address-table static 00aa.bbcc.ddee vlan 20 interface fa0/7
+  SW1(config)# mac address-table static 0066.7788.99aa vlan 20 drop
+  SW1(config)# mac address-table aging-time 900
+  SW1# show mac address-table address 0011.2233.4455
+  SW1# clear mac address-table dynamic
+  ```
+
+  Le format Cisco d'une adresse MAC est en **trois groupes de quatre chiffres hexadécimaux**
+  séparés par des points (`0011.2233.4455`), là où Windows affiche `00-11-22-33-44-55`.
+
+  ### À quoi servent les entrées statiques ?
+
+  - garantir qu'un équipement critique (serveur, automate) est toujours joint sur le bon port ;
+  - neutraliser rapidement une machine (`drop`) en attendant d'intervenir sur place ;
+  - certaines architectures (répartiteurs de charge en mode multicast) l'exigent.
+
+  ### Pièges fréquents
+
+  - Une entrée statique oubliée : si le serveur est déplacé, il devient injoignable.
+  - Une table pleine (attaque par **inondation MAC**, outil *macof*) : le switch inonde tout et
+    se comporte comme un concentrateur. La parade est la **port-security**.
+  - Chercher une adresse MAC dans le mauvais VLAN : la table est par VLAN.
+
+  ### Pour le CCNA
+
+  Le processus apprentissage / inondation / acheminement / filtrage est un classique de l'examen :
+  sois capable de prédire ce que fait un switch d'une trame donnée en lisant sa table.
+docs:
+  - title: Wikipédia — Commutateur réseau
+    url: https://fr.wikipedia.org/wiki/Commutateur_r%C3%A9seau
+  - title: Wikipédia — Adresse MAC
+    url: https://fr.wikipedia.org/wiki/Adresse_MAC

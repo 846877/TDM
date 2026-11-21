@@ -1,0 +1,154 @@
+title: "Projet : site 100 % IPv6"
+level: expert
+order: 25
+device: router
+hostname: R-SITE6
+tags: [projet, ipv6, ospfv3, dhcpv6, acl ipv6, sécurité]
+summary: Mettre en service le routeur d'un site entièrement en IPv6, du routage au filtrage.
+description: |
+  Un nouveau site n'aura **aucune** adresse IPv4. Les adresses IPv6 de `R-SITE6` sont en place :
+  LAN utilisateurs `2001:db8:50:1::1/64` (`G0/0`), lien vers le cœur `2001:db8:50:ff::2/64`
+  (`G0/1`).
+
+  **Routage**
+  - routage IPv6 actif ; OSPFv3 processus `1`, router-id `5.5.5.5` (aucune IPv4 pour le choisir) ;
+  - `G0/0` et `G0/1` dans la zone `0` ; `G0/0` passive.
+
+  **Adressage des postes** (SLAAC + DHCPv6 sans état)
+  - pool DHCPv6 `LAN6` : DNS `2001:db8:50::53`, domaine `site6.local` ;
+  - sur `G0/0` : `ipv6 nd other-config-flag` et `ipv6 dhcp server LAN6`.
+
+  **Sécurité**
+  - ACL IPv6 `GESTION6` : `permit ipv6 2001:db8:50:99::/64 any` puis `deny ipv6 any any log` ;
+    appliquée aux lignes VTY (`ipv6 access-class GESTION6 in`) ;
+  - ACL IPv6 `LAN6-IN` : `deny ipv6 any 2001:db8:50:99::/64` puis `permit ipv6 any any` ;
+    appliquée en **entrée** de `G0/0` (`ipv6 traffic-filter`).
+initial: |
+  interface g0/0
+  ipv6 address 2001:db8:50:1::1/64
+  no shutdown
+  interface g0/1
+  ipv6 address 2001:db8:50:ff::2/64
+  no shutdown
+checks:
+  - desc: Routage IPv6 et OSPFv3 1 (router-id 5.5.5.5)
+    expr: d.ipv6_routing and d.ospfv3[1].router_id == "5.5.5.5"
+  - desc: G0/0 et G0/1 en zone 0, G0/0 passive
+    expr: intf("g0/0").ospfv3_area == (1, "0") and intf("g0/1").ospfv3_area == (1, "0") and d.ospfv3[1].is_passive("g0/0") and not d.ospfv3[1].is_passive("g0/1")
+  - desc: Pool DHCPv6 LAN6 (DNS et domaine)
+    expr: d.dhcpv6_pools["LAN6"]["dns"] == ["2001:db8:50::53"] and d.dhcpv6_pools["LAN6"]["domain"] == "site6.local"
+  - desc: G0/0 en DHCPv6 sans état
+    expr: intf("g0/0").ipv6_nd_other and intf("g0/0").ipv6_dhcp_server == "LAN6" and not intf("g0/0").ipv6_nd_managed
+  - desc: GESTION6 appliquée aux VTY
+    expr: acl6("GESTION6") == ["permit ipv6 2001:db8:50:99::/64 any", "deny ipv6 any any log"] and line("vty").ipv6_access_class.get("in") == "GESTION6"
+  - desc: LAN6-IN en entrée de G0/0
+    expr: 'acl6("LAN6-IN") == ["deny ipv6 any 2001:db8:50:99::/64", "permit ipv6 any any"] and intf("g0/0").ipv6_traffic_filter == {"in": "LAN6-IN"}'
+solution: |
+  configure terminal
+  ipv6 unicast-routing
+  ipv6 router ospf 1
+  router-id 5.5.5.5
+  passive-interface g0/0
+  exit
+  interface g0/0
+  ipv6 ospf 1 area 0
+  interface g0/1
+  ipv6 ospf 1 area 0
+  exit
+  ipv6 dhcp pool LAN6
+  dns-server 2001:db8:50::53
+  domain-name site6.local
+  exit
+  interface g0/0
+  ipv6 nd other-config-flag
+  ipv6 dhcp server LAN6
+  exit
+  ipv6 access-list GESTION6
+  permit ipv6 2001:db8:50:99::/64 any
+  deny ipv6 any any log
+  exit
+  ipv6 access-list LAN6-IN
+  deny ipv6 any 2001:db8:50:99::/64
+  permit ipv6 any any
+  exit
+  line vty 0 15
+  ipv6 access-class GESTION6 in
+  exit
+  interface g0/0
+  ipv6 traffic-filter LAN6-IN in
+  end
+cours: |
+  ## Un site sans IPv4
+
+  Exploiter un site uniquement en IPv6 oblige à revoir des réflexes IPv4 :
+
+  | Besoin                 | IPv4                         | IPv6                                         |
+  |------------------------|------------------------------|----------------------------------------------|
+  | adresse des postes     | DHCP                         | **SLAAC** (annonces RA) ± DHCPv6             |
+  | passerelle par défaut  | option DHCP 3                | apprise par les **RA** (adresse link-local du routeur) |
+  | DNS                    | option DHCP 6                | DHCPv6 sans état (ou option RDNSS des RA)    |
+  | router-id OSPF         | plus haute IPv4              | **à fixer** (32 bits)                        |
+  | filtrage VTY           | `access-class`               | `ipv6 access-class`                          |
+  | ACL d'interface        | `ip access-group`            | `ipv6 traffic-filter`                        |
+
+  ### Les drapeaux des annonces de routeur
+
+  - aucun drapeau : SLAAC seul (adresse et passerelle, pas de DNS sauf RDNSS) ;
+  - **O** (`other-config-flag`) : SLAAC pour l'adresse, **DHCPv6 sans état** pour le DNS et le
+    domaine ;
+  - **M** (`managed-config-flag`) : DHCPv6 **avec état** attribue les adresses.
+
+  ### ACL IPv6 (autres valeurs)
+
+  ```
+  R1(config)# ipv6 access-list ADMIN-V6
+  R1(config-ipv6-acl)# permit ipv6 2001:db8:aa:10::/64 any
+  R1(config-ipv6-acl)# deny ipv6 any any log
+  R1(config)# line vty 0 15
+  R1(config-line)# ipv6 access-class ADMIN-V6 in
+  R1(config)# interface gi0/2
+  R1(config-if)# ipv6 traffic-filter FILTRE-V6 in
+  R1# show ipv6 access-list
+  ```
+
+  Différences avec IPv4 : les ACL IPv6 sont **toujours nommées**, utilisent la notation
+  préfixe/longueur (pas de masque générique), et se terminent par des règles **implicites**
+  qui autorisent le Neighbor Discovery avant le deny final :
+
+  ```
+  permit icmp any any nd-na
+  permit icmp any any nd-ns
+  deny ipv6 any any
+  ```
+
+  Attention : un `deny ipv6 any any` **explicite** placé par l'administrateur passe **avant** ces
+  règles implicites et bloque le Neighbor Discovery ! Sur une ACL d'interface, on ajoute alors
+  explicitement `permit icmp any any nd-ns` et `nd-na`. Sur une ACL de VTY, ce n'est pas un
+  problème (elle ne filtre que les sessions d'administration).
+
+  ### Vérifications du projet
+
+  ```
+  R1# show ipv6 ospf neighbor
+  R1# show ipv6 route ospf
+  R1# show ipv6 dhcp pool
+  R1# show ipv6 interface gi0/0 | include ND|hosts
+  ```
+
+  ### Pièges fréquents
+
+  - Oublier `ipv6 unicast-routing` : pas de RA, les postes n'ont pas de passerelle.
+  - Filtrer tout l'ICMPv6 « comme en IPv4 » : IPv6 ne fonctionne plus (ND, découverte de MTU).
+  - Pas de router-id sur un routeur sans IPv4 : OSPFv3 ne démarre pas.
+
+  ### Pour le CCNA / CCNP ENCOR
+
+  Le CCNA couvre l'adressage IPv6, SLAAC et les routes statiques ; ENCOR ajoute OSPFv3 et la
+  sécurisation en IPv6.
+docs:
+  - title: RFC 8415 — Dynamic Host Configuration Protocol for IPv6 (DHCPv6)
+    url: https://www.rfc-editor.org/rfc/rfc8415
+  - title: RFC 5340 — OSPF for IPv6
+    url: https://www.rfc-editor.org/rfc/rfc5340
+  - title: Wikipédia — IPv6
+    url: https://fr.wikipedia.org/wiki/IPv6

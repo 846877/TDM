@@ -1,0 +1,131 @@
+title: "Ticket : plus d'Internet après la migration du routeur"
+level: expert
+order: 23
+device: router
+hostname: R-EDGE
+tags: [dépannage, nat, acl, routage, internet]
+summary: Trouver et corriger cinq erreurs sur un routeur de bordure fraîchement migré.
+description: |
+  **Ticket n° 4610** — « Depuis la migration de cette nuit, aucun poste du siège
+  (`192.168.10.0/24`) n'accède à Internet. Seul le poste `192.168.10.0`... n'existe pas. »
+
+  Schéma : LAN sur `G0/0` (`192.168.10.1/24`), opérateur sur `G0/1` (`203.0.113.2/30`, passerelle
+  `203.0.113.1`). Une seule adresse publique : NAT en **surcharge** sur `G0/1`. L'ACL
+  `EDGE-IN` protège le routeur contre le trafic **venant d'Internet**.
+
+  Analyse `show ip nat translations`, `show ip nat statistics`, `show ip route`,
+  `show access-lists` et `show ip interface g0/1`, puis corrige :
+
+  - les rôles NAT `inside` / `outside` ;
+  - l'ACL `1` qui sélectionne les adresses à traduire ;
+  - la règle de NAT (surcharge) ;
+  - la route par défaut ;
+  - le sens d'application d'`EDGE-IN`.
+initial: |
+  interface g0/0
+  ip address 192.168.10.1 255.255.255.0
+  ip nat outside
+  no shutdown
+  interface g0/1
+  ip address 203.0.113.2 255.255.255.252
+  ip nat inside
+  no shutdown
+  access-list 1 permit 192.168.10.0 0.0.0.0
+  ip nat inside source list 1 interface g0/1
+  ip access-list extended EDGE-IN
+  deny ip 10.0.0.0 0.255.255.255 any
+  deny ip 172.16.0.0 0.15.255.255 any
+  deny ip 192.168.0.0 0.0.255.255 any
+  permit ip any any
+  exit
+  interface g0/1
+  ip access-group EDGE-IN out
+checks:
+  - desc: G0/0 inside, G0/1 outside
+    expr: intf("g0/0").nat == "inside" and intf("g0/1").nat == "outside"
+  - desc: ACL 1 couvre tout 192.168.10.0/24
+    expr: acl(1) == ["permit 192.168.10.0 0.0.0.255"]
+    hint: "Masque générique d'un /24 : 0.0.0.255"
+  - desc: NAT en surcharge sur G0/1 (et plus de règle sans overload)
+    expr: nat("ip nat inside source list 1 interface g0/1 overload") and not nat("ip nat inside source list 1 interface g0/1")
+  - desc: Route par défaut vers 203.0.113.1
+    expr: route("0.0.0.0", "0.0.0.0", "203.0.113.1")
+  - desc: EDGE-IN appliquée en entrée de G0/1
+    expr: 'intf("g0/1").access_groups == {"in": "EDGE-IN"}'
+solution: |
+  configure terminal
+  interface g0/0
+  ip nat inside
+  interface g0/1
+  ip nat outside
+  no ip access-group EDGE-IN out
+  ip access-group EDGE-IN in
+  exit
+  no access-list 1
+  access-list 1 permit 192.168.10.0 0.0.0.255
+  no ip nat inside source list 1 interface g0/1
+  ip nat inside source list 1 interface g0/1 overload
+  ip route 0.0.0.0 0.0.0.0 203.0.113.1
+  end
+cours: |
+  ## Une méthode pour la bordure Internet
+
+  Un routeur de bordure enchaîne plusieurs fonctions sur chaque paquet ; une seule erreur suffit
+  à tout bloquer. Pour un paquet sortant (LAN → Internet), l'ordre de traitement IOS est :
+
+  1. ACL **en entrée** de l'interface LAN ;
+  2. **NAT inside → outside** se prépare : le routeur **route** d'abord (il faut une route vers
+     la destination, ici la route par défaut) ;
+  3. **traduction** de l'adresse source (si l'interface d'entrée est `inside`, celle de sortie
+     `outside`, et l'adresse correspond à l'ACL du NAT) ;
+  4. ACL **en sortie** de l'interface WAN (qui voit donc l'adresse **déjà traduite**).
+
+  ### Les vérifications, dans l'ordre
+
+  ```
+  R1# show ip interface brief                  ! interfaces up/up ?
+  R1# show ip route | include 0.0.0.0          ! route par défaut ?
+  R1# show ip nat statistics
+  Outside interfaces: GigabitEthernet0/2
+  Inside interfaces: GigabitEthernet0/0
+  Hits: 0  Misses: 0
+  R1# show ip nat translations                 ! des entrées apparaissent-elles ?
+  R1# show access-lists                        ! compteurs de correspondance
+  R1# show ip interface gi0/2 | include access list
+  ```
+
+  - `Hits: 0` et aucune traduction → paquets non concernés : rôles inside/outside inversés, ACL
+    du NAT fausse, ou pas de route ;
+  - une seule traduction possible, puis plus rien → oubli d'`overload` (NAT dynamique un pour un
+    avec une seule adresse) ;
+  - compteurs d'une ACL qui grimpent sur un `deny` inattendu → ACL mal placée.
+
+  ### Les erreurs de ce ticket (en général)
+
+  | Erreur                         | Effet                                           |
+  |--------------------------------|-------------------------------------------------|
+  | inside/outside inversés        | aucune traduction                               |
+  | `permit 192.168.10.0 0.0.0.0`  | seule l'adresse .0 (inexistante) est traduite   |
+  | pas d'`overload`               | un seul poste à la fois                         |
+  | pas de route par défaut        | « Destination unreachable »                     |
+  | ACL anti-usurpation en **sortie** | elle voit les adresses du LAN... déjà traduites, mais bloque les retours non prévus ; et Internet n'est plus filtré en entrée |
+
+  Une ACL d'entrée sur le WAN qui refuse les adresses privées (RFC 1918) comme **source** protège
+  contre l'usurpation ; appliquée en sortie, elle n'a plus de sens.
+
+  ### Pièges fréquents
+
+  - `no ip nat inside source ...` refusé tant que des traductions sont actives :
+    `clear ip nat translation *` d'abord.
+  - Modifier une ACL numérotée ligne par ligne : `no access-list 1` efface toute la liste.
+  - Corriger dans le désordre et conclure trop vite : retester à chaque étape.
+
+  ### Pour le CCNA
+
+  Le NAT (statique, dynamique, PAT), les ACL et leur dépannage forment le cœur du domaine
+  « services IP » et « sécurité ».
+docs:
+  - title: Cisco — NAT Frequently Asked Questions
+    url: https://www.cisco.com/c/en/us/support/docs/ip/network-address-translation-nat/26704-nat-faq-00.html
+  - title: RFC 1918 — Address Allocation for Private Internets
+    url: https://www.rfc-editor.org/rfc/rfc1918

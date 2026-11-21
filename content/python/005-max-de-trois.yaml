@@ -1,0 +1,88 @@
+title: Le plus grand des trois
+level: debutant
+order: 5
+tags: [conditions]
+summary: Comparer des nombres sans utiliser max().
+description: |
+  Écris `max_de_trois(a, b, c)` qui renvoie le plus grand des trois nombres.
+
+  **Interdit** d'utiliser la fonction `max()` : entraîne-toi avec `if`, `elif` et `else`.
+starter: |
+  def max_de_trois(a, b, c):
+      pass
+tests: |
+  import inspect
+
+  def test_premier():
+      "Le premier est le plus grand"
+      assert solution.max_de_trois(9, 2, 3) == 9
+
+  def test_milieu():
+      "Le deuxième est le plus grand"
+      assert solution.max_de_trois(1, 8, 3) == 8
+
+  def test_dernier():
+      "Le dernier est le plus grand"
+      assert solution.max_de_trois(1, 2, 7) == 7
+
+  def test_egaux():
+      "Valeurs égales"
+      assert solution.max_de_trois(5, 5, 5) == 5
+
+  def test_sans_max():
+      "max() n'est pas utilisé"
+      assert "max(" not in inspect.getsource(solution.max_de_trois).replace("def max_de_trois(", ""), "N'utilise pas max() !"
+solution: |
+  def max_de_trois(a, b, c):
+      if a >= b and a >= c:
+          return a
+      elif b >= c:
+          return b
+      else:
+          return c
+cours: |
+  ## Enchaîner les cas avec `elif`
+
+  `elif` (contraction de *else if*) permet de tester plusieurs conditions à la suite. Python
+  les évalue **dans l'ordre** et n'exécute que le premier bloc dont la condition est vraie.
+
+  ```python
+  note = 14
+  if note >= 16:
+      mention = "très bien"
+  elif note >= 14:
+      mention = "bien"
+  elif note >= 12:
+      mention = "assez bien"
+  else:
+      mention = "aucune"
+  ```
+
+  L'ordre compte : si on testait `note >= 12` en premier, une note de 17 donnerait
+  « assez bien ».
+
+  ## Combiner des conditions
+
+  - `a and b` : vrai si les deux sont vraies ;
+  - `a or b` : vrai si au moins une est vraie ;
+  - `not a` : l'inverse.
+
+  Python autorise aussi les **comparaisons chaînées**, très lisibles :
+  `0 <= x < 10` équivaut à `0 <= x and x < 10`.
+
+  ## Deux stratégies pour trouver un maximum
+
+  1. **Comparer tout le monde** : écrire une condition par candidat (« a est-il plus grand
+     ou égal aux deux autres ? »).
+  2. **Le champion provisoire** : garder dans une variable le plus grand vu jusqu'ici, puis
+     le comparer au suivant et le remplacer si besoin. Cette idée se généralise à une liste
+     de n'importe quelle taille avec une boucle, et c'est exactement ce que fait `max()`.
+
+  **Pièges** : pense aux égalités (`a == b`), aux nombres négatifs et aux flottants.
+  Utilise `>=` plutôt que `>` si deux valeurs égales peuvent être le maximum, sinon aucun
+  cas ne sera vrai.
+docs:
+  - title: Tutoriel — if, elif, else
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html#if-statements
+  - title: Référence — opérateurs booléens and, or, not
+    url: https://docs.python.org/fr/3/reference/expressions.html#boolean-operations

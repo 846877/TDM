@@ -1,0 +1,100 @@
+title: Documenter les interfaces
+level: debutant
+order: 7
+device: switch
+hostname: SW-ACCUEIL
+tags: [interface, description, documentation]
+summary: Décrire chaque port pour s'y retrouver lors d'un dépannage.
+description: |
+  Un technicien doit pouvoir savoir **ce qui est branché** sur un port sans descendre au local
+  informatique. On utilise pour cela la commande `description` en mode interface.
+
+  Documente les ports du switch de l'accueil :
+
+  | Port     | Description          |
+  |----------|----------------------|
+  | `Fa0/1`  | `PC-ACCUEIL-1`       |
+  | `Fa0/2`  | `PC-ACCUEIL-2`       |
+  | `Fa0/10` | `IMPRIMANTE-ACCUEIL` |
+  | `Gi0/1`  | `UPLINK-SW-DIST`     |
+
+  ```
+  interface fa0/1
+   description PC-ACCUEIL-1
+  ```
+
+  Vérifie avec `show interfaces description` (la colonne *Description*).
+checks:
+  - desc: Fa0/1 décrit « PC-ACCUEIL-1 »
+    expr: intf("fa0/1").description == "PC-ACCUEIL-1"
+    hint: "interface fa0/1 puis description PC-ACCUEIL-1"
+  - desc: Fa0/2 décrit « PC-ACCUEIL-2 »
+    expr: intf("fa0/2").description == "PC-ACCUEIL-2"
+  - desc: Fa0/10 décrit « IMPRIMANTE-ACCUEIL »
+    expr: intf("fa0/10").description == "IMPRIMANTE-ACCUEIL"
+  - desc: Gi0/1 décrit « UPLINK-SW-DIST »
+    expr: intf("g0/1").description == "UPLINK-SW-DIST"
+    hint: "Le port Gigabit s'abrège g0/1 : interface g0/1"
+solution: |
+  configure terminal
+  interface fa0/1
+  description PC-ACCUEIL-1
+  interface fa0/2
+  description PC-ACCUEIL-2
+  interface fa0/10
+  description IMPRIMANTE-ACCUEIL
+  interface g0/1
+  description UPLINK-SW-DIST
+  end
+cours: |
+  ## Documenter dans l'équipement lui-même
+
+  Un switch de 48 ports dans une baie : sans documentation, impossible de savoir quel câble
+  mène où. La commande `description` attache un texte libre à une interface. Elle n'a **aucun
+  effet** sur le fonctionnement, mais elle apparaît dans la configuration, dans `show interfaces`
+  et dans les outils de supervision (SNMP `ifAlias`) : c'est la documentation la plus fiable,
+  car elle voyage avec l'équipement.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  SW1(config)# interface fa0/17
+  SW1(config-if)# description BUREAU-204-PC-COMPTA
+  SW1(config-if)# interface gi0/2
+  SW1(config-if)# description TRUNK-VERS-SW-CORE-Gi1/0/12
+  SW1# show interfaces description
+  Interface  Status   Protocol Description
+  Fa0/17     up       up       BUREAU-204-PC-COMPTA
+  Gi0/2      up       up       TRUNK-VERS-SW-CORE-Gi1/0/12
+  ```
+
+  `no description` efface le texte. Une nouvelle description **remplace** l'ancienne.
+
+  ### Une convention utile
+
+  - pour un poste : la prise murale ou le bureau (`PRISE-2B-14`), plutôt que le nom de
+    l'utilisateur qui changera ;
+  - pour un lien entre équipements : le **nom et le port d'en face** (`UPLINK-SW-DIST-Gi1/0/3`) ;
+  - majuscules, tirets, pas d'accents (certains outils les affichent mal).
+
+  ### Vérifier rapidement
+
+  - `show interfaces description` : tableau de tous les ports ;
+  - `show interfaces status` : la colonne *Name* affiche le début de la description ;
+  - `show running-config interface fa0/17` : configuration d'un seul port.
+
+  ### Pièges fréquents
+
+  - Laisser des descriptions obsolètes après un déménagement : pire que pas de description.
+  - Une description trop longue est tronquée dans `show interfaces status`.
+  - Croire que la description « configure » quoi que ce soit.
+
+  ### Pour le CCNA
+
+  La documentation des interfaces fait partie des bonnes pratiques attendues ; on la retrouve
+  dans toutes les configurations d'examen.
+docs:
+  - title: "Wikipédia — Commutateur réseau"
+    url: https://fr.wikipedia.org/wiki/Commutateur_r%C3%A9seau
+  - title: "Cisco IOS 15.4M&T — références de commandes"
+    url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-4m-t/products-command-reference-list.html

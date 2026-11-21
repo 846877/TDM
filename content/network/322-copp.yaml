@@ -1,0 +1,144 @@
+title: Protéger le plan de contrôle (CoPP)
+level: expert
+order: 22
+device: router
+hostname: R-INTERNET
+tags: [copp, qos, sécurité, plan de contrôle, police]
+summary: Limiter le trafic destiné au processeur du routeur pour résister à une attaque.
+description: |
+  `R-INTERNET` a subi un flood ICMP et SSH qui a saturé son processeur : la session BGP avec
+  l'opérateur est tombée. Mets en place une politique **CoPP** :
+
+  1. ACL étendues :
+     - `COPP-BGP` : `permit tcp host 203.0.113.1 any eq 179` et
+       `permit tcp host 203.0.113.1 eq 179 any` ;
+     - `COPP-GESTION` : `permit tcp 10.0.0.0 0.0.0.255 any eq 22` ;
+     - `COPP-ICMP` : `permit icmp any any` ;
+  2. classes `CM-BGP`, `CM-GESTION`, `CM-ICMP` (`match access-group name ...`) ;
+  3. politique `COPP` :
+     - `CM-BGP` : `police 256000 conform-action transmit exceed-action transmit` (jamais jeté,
+       mais mesuré) ;
+     - `CM-GESTION` : `police 128000 conform-action transmit exceed-action drop` ;
+     - `CM-ICMP` : `police 32000 conform-action transmit exceed-action drop` ;
+     - `class-default` : `police 64000 conform-action transmit exceed-action drop` ;
+  4. applique-la en **entrée** du plan de contrôle (`control-plane`).
+initial: |
+  interface g0/0
+  ip address 10.0.0.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 203.0.113.2 255.255.255.252
+  no shutdown
+checks:
+  - desc: ACL COPP-BGP, COPP-GESTION et COPP-ICMP
+    expr: acl("COPP-BGP") == ["permit tcp host 203.0.113.1 any eq 179", "permit tcp host 203.0.113.1 eq 179 any"] and acl("COPP-GESTION") == ["permit tcp 10.0.0.0 0.0.0.255 any eq 22"] and acl("COPP-ICMP") == ["permit icmp any any"]
+  - desc: Classes CM-BGP, CM-GESTION, CM-ICMP sur ces ACL
+    expr: cmap("CM-BGP").get("matches") == ["access-group name COPP-BGP"] and cmap("CM-GESTION").get("matches") == ["access-group name COPP-GESTION"] and cmap("CM-ICMP").get("matches") == ["access-group name COPP-ICMP"]
+  - desc: BGP mesuré sans perte, gestion limitée à 128 kbit/s
+    expr: pmap("COPP").get("CM-BGP") == ["police 256000 conform-action transmit exceed-action transmit"] and pmap("COPP").get("CM-GESTION") == ["police 128000 conform-action transmit exceed-action drop"]
+  - desc: ICMP à 32 kbit/s et le reste à 64 kbit/s
+    expr: pmap("COPP").get("CM-ICMP") == ["police 32000 conform-action transmit exceed-action drop"] and pmap("COPP").get("class-default") == ["police 64000 conform-action transmit exceed-action drop"]
+  - desc: Politique COPP appliquée au plan de contrôle
+    expr: d.control_plane_policy == "COPP"
+solution: |
+  configure terminal
+  ip access-list extended COPP-BGP
+  permit tcp host 203.0.113.1 any eq 179
+  permit tcp host 203.0.113.1 eq 179 any
+  ip access-list extended COPP-GESTION
+  permit tcp 10.0.0.0 0.0.0.255 any eq 22
+  ip access-list extended COPP-ICMP
+  permit icmp any any
+  exit
+  class-map match-all CM-BGP
+  match access-group name COPP-BGP
+  class-map match-all CM-GESTION
+  match access-group name COPP-GESTION
+  class-map match-all CM-ICMP
+  match access-group name COPP-ICMP
+  exit
+  policy-map COPP
+  class CM-BGP
+  police 256000 conform-action transmit exceed-action transmit
+  class CM-GESTION
+  police 128000 conform-action transmit exceed-action drop
+  class CM-ICMP
+  police 32000 conform-action transmit exceed-action drop
+  class class-default
+  police 64000 conform-action transmit exceed-action drop
+  exit
+  exit
+  control-plane
+  service-policy input COPP
+  end
+cours: |
+  ## Le processeur, point faible du routeur
+
+  Le trafic **en transit** est commuté par le matériel ou le chemin rapide (CEF). Le trafic
+  **destiné au routeur lui-même** (SSH, SNMP, BGP, OSPF, ping vers ses adresses, paquets avec
+  options IP, TTL expiré...) monte au **processeur**, beaucoup plus lent. Un flood vers une
+  adresse du routeur peut l'occuper à 100 % : les protocoles de contrôle n'ont plus de temps
+  processeur, les voisins tombent, le réseau s'effondre.
+
+  **CoPP** (*Control Plane Policing*) applique une politique QoS MQC à l'interface virtuelle
+  `control-plane` : chaque type de trafic destiné au processeur est limité à un débit adapté.
+
+  ### Construction (autres valeurs)
+
+  ```
+  R1(config)# ip access-list extended CP-OSPF
+  R1(config-ext-nacl)# permit ospf any any
+  R1(config)# ip access-list extended CP-SNMP
+  R1(config-ext-nacl)# permit udp 172.16.50.0 0.0.0.255 any eq 161
+  R1(config)# class-map match-all CL-OSPF
+  R1(config-cmap)# match access-group name CP-OSPF
+  R1(config)# class-map match-all CL-SNMP
+  R1(config-cmap)# match access-group name CP-SNMP
+  R1(config)# policy-map PLAN-CONTROLE
+  R1(config-pmap)# class CL-OSPF
+  R1(config-pmap-c)# police 512000 conform-action transmit exceed-action transmit
+  R1(config-pmap)# class CL-SNMP
+  R1(config-pmap-c)# police 64000 conform-action transmit exceed-action drop
+  R1(config-pmap)# class class-default
+  R1(config-pmap-c)# police 32000 conform-action transmit exceed-action drop
+  R1(config)# control-plane
+  R1(config-cp)# service-policy input PLAN-CONTROLE
+  R1# show policy-map control-plane
+   Class-map: CL-SNMP (match-all)
+     police: cir 64000 bps   conformed 1204 packets; exceeded 0 packets
+  ```
+
+  ### Principes de conception
+
+  - **classer** du plus critique au moins critique : routage (BGP, OSPF), gestion (SSH, SNMP,
+    NTP), supervision (ICMP), le reste ;
+  - les protocoles de routage ne sont **jamais jetés** (`exceed-action transmit`) mais mesurés,
+    pour repérer une anomalie ;
+  - la gestion n'est acceptée que depuis le réseau d'administration ;
+  - `class-default` limite tout le reste à un débit faible : un flood vers une adresse du
+    routeur est contenu ;
+  - commencer en mode observation (`exceed-action transmit` partout), relever les débits réels
+    avec `show policy-map control-plane`, puis durcir.
+
+  ### Ce que CoPP ne fait pas
+
+  CoPP ne protège pas le **trafic en transit** (une attaque contre un serveur derrière le
+  routeur) : c'est le rôle des ACL d'infrastructure, du pare-feu et de l'opérateur.
+
+  ### Pièges fréquents
+
+  - Oublier BGP ou OSPF dans une classe dédiée : ils tombent dans `class-default` limitée, et les
+    sessions tombent au premier pic.
+  - Une ACL d'une classe CoPP avec `deny` : le trafic refusé passe simplement à la classe
+    suivante (l'ACL **classe**, elle ne filtre pas).
+  - Débits trop bas pour la table BGP complète (des centaines de milliers de préfixes à la
+    reconnexion).
+
+  ### Pour le CCNP ENCOR
+
+  CoPP figure dans le domaine sécurité d'ENCOR, avec la protection des accès aux équipements.
+docs:
+  - title: Cisco IOS 15.4M&T — références de commandes
+    url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-4m-t/products-command-reference-list.html
+  - title: RFC 6192 — Protecting the Router Control Plane
+    url: https://www.rfc-editor.org/rfc/rfc6192

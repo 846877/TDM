@@ -1,0 +1,22 @@
+# Pile applicative (format proche de docker compose)
+services:
+  web:
+    image: nginx:1.27
+    replicas: 1
+    ports:
+      - "8080:80"
+    environment:
+      LOG_LEVEL: info
+  api:
+    image: registry.local/api:1.4.2
+    replicas: 2
+    environment:
+      LOG_LEVEL: info
+      DB_HOST: db
+  db:
+    image: postgres:16
+    replicas: 1
+    volumes:
+      - donnees-db:/var/lib/postgresql/data
+volumes:
+  donnees-db: {}

@@ -1,0 +1,203 @@
+title: Masques et calcul de sous-réseau
+level: intermediaire
+order: 32
+tags: [réseau, bits, opérateurs binaires]
+summary: Calculer réseau, broadcast et nombre d'hôtes avec les opérateurs de bits.
+description: |
+  Sans le module `ipaddress`, en utilisant les opérateurs de bits (`&`, `|`, `~`, `<<`, `>>`).
+  Les adresses sont des chaînes décimales pointées valides.
+
+  1. `cidr_vers_masque(prefixe)` : `24` → `"255.255.255.0"` (`0 ≤ prefixe ≤ 32`, sinon
+     `ValueError`).
+  2. `masque_vers_cidr(masque)` : `"255.255.240.0"` → `20`. Un masque non contigu
+     (`"255.0.255.0"`) lève `ValueError`.
+  3. `adresse_reseau(ip, prefixe)` : `("192.168.1.130", 25)` → `"192.168.1.128"`.
+  4. `broadcast(ip, prefixe)` : `("192.168.1.130", 25)` → `"192.168.1.255"`.
+  5. `nb_hotes(prefixe)` : nombre d'adresses utilisables pour des hôtes : `2^(32−préfixe) − 2`,
+     sauf `/31` (2 adresses, liaison point à point) et `/32` (1 adresse).
+  6. `meme_reseau(ip1, ip2, prefixe)` : `True` si les deux adresses sont dans le même
+     sous-réseau.
+
+  ```python
+  cidr_vers_masque(20)                         # "255.255.240.0"
+  adresse_reseau("10.20.30.40", 12)            # "10.16.0.0"
+  nb_hotes(24)                                 # 254
+  meme_reseau("192.168.1.10", "192.168.1.200", 24)   # True
+  ```
+
+  Astuce : écris deux petites fonctions de conversion texte ↔ entier 32 bits.
+starter: |
+  def cidr_vers_masque(prefixe):
+      pass
+
+
+  def masque_vers_cidr(masque):
+      pass
+
+
+  def adresse_reseau(ip, prefixe):
+      pass
+
+
+  def broadcast(ip, prefixe):
+      pass
+
+
+  def nb_hotes(prefixe):
+      pass
+
+
+  def meme_reseau(ip1, ip2, prefixe):
+      pass
+tests: |
+  def test_cidr_vers_masque():
+      "cidr_vers_masque"
+      cas = {0: "0.0.0.0", 8: "255.0.0.0", 20: "255.255.240.0", 24: "255.255.255.0",
+             30: "255.255.255.252", 32: "255.255.255.255"}
+      for p, m in cas.items():
+          r = solution.cidr_vers_masque(p)
+          assert r == m, f"/{p} -> attendu {m}, obtenu {r!r}"
+      for p in (-1, 33):
+          try:
+              solution.cidr_vers_masque(p)
+          except ValueError:
+              continue
+          raise AssertionError(f"cidr_vers_masque({p}) devrait lever ValueError")
+
+  def test_masque_vers_cidr():
+      "masque_vers_cidr"
+      assert solution.masque_vers_cidr("255.255.240.0") == 20
+      assert solution.masque_vers_cidr("255.255.255.255") == 32
+      assert solution.masque_vers_cidr("0.0.0.0") == 0
+      assert solution.masque_vers_cidr("255.255.255.128") == 25
+
+  def test_masque_non_contigu():
+      "Masque non contigu refusé"
+      for m in ["255.0.255.0", "255.255.255.1", "0.255.255.255"]:
+          try:
+              solution.masque_vers_cidr(m)
+          except ValueError:
+              continue
+          raise AssertionError(f"{m} n'est pas un masque valide")
+
+  def test_reseau_broadcast():
+      "adresse_reseau et broadcast"
+      assert solution.adresse_reseau("192.168.1.130", 25) == "192.168.1.128"
+      assert solution.broadcast("192.168.1.130", 25) == "192.168.1.255"
+      assert solution.adresse_reseau("10.20.30.40", 12) == "10.16.0.0"
+      assert solution.broadcast("10.20.30.40", 12) == "10.31.255.255"
+      assert solution.adresse_reseau("172.16.5.9", 32) == "172.16.5.9"
+      assert solution.broadcast("172.16.5.9", 0) == "255.255.255.255"
+
+  def test_nb_hotes():
+      "nb_hotes"
+      for p, n in [(24, 254), (25, 126), (30, 2), (31, 2), (32, 1), (16, 65534), (8, 16777214)]:
+          assert solution.nb_hotes(p) == n, f"/{p} -> {n}, obtenu {solution.nb_hotes(p)}"
+
+  def test_meme_reseau():
+      "meme_reseau"
+      assert solution.meme_reseau("192.168.1.10", "192.168.1.200", 24) is True
+      assert solution.meme_reseau("192.168.1.10", "192.168.1.200", 25) is False
+      assert solution.meme_reseau("10.0.0.1", "10.255.0.1", 8) is True
+solution: |
+  def ip_en_entier(ip):
+      n = 0
+      for octet in ip.split("."):
+          n = (n << 8) | int(octet)
+      return n
+
+
+  def entier_en_ip(n):
+      return ".".join(str((n >> decalage) & 0xFF) for decalage in (24, 16, 8, 0))
+
+
+  def masque_entier(prefixe):
+      if not 0 <= prefixe <= 32:
+          raise ValueError("préfixe hors limites")
+      return (0xFFFFFFFF << (32 - prefixe)) & 0xFFFFFFFF
+
+
+  def cidr_vers_masque(prefixe):
+      return entier_en_ip(masque_entier(prefixe))
+
+
+  def masque_vers_cidr(masque):
+      n = ip_en_entier(masque)
+      prefixe = bin(n).count("1")
+      if masque_entier(prefixe) != n:
+          raise ValueError(f"masque non contigu : {masque}")
+      return prefixe
+
+
+  def adresse_reseau(ip, prefixe):
+      return entier_en_ip(ip_en_entier(ip) & masque_entier(prefixe))
+
+
+  def broadcast(ip, prefixe):
+      hote = ~masque_entier(prefixe) & 0xFFFFFFFF
+      return entier_en_ip(ip_en_entier(ip) | hote)
+
+
+  def nb_hotes(prefixe):
+      if prefixe == 32:
+          return 1
+      if prefixe == 31:
+          return 2
+      return 2 ** (32 - prefixe) - 2
+
+
+  def meme_reseau(ip1, ip2, prefixe):
+      m = masque_entier(prefixe)
+      return ip_en_entier(ip1) & m == ip_en_entier(ip2) & m
+cours: |
+  ## Le masque de sous-réseau
+
+  Un masque sépare une adresse en deux parties : les bits à **1** du masque désignent la
+  partie **réseau**, les bits à **0** la partie **hôte**. La notation CIDR `/24` indique le
+  nombre de bits à 1 : `/24` = `11111111.11111111.11111111.00000000` = `255.255.255.0`.
+  Un masque valide est toujours **contigu** : des 1 puis des 0.
+
+  ## Les opérateurs de bits
+
+  | Opérateur | Effet | Exemple (sur 8 bits) |
+  |-----------|-------|----------------------|
+  | `a & b` | ET : 1 si les deux bits valent 1 | `1100 & 1010 = 1000` |
+  | `a \| b` | OU : 1 si au moins un vaut 1 | `1100 \| 1010 = 1110` |
+  | `a ^ b` | OU exclusif | `1100 ^ 1010 = 0110` |
+  | `~a` | inverse tous les bits | |
+  | `a << n` | décale à gauche (× 2ⁿ) | `0011 << 2 = 1100` |
+  | `a >> n` | décale à droite (÷ 2ⁿ) | `1100 >> 2 = 0011` |
+
+  Pour visualiser : `bin(10)` → `'0b1010'`, `f"{10:08b}"` → `'00001010'`,
+  `0xFF` = 255, `0xFFFFFFFF` = 2³² − 1.
+
+  ## Les calculs du sous-réseau
+
+  - **adresse réseau** = `ip & masque` (on met à zéro les bits d'hôte) ;
+  - **broadcast** = `ip | ~masque` (on met à un les bits d'hôte) ;
+  - deux adresses sont dans le même réseau si `ip1 & masque == ip2 & masque`.
+
+  ## Le piège de `~` en Python
+
+  Les entiers Python n'ont pas de taille fixe : `~0` vaut `-1`, pas `0xFFFFFFFF`. Pour
+  rester sur 32 bits, on **masque** le résultat : `~x & 0xFFFFFFFF`. De même, un décalage
+  à gauche peut dépasser 32 bits : `(0xFFFFFFFF << 8) & 0xFFFFFFFF`.
+
+  ## Construire un masque à partir d'un préfixe
+
+  Il y a plusieurs façons : décaler des 1 vers la gauche puis tronquer à 32 bits, ou
+  calculer `2³² − 2^(32−p)`. Pour retrouver le préfixe d'un masque, on compte ses bits à 1
+  (`bin(n).count("1")`, ou `n.bit_count()` en Python 3.10+), puis on vérifie que le masque
+  reconstruit est identique (sinon il n'était pas contigu).
+
+  ## Nombre d'hôtes
+
+  Un réseau `/p` contient 2^(32−p) adresses, dont deux réservées (réseau et broadcast). Les
+  `/31` (RFC 3021) sont l'exception utile des liaisons point à point entre routeurs.
+
+  Tu viens de réimplémenter ce que fait `ipcalc` sous Linux !
+docs:
+  - title: Opérations bit à bit sur les entiers
+    url: https://docs.python.org/fr/3/library/stdtypes.html#bitwise-operations-on-integer-types
+  - title: HOWTO — introduction au module ipaddress
+    url: https://docs.python.org/fr/3/howto/ipaddress.html

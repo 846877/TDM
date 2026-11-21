@@ -1,0 +1,384 @@
+title: Exploiter PostgreSQL
+level: intermediaire
+order: 9
+tags: [postgresql, base de données, sauvegarde, réplication, sql, exploitation]
+summary: Rôles et bases, import CSV, index et EXPLAIN, droits, sauvegarde et restauration, réglages, verrous bloquants et réplication en flux.
+build: .
+command: []
+ports: ["8615:5432"]
+shell: sh
+workdir: /root
+setup: |
+  for i in $(seq 1 90); do pg_isready -q -h 127.0.0.1 && psql -qAt -d ventes -c 'SELECT 1 FROM commandes LIMIT 1' >/dev/null 2>&1 && break; sleep 1; done
+  if ! psql -qAt -c "SELECT 1 FROM pg_stat_activity WHERE application_name = 'traitement-bloquant'" | grep -q 1; then
+    setsid nohup /root/outils/traitement-bloquant.sh >/dev/null 2>&1 < /dev/null &
+    sleep 2
+  fi
+description: |
+  Un serveur **PostgreSQL 16** rien qu'à toi. Tu es `root` dans le conteneur du serveur ; `psql` se
+  connecte par défaut en superutilisateur `postgres` (variable `PGUSER`) par le socket local.
+
+  Une base d'exemple **`ventes`** existe déjà (tables `clients` et `commandes`, 200 000 commandes). Des
+  données à importer sont dans **`/root/donnees`**, et tes sauvegardes iront dans **`/root/sauvegardes`**.
+
+  Le serveur est publié sur le port **8615** de ta machine : tu peux t'y connecter avec un client graphique
+  (DBeaver, pgAdmin) une fois le rôle `appli` créé.
+
+  Commandes utiles dans `psql` : `\l` (bases), `\c base` (changer de base), `\dt` (tables), `\d table`
+  (structure), `\du` (rôles), `\x` (affichage étendu), `\q` (quitter).
+cours: |
+  ## PostgreSQL du point de vue de l'exploitant
+
+  PostgreSQL est un serveur de bases de données relationnelles. Un **cluster** (une instance, un dossier de
+  données `PGDATA`) contient plusieurs **bases** ; chaque base contient des **schémas** (`public` par
+  défaut), qui contiennent les tables, vues, index et fonctions. Les **rôles** (utilisateurs et groupes)
+  sont communs à tout le cluster.
+
+  ```
+   client (psql, appli) ──TCP 5432 / socket──> postmaster ──> un processus par connexion
+                                                  │
+                     ┌────────────────────────────┼─────────────────────────────┐
+                     ▼                            ▼                             ▼
+             base « ventes »              base « boutique »             WAL (journal des
+             schéma public                schéma public                 transactions) ──> réplica
+             tables, index                tables, index                 (réplication en flux)
+  ```
+
+  ### Authentification et droits
+
+  Le fichier **`pg_hba.conf`** décide qui peut se connecter, à quelle base, depuis où et avec quelle
+  méthode (`trust`, `scram-sha-256`, `peer`, `cert`). La première ligne qui correspond s'applique. Ensuite,
+  les **privilèges** (`GRANT`/`REVOKE`) contrôlent ce que chaque rôle peut faire sur chaque objet. Le
+  propriétaire d'un objet a tous les droits dessus.
+
+  ### Performances : index et plans d'exécution
+
+  Sans index, PostgreSQL lit toute la table (*Seq Scan*). Un **index** B-tree sur une colonne filtrée
+  permet un *Index Scan*. **`EXPLAIN`** montre le plan choisi, **`EXPLAIN ANALYZE`** l'exécute et donne les
+  durées réelles. Les statistiques (`ANALYZE`, lancé aussi par l'autovacuum) guident le planificateur.
+
+  ### Sauvegarde et restauration
+
+  | Outil | Usage |
+  |---|---|
+  | `pg_dump -Fc base -f f.dump` | sauvegarde logique d'une base (format personnalisé) |
+  | `pg_restore -d base f.dump` | restauration (sélective possible avec `-t`, `-n`) |
+  | `pg_dumpall --globals-only` | rôles et tablespaces, absents de `pg_dump` |
+  | `pg_basebackup` | copie physique du cluster entier, base de la réplication et du PITR |
+
+  Une sauvegarde n'existe vraiment que si l'on a **testé sa restauration**.
+
+  ### Réplication
+
+  Chaque modification est d'abord écrite dans le **WAL**. Un serveur **secondaire** (*standby*) initialisé
+  par `pg_basebackup` reçoit ce journal en continu et le rejoue : il reste à jour, accepte les lectures
+  et peut être promu primaire en cas de panne.
+
+  ### Mémo d'exploitation
+
+  - `SELECT * FROM pg_stat_activity` : connexions et requêtes en cours.
+  - `pg_locks` et `pg_blocking_pids(pid)` : qui bloque qui.
+  - `pg_cancel_backend(pid)` annule une requête, `pg_terminate_backend(pid)` coupe une connexion.
+  - `ALTER SYSTEM SET param = valeur` puis `SELECT pg_reload_conf()` (ou redémarrage selon le paramètre).
+
+  ### Pièges et bonnes pratiques
+
+  - Les applications ne se connectent jamais en superutilisateur : un rôle par application, avec le
+    minimum de droits.
+  - `trust` sur le réseau revient à ne pas avoir de mot de passe.
+  - Une transaction ouverte et oubliée bloque des tables et empêche le nettoyage (VACUUM).
+  - Trop d'index ralentit les écritures : on indexe ce que les requêtes filtrent réellement.
+  - Sauvegardes automatisées, copiées hors du serveur et restaurées régulièrement en test.
+  - Surveiller l'espace disque, le nombre de connexions, le retard des secondaires et les requêtes
+    lentes : ce sont les premières causes d'incident.
+
+  ### Pour réviser
+
+  1. Quels fichiers contrôlent qui peut se connecter, et ce qu'il peut faire une fois connecté ?
+  2. Pourquoi `pg_dump` ne suffit-il pas pour reconstruire un serveur complet ?
+  3. Que signifie un *Seq Scan* qui élimine 199 990 lignes sur 200 000 ?
+  4. Que fait l'option `-R` de `pg_basebackup` ?
+  5. Quelle différence entre `pg_cancel_backend` et `pg_terminate_backend` ?
+docs:
+  - title: Documentation de PostgreSQL 16
+    url: https://www.postgresql.org/docs/16/
+  - title: Le fichier pg_hba.conf
+    url: https://www.postgresql.org/docs/16/auth-pg-hba-conf.html
+  - title: Sauvegarde et restauration
+    url: https://www.postgresql.org/docs/16/backup.html
+  - title: Image Docker officielle postgres
+    url: https://hub.docker.com/_/postgres
+exercises:
+  - id: pg-roles
+    title: Un rôle et une base pour l'application
+    description: |
+      L'application « boutique » ne doit pas utiliser le superutilisateur. Crée :
+      1. un rôle **`appli`** qui peut se connecter, avec le mot de passe **`appli-secret`** ;
+      2. une base **`boutique`** dont `appli` est le **propriétaire**.
+
+      Teste une connexion **par le réseau** (avec mot de passe) :
+      `psql "host=$(hostname -i) user=appli dbname=boutique password=appli-secret" -c 'SELECT current_user'`.
+    hint: "CREATE ROLE appli LOGIN PASSWORD 'appli-secret'; puis CREATE DATABASE boutique OWNER appli;"
+    cours: |
+      Dans PostgreSQL, utilisateurs et groupes sont des **rôles**. Un rôle avec l'attribut `LOGIN` peut
+      ouvrir une session ; `PASSWORD` lui donne un mot de passe, stocké haché (SCRAM-SHA-256). D'autres
+      attributs : `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`. `CREATE USER` est un alias de
+      `CREATE ROLE ... LOGIN`.
+
+      `CREATE DATABASE nom OWNER role` crée une base qui appartient au rôle : il peut y créer des schémas et
+      des tables et en gérer les droits, sans être superutilisateur. C'est le bon niveau pour le compte
+      d'une application.
+
+      Le mot de passe n'est vérifié que si `pg_hba.conf` l'exige pour la connexion : ici, les connexions
+      locales et depuis `127.0.0.1` sont en `trust`, celles qui arrivent par l'adresse IP du conteneur en
+      `scram-sha-256`. `\du` et `\l` dans psql affichent rôles et bases.
+    checks:
+      - desc: appli se connecte par le réseau avec son mot de passe
+        run: |
+          test "$(psql -qAt "host=$(hostname -i | cut -d' ' -f1) user=appli dbname=boutique password=appli-secret" -c 'SELECT current_user' 2>/dev/null)" = appli
+      - desc: Un mauvais mot de passe est refusé
+        run: |
+          psql -qAt -c "SELECT 1 FROM pg_roles WHERE rolname = 'appli' AND rolcanlogin" | grep -q 1 && ! psql -qAt "host=$(hostname -i | cut -d' ' -f1) user=appli dbname=boutique password=faux" -c 'SELECT 1' >/dev/null 2>&1
+      - desc: La base boutique appartient à appli
+        run: |
+          test "$(psql -qAt -c "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'boutique'")" = appli
+  - id: pg-tables
+    title: Créer une table et importer un CSV
+    description: |
+      En te connectant **en tant qu'`appli`** à la base `boutique`, crée la table **`produits`** :
+      - `id` : entier auto-incrémenté, clé primaire ;
+      - `nom` : texte **obligatoire** et **unique** ;
+      - `prix` : `numeric(10,2)`, obligatoire, **jamais négatif** (contrainte `CHECK`) ;
+      - `stock` : entier, 0 par défaut.
+
+      Importe ensuite les 40 produits de **`/root/donnees/produits.csv`** (avec une ligne d'en-tête).
+    hint: "psql -U appli -d boutique ; CREATE TABLE produits (id serial PRIMARY KEY, nom text NOT NULL UNIQUE, prix numeric(10,2) NOT NULL CHECK (prix >= 0), stock integer DEFAULT 0); puis \\copy produits(nom, prix, stock) FROM '/root/donnees/produits.csv' WITH (FORMAT csv, HEADER)"
+    cours: |
+      Les **contraintes** protègent la qualité des données au plus près : `PRIMARY KEY` (unique et non nul),
+      `NOT NULL`, `UNIQUE`, `CHECK (expression)`, `REFERENCES` (clé étrangère), `DEFAULT`. Une insertion qui
+      les viole est refusée, quelle que soit l'application qui l'envoie.
+
+      `serial` (ou la forme standard `integer GENERATED ALWAYS AS IDENTITY`) crée une séquence qui numérote
+      automatiquement les lignes. `numeric(10,2)` stocke des montants exacts, contrairement aux flottants.
+
+      Pour importer en masse, `COPY` est bien plus rapide que des `INSERT`. `COPY ... FROM 'fichier'` lit un
+      fichier **sur le serveur** (droits élevés requis) ; la commande **`\copy`** de psql lit le fichier
+      **côté client** et l'envoie, avec les droits de l'utilisateur connecté. Une table créée par `appli` lui
+      appartient : il en est propriétaire.
+    checks:
+      - desc: produits contient 40 lignes et appartient à appli
+        run: |
+          test "$(psql -qAt -d boutique -c "SELECT count(*) FROM produits" 2>/dev/null)" = 40 && test "$(psql -qAt -d boutique -c "SELECT tableowner FROM pg_tables WHERE tablename = 'produits'")" = appli
+      - desc: Un prix négatif et un nom en double sont refusés
+        run: |
+          ! psql -qAt -d boutique -c "INSERT INTO produits (nom, prix) VALUES ('tdm-negatif', -1)" >/dev/null 2>&1 && ! psql -qAt -d boutique -c "INSERT INTO produits (nom, prix) VALUES ('clavier-pro', 10)" >/dev/null 2>&1 && psql -qAt -d boutique -c "SELECT 1 FROM produits LIMIT 1" | grep -q 1
+      - desc: Le stock vaut 0 par défaut et l'id est automatique
+        run: |
+          psql -qAt -d boutique -c "BEGIN" -c "INSERT INTO produits (nom, prix) VALUES ('tdm-defaut', 1) RETURNING (id IS NOT NULL AND stock = 0)" -c "ROLLBACK" 2>/dev/null | grep -qx t
+  - id: pg-index
+    title: Accélérer une requête avec un index
+    description: |
+      Dans la base **`ventes`**, cette requête est lente : `SELECT * FROM commandes WHERE client_id = 42;`.
+      Observe son plan avec `EXPLAIN ANALYZE`, puis crée l'index qui permet à PostgreSQL de ne plus lire
+      toute la table. Compare les durées avant et après.
+    hint: "CREATE INDEX ON commandes (client_id); puis relance EXPLAIN ANALYZE"
+    cours: |
+      **`EXPLAIN`** affiche le plan d'exécution choisi par le planificateur, avec un coût estimé ;
+      **`EXPLAIN ANALYZE`** exécute vraiment la requête et ajoute le nombre de lignes et la durée de chaque
+      étape. Un *Seq Scan* sur une grosse table pour ne garder que quelques lignes (« Rows Removed by
+      Filter ») est le signe classique d'un index manquant.
+
+      Un index **B-tree** (le type par défaut) sur la colonne filtrée permet un *Index Scan* ou un *Bitmap
+      Index Scan* : on ne lit que les lignes utiles. `CREATE INDEX CONCURRENTLY` évite de bloquer les
+      écritures pendant la construction, ce qui est indispensable en production.
+
+      Un index a un coût : de la place disque et des écritures plus lentes. Le planificateur ne l'utilise que
+      s'il est rentable : pour une condition qui garde la moitié de la table, la lecture complète reste plus
+      rapide. `\di` liste les index.
+    checks:
+      - desc: La requête utilise un index
+        run: |
+          psql -qAt -d ventes -c "EXPLAIN SELECT * FROM commandes WHERE client_id = 42" | grep -q 'Index'
+      - desc: Un index existe sur commandes(client_id)
+        run: |
+          psql -qAt -d ventes -c "SELECT indexdef FROM pg_indexes WHERE tablename = 'commandes'" | grep -q '(client_id'
+  - id: pg-droits
+    title: Un rôle en lecture seule
+    description: |
+      L'équipe de reporting a besoin de lire les données de `boutique`, sans pouvoir les modifier. Crée le rôle
+      **`lecteur`** (connexion, mot de passe **`lecteur-secret`**) qui peut :
+      - **lire** toutes les tables du schéma `public` de `boutique`, y compris celles qu'`appli` créera
+        **plus tard** ;
+      - mais ni insérer, ni modifier, ni supprimer.
+    hint: "GRANT CONNECT ON DATABASE, GRANT USAGE ON SCHEMA public, GRANT SELECT ON ALL TABLES IN SCHEMA public, et ALTER DEFAULT PRIVILEGES FOR ROLE appli IN SCHEMA public GRANT SELECT ON TABLES TO lecteur"
+    cours: |
+      Les privilèges se donnent à plusieurs niveaux, et il faut tous les niveaux pour accéder à une table :
+      `CONNECT` sur la base, `USAGE` sur le schéma, puis `SELECT`, `INSERT`, `UPDATE`, `DELETE` sur les
+      tables. `GRANT SELECT ON ALL TABLES IN SCHEMA public TO lecteur` couvre les tables **existantes**
+      seulement.
+
+      Pour les tables **futures**, on définit des **privilèges par défaut** :
+      `ALTER DEFAULT PRIVILEGES FOR ROLE appli IN SCHEMA public GRANT SELECT ON TABLES TO lecteur`. Ils
+      s'appliquent aux objets que **ce rôle** (`appli`) créera ensuite. Les séquences ont leurs propres
+      privilèges (`USAGE`, `SELECT`).
+
+      Le plus maintenable est de donner les droits à un rôle de **groupe** (`NOLOGIN`, par exemple
+      `lecture_seule`), puis d'y ajouter les personnes : `GRANT lecture_seule TO alice`. `\dp` affiche les
+      privilèges d'une table.
+    checks:
+      - desc: lecteur lit produits par le réseau
+        run: |
+          test "$(psql -qAt "host=$(hostname -i | cut -d' ' -f1) user=lecteur dbname=boutique password=lecteur-secret" -c 'SELECT count(*) > 0 FROM produits' 2>/dev/null)" = t
+      - desc: lecteur ne peut pas écrire
+        run: |
+          psql -qAt -c "SELECT 1 FROM pg_roles WHERE rolname = 'lecteur'" | grep -q 1 && ! psql -qAt -U lecteur -d boutique -c "INSERT INTO produits (nom, prix) VALUES ('tdm-lecteur', 1)" >/dev/null 2>&1 && ! psql -qAt -U lecteur -d boutique -c "DELETE FROM produits" >/dev/null 2>&1
+      - desc: lecteur lit aussi une table créée ensuite par appli
+        run: |
+          psql -q -U appli -d boutique -c "DROP TABLE IF EXISTS tdm_verif; CREATE TABLE tdm_verif (x int); INSERT INTO tdm_verif VALUES (1);" >/dev/null 2>&1 && r=$(psql -qAt -U lecteur -d boutique -c "SELECT x FROM tdm_verif" 2>/dev/null); psql -q -U appli -d boutique -c "DROP TABLE IF EXISTS tdm_verif" >/dev/null 2>&1; test "$r" = 1
+  - id: pg-sauvegarde
+    title: Sauvegarder une base
+    description: |
+      Sauvegarde la base **`boutique`** au **format personnalisé** de `pg_dump` dans
+      **`/root/sauvegardes/boutique.dump`**. Sauvegarde aussi les **rôles** (objets globaux) dans
+      **`/root/sauvegardes/globaux.sql`**.
+    hint: "pg_dump -Fc -d boutique -f /root/sauvegardes/boutique.dump ; pg_dumpall --globals-only -f /root/sauvegardes/globaux.sql"
+    cours: |
+      **`pg_dump`** produit une sauvegarde **logique** et cohérente d'une base, même pendant qu'on l'utilise
+      (il travaille dans une transaction). Formats :
+      - `-Fp` (texte SQL, par défaut) : lisible, se rejoue avec `psql` ;
+      - **`-Fc`** (personnalisé) : compressé, et `pg_restore` peut n'en restaurer qu'une partie, ou en
+        parallèle ;
+      - `-Fd` (répertoire) : sauvegarde parallèle avec `-j`.
+
+      `pg_dump` ne sauvegarde **qu'une base** et ne contient **pas les rôles**, communs au cluster :
+      `pg_dumpall --globals-only` les exporte. Sans eux, une restauration sur un serveur neuf échoue sur les
+      `OWNER` et les `GRANT`.
+
+      `pg_restore -l fichier.dump` liste le contenu d'une sauvegarde sans rien restaurer : un premier
+      contrôle simple. En production, on automatise, on chiffre, on copie hors du serveur et on surveille la
+      réussite de chaque sauvegarde.
+    checks:
+      - desc: boutique.dump est au format personnalisé et contient produits
+        run: pg_restore -l /root/sauvegardes/boutique.dump 2>/dev/null | grep -q 'TABLE public produits'
+      - desc: globaux.sql contient les rôles appli et lecteur
+        run: grep -q 'CREATE ROLE appli' /root/sauvegardes/globaux.sql && grep -q 'CREATE ROLE lecteur' /root/sauvegardes/globaux.sql
+  - id: pg-restauration
+    title: Tester la restauration
+    description: |
+      Une sauvegarde non testée n'est pas une sauvegarde. Restaure `boutique.dump` dans une **nouvelle base**
+      **`boutique_restauree`** et vérifie que la table `produits` y contient le même nombre de lignes que
+      l'originale, avec le même propriétaire.
+    hint: "createdb boutique_restauree puis pg_restore -d boutique_restauree /root/sauvegardes/boutique.dump"
+    cours: |
+      **`pg_restore`** relit une sauvegarde au format personnalisé ou répertoire. Il restaure dans une base
+      **existante** (`createdb` ou `CREATE DATABASE` d'abord), ou la crée avec `-C`. Options utiles :
+      `--no-owner` pour attribuer les objets à l'utilisateur qui restaure, `-t table` pour une seule table,
+      `-j N` pour paralléliser, `--clean` pour supprimer les objets avant de les recréer.
+
+      Restaurer sous un **autre nom** permet de vérifier une sauvegarde sans toucher à la base en service, ou
+      de récupérer quelques lignes supprimées par erreur.
+
+      Un test de restauration se mesure : combien de temps prend-il (ton délai de remise en service), et
+      que perd-on depuis la dernière sauvegarde ? Pour ne perdre presque rien, on archive en continu le WAL
+      et on pratique la restauration à un instant donné (PITR).
+    checks:
+      - desc: boutique_restauree contient autant de produits que boutique
+        run: |
+          a=$(psql -qAt -d boutique -c "SELECT count(*) FROM produits") && b=$(psql -qAt -d boutique_restauree -c "SELECT count(*) FROM produits" 2>/dev/null) && test -n "$b" && test "$a" = "$b"
+      - desc: Le propriétaire de la table est conservé
+        run: |
+          test "$(psql -qAt -d boutique_restauree -c "SELECT tableowner FROM pg_tables WHERE tablename = 'produits'" 2>/dev/null)" = appli
+  - id: pg-reglages
+    title: Modifier la configuration à chaud
+    description: |
+      Sans éditer `postgresql.conf` à la main ni redémarrer le serveur :
+      1. journalise toute requête de plus de **500 ms** (`log_min_duration_statement`) ;
+      2. passe la mémoire de tri par opération (`work_mem`) à **16MB** ;
+      3. fais prendre en compte ces changements.
+    hint: "ALTER SYSTEM SET log_min_duration_statement = '500ms'; ALTER SYSTEM SET work_mem = '16MB'; SELECT pg_reload_conf();"
+    cours: |
+      La configuration de PostgreSQL est dans `postgresql.conf`. **`ALTER SYSTEM SET param = valeur`** écrit
+      la valeur dans `postgresql.auto.conf`, qui est lu en dernier et l'emporte. `ALTER SYSTEM RESET param`
+      revient à la valeur du fichier principal.
+
+      Selon le paramètre, la prise en compte demande :
+      - un **rechargement** (`SELECT pg_reload_conf()` ou `pg_ctl reload`) : journalisation, `work_mem`,
+        délais… ;
+      - un **redémarrage** : `shared_buffers`, `max_connections`, `listen_addresses`…
+
+      La vue **`pg_settings`** indique pour chaque paramètre sa valeur, son unité, sa source et la colonne
+      `pending_restart`. `SHOW param` donne la valeur courante. `log_min_duration_statement` est un réglage
+      précieux en exploitation : il trace les requêtes lentes, à analyser ensuite avec `EXPLAIN`.
+    checks:
+      - desc: Les valeurs sont actives
+        run: |
+          test "$(psql -qAt -c 'SHOW log_min_duration_statement')" = 500ms && test "$(psql -qAt -c 'SHOW work_mem')" = 16MB
+      - desc: Elles sont enregistrées dans postgresql.auto.conf
+        run: |
+          f=$(psql -qAt -c 'SHOW data_directory')/postgresql.auto.conf; grep -q log_min_duration_statement "$f" && grep -q work_mem "$f"
+  - id: pg-verrous
+    title: Débloquer une table
+    description: |
+      Les requêtes sur la table `clients` de la base `ventes` ne répondent plus : essaie
+      `psql -d ventes -c 'SELECT count(*) FROM clients'` (Ctrl+C pour abandonner). Un traitement oublié garde
+      un verrou depuis le démarrage du lab.
+
+      Trouve la session responsable (`pg_stat_activity`, `pg_locks`) et **mets-y fin**, sans redémarrer le
+      serveur.
+    hint: "SELECT pid, application_name, state, query FROM pg_stat_activity WHERE datname = 'ventes'; puis SELECT pg_terminate_backend(pid);"
+    cours: |
+      Une transaction qui prend un verrou fort (`LOCK TABLE`, `ALTER TABLE`) et reste ouverte bloque toutes
+      les requêtes sur la table, qui s'empilent en attente. Symptôme : des requêtes qui ne finissent jamais,
+      sans consommer de processeur.
+
+      Pour diagnostiquer :
+      - **`pg_stat_activity`** : une ligne par connexion, avec `pid`, `application_name`, `state` (`active`,
+        `idle in transaction`…), `wait_event_type` (`Lock`), `query` et l'heure de début ;
+      - **`pg_blocking_pids(pid)`** donne directement les sessions qui bloquent un `pid` ;
+      - **`pg_locks`** détaille les verrous détenus et demandés.
+
+      `pg_cancel_backend(pid)` annule la requête en cours ; `pg_terminate_backend(pid)` ferme la connexion et
+      annule sa transaction, ce qui libère ses verrous. En prévention : `lock_timeout`, `statement_timeout`
+      et `idle_in_transaction_session_timeout`.
+    checks:
+      - desc: La session bloquante n'existe plus
+        run: |
+          psql -qAt -c "SELECT 1" | grep -q 1 && ! psql -qAt -c "SELECT 1 FROM pg_stat_activity WHERE application_name = 'traitement-bloquant'" | grep -q 1
+      - desc: La table clients répond à nouveau
+        run: |
+          test "$(psql -qAt -d ventes -c "SET lock_timeout = '3s'" -c 'SELECT count(*) FROM clients' 2>/dev/null | tail -1)" = 5000
+  - id: pg-replication
+    title: Un serveur secondaire en réplication
+    description: |
+      Mets en place un **secondaire** (*standby*) dans le même conteneur, sur le port **5433** :
+      1. crée un rôle **`replicateur`** avec l'attribut `REPLICATION` et un mot de passe ;
+      2. autorise dans `pg_hba.conf` les connexions de **réplication** de ce rôle **par le réseau** (adresse
+         du conteneur, méthode `scram-sha-256`), puis recharge la configuration ;
+      3. en tant qu'utilisateur système `postgres`, copie le primaire avec `pg_basebackup` (connexion à
+         l'adresse `$(hostname -i)`, pas à `localhost`) dans **`/var/lib/postgresql/replica`**, avec l'option
+         `-R` ;
+      4. démarre ce secondaire sur le port 5433 avec `pg_ctl`.
+    hint: "host replication replicateur 0.0.0.0/0 scram-sha-256 ; su-exec postgres pg_basebackup -h $(hostname -i) -U replicateur -D /var/lib/postgresql/replica -R -P ; su-exec postgres pg_ctl -D /var/lib/postgresql/replica -o '-p 5433' -l /var/lib/postgresql/replica.log start"
+    cours: |
+      La **réplication en flux** (*streaming replication*) envoie le WAL du primaire vers un ou plusieurs
+      secondaires, qui le rejouent en continu. Le secondaire accepte les **lectures** (*hot standby*) et peut
+      être **promu** primaire (`pg_ctl promote`) si le primaire tombe.
+
+      Étapes : un rôle avec l'attribut `REPLICATION`, une ligne `host replication ...` dans `pg_hba.conf` (le
+      mot-clé `replication` ne correspond pas à `all`), puis **`pg_basebackup`**, qui copie le dossier de
+      données du primaire. L'option **`-R`** écrit `primary_conninfo` dans `postgresql.auto.conf` et crée le
+      fichier `standby.signal` : au démarrage, le serveur se comporte en secondaire.
+
+      Côté primaire, **`pg_stat_replication`** liste les secondaires connectés et leur retard ; côté
+      secondaire, `SELECT pg_is_in_recovery()` vaut `true`. Les fichiers de données doivent appartenir à
+      l'utilisateur système `postgres` : `su-exec postgres commande` lance une commande sous son identité.
+    checks:
+      - desc: Le secondaire répond sur le port 5433 et est en récupération
+        run: test "$(psql -qAt -p 5433 -h 127.0.0.1 -c 'SELECT pg_is_in_recovery()' 2>/dev/null)" = t
+      - desc: Le primaire voit replicateur connecté par le réseau, en streaming
+        run: |
+          psql -qAt -c "SELECT usename, state, client_addr FROM pg_stat_replication" | grep -E '^replicateur\|streaming\|' | grep -qvE '\|(127\.0\.0\.1|::1)?$'
+      - desc: Une écriture sur le primaire arrive sur le secondaire
+        timeout: 60
+        run: |
+          v=$(date +%s); psql -q -d ventes -c "CREATE TABLE IF NOT EXISTS tdm_repli (v bigint); INSERT INTO tdm_repli VALUES ($v);" >/dev/null && for i in $(seq 1 20); do psql -qAt -p 5433 -h 127.0.0.1 -d ventes -c "SELECT 1 FROM tdm_repli WHERE v = $v" 2>/dev/null | grep -q 1 && exit 0; sleep 1; done; exit 1

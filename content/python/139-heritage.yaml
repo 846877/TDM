@@ -1,0 +1,211 @@
+title: Héritage d'équipements réseau
+level: intermediaire
+order: 39
+tags: [classes, héritage, super, POO]
+summary: Réutiliser et spécialiser du code avec l'héritage et super().
+description: |
+  Modélise un parc d'équipements.
+
+  **`Equipement(nom, ip)`**
+
+  - attributs `nom` et `ip` ; attribut `allume` à `False` au départ ;
+  - `demarrer()` met `allume` à `True` et renvoie `"<nom> démarré"` ;
+  - `decrire()` renvoie `"<Type> <nom> (<ip>)"` où `<Type>` est le **nom de la classe** de
+    l'objet (`type(self).__name__`) ;
+  - `ports()` renvoie `0`.
+
+  **`Switch(nom, ip, nb_ports=24)`** hérite d'`Equipement` (appelle `super().__init__`) :
+
+  - attribut `vlans`, une liste vide **propre à chaque switch** ;
+  - `ajouter_vlan(numero)` : ajoute le VLAN s'il est entre 1 et 4094 et pas déjà présent
+    (sinon `ValueError`) ;
+  - `ports()` renvoie `nb_ports`.
+
+  **`Routeur(nom, ip, interfaces)`** hérite d'`Equipement` :
+
+  - `interfaces` est une liste de noms ; `ports()` renvoie leur nombre ;
+  - `demarrer()` **réutilise** celui du parent puis ajoute `" (routage actif)"`.
+
+  **`total_ports(equipements)`** : somme des `ports()` d'une liste d'équipements quelconques.
+
+  ```python
+  s = Switch("sw1", "10.0.0.2", 48)
+  s.decrire()                      # "Switch sw1 (10.0.0.2)"
+  r = Routeur("r1", "10.0.0.1", ["g0/0", "g0/1"])
+  r.demarrer()                     # "r1 démarré (routage actif)"
+  total_ports([s, r])              # 50
+  ```
+starter: |
+  class Equipement:
+      def __init__(self, nom, ip):
+          pass
+
+
+  class Switch(Equipement):
+      pass
+
+
+  class Routeur(Equipement):
+      pass
+
+
+  def total_ports(equipements):
+      pass
+tests: |
+  def test_equipement():
+      "Equipement"
+      e = solution.Equipement("srv", "10.0.0.9")
+      assert e.nom == "srv" and e.ip == "10.0.0.9" and e.allume is False
+      assert e.demarrer() == "srv démarré" and e.allume is True
+      assert e.decrire() == "Equipement srv (10.0.0.9)"
+      assert e.ports() == 0
+
+  def test_switch_heritage():
+      "Switch hérite d'Equipement"
+      s = solution.Switch("sw1", "10.0.0.2", 48)
+      assert isinstance(s, solution.Equipement)
+      assert s.decrire() == "Switch sw1 (10.0.0.2)", s.decrire()
+      assert s.ports() == 48
+      assert solution.Switch("sw2", "10.0.0.3").ports() == 24
+      assert s.demarrer() == "sw1 démarré" and s.allume
+
+  def test_vlans():
+      "ajouter_vlan et listes indépendantes"
+      a = solution.Switch("a", "1.1.1.1")
+      b = solution.Switch("b", "1.1.1.2")
+      a.ajouter_vlan(10)
+      a.ajouter_vlan(20)
+      assert a.vlans == [10, 20] and b.vlans == [], "chaque switch doit avoir sa propre liste"
+      for mauvais in (10, 0, 4095):
+          try:
+              a.ajouter_vlan(mauvais)
+          except ValueError:
+              continue
+          raise AssertionError(f"ajouter_vlan({mauvais}) devrait lever ValueError")
+      assert a.vlans == [10, 20]
+
+  def test_routeur():
+      "Routeur"
+      r = solution.Routeur("r1", "10.0.0.1", ["g0/0", "g0/1"])
+      assert r.demarrer() == "r1 démarré (routage actif)"
+      assert r.allume is True, "demarrer doit réutiliser celui du parent"
+      assert r.ports() == 2
+      assert r.decrire() == "Routeur r1 (10.0.0.1)"
+
+  def test_total():
+      "total_ports (polymorphisme)"
+      parc = [solution.Switch("s", "1", 48), solution.Routeur("r", "2", ["a", "b"]), solution.Equipement("e", "3")]
+      assert solution.total_ports(parc) == 50
+      assert solution.total_ports([]) == 0
+solution: |
+  class Equipement:
+      def __init__(self, nom, ip):
+          self.nom = nom
+          self.ip = ip
+          self.allume = False
+
+      def demarrer(self):
+          self.allume = True
+          return f"{self.nom} démarré"
+
+      def decrire(self):
+          return f"{type(self).__name__} {self.nom} ({self.ip})"
+
+      def ports(self):
+          return 0
+
+
+  class Switch(Equipement):
+      def __init__(self, nom, ip, nb_ports=24):
+          super().__init__(nom, ip)
+          self.nb_ports = nb_ports
+          self.vlans = []
+
+      def ajouter_vlan(self, numero):
+          if not 1 <= numero <= 4094 or numero in self.vlans:
+              raise ValueError(f"VLAN invalide : {numero}")
+          self.vlans.append(numero)
+
+      def ports(self):
+          return self.nb_ports
+
+
+  class Routeur(Equipement):
+      def __init__(self, nom, ip, interfaces):
+          super().__init__(nom, ip)
+          self.interfaces = list(interfaces)
+
+      def demarrer(self):
+          return super().demarrer() + " (routage actif)"
+
+      def ports(self):
+          return len(self.interfaces)
+
+
+  def total_ports(equipements):
+      return sum(e.ports() for e in equipements)
+cours: |
+  ## L'héritage : « est un »
+
+  Un switch **est un** équipement : il a un nom, une IP, il démarre… plus des choses à lui.
+  L'héritage permet d'écrire le code commun **une fois** dans une classe parente, et de ne
+  décrire dans les classes filles que ce qui change.
+
+  ```python
+  class Equipement:
+      def __init__(self, nom):
+          self.nom = nom
+      def saluer(self):
+          return f"Je suis {self.nom}"
+
+  class Pare_feu(Equipement):        # entre parenthèses : la classe parente
+      def filtrer(self, paquet):
+          ...
+  ```
+
+  Un objet `Pare_feu` possède `nom` et `saluer()` sans les avoir redéfinis.
+
+  ## `super()` : appeler la version du parent
+
+  Si la classe fille définit son propre `__init__`, celui du parent **n'est plus appelé
+  automatiquement**. On le rappelle avec `super()` pour ne pas dupliquer l'initialisation :
+
+  ```python
+  class Serveur(Equipement):
+      def __init__(self, nom, os):
+          super().__init__(nom)      # initialise nom
+          self.os = os               # puis ce qui est propre au serveur
+  ```
+
+  Même principe pour enrichir une méthode : `super().methode()` exécute la version parente,
+  et on complète son résultat.
+
+  ## Redéfinir (surcharger) une méthode
+
+  Une méthode de même nom dans la fille **remplace** celle du parent pour les objets de la
+  fille. Python cherche la méthode d'abord dans la classe de l'objet, puis dans ses parents
+  (l'ordre de recherche s'appelle le MRO, visible avec `Classe.__mro__`).
+
+  ## Le polymorphisme
+
+  Une fonction qui appelle `e.ports()` sur une liste d'équipements variés n'a pas besoin de
+  savoir de quel type est chacun : chaque objet répond avec **sa** version de la méthode.
+  Pas de `if isinstance(...)` en cascade : c'est tout l'intérêt de la conception objet.
+
+  ## Le nom de la classe réelle
+
+  `type(self).__name__` renvoie le nom de la classe **effective** de l'objet : une méthode
+  écrite une fois dans le parent affiche « Switch » pour un switch.
+
+  ## Attributs mutables
+
+  Les listes s'initialisent dans `__init__` (`self.vlans = []`). Une liste déclarée au niveau
+  de la classe serait **partagée** par toutes les instances.
+
+  `isinstance(objet, Classe)` est vrai pour la classe et toutes ses parentes ;
+  `issubclass(Switch, Equipement)` teste la relation entre classes.
+docs:
+  - title: Tutoriel — héritage
+    url: https://docs.python.org/fr/3/tutorial/classes.html#inheritance
+  - title: Documentation Python — super()
+    url: https://docs.python.org/fr/3/library/functions.html#super

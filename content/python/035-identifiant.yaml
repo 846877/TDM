@@ -1,0 +1,134 @@
+title: Générer un identifiant
+level: debutant
+order: 35
+tags: [chaînes, méthodes]
+summary: Fabriquer des identifiants de connexion avec les méthodes de chaînes.
+description: |
+  Au service informatique, chaque nouvel employé reçoit un identifiant construit à partir de
+  son prénom et de son nom.
+
+  1. `identifiant(prenom, nom)` renvoie : la **première lettre du prénom** suivie du **nom**,
+     le tout en minuscules, sans espaces ni tirets, et limité à **8 caractères**.
+
+     ```python
+     identifiant("Alice", "Martin")          # "amartin"
+     identifiant("jean", "De La Fontaine")   # "jdelafon"
+     identifiant("  Léa ", "Roux-Petit")     # "lrouxpet"
+     ```
+
+     Les espaces autour du prénom et du nom sont ignorés. Les accents sont conservés.
+
+  2. `email(prenom, nom, domaine="entreprise.fr")` renvoie `prenom.nom@domaine`, en minuscules,
+     où les espaces du prénom et du nom sont remplacés par des tirets (après avoir retiré ceux
+     du début et de la fin) :
+
+     ```python
+     email("Alice", "Martin")                  # "alice.martin@entreprise.fr"
+     email("Jean", "De La Fontaine", "ex.org") # "jean.de-la-fontaine@ex.org"
+     ```
+starter: |
+  def identifiant(prenom, nom):
+      pass
+
+
+  def email(prenom, nom, domaine="entreprise.fr"):
+      pass
+tests: |
+  def test_simple():
+      "Alice Martin -> amartin"
+      r = solution.identifiant("Alice", "Martin")
+      assert r == "amartin", f"obtenu {r!r}"
+
+  def test_tronque():
+      "Limité à 8 caractères, sans espaces"
+      r = solution.identifiant("jean", "De La Fontaine")
+      assert r == "jdelafon", f"obtenu {r!r}"
+
+  def test_tiret_espaces():
+      "Tirets et espaces autour supprimés"
+      r = solution.identifiant("  Léa ", "Roux-Petit")
+      assert r == "lrouxpet", f"obtenu {r!r}"
+
+  def test_court():
+      "Nom court"
+      r = solution.identifiant("Bob", "Li")
+      assert r == "bli", f"obtenu {r!r}"
+
+  def test_email():
+      "email par défaut"
+      r = solution.email("Alice", "Martin")
+      assert r == "alice.martin@entreprise.fr", f"obtenu {r!r}"
+
+  def test_email_domaine():
+      "email avec espaces et domaine"
+      r = solution.email(" Jean", "De La Fontaine ", "ex.org")
+      assert r == "jean.de-la-fontaine@ex.org", f"obtenu {r!r}"
+solution: |
+  def identifiant(prenom, nom):
+      prenom = prenom.strip().lower()
+      nom = nom.strip().lower().replace(" ", "").replace("-", "")
+      return (prenom[0] + nom)[:8]
+
+
+  def email(prenom, nom, domaine="entreprise.fr"):
+      p = prenom.strip().lower().replace(" ", "-")
+      n = nom.strip().lower().replace(" ", "-")
+      return f"{p}.{n}@{domaine}"
+cours: |
+  ## Les chaînes sont immuables
+
+  Une chaîne ne se modifie jamais : chaque méthode **renvoie une nouvelle chaîne**.
+
+  ```python
+  nom = "  Martin "
+  nom.strip()      # renvoie "Martin"…
+  print(nom)       # … mais nom vaut toujours "  Martin "
+  nom = nom.strip()   # il faut réaffecter pour garder le résultat
+  ```
+
+  Oublier de récupérer le résultat est l'erreur la plus courante avec les chaînes.
+
+  ## Les méthodes indispensables
+
+  | Méthode | Effet | Exemple |
+  |---------|-------|---------|
+  | `lower()` / `upper()` | minuscules / majuscules | `"Ab".lower()` → `"ab"` |
+  | `capitalize()` / `title()` | majuscule initiale / à chaque mot | `"jean luc".title()` → `"Jean Luc"` |
+  | `strip()` | retire les espaces autour | `" a ".strip()` → `"a"` |
+  | `replace(a, b)` | remplace toutes les occurrences | `"a-b".replace("-", "")` → `"ab"` |
+  | `startswith(x)` / `endswith(x)` | commence / finit par | `"web01".startswith("web")` → `True` |
+  | `find(x)` | position de `x` ou `-1` | `"a@b".find("@")` → `1` |
+  | `count(x)` | nombre d'occurrences | `"a.b.c".count(".")` → `2` |
+
+  ## Chaîner les appels
+
+  Puisque chaque méthode renvoie une chaîne, on peut enchaîner :
+
+  ```python
+  "  Mon Serveur ".strip().lower().replace(" ", "_")   # "mon_serveur"
+  ```
+
+  On lit de gauche à droite : chaque étape s'applique au résultat de la précédente.
+
+  ## Extraire une partie
+
+  - `texte[0]` : le premier caractère (erreur si la chaîne est vide) ;
+  - `texte[:8]` : au plus les 8 premiers caractères — si la chaîne est plus courte, on
+    obtient la chaîne entière, **sans erreur**.
+
+  ## Concaténer
+
+  `+` colle deux chaînes, et une f-string permet d'insérer des variables dans un modèle :
+  `f"{a}.{b}@{c}"`.
+
+  ## Dans la vraie vie
+
+  Les conventions d'identifiants (`pnom`, `prenom.nom`) sont fixées par les administrateurs
+  pour les comptes Active Directory ou LDAP. Un script qui les génère doit aussi gérer les
+  **doublons** (deux Alice Martin) et souvent supprimer les accents (avec le module
+  `unicodedata`), ce que cet exercice ne demande pas.
+docs:
+  - title: Méthodes des chaînes de caractères
+    url: https://docs.python.org/fr/3/library/stdtypes.html#string-methods
+  - title: Tutoriel — les chaînes de caractères
+    url: https://docs.python.org/fr/3/tutorial/introduction.html

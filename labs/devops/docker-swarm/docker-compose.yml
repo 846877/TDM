@@ -1,0 +1,20 @@
+# Trois hôtes Docker (Docker dans Docker) pour former un cluster Swarm.
+services:
+  manager:
+    image: docker:28-dind
+    hostname: manager
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+  worker1:
+    image: docker:28-dind
+    hostname: worker1
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+  worker2:
+    image: docker:28-dind
+    hostname: worker2
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""

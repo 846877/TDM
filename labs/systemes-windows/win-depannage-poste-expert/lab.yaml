@@ -1,0 +1,389 @@
+title: Dépannage avancé d'un poste Windows
+level: expert
+order: 2
+tags: [dépannage, services, persistance, certificats, journaux, windows update, vidage mémoire, hosts, defender, réponse à incident]
+summary: Remettre d'aplomb un poste « lent et bizarre » - service bloqué par une dépendance, persistance suspecte, faux certificat racine, journaux inutilisables, profil réseau, Windows Update, vidage mémoire, hosts détourné et exclusion antivirus.
+vagrant: bundled
+machine: pc01
+description: |
+  **Contexte.** Un commercial des *Ateliers Durand* revient de salon avec son portable : « il est lent,
+  l'imprimante ne marche plus, Windows ne se met plus à jour et certains sites Microsoft affichent une
+  erreur ». Un « ami » a « optimisé » le PC sur place avec un outil trouvé en ligne. Ton travail :
+  **diagnostiquer, conserver les traces, corriger** chaque problème, et déterminer s'il s'agit d'un
+  incident de sécurité.
+
+  **Machine** : `PC01` (terminal), Windows 11 autonome (3 Go), adresse LAN 192.168.10.101.
+
+  Neuf anomalies ont été posées. Les exercices les décrivent du point de vue de l'utilisateur ou de
+  l'analyste : à toi de trouver où chercher.
+cours: |
+  ## Démarche de dépannage... et de réponse à incident
+
+  Un poste qui se comporte bizarrement peut être **mal configuré** ou **compromis**. Les deux se
+  ressemblent : services arrêtés, mises à jour bloquées, journaux qui ne montrent rien. La différence se
+  fait sur les **traces** : un programme inconnu lancé au démarrage, un certificat racine inattendu, des
+  noms de domaine redirigés, l'antivirus aveuglé. Dans le doute, on traite le poste comme compromis :
+  on **conserve les preuves avant de nettoyer** (une suppression détruit l'information dont l'équipe
+  sécurité aura besoin), on isole si nécessaire, on prévient.
+
+  ## Où Windows cache ce qui démarre tout seul
+
+  Les **points de persistance** les plus utilisés (par les logiciels légitimes comme par les maliciels) :
+
+  - les clés **Run** et **RunOnce** (`HKLM` et `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`) ;
+  - les **tâches planifiées** (`Get-ScheduledTask`, souvent avec des noms rassurants : mise à jour Adobe,
+    Google, OneDrive...) ;
+  - les **services** (`Get-CimInstance Win32_Service` pour voir le chemin de l'exécutable) ;
+  - le dossier **Démarrage**, WMI (abonnements d'événements), les extensions de navigateur.
+
+  L'outil **Autoruns** (Sysinternals) les liste tous. Un script PowerShell lancé avec `-WindowStyle Hidden`
+  et `-ExecutionPolicy Bypass` depuis `C:\ProgramData` est un signal d'alerte classique.
+
+  ## La confiance du système
+
+  Le magasin **Autorités de certification racines de confiance** décide quels certificats le système
+  accepte. Un certificat racine ajouté par un tiers permet d'intercepter le trafic HTTPS sans alerte
+  (proxy d'interception, maliciel). De même, le fichier **hosts** (`C:\Windows\System32\drivers\etc\hosts`)
+  passe avant le DNS : y rediriger des noms Microsoft empêche les mises à jour et l'antivirus de
+  fonctionner. Enfin, une **exclusion** Defender sur tout un disque désactive de fait l'antivirus.
+
+  ## Les services et leurs dépendances
+
+  Un service ne démarre que si les services dont il **dépend** démarrent. Une dépendance vers un service
+  désactivé ou cassé donne l'erreur 1068 (« le service ou le groupe de dépendance n'a pas pu démarrer »).
+  `sc.exe qc <service>` et `Get-Service -RequiredServices` montrent ces dépendances ; `sc.exe config`
+  les modifie en direct (le registre seul ne serait relu qu'au redémarrage).
+
+  ## Garder de quoi diagnostiquer
+
+  Des journaux d'événements trop petits ou configurés pour **ne pas écraser** les anciens événements
+  cessent d'enregistrer : on perd justement la période de l'incident. Un vidage mémoire désactivé prive
+  le support de toute analyse après un écran bleu. Ces réglages, souvent modifiés par des « optimiseurs »,
+  font partie des vérifications de base d'un poste.
+
+  ## Outils
+
+  `Get-Service`, `sc.exe`, `Get-ScheduledTask`, `Get-ItemProperty` (registre), `Get-ChildItem Cert:\`,
+  `Get-WinEvent -ListLog`, `wevtutil`, `Get-NetConnectionProfile`, `Get-MpPreference`, et les outils
+  Sysinternals (Autoruns, Process Explorer, Sigcheck).
+docs:
+  - title: Résolution des problèmes de Windows (support)
+    url: https://learn.microsoft.com/fr-fr/troubleshoot/windows-client/welcome-windows-client
+  - title: Autoruns (Sysinternals)
+    url: https://learn.microsoft.com/fr-fr/sysinternals/downloads/autoruns
+  - title: sc.exe config
+    url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/sc-config
+exercises:
+  - id: win-dpx-spouleur
+    title: L'imprimante ne marche plus
+    description: |
+      Le service **Spouleur d'impression** refuse de démarrer (erreur 1068). Trouve la dépendance en cause,
+      **retire-la** de la configuration du spouleur (sans toucher aux dépendances légitimes) et démarre le
+      service.
+    hint: Get-Service Spooler -RequiredServices ; sc.exe qc Spooler ; sc.exe config Spooler depend= RPCSS/http
+    cours: |
+      ```powershell
+      Start-Service Spooler                                  # erreur 1068
+      Get-Service Spooler -RequiredServices
+      sc.exe qc TDMFantome                                   # binaire inexistant, service désactivé
+      sc.exe config Spooler depend= RPCSS/http               # liste séparée par des barres obliques
+      Start-Service Spooler
+      ```
+
+      Avant de modifier, note les dépendances d'origine (sur Windows 11 : `RPCSS` et `http`). La syntaxe de
+      `sc.exe` est piégeuse : **une espace après `=`**, et la liste **remplace** l'ancienne. Le service
+      fantôme lui-même est suspect : un nom générique, un exécutable absent, posé par l'« optimiseur ».
+      Supprime-le ensuite (`sc.exe delete TDMFantome`) une fois la dépendance retirée.
+    docs:
+      - title: sc.exe config
+        url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/sc-config
+      - title: Get-Service
+        url: https://learn.microsoft.com/fr-fr/powershell/module/microsoft.powershell.management/get-service
+    ci: true
+    checks:
+      - desc: Le spouleur ne dépend plus de TDMFantome
+        run: |
+          (Get-Service Spooler).ServicesDependedOn.Name -notcontains 'TDMFantome'
+      - desc: Le spouleur est démarré
+        run: |
+          (Get-Service Spooler).Status -eq 'Running'
+    solution: |
+      $dep = @((Get-Service Spooler).ServicesDependedOn.Name | Where-Object { $_ -ne 'TDMFantome' })
+      if ($dep) { sc.exe config Spooler depend= ($dep -join '/') | Out-Null } else { sc.exe config Spooler depend= / | Out-Null }
+      Start-Service Spooler
+      sc.exe delete TDMFantome | Out-Null
+
+  - id: win-dpx-persistance
+    title: Quelque chose se lance tout seul
+    description: |
+      Un script PowerShell caché se lance au démarrage par **deux** mécanismes. Enregistre d'abord ce que tu
+      trouves dans `C:\Admin\persistance.txt` (noms et commandes), puis **supprime** les deux mécanismes et le
+      dossier qui contient le script.
+    hint: Get-ScheduledTask | Where-Object { $_.Actions.Arguments -match 'ProgramData' } ; Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Run
+    cours: |
+      ```powershell
+      $taches = Get-ScheduledTask | Where-Object { $_.Actions.Execute -match 'powershell' -or $_.Actions.Arguments -match 'ProgramData' }
+      $run = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Run
+      ($taches | Format-List TaskName, TaskPath, @{ n = 'Commande'; e = { $_.Actions.Execute + ' ' + $_.Actions.Arguments } } | Out-String) +
+          ($run | Out-String) | Set-Content C:\Admin\persistance.txt
+      Unregister-ScheduledTask -TaskName MiseAJourAdobe -Confirm:$false
+      Remove-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Run -Name OneDriveSync
+      Remove-Item C:\ProgramData\Updater -Recurse -Force
+      ```
+
+      Le nom (« MiseAJourAdobe », « OneDriveSync ») ne prouve rien : seule la **commande** compte. Un vrai
+      composant Adobe ou OneDrive lance un exécutable signé depuis `Program Files`, pas un script caché dans
+      `ProgramData`. En entreprise, on copierait aussi le script et son empreinte (`Get-FileHash`) avant de
+      le supprimer, et on chercherait la même empreinte sur les autres postes.
+    docs:
+      - title: Get-ScheduledTask
+        url: https://learn.microsoft.com/fr-fr/powershell/module/scheduledtasks/get-scheduledtask
+      - title: Clés de registre Run et RunOnce
+        url: https://learn.microsoft.com/fr-fr/windows/win32/setupapi/run-and-runonce-registry-keys
+    ci: true
+    checks:
+      - desc: C:\Admin\persistance.txt cite la tâche et la valeur Run
+        run: |
+          $t = Get-Content C:\Admin\persistance.txt -Raw -ErrorAction Stop
+          $t -match 'MiseAJourAdobe' -and $t -match 'OneDriveSync' -and $t -match 'maj\.ps1'
+      - desc: La tâche, la valeur Run et le dossier ont disparu
+        run: |
+          -not (Get-ScheduledTask -TaskName MiseAJourAdobe -ErrorAction SilentlyContinue) -and -not (Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Run).OneDriveSync -and -not (Test-Path C:\ProgramData\Updater)
+    solution: |
+      $taches = Get-ScheduledTask | Where-Object { $_.Actions.Arguments -match 'ProgramData' }
+      $run = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Run
+      ($taches | Format-List TaskName, @{ n = 'Commande'; e = { $_.Actions.Execute + ' ' + $_.Actions.Arguments } } | Out-String) + ($run | Format-List * | Out-String) | Set-Content C:\Admin\persistance.txt
+      Unregister-ScheduledTask -TaskName MiseAJourAdobe -Confirm:$false
+      Remove-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Run -Name OneDriveSync
+      Remove-Item C:\ProgramData\Updater -Recurse -Force
+
+  - id: win-dpx-certificat
+    title: Une autorité de certification de trop
+    description: |
+      Une autorité racine au nom trompeur a été ajoutée au magasin **Ordinateur › Autorités de certification
+      racines de confiance** : elle se fait passer pour DigiCert mais est **auto-signée récemment**. Exporte sa
+      partie publique dans `C:\Admin\racine-suspecte.cer` puis supprime-la du magasin.
+    hint: Get-ChildItem Cert:\LocalMachine\Root | Sort-Object NotBefore -Descending | Select-Object -First 5 Subject, NotBefore, Thumbprint
+    cours: |
+      ```powershell
+      Get-ChildItem Cert:\LocalMachine\Root | Sort-Object NotBefore -Descending |
+          Select-Object -First 5 Subject, NotBefore, NotAfter, Thumbprint
+      $c = Get-ChildItem Cert:\LocalMachine\Root | Where-Object Subject -eq 'CN=DigiCert Global Root G9'
+      Export-Certificate -Cert $c -FilePath C:\Admin\racine-suspecte.cer
+      Remove-Item "Cert:\LocalMachine\Root\$($c.Thumbprint)"
+      ```
+
+      Les vraies racines publiques ont été émises il y a des années et sont listées par Microsoft
+      (*Programme de certificats racines de confiance*) ; une racine émise **cette semaine**, auto-signée,
+      au nom d'une autorité connue mais inexistante (« G9 »), est un indicateur fort d'interception TLS.
+      `sigcheck -tv` (Sysinternals) compare le magasin à la liste officielle. Après suppression, les sites
+      chiffrés à l'aide de cette racine provoqueront des erreurs de certificat : c'est voulu.
+    docs:
+      - title: Programme de certificats racines de confiance Microsoft
+        url: https://learn.microsoft.com/fr-fr/security/trusted-root/program-requirements
+      - title: Export-Certificate
+        url: https://learn.microsoft.com/fr-fr/powershell/module/pki/export-certificate
+    ci: true
+    checks:
+      - desc: C:\Admin\racine-suspecte.cer contient le faux certificat
+        run: |
+          (New-Object Security.Cryptography.X509Certificates.X509Certificate2 'C:\Admin\racine-suspecte.cer').Subject -eq 'CN=DigiCert Global Root G9'
+      - desc: Le faux certificat n'est plus dans les racines de confiance
+        run: |
+          -not (Get-ChildItem Cert:\LocalMachine\Root | Where-Object Subject -eq 'CN=DigiCert Global Root G9')
+    solution: |
+      $c = Get-ChildItem Cert:\LocalMachine\Root | Where-Object Subject -eq 'CN=DigiCert Global Root G9' | Select-Object -First 1
+      Export-Certificate -Cert $c -FilePath C:\Admin\racine-suspecte.cer | Out-Null
+      Get-ChildItem Cert:\LocalMachine\Root | Where-Object Subject -eq 'CN=DigiCert Global Root G9' | Remove-Item
+
+  - id: win-dpx-journal
+    title: Le journal Application n'enregistre plus rien
+    description: |
+      Le journal **Application** est plein et n'accepte plus de nouveaux événements. Porte sa taille maximale
+      à **32 Mo** et fais-le **écraser** les événements les plus anciens si nécessaire.
+    hint: Get-WinEvent -ListLog Application | Format-List MaximumSizeInBytes, LogMode ; wevtutil sl Application /ms:33554432 /rt:false
+    cours: |
+      ```powershell
+      Get-WinEvent -ListLog Application | Format-List LogName, MaximumSizeInBytes, LogMode, RecordCount, FileSize
+      wevtutil sl Application /ms:33554432 /rt:false
+      ```
+
+      `LogMode` : **Circular** (écrase les plus anciens, le mode normal), **Retain** (conserve tout et
+      cesse d'écrire une fois plein), **AutoBackup** (archive le fichier plein et recommence). 1 Mo en mode
+      *Retain*, c'est quelques heures d'événements puis le silence : tout ce qui suit l'« optimisation » est
+      perdu. Sur un parc, la taille des journaux se fixe par GPO (*Modèles d'administration* › *Composants
+      Windows* › *Service de journal des événements*) et les événements importants sont collectés
+      ailleurs (transfert d'événements, SIEM).
+    docs:
+      - title: wevtutil
+        url: https://learn.microsoft.com/fr-fr/windows-server/administration/windows-commands/wevtutil
+    ci: true
+    checks:
+      - desc: Le journal Application fait au moins 32 Mo, en mode circulaire
+        run: |
+          $l = Get-WinEvent -ListLog Application
+          $l.MaximumSizeInBytes -ge 32MB -and $l.LogMode -eq 'Circular'
+    solution: |
+      wevtutil sl Application /ms:33554432 /rt:false
+
+  - id: win-dpx-profil
+    title: Le partage de fichiers ne répond plus
+    description: |
+      Depuis le salon, la carte **LAN** est restée en profil réseau **Public** : le pare-feu bloque le partage
+      et la découverte sur le réseau de l'entreprise. Remets-la en profil **Privé**.
+    hint: Get-NetConnectionProfile ; Set-NetConnectionProfile -InterfaceAlias LAN -NetworkCategory Private
+    cours: |
+      ```powershell
+      Get-NetConnectionProfile | Format-Table InterfaceAlias, Name, NetworkCategory
+      Set-NetConnectionProfile -InterfaceAlias LAN -NetworkCategory Private
+      ```
+
+      Windows choisit un profil par réseau (identifié par la passerelle, le DNS, le nom Wi-Fi) et s'en
+      souvient. Le profil **Public** applique les règles de pare-feu les plus strictes : c'est le bon choix
+      à l'hôtel ou sur un salon, pas au bureau. Sur un poste du domaine, le profil **Domaine** est détecté
+      automatiquement quand un contrôleur est joignable. Ce réglage n'est pas validé en CI : les
+      runners n'ont pas de carte `LAN`.
+    docs:
+      - title: Set-NetConnectionProfile
+        url: https://learn.microsoft.com/fr-fr/powershell/module/netconnection/set-netconnectionprofile
+    # Pas de ci : les runners Windows de GitHub n'ont pas de carte nommée LAN.
+    checks:
+      - desc: La carte LAN est en profil Privé
+        run: |
+          (Get-NetConnectionProfile -InterfaceAlias LAN).NetworkCategory -eq 'Private'
+    solution: |
+      Set-NetConnectionProfile -InterfaceAlias LAN -NetworkCategory Private
+
+  - id: win-dpx-maj
+    title: Windows ne se met plus à jour
+    description: |
+      Remets **Windows Update** en état de marche : le service ne doit plus être désactivé (démarrage
+      **manuel**, son mode normal) et la stratégie qui interdit les mises à jour automatiques doit
+      disparaître.
+    hint: Get-Service wuauserv | Select StartType ; sc.exe config wuauserv start= demand ; Get-ItemProperty HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU
+    cours: |
+      ```powershell
+      Get-Service wuauserv | Select-Object Status, StartType
+      Get-ItemProperty HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU
+      sc.exe config wuauserv start= demand
+      Remove-ItemProperty HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU -Name NoAutoUpdate
+      ```
+
+      `wuauserv` démarre normalement **à la demande** (déclenché par l'orchestrateur `UsoSvc`) : le voir
+      arrêté n'est pas anormal, le voir **désactivé** l'est. Une valeur sous `HKLM\SOFTWARE\Policies` a la
+      force d'une stratégie : si le poste était dans un domaine, une GPO pourrait la remettre, il faudrait
+      alors corriger la GPO. Un poste qui ne se met plus à jour est le premier chemin d'entrée des
+      attaquants : la conformité des mises à jour se surveille sur tout le parc.
+    docs:
+      - title: Gérer les paramètres de Windows Update
+        url: https://learn.microsoft.com/fr-fr/windows/deployment/update/waas-wu-settings
+    ci: true
+    checks:
+      - desc: Le service Windows Update n'est plus désactivé
+        run: |
+          (Get-Service wuauserv).StartType -ne 'Disabled'
+      - desc: La stratégie NoAutoUpdate est retirée
+        run: |
+          -not (Get-ItemProperty HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU -ErrorAction SilentlyContinue).NoAutoUpdate
+    solution: |
+      sc.exe config wuauserv start= demand | Out-Null
+      Remove-ItemProperty HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU -Name NoAutoUpdate
+
+  - id: win-dpx-vidage
+    title: Après l'écran bleu, rien à analyser
+    description: |
+      Le poste a fait un écran bleu la semaine dernière, mais aucun fichier de vidage n'a été écrit.
+      Configure l'**image mémoire automatique** (valeur `7`).
+    hint: HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl, valeur CrashDumpEnabled
+    cours: |
+      ```powershell
+      Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl | Format-List CrashDumpEnabled, DumpFile, MinidumpDir
+      Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl -Name CrashDumpEnabled -Value 7
+      ```
+
+      `CrashDumpEnabled` : 0 aucun, 1 image complète, 2 image du noyau, 3 image partielle (minidump), **7
+      image automatique** (le réglage par défaut : un vidage noyau, avec un fichier d'échange géré par le
+      système pour qu'il soit assez grand). Le vidage s'écrit d'abord dans le fichier d'échange : le
+      désactiver ou le réduire à l'extrême, autre « optimisation » classique, empêche aussi les vidages.
+      Le fichier `C:\Windows\MEMORY.DMP` s'analyse avec WinDbg (`!analyze -v`).
+    docs:
+      - title: Options de vidage sur incident
+        url: https://learn.microsoft.com/fr-fr/troubleshoot/windows-server/performance/memory-dump-file-options
+    ci: true
+    checks:
+      - desc: CrashDumpEnabled vaut 7
+        run: |
+          (Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl).CrashDumpEnabled -eq 7
+    solution: |
+      Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl -Name CrashDumpEnabled -Value 7 -Type DWord
+
+  - id: win-dpx-hosts
+    title: Certains sites Microsoft sont injoignables
+    description: |
+      `www.microsoft.com` et les serveurs de mise à jour pointent vers une adresse étrange. Retire du fichier
+      `hosts` **toutes** les lignes vers `203.0.113.66`, sans toucher au reste du fichier, puis vide le cache
+      DNS.
+    hint: Get-Content C:\Windows\System32\drivers\etc\hosts ; (Get-Content ...) | Where-Object { $_ -notmatch '203\.0\.113\.66' } | Set-Content ... ; Clear-DnsClientCache
+    cours: |
+      ```powershell
+      $hosts = 'C:\Windows\System32\drivers\etc\hosts'
+      Copy-Item $hosts C:\Admin\hosts.suspect                   # garder la preuve
+      (Get-Content $hosts) | Where-Object { $_ -notmatch '203\.0\.113\.66' } | Set-Content $hosts -Encoding ASCII
+      Clear-DnsClientCache
+      Resolve-DnsName www.microsoft.com
+      ```
+
+      Le fichier `hosts` est consulté **avant** le DNS : une ligne suffit à détourner un nom, pour bloquer
+      les mises à jour, l'antivirus, ou envoyer l'utilisateur vers une fausse page. `203.0.113.0/24` est une
+      plage de documentation (TEST-NET-3), utilisée ici pour l'exercice. Les parenthèses autour de
+      `Get-Content` lisent tout le fichier avant de le réécrire. Defender surveille d'ailleurs les
+      modifications de `hosts` touchant des domaines Microsoft (*SettingsModifier:Win32/HostsFileHijack*).
+    docs:
+      - title: Resolve-DnsName
+        url: https://learn.microsoft.com/fr-fr/powershell/module/dnsclient/resolve-dnsname
+    ci: true
+    checks:
+      - desc: Le fichier hosts ne contient plus 203.0.113.66
+        run: |
+          (Test-Path C:\Windows\System32\drivers\etc\hosts) -and -not (Select-String -Path C:\Windows\System32\drivers\etc\hosts -Pattern '203.0.113.66' -SimpleMatch -Quiet)
+    solution: |
+      $hosts = 'C:\Windows\System32\drivers\etc\hosts'
+      Copy-Item $hosts C:\Admin\hosts.suspect -Force
+      (Get-Content $hosts) | Where-Object { $_ -notmatch '203\.0\.113\.66' } | Set-Content $hosts -Encoding ASCII
+      Clear-DnsClientCache
+
+  - id: win-dpx-defender
+    title: L'antivirus ne voit plus rien
+    description: |
+      L'« optimiseur » a ajouté une **exclusion** Microsoft Defender qui couvre **tout le disque C:**. Retire-la,
+      puis lance une **analyse rapide**.
+    hint: (Get-MpPreference).ExclusionPath ; Remove-MpPreference -ExclusionPath 'C:\' ; Start-MpScan -ScanType QuickScan
+    cours: |
+      ```powershell
+      Get-MpPreference | Select-Object ExclusionPath, ExclusionExtension, ExclusionProcess
+      Remove-MpPreference -ExclusionPath 'C:\'
+      Start-MpScan -ScanType QuickScan
+      Get-MpThreatDetection
+      ```
+
+      Ajouter une exclusion est une technique très courante des maliciels pour échapper à l'antivirus,
+      souvent sur `C:\`, `C:\ProgramData` ou l'extension `.ps1`. Les exclusions légitimes sont rares, précises
+      et documentées (dossier d'une base de données, par exemple). En entreprise, elles sont gérées
+      centralement et la **protection contre les falsifications** (*Tamper Protection*) empêche de les
+      modifier localement. Ce réglage n'est pas validé en CI : Defender n'est pas garanti sur les runners.
+    docs:
+      - title: Configurer les exclusions de Microsoft Defender Antivirus
+        url: https://learn.microsoft.com/fr-fr/defender-endpoint/configure-exclusions-microsoft-defender-antivirus
+      - title: Remove-MpPreference
+        url: https://learn.microsoft.com/fr-fr/powershell/module/defender/remove-mppreference
+    # Pas de ci : Microsoft Defender peut être absent ou désactivé sur les runners Windows de GitHub.
+    checks:
+      - desc: Aucune exclusion ne couvre plus C:\
+        run: |
+          @((Get-MpPreference).ExclusionPath | Where-Object { $_ -match '^C:\\?$' }).Count -eq 0
+      - desc: Une analyse rapide a été lancée aujourd'hui
+        run: |
+          (Get-MpComputerStatus).QuickScanStartTime -gt (Get-Date).Date
+    solution: |
+      Remove-MpPreference -ExclusionPath 'C:\'
+      Start-MpScan -ScanType QuickScan

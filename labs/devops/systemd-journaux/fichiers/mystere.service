@@ -1,0 +1,10 @@
+[Unit]
+Description=Service mystère (lis son journal)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo "Initialisation terminée. Le code secret du jour est 7319"'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

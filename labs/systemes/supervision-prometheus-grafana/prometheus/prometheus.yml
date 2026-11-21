@@ -1,0 +1,10 @@
+# Configuration Prometheus d'Ateliers Durand (point de départ : Prometheus ne surveille que lui-même).
+# Après modification : curl -X POST http://prometheus:9090/-/reload
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

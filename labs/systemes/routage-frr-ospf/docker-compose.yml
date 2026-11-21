@@ -1,0 +1,89 @@
+# Trois routeurs FRRouting en triangle, un réseau local derrière chacun, et un réseau
+# d'administration hors bande (mgmt 10.99.0.0/24) pour s'y connecter en SSH depuis admin.
+#
+#          lan2 10.2.2.0/24 (srv2)
+#                 R2
+#   10.0.12.0/24 /  \ 10.0.23.0/24
+#              R1 ── R3
+#   lan1 10.1.1.0/24   10.0.13.0/24   lan3 10.3.3.0/24
+#   (pc1)                              (pc3)
+x-routeur: &routeur
+  build: {context: ., dockerfile: noeud/Dockerfile}
+  privileged: true            # FRRouting (zebra) pilote les tables de routage du noyau
+  sysctls: {net.ipv4.ip_forward: "1"}
+  volumes: [cles:/lab-ssh]
+x-poste: &poste
+  build: {context: ., dockerfile: noeud/Dockerfile}
+  cap_add: [NET_ADMIN]
+  volumes: [cles:/lab-ssh]
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    volumes: [cles:/lab-ssh]
+    networks:
+      mgmt: {ipv4_address: 10.99.0.5}
+  r1:
+    <<: *routeur
+    hostname: r1
+    environment:
+      ROLE: routeur
+      IFNAMES: "10.1.1.=lan 10.0.12.=vers-r2 10.0.13.=vers-r3 10.99.0.=mgmt"
+    networks:
+      mgmt: {ipv4_address: 10.99.0.11}
+      lan1: {ipv4_address: 10.1.1.254}
+      r1r2: {ipv4_address: 10.0.12.11}
+      r1r3: {ipv4_address: 10.0.13.11}
+  r2:
+    <<: *routeur
+    hostname: r2
+    environment:
+      ROLE: routeur
+      IFNAMES: "10.2.2.=lan 10.0.12.=vers-r1 10.0.23.=vers-r3 10.99.0.=mgmt"
+    networks:
+      mgmt: {ipv4_address: 10.99.0.12}
+      lan2: {ipv4_address: 10.2.2.254}
+      r1r2: {ipv4_address: 10.0.12.12}
+      r2r3: {ipv4_address: 10.0.23.12}
+  r3:
+    <<: *routeur
+    hostname: r3
+    environment:
+      ROLE: routeur
+      IFNAMES: "10.3.3.=lan 10.0.13.=vers-r1 10.0.23.=vers-r2 10.99.0.=mgmt"
+    networks:
+      mgmt: {ipv4_address: 10.99.0.13}
+      lan3: {ipv4_address: 10.3.3.254}
+      r1r3: {ipv4_address: 10.0.13.13}
+      r2r3: {ipv4_address: 10.0.23.13}
+  pc1:
+    <<: *poste
+    hostname: pc1
+    environment: {IFNAMES: "10.1.1.=lan 10.99.0.=mgmt", PASSERELLE: 10.1.1.254}
+    networks:
+      mgmt: {ipv4_address: 10.99.0.21}
+      lan1: {ipv4_address: 10.1.1.10}
+  srv2:
+    <<: *poste
+    hostname: srv2
+    environment: {IFNAMES: "10.2.2.=lan 10.99.0.=mgmt", PASSERELLE: 10.2.2.254}
+    networks:
+      mgmt: {ipv4_address: 10.99.0.22}
+      lan2: {ipv4_address: 10.2.2.10}
+  pc3:
+    <<: *poste
+    hostname: pc3
+    environment: {IFNAMES: "10.3.3.=lan 10.99.0.=mgmt", PASSERELLE: 10.3.3.254}
+    networks:
+      mgmt: {ipv4_address: 10.99.0.23}
+      lan3: {ipv4_address: 10.3.3.10}
+volumes:
+  cles:
+networks:
+  mgmt: {internal: true, ipam: {config: [{subnet: 10.99.0.0/24}]}}
+  lan1: {internal: true, ipam: {config: [{subnet: 10.1.1.0/24}]}}
+  lan2: {internal: true, ipam: {config: [{subnet: 10.2.2.0/24}]}}
+  lan3: {internal: true, ipam: {config: [{subnet: 10.3.3.0/24}]}}
+  r1r2: {internal: true, ipam: {config: [{subnet: 10.0.12.0/24}]}}
+  r1r3: {internal: true, ipam: {config: [{subnet: 10.0.13.0/24}]}}
+  r2r3: {internal: true, ipam: {config: [{subnet: 10.0.23.0/24}]}}

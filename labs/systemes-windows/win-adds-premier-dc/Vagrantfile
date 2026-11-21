@@ -1,0 +1,9 @@
+# Lab « Premier contrôleur de domaine » : un Windows Server 2022 autonome (SRV-DC01, 2 Go de RAM)
+# que l'élève promeut lui-même contrôleur du domaine durand.lan (pas de promotion automatique ici).
+require_relative "../_commun/tdm"
+
+Vagrant.configure("2") do |config|
+  TDM.lab(config, __dir__) do |lab|
+    lab.server "dc01", hostname: "SRV-DC01", ip: "192.168.10.10", primary: true, scenario: "scenario.ps1"
+  end
+end

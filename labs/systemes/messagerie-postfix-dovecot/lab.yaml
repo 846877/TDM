@@ -1,0 +1,341 @@
+title: Messagerie Postfix et Dovecot
+level: avance
+order: 10
+tags: [messagerie, smtp, imap, postfix, dovecot, relais, sasl]
+summary: Serveur SMTP Postfix, boîtes Maildir, alias, protection contre le relais ouvert, IMAP avec Dovecot, soumission authentifiée, routage vers un partenaire et gestion de la file d'attente.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** *Ateliers Durand* veut héberger sa messagerie interne (`@durand.lan`) : envoi et réception
+  avec **Postfix** (SMTP), consultation des boîtes avec **Dovecot** (IMAP), échanges directs avec le
+  serveur d'un partenaire. Le serveur ne doit surtout pas devenir un **relais ouvert** pour les spammeurs.
+
+  | Machine | Adresse | Rôle |
+  |---|---|---|
+  | `admin` | 10.176.0.5 (LAN) | ton poste (`swaks` pour SMTP, `curl` pour IMAP) — terminal du lab |
+  | `srv-mail` | 10.176.0.25 (LAN), 10.176.1.25 (Internet) | Postfix (config Ubuntu par défaut) et Dovecot installés, **non démarrés** |
+  | `ext` | 10.176.1.30 (Internet) | serveur du partenaire `partenaire.example` (boîte `contact`) |
+
+  | Compte (srv-mail) | Mot de passe |
+  |---|---|
+  | `amartin` | `Alice2026!` |
+  | `bleroy` | `Bruno2026!` |
+
+  - `ssh srv-mail`, `ssh ext` (root, par clé). Pas de systemd : `postfix start|reload|stop`, `postfix check`,
+    `dovecot` (démarrer), `doveadm reload`. Lance-les dans une session `ssh srv-mail` : en une seule
+    commande depuis admin, `ssh srv-mail dovecot` resterait bloqué (ajoute `</dev/null >/dev/null 2>&1`).
+  - Pas de DNS dans le lab : le routage vers les autres domaines passe par la table de transport
+    `/etc/postfix/transport` (déjà utilisée pour un ancien fournisseur).
+  - Envoyer un message de test depuis admin :
+    `swaks --server 10.176.0.25 --from admin@durand.lan --to amartin@durand.lan`.
+
+  Réponses à écrire dans `/root/reponses.txt` d'admin, au format `cle=valeur`.
+cours: |
+  ## Comment circule un courriel
+
+  ```
+   client (MUA)  ── SMTP 587 + authentification ──▶  serveur d'envoi (MTA Postfix)
+                                                       │ SMTP 25 (MX du domaine destinataire)
+                                                       ▼
+                                                     MTA du destinataire ── dépôt (MDA) ──▶ boîte Maildir
+   client (MUA)  ◀── IMAP 143/993 (Dovecot) ───────────────────────────────────────────────┘
+  ```
+
+  | Rôle | Protocole / port | Logiciels |
+  |------|------------------|-----------|
+  | transfert entre serveurs (MTA) | SMTP 25 | Postfix, Exim, Exchange |
+  | soumission par les clients | SMTP 587 (STARTTLS) ou 465 (TLS), **authentifié** | Postfix + SASL |
+  | consultation | IMAP 143/993, POP3 110/995 | Dovecot |
+  | stockage | mbox (`/var/mail/<user>`) ou **Maildir** (`~/Maildir/{new,cur,tmp}`) | |
+
+  Pour trouver le serveur d'un domaine, un MTA interroge le DNS (enregistrement **MX**). Ici, sans DNS, on
+  utilise une **table de transport** qui associe un domaine à un serveur.
+
+  ## Postfix : main.cf
+
+  ```
+  myhostname    = mail.durand.lan
+  mydomain      = durand.lan
+  myorigin      = $mydomain
+  mydestination = $myhostname, $mydomain, localhost     ← domaines livrés localement
+  inet_interfaces = all
+  mynetworks    = 127.0.0.0/8 10.176.0.0/24             ← clients autorisés à relayer sans authentification
+  home_mailbox  = Maildir/
+  smtpd_relay_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination
+  transport_maps = hash:/etc/postfix/transport
+  maillog_file  = /var/log/postfix.log
+  ```
+
+  `postconf -e 'clé = valeur'` modifie `main.cf`, `postconf -n` affiche les réglages non par défaut,
+  `postconf <clé>` une valeur. `master.cf` déclare les services (smtp sur 25, submission sur 587...).
+
+  ## Le relais ouvert
+
+  Un serveur qui accepte de relayer un message **de n'importe qui vers n'importe où** est un relais ouvert :
+  il sera utilisé par les spammeurs en quelques heures et finira sur les listes noires. La règle :
+
+  - livrer les messages **pour ses domaines** (`mydestination`), quelle que soit l'origine ;
+  - relayer vers l'extérieur **seulement** pour ses réseaux (`mynetworks`) ou ses utilisateurs
+    authentifiés (`permit_sasl_authenticated`) ;
+  - refuser le reste : `reject_unauth_destination` (code 554 « Relay access denied »).
+
+  ## Mémo
+
+  | Besoin                           | Commande                                         |
+  |----------------------------------|--------------------------------------------------|
+  | Vérifier / recharger             | `postfix check`, `postfix reload`                |
+  | File d'attente                   | `mailq` (ou `postqueue -p`)                      |
+  | Relancer l'envoi                 | `postqueue -f`                                   |
+  | Supprimer des messages           | `postsuper -d <ID>` ou `postsuper -d ALL deferred` |
+  | Alias                            | `/etc/aliases` puis `newaliases`                 |
+  | Tables (transport...)            | éditer puis `postmap /etc/postfix/transport`     |
+  | Journal                          | `/var/log/postfix.log` (avec `maillog_file`)     |
+  | Test SMTP                        | `swaks --server ... --to ... [--port 587 --auth PLAIN --auth-user ...]` |
+  | Test IMAP                        | `curl imap://serveur/INBOX -u 'user:mdp' -X 'EXAMINE INBOX'` |
+
+  ## Pièges courants
+
+  - Laisser `mynetworks` par défaut (tous les réseaux connectés) : le réseau Internet du serveur devient
+    « de confiance ».
+  - Oublier `postmap` après avoir modifié une table, ou `newaliases` après `/etc/aliases`.
+  - Mélanger mbox et Maildir entre Postfix et Dovecot : les messages arrivent mais les clients ne les
+    voient pas.
+  - Authentification en clair sur le réseau : en production, TLS obligatoire (`smtpd_tls_auth_only = yes`,
+    IMAPS).
+
+  ## Bonnes pratiques en entreprise
+
+  - Enregistrements DNS **SPF**, **DKIM** et **DMARC** pour que les messages ne finissent pas en spam.
+  - TLS partout, certificats valides, soumission sur 587 avec authentification.
+  - Antispam et antivirus (rspamd, ClamAV), quotas, sauvegarde des boîtes.
+  - Surveiller la file d'attente : une file qui grossit révèle un problème (destination injoignable,
+    compte piraté qui envoie du spam).
+docs:
+  - title: Documentation de Postfix
+    url: https://www.postfix.org/documentation.html
+  - title: Postfix - paramètres de main.cf (postconf.5)
+    url: https://www.postfix.org/postconf.5.html
+  - title: Documentation de Dovecot
+    url: https://doc.dovecot.org/
+  - title: Ubuntu Server - installer Postfix
+    url: https://documentation.ubuntu.com/server/how-to/mail-services/install-postfix/
+exercises:
+  - id: mail-postfix-base
+    title: Configurer et démarrer Postfix
+    cours: |
+      Postfix se configure dans `/etc/postfix/main.cf`, de préférence avec `postconf -e 'clé = valeur'` qui
+      remplace proprement une ligne. Les réglages de base :
+
+      | Paramètre        | Rôle                                                       |
+      |------------------|------------------------------------------------------------|
+      | `myhostname`     | nom complet du serveur (annoncé dans la bannière SMTP)     |
+      | `mydomain`, `myorigin` | domaine ajouté aux adresses sans domaine             |
+      | `mydestination`  | domaines dont les boîtes sont **sur ce serveur**           |
+      | `mynetworks`     | réseaux autorisés à envoyer vers l'extérieur sans s'authentifier |
+      | `inet_interfaces`| interfaces d'écoute (`all`)                                |
+      | `maillog_file`   | fichier journal (utile sans syslog)                        |
+
+      `postfix check` vérifie l'installation, `postfix start` démarre. `swaks` envoie un message de test
+      et affiche tout le dialogue SMTP (codes 250 = accepté).
+    description: |
+      Sur `srv-mail`, configure Postfix : nom `mail.durand.lan`, domaine `durand.lan` (les adresses
+      `@durand.lan` sont livrées localement), écoute sur toutes les interfaces, réseaux de confiance limités
+      à la boucle locale et au LAN `10.176.0.0/24`, journal dans `/var/log/postfix.log`. Démarre Postfix et
+      envoie un message à `amartin@durand.lan` depuis admin.
+    hint: |
+      postconf -e 'myhostname = mail.durand.lan' 'mydomain = durand.lan' 'myorigin = $mydomain' 'mydestination = $myhostname, $mydomain, localhost' 'inet_interfaces = all' 'mynetworks = 127.0.0.0/8 10.176.0.0/24' 'maillog_file = /var/log/postfix.log' ; postfix start
+    checks:
+      - desc: Postfix accepte un message pour amartin@durand.lan
+        run: |
+          swaks --server 10.176.0.25 --from admin@durand.lan --to amartin@durand.lan --header 'Subject: verif base' >/dev/null 2>&1
+      - desc: Domaine local, réseaux de confiance et journal
+        run: |
+          ssh srv-mail 'postconf -hx mydestination | grep -q "durand.lan" && test "$(postconf -h mynetworks | tr -s " ,")" = "127.0.0.0/8 10.176.0.0/24" && test -s /var/log/postfix.log'
+
+  - id: mail-maildir
+    title: Livrer dans des boîtes Maildir
+    cours: |
+      Par défaut, Postfix ajoute les messages à la fin d'un fichier unique `/var/mail/<utilisateur>` (format
+      **mbox**). Le format **Maildir** range chaque message dans son propre fichier :
+
+      ```
+      ~/Maildir/new/   messages pas encore vus par un client
+      ~/Maildir/cur/   messages déjà vus
+      ~/Maildir/tmp/   écriture en cours
+      ```
+
+      Plus robuste (pas de verrou, pas de corruption d'un gros fichier) et parfaitement géré par Dovecot. Il
+      suffit de `home_mailbox = Maildir/` (la barre oblique finale est obligatoire : elle signifie
+      « Maildir »). Postfix crée l'arborescence à la première livraison.
+    description: |
+      Fais livrer les messages dans `~/Maildir/` de chaque utilisateur, puis vérifie qu'un nouveau message
+      pour `amartin` arrive dans `/home/amartin/Maildir/new/`.
+    hint: postconf -e 'home_mailbox = Maildir/' ; postfix reload ; swaks ... ; ls /home/amartin/Maildir/new/
+    checks:
+      - desc: Un message arrive dans /home/amartin/Maildir/new
+        run: |
+          s="maildir-$$-$(date +%s)"; swaks --server 10.176.0.25 --from admin@durand.lan --to amartin@durand.lan --header "Subject: $s" >/dev/null 2>&1; sleep 2; ssh srv-mail "grep -rlq '$s' /home/amartin/Maildir/new/"
+
+  - id: mail-alias
+    title: Une adresse partagée (alias)
+    cours: |
+      Un **alias** redirige une adresse vers un ou plusieurs destinataires : adresses de service
+      (`contact@`, `compta@`), départ d'un salarié, adresses obligatoires (`postmaster@`, `abuse@`).
+
+      Le fichier `/etc/aliases` contient des lignes `alias: destinataire1, destinataire2`. Postfix lit une
+      version indexée du fichier : après chaque modification, `newaliases` (ou `postalias /etc/aliases`)
+      la régénère. `postmap -q contact hash:/etc/aliases` (ou `postalias -q`) affiche la résolution.
+
+      Pour des domaines virtuels ou des listes plus grandes, on utilise `virtual_alias_maps`.
+
+      Après chaque modification de `/etc/aliases`, lance `newaliases` : Postfix lit la version compilée, pas le fichier texte.
+    description: |
+      Crée l'adresse **`contact@durand.lan`**, distribuée à la fois à `amartin` et à `bleroy`.
+    hint: |
+      echo 'contact: amartin, bleroy' >> /etc/aliases ; newaliases
+    checks:
+      - desc: Un message à contact@ arrive chez amartin et bleroy
+        run: |
+          s="alias-$$-$(date +%s)"; swaks --server 10.176.0.25 --from admin@durand.lan --to contact@durand.lan --header "Subject: $s" >/dev/null 2>&1; sleep 2; ssh srv-mail "grep -rlq '$s' /home/amartin/Maildir/new/ && grep -rlq '$s' /home/bleroy/Maildir/new/"
+
+  - id: mail-anti-relais
+    title: Ne pas être un relais ouvert
+    cours: |
+      La directive `smtpd_relay_restrictions` décide qui peut faire **relayer** un message vers un domaine
+      qui n'est pas le nôtre. Sur Ubuntu, la valeur par défaut se termine par `defer_unauth_destination` :
+      le serveur répond « réessayez plus tard » (code 4xx) au lieu de refuser franchement, et le spammeur
+      insiste.
+
+      `permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination` refuse définitivement
+      (code **554 Relay access denied**) ce qui ne vient ni de nos réseaux ni d'un utilisateur authentifié.
+
+      Teste depuis une machine extérieure (`ssh ext swaks ...`) : un message pour un domaine étranger doit
+      être refusé, un message pour `@durand.lan` accepté.
+    description: |
+      Depuis Internet (machine `ext`), le serveur doit **refuser définitivement** de relayer vers d'autres
+      domaines, tout en acceptant les messages destinés à `@durand.lan`.
+    hint: postconf -e 'smtpd_relay_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination' ; postfix reload ; ssh ext swaks --server 10.176.1.25 --from x@autre.example --to y@spam.example
+    checks:
+      - desc: Relais refusé depuis Internet (554)
+        run: ssh ext 'swaks --server 10.176.1.25 --from pirate@autre.example --to victime@spam.example 2>&1' | grep -q '554 .*Relay access denied'
+      - desc: Les messages pour durand.lan restent acceptés depuis Internet
+        run: ssh ext 'swaks --server 10.176.1.25 --from contact@partenaire.example --to amartin@durand.lan' >/dev/null 2>&1
+
+  - id: mail-dovecot-imap
+    title: Consulter les boîtes en IMAP
+    cours: |
+      **Dovecot** sert les boîtes aux clients (Thunderbird, Outlook, téléphones) en IMAP. Sa configuration
+      est découpée dans `/etc/dovecot/conf.d/` :
+
+      - `10-mail.conf` : `mail_location = maildir:~/Maildir` (même format que Postfix !) ;
+      - `10-auth.conf` : `disable_plaintext_auth` ; à `no` seulement pour ce lab sans TLS — en production on
+        garde `yes` et on utilise IMAPS (993) ;
+      - les comptes sont ici les comptes Linux (PAM).
+
+      `dovecot` démarre le service, `doveconf -n` affiche la configuration effective, `doveadm mailbox status
+      -u <user> messages INBOX` compte les messages. Côté client :
+      `curl imap://<serveur>/INBOX -u '<user>:<mdp>' -X 'EXAMINE INBOX'`.
+    description: |
+      Configure Dovecot pour lire les boîtes **Maildir** et accepter l'authentification sans TLS (lab
+      uniquement), puis démarre-le. Depuis admin, `amartin` doit voir ses messages en IMAP.
+    hint: mail_location = maildir:~/Maildir dans /etc/dovecot/conf.d/10-mail.conf ; disable_plaintext_auth = no dans 10-auth.conf ; dovecot ; curl imap://10.176.0.25/INBOX -u 'amartin:Alice2026!' -X 'EXAMINE INBOX'
+    checks:
+      - desc: amartin voit ses messages en IMAP
+        run: |
+          n=$(curl -s --max-time 8 imap://10.176.0.25/INBOX -u 'amartin:Alice2026!' -X 'EXAMINE INBOX' | sed -n 's/^\* \([0-9]*\) EXISTS.*/\1/p'); test -n "$n" && test "$n" -ge 1
+      - desc: Mauvais mot de passe refusé
+        run: |
+          curl -s --max-time 8 imap://10.176.0.25/INBOX -u 'amartin:Alice2026!' -X 'EXAMINE INBOX' >/dev/null && ! curl -s --max-time 8 imap://10.176.0.25/INBOX -u 'amartin:mauvais' -X 'EXAMINE INBOX' >/dev/null
+
+  - id: mail-soumission
+    title: Envoi authentifié sur le port 587
+    cours: |
+      Les utilisateurs nomades ne sont pas dans `mynetworks` : ils doivent **s'authentifier** pour envoyer.
+      Le service **submission** (port 587) se déclare dans `/etc/postfix/master.cf` (il y est en
+      commentaire) avec des options propres :
+
+      ```
+      submission inet n - y - - smtpd
+        -o smtpd_sasl_auth_enable=yes
+        -o smtpd_relay_restrictions=permit_sasl_authenticated,reject
+      ```
+
+      Postfix délègue la vérification des mots de passe à Dovecot (SASL) : `smtpd_sasl_type = dovecot` et
+      `smtpd_sasl_path = private/auth` dans `main.cf`, et côté Dovecot (`10-master.conf`, `service auth`)
+      une socket `unix_listener /var/spool/postfix/private/auth` (mode `0660`, utilisateur et groupe
+      `postfix`). `swaks --port 587 --auth PLAIN --auth-user ... --auth-password ...` teste.
+    description: |
+      Active le port **587** : un utilisateur authentifié (`amartin`) peut y envoyer vers l'extérieur
+      (`contact@partenaire.example`) ; sans authentification, le port 587 refuse tout relais, même depuis le
+      LAN.
+    hint: |
+      master.cf → décommenter submission + -o smtpd_sasl_auth_enable=yes -o smtpd_relay_restrictions=permit_sasl_authenticated,reject ; postconf -e 'smtpd_sasl_type = dovecot' 'smtpd_sasl_path = private/auth' ; 10-master.conf → unix_listener /var/spool/postfix/private/auth { mode = 0660 user = postfix group = postfix } ; doveadm reload ; postfix reload
+    checks:
+      - desc: Envoi authentifié accepté sur 587
+        run: |
+          swaks --server 10.176.0.25 --port 587 --auth PLAIN --auth-user amartin --auth-password 'Alice2026!' --from amartin@durand.lan --to contact@partenaire.example --header 'Subject: soumission' >/dev/null 2>&1
+      - desc: Sans authentification, relais refusé sur 587
+        run: |
+          nc -z -w 3 10.176.0.25 587 && ! swaks --server 10.176.0.25 --port 587 --from admin@durand.lan --to contact@partenaire.example >/dev/null 2>&1
+      - desc: Mauvais mot de passe refusé
+        run: |
+          nc -z -w 3 10.176.0.25 587 && ! swaks --server 10.176.0.25 --port 587 --auth PLAIN --auth-user amartin --auth-password mauvais --from amartin@durand.lan --to contact@partenaire.example >/dev/null 2>&1
+
+  - id: mail-transport-partenaire
+    title: Router les messages vers le partenaire
+    cours: |
+      Pour joindre un domaine, Postfix cherche normalement son enregistrement MX dans le DNS. Une **table de
+      transport** permet d'imposer la route d'un domaine :
+
+      ```
+      # /etc/postfix/transport
+      partenaire.example   smtp:[10.176.1.30]
+      ```
+
+      Les crochets demandent d'utiliser directement cette adresse, sans chercher de MX. La table est déclarée
+      par `transport_maps = hash:/etc/postfix/transport` (déjà en place ici) et doit être indexée par
+      `postmap /etc/postfix/transport` après chaque modification. `postqueue -f` relance immédiatement les
+      messages en attente. Le journal montre `status=sent` à la livraison.
+
+      Après `postmap`, un `postfix reload` n'est pas nécessaire pour une table hash, mais `postqueue -f` relance les envois en attente.
+    description: |
+      Fais livrer les messages pour **`partenaire.example`** directement au serveur `10.176.1.30`. Les
+      messages déjà en attente pour ce domaine doivent partir, et un nouveau message pour
+      `contact@partenaire.example` doit arriver dans la boîte `contact` d'`ext`.
+    hint: echo 'partenaire.example smtp:[10.176.1.30]' >> /etc/postfix/transport ; postmap /etc/postfix/transport ; postqueue -f
+    checks:
+      - desc: Un message pour contact@partenaire.example arrive chez le partenaire
+        run: |
+          s="partenaire-$$-$(date +%s)"; swaks --server 10.176.0.25 --from amartin@durand.lan --to contact@partenaire.example --header "Subject: $s" >/dev/null 2>&1; sleep 4; ssh ext "grep -rlq '$s' /home/contact/Maildir/new/"
+      - desc: Plus aucun message en attente pour partenaire.example
+        run: |
+          ssh srv-mail 'postqueue -p' | grep -q . && ! ssh srv-mail 'postqueue -p' | grep -q 'partenaire.example'
+
+  - id: mail-file-attente
+    title: Purger une file d'attente bloquée
+    cours: |
+      Quand une destination est injoignable, Postfix garde les messages dans la file **deferred** et
+      réessaie pendant 5 jours (`maximal_queue_lifetime`) avant de prévenir l'expéditeur.
+
+      - `mailq` (ou `postqueue -p`) liste la file : identifiant, taille, date, expéditeur, raison du report
+        et destinataires ;
+      - `postsuper -d <ID>` supprime un message ; `postsuper -d ALL deferred` vide toute la file différée
+        (à éviter s'il y a d'autres messages) ;
+      - `postcat -q <ID>` affiche un message.
+
+      Pour supprimer seulement les messages d'un destinataire, on filtre la sortie de `mailq` (avec `awk` ou
+      `grep -B`) pour récupérer leurs identifiants, puis on les passe à `postsuper -d -`.
+    description: |
+      Des messages pour l'ancien fournisseur (`ancien-fournisseur.example`, fermé) bloquent dans la file.
+      Compte-les, puis supprime-les **sans** toucher aux éventuels autres messages.
+
+      Réponse : `nb_bloques=` (le nombre de messages bloqués pour ce domaine).
+    hint: mailq ; mailq | grep -B2 ancien-fournisseur ; postsuper -d <ID> (pour chaque identifiant)
+    checks:
+      - desc: Nombre de messages bloqués
+        run: grep -Eq '^nb_bloques *= *3 *$' /root/reponses.txt
+      - desc: Plus aucun message pour ancien-fournisseur.example
+        run: |
+          ssh srv-mail 'postqueue -p' | grep -q . && ! ssh srv-mail 'postqueue -p' | grep -q 'ancien-fournisseur'

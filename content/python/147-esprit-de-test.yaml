@@ -1,0 +1,222 @@
+title: Écrire des tests qui trouvent les bugs
+level: intermediaire
+order: 47
+tags: [tests, assert, cas limites, fonctions]
+summary: Penser comme une moulinette — démasquer des implémentations buguées.
+description: |
+  Cette fois, c'est **toi** qui écris la moulinette ! On te donnera plusieurs
+  implémentations de deux fonctions, certaines correctes, d'autres buguées. Ta fonction de
+  test doit renvoyer `True` si l'implémentation reçue est correcte, `False` sinon.
+
+  **1. `tester_est_bissextile(f)`** — `f(annee)` doit renvoyer `True` si l'année est
+  bissextile (divisible par 4, sauf par 100, sauf par 400), `False` sinon.
+
+  **2. `tester_moyenne(f)`** — `f(notes)` doit renvoyer la moyenne d'une liste de nombres,
+  arrondie à 2 décimales, et `None` si la liste est vide. Elle **ne doit pas modifier** la
+  liste reçue.
+
+  Ta fonction de test appelle `f` sur des cas bien choisis et compare aux résultats attendus.
+  Si `f` lève une exception, c'est aussi un échec (renvoie `False`).
+
+  ```python
+  def bonne(annee):
+      return annee % 4 == 0 and (annee % 100 != 0 or annee % 400 == 0)
+
+  def buguee(annee):
+      return annee % 4 == 0
+
+  tester_est_bissextile(bonne)    # True
+  tester_est_bissextile(buguee)   # False
+  ```
+
+  La moulinette te soumet **une dizaine d'implémentations** différentes : à toi de choisir
+  des cas qui couvrent toutes les règles et les cas limites.
+starter: |
+  def tester_est_bissextile(f):
+      pass
+
+
+  def tester_moyenne(f):
+      pass
+tests: |
+  def b_ok(a):
+      return a % 4 == 0 and (a % 100 != 0 or a % 400 == 0)
+
+  def b_ok2(a):
+      if a % 400 == 0:
+          return True
+      if a % 100 == 0:
+          return False
+      return a % 4 == 0
+
+  def b_simple(a):
+      return a % 4 == 0
+
+  def b_sans_400(a):
+      return a % 4 == 0 and a % 100 != 0
+
+  def b_inverse(a):
+      return a % 4 == 0 and (a % 100 == 0 or a % 400 != 0)
+
+  def b_texte(a):
+      return "oui" if b_ok(a) else "non"
+
+  def b_plante(a):
+      if a > 2000:
+          raise ValueError("pas géré")
+      return b_ok(a)
+
+  def b_2100(a):
+      return b_ok(a) or a == 2100
+
+  def m_ok(notes):
+      return round(sum(notes) / len(notes), 2) if notes else None
+
+  def m_vide_zero(notes):
+      return round(sum(notes) / len(notes), 2) if notes else 0
+
+  def m_plante_vide(notes):
+      return round(sum(notes) / len(notes), 2)
+
+  def m_pas_arrondi(notes):
+      return sum(notes) / len(notes) if notes else None
+
+  def m_entiere(notes):
+      return sum(notes) // len(notes) if notes else None
+
+  def m_modifie(notes):
+      if not notes:
+          return None
+      notes.sort()
+      return round(sum(notes) / len(notes), 2)
+
+  def m_vide(notes):
+      if not notes:
+          return None
+      notes_pos = [n for n in notes if n > 0]
+      return round(sum(notes_pos) / len(notes_pos), 2)
+
+  def m_arrondi1(notes):
+      return round(sum(notes) / len(notes), 1) if notes else None
+
+  def verifier(testeur, f, attendu):
+      r = testeur(f)
+      assert r is attendu, f"{testeur.__name__}({f.__name__}) devrait renvoyer {attendu}, a renvoyé {r!r}"
+
+  def test_bissextile_correctes():
+      "Les implémentations correctes sont acceptées"
+      verifier(solution.tester_est_bissextile, b_ok, True)
+      verifier(solution.tester_est_bissextile, b_ok2, True)
+
+  def test_bissextile_bugs():
+      "Les implémentations buguées sont refusées"
+      for f in (b_simple, b_sans_400, b_inverse, b_texte, b_plante, b_2100):
+          verifier(solution.tester_est_bissextile, f, False)
+
+  def test_moyenne_correcte():
+      "La moyenne correcte est acceptée"
+      verifier(solution.tester_moyenne, m_ok, True)
+
+  def test_moyenne_bugs():
+      "Les moyennes buguées sont refusées"
+      for f in (m_vide_zero, m_plante_vide, m_pas_arrondi, m_entiere, m_modifie, m_vide, m_arrondi1):
+          verifier(solution.tester_moyenne, f, False)
+solution: |
+  def tester_est_bissextile(f):
+      cas = {2024: True, 2023: False, 1900: False, 2100: False, 2000: True,
+             2400: True, 1996: True, 2001: False, 4: True, 2026: False}
+      try:
+          for annee, attendu in cas.items():
+              if f(annee) is not attendu:
+                  return False
+      except Exception:
+          return False
+      return True
+
+
+  def tester_moyenne(f):
+      cas = [
+          ([10, 20], 15),
+          ([12, 15, 18], 15),
+          ([1, 2, 2], 1.67),
+          ([7], 7),
+          ([0, 10], 5),
+          ([-4, 4, 3], 1),
+          ([2.5, 3.25], 2.88),
+      ]
+      try:
+          for notes, attendu in cas:
+              copie = list(notes)
+              donnees = list(notes)
+              r = f(donnees)
+              if donnees != copie:
+                  return False
+              if isinstance(r, bool) or not isinstance(r, (int, float)) or r != attendu:
+                  return False
+          non_triee = [18, 3, 9]
+          f(non_triee)
+          if non_triee != [18, 3, 9]:
+              return False
+          if f([]) is not None:
+              return False
+      except Exception:
+          return False
+      return True
+cours: |
+  ## Un test, c'est quoi ?
+
+  Un test appelle le code avec une entrée choisie et vérifie que le résultat est celui
+  attendu. Les moulinettes de cette plateforme sont des tests ; dans un vrai projet, on les
+  écrit avec `unittest` ou `pytest` et on les lance à chaque modification.
+
+  ```python
+  def test_addition():
+      assert addition(2, 3) == 5, "2 + 3 devrait faire 5"
+  ```
+
+  `assert condition, message` lève une `AssertionError` si la condition est fausse.
+
+  ## Choisir ses cas : les classes d'équivalence
+
+  Tester toutes les entrées est impossible. On les regroupe en **classes** qui devraient se
+  comporter pareil, et on prend un représentant de chacune. Pour une règle « divisible par 4,
+  sauf par 100, sauf par 400 », il faut au minimum :
+
+  - une année non divisible par 4 ;
+  - une divisible par 4 mais pas par 100 ;
+  - une divisible par 100 mais pas par 400 ;
+  - une divisible par 400.
+
+  Chaque règle de l'énoncé doit être couverte par au moins un cas, sinon un bug sur cette
+  règle passe inaperçu.
+
+  ## Les cas limites
+
+  Les bugs se cachent aux frontières : liste vide, un seul élément, zéro, valeurs négatives,
+  bornes exactes d'un intervalle, très grandes valeurs. Pose-toi toujours la question
+  « et si l'entrée est vide ? ».
+
+  ## Vérifier aussi le type et les effets de bord
+
+  - `2 == 2.0` et `1 == True` sont vrais en Python : pour exiger un booléen, compare avec
+    `is True` ; pour exiger un nombre, vérifie le type.
+  - Une fonction ne doit pas modifier ses entrées : garde une copie, appelle la fonction,
+    compare. Utilise une entrée **non triée** pour détecter un tri sur place.
+  - Une exception inattendue est un échec : encadre les appels dans un `try`.
+
+  ## Des cas qui distinguent
+
+  Un bon cas de test fait échouer une implémentation fausse **plausible**. Pour une moyenne
+  arrondie à 2 décimales, `[10, 20]` (moyenne 15) ne détecte ni l'oubli de l'arrondi, ni une
+  division entière : il faut une moyenne non entière comme `[1, 2, 2]` (1,666…).
+
+  ## Le test d'abord
+
+  Le **TDD** (*Test-Driven Development*) consiste à écrire les tests **avant** le code : on
+  réfléchit au comportement attendu, puis on code jusqu'à ce que tout passe. Même sans aller
+  jusque-là, écrire quelques tests en même temps que le code évite bien des régressions.
+docs:
+  - title: Module unittest
+    url: https://docs.python.org/fr/3/library/unittest.html
+  - title: Référence — l'instruction assert
+    url: https://docs.python.org/fr/3/reference/simple_stmts.html#the-assert-statement

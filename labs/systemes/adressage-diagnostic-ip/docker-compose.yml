@@ -1,0 +1,57 @@
+# Réseau d'« Ateliers Durand » : un LAN utilisateurs et un réseau serveurs reliés par un routeur.
+#   LAN       192.168.10.0/24 : admin (.50), imprimante (.77), routeur (.254)
+#   SERVEURS  10.0.20.0/24    : routeur (.254), srv-web (.10), srv-bdd (.30), srv-dns (.53)
+services:
+  admin:
+    build: ./admin
+    hostname: admin
+    cap_add: [NET_ADMIN]
+    networks:
+      lan:
+        ipv4_address: 192.168.10.50
+        mac_address: "02:42:c0:a8:0a:32"
+  routeur:
+    build: ./noeud
+    hostname: routeur
+    environment: {ROLE: routeur}
+    sysctls: {net.ipv4.ip_forward: "1"}
+    networks:
+      lan: {ipv4_address: 192.168.10.254}
+      serveurs: {ipv4_address: 10.0.20.254}
+  imprimante:
+    build: ./noeud
+    hostname: imprimante
+    environment: {ROLE: imprimante, PASSERELLE: 192.168.10.254}
+    cap_add: [NET_ADMIN]
+    networks:
+      lan: {ipv4_address: 192.168.10.77}
+  srv-web:
+    build: ./noeud
+    hostname: srv-web
+    environment: {ROLE: web, PASSERELLE: 10.0.20.254}
+    cap_add: [NET_ADMIN]
+    networks:
+      serveurs: {ipv4_address: 10.0.20.10}
+  srv-bdd:
+    build: ./noeud
+    hostname: srv-bdd
+    environment: {ROLE: bdd, PASSERELLE: 10.0.20.254}
+    cap_add: [NET_ADMIN]
+    networks:
+      serveurs: {ipv4_address: 10.0.20.30}
+  srv-dns:
+    build: ./noeud
+    hostname: srv-dns
+    environment: {ROLE: dns, PASSERELLE: 10.0.20.254}
+    cap_add: [NET_ADMIN]
+    networks:
+      serveurs: {ipv4_address: 10.0.20.53}
+networks:
+  lan:
+    internal: true
+    ipam:
+      config: [{subnet: 192.168.10.0/24}]
+  serveurs:
+    internal: true
+    ipam:
+      config: [{subnet: 10.0.20.0/24}]

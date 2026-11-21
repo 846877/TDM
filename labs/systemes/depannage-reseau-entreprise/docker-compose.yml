@@ -1,0 +1,65 @@
+# Réseau d'entreprise en panne : les pannes sont injectées au démarrage par noeud/role.sh.
+#   LAN       192.168.20.0/24 : admin .5, poste .10, routeur .254
+#   SERVEURS  10.20.0.0/24    : srv-web .10, srv-dns .53, routeur .254
+#   WAN       198.51.100.0/24 : routeur .2, internet .80
+#   MGMT      10.99.5.0/24    : réseau d'administration hors bande (ssh et vérifications)
+x-noeud: &noeud
+  build: {context: ., dockerfile: noeud/Dockerfile}
+  cap_add: [NET_ADMIN]
+  volumes: [cles:/lab-ssh]
+services:
+  admin:
+    build: {context: ., dockerfile: admin/Dockerfile}
+    hostname: admin
+    cap_add: [NET_ADMIN]
+    environment: {IFNAMES: "192.168.20.=lan 10.99.5.=mgmt", PASSERELLE: 192.168.20.254}
+    volumes: [cles:/lab-ssh]
+    networks:
+      lan: {ipv4_address: 192.168.20.5}
+      mgmt: {ipv4_address: 10.99.5.5}
+  routeur:
+    <<: *noeud
+    hostname: routeur
+    # privileged : le rôle modifie les sysctl (lecture seule sinon).
+    privileged: true
+    environment: {ROLE: routeur, IFNAMES: "192.168.20.=lan 10.20.0.=serveurs 198.51.100.=wan 10.99.5.=mgmt"}
+    networks:
+      lan: {ipv4_address: 192.168.20.254}
+      serveurs: {ipv4_address: 10.20.0.254}
+      wan: {ipv4_address: 198.51.100.2}
+      mgmt: {ipv4_address: 10.99.5.254}
+  poste:
+    <<: *noeud
+    hostname: poste
+    environment: {ROLE: poste, IFNAMES: "192.168.20.=lan 10.99.5.=mgmt", PASSERELLE: 192.168.20.254}
+    networks:
+      lan: {ipv4_address: 192.168.20.10}
+      mgmt: {ipv4_address: 10.99.5.10}
+  srv-web:
+    <<: *noeud
+    hostname: srv-web
+    environment: {ROLE: web, IFNAMES: "10.20.0.=serveurs 10.99.5.=mgmt", PASSERELLE: 10.20.0.254}
+    networks:
+      serveurs: {ipv4_address: 10.20.0.10}
+      mgmt: {ipv4_address: 10.99.5.20}
+  srv-dns:
+    <<: *noeud
+    hostname: srv-dns
+    environment: {ROLE: dns, IFNAMES: "10.20.0.=serveurs 10.99.5.=mgmt", PASSERELLE: 10.20.0.254}
+    networks:
+      serveurs: {ipv4_address: 10.20.0.53}
+      mgmt: {ipv4_address: 10.99.5.53}
+  internet:
+    <<: *noeud
+    hostname: internet
+    environment: {ROLE: internet, IFNAMES: "198.51.100.=wan 10.99.5.=mgmt"}
+    networks:
+      wan: {ipv4_address: 198.51.100.80}
+      mgmt: {ipv4_address: 10.99.5.80}
+volumes:
+  cles:
+networks:
+  lan: {internal: true, ipam: {config: [{subnet: 192.168.20.0/24}]}}
+  serveurs: {internal: true, ipam: {config: [{subnet: 10.20.0.0/24}]}}
+  wan: {internal: true, ipam: {config: [{subnet: 198.51.100.0/24}]}}
+  mgmt: {internal: true, ipam: {config: [{subnet: 10.99.5.0/24}]}}

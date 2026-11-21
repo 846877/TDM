@@ -1,0 +1,213 @@
+title: Remplacer temporairement un attribut
+level: avance
+order: 29
+tags: [with, context manager, décorateurs, introspection]
+summary: Recréer une version simplifiée de unittest.mock.patch.
+description: |
+  Pour tester du code, on a souvent besoin de remplacer **temporairement** une fonction ou une
+  configuration, puis de tout remettre en place. Crée une classe `remplacer(cible, nom, valeur)` :
+
+  1. **Gestionnaire de contexte** (`__enter__` / `__exit__`) :
+     - à l'entrée, `cible.<nom>` prend la valeur `valeur`, et `with ... as v` donne `valeur` ;
+     - à la sortie, l'ancienne valeur est **restaurée**, même si une exception a été levée
+       (l'exception continue de se propager) ;
+     - si l'attribut n'existait pas avant, il est **supprimé** à la sortie ;
+     - les remplacements peuvent être **imbriqués** sur le même attribut ;
+     - un même objet `remplacer` peut être réutilisé dans plusieurs `with` successifs.
+
+  2. **Décorateur** : `@remplacer(cible, nom, valeur)` appliqué à une fonction active le remplacement
+     pendant chaque appel de la fonction (pense à `functools.wraps`).
+
+  3. **Dictionnaires** : si `cible` est un `dict`, c'est la **clé** `nom` qui est remplacée
+     (et retirée à la sortie si elle n'existait pas).
+
+  ```python
+  import math
+  with remplacer(math, "pi", 3):
+      math.pi          # 3
+  math.pi              # 3.141592653589793
+
+  @remplacer(config, "DEBUG", True)
+  def test_mode_debug(): ...
+  ```
+starter: |
+  import functools
+
+
+  class remplacer:
+      def __init__(self, cible, nom, valeur):
+          pass
+tests: |
+  import types
+
+  def test_simple():
+      "Remplacement puis restauration"
+      obj = types.SimpleNamespace(x=1)
+      with solution.remplacer(obj, "x", 2) as v:
+          assert obj.x == 2 and v == 2
+      assert obj.x == 1
+
+  def test_exception():
+      "Restauration même en cas d'exception, qui se propage"
+      obj = types.SimpleNamespace(x=1)
+      try:
+          with solution.remplacer(obj, "x", 2):
+              raise KeyError("boum")
+      except KeyError:
+          pass
+      else:
+          raise AssertionError("l'exception ne doit pas être avalée")
+      assert obj.x == 1
+
+  def test_absent():
+      "Attribut inexistant supprimé à la sortie"
+      obj = types.SimpleNamespace()
+      with solution.remplacer(obj, "nouveau", 5):
+          assert obj.nouveau == 5
+      assert not hasattr(obj, "nouveau")
+
+  def test_imbrique():
+      "Remplacements imbriqués"
+      obj = types.SimpleNamespace(x="a")
+      with solution.remplacer(obj, "x", "b"):
+          with solution.remplacer(obj, "x", "c"):
+              assert obj.x == "c"
+          assert obj.x == "b"
+      assert obj.x == "a"
+
+  def test_reutilisable():
+      "Un même objet utilisé deux fois"
+      obj = types.SimpleNamespace(x=1)
+      r = solution.remplacer(obj, "x", 9)
+      with r:
+          pass
+      obj.x = 2
+      with r:
+          assert obj.x == 9
+      assert obj.x == 2, "il faut mémoriser l'ancienne valeur à chaque entrée"
+
+  def test_module():
+      "Sur un module de la bibliothèque standard"
+      import math
+      with solution.remplacer(math, "sqrt", lambda x: -1):
+          assert math.sqrt(4) == -1
+      assert math.sqrt(4) == 2
+
+  def test_decorateur():
+      "Utilisation comme décorateur"
+      obj = types.SimpleNamespace(mode="prod")
+      @solution.remplacer(obj, "mode", "test")
+      def lire():
+          "doc"
+          return obj.mode
+      assert obj.mode == "prod"
+      assert lire() == "test" and lire() == "test"
+      assert obj.mode == "prod"
+      assert lire.__name__ == "lire" and lire.__doc__ == "doc"
+
+  def test_dict():
+      "Sur un dictionnaire"
+      config = {"debug": False}
+      with solution.remplacer(config, "debug", True):
+          assert config == {"debug": True}
+      assert config == {"debug": False}
+      with solution.remplacer(config, "niveau", 3):
+          assert config["niveau"] == 3
+      assert config == {"debug": False}
+solution: |
+  import functools
+
+  _ABSENT = object()
+
+
+  class remplacer:
+      def __init__(self, cible, nom, valeur):
+          self.cible, self.nom, self.valeur = cible, nom, valeur
+          self._anciennes = []          # une pile : permet de réutiliser l'objet
+
+      def _lire(self):
+          if isinstance(self.cible, dict):
+              return self.cible.get(self.nom, _ABSENT)
+          return getattr(self.cible, self.nom, _ABSENT)
+
+      def _ecrire(self, valeur):
+          if isinstance(self.cible, dict):
+              if valeur is _ABSENT:
+                  del self.cible[self.nom]
+              else:
+                  self.cible[self.nom] = valeur
+          elif valeur is _ABSENT:
+              delattr(self.cible, self.nom)
+          else:
+              setattr(self.cible, self.nom, valeur)
+
+      def __enter__(self):
+          self._anciennes.append(self._lire())
+          self._ecrire(self.valeur)
+          return self.valeur
+
+      def __exit__(self, type_exc, exc, tb):
+          self._ecrire(self._anciennes.pop())
+          return False
+
+      def __call__(self, fonction):
+          @functools.wraps(fonction)
+          def enveloppe(*args, **kwargs):
+              with self:
+                  return fonction(*args, **kwargs)
+          return enveloppe
+cours: |
+  ## Le *monkey patching* contrôlé
+
+  Remplacer un attribut d'un module ou d'un objet à l'exécution s'appelle du *monkey
+  patching*. En test, on s'en sert pour simuler l'heure, le réseau ou le disque. Le danger :
+  oublier de remettre l'original, et polluer les tests suivants. Le gestionnaire de contexte
+  garantit la restauration.
+
+  ## `getattr`, `setattr`, `delattr`, `hasattr`
+
+  ```python
+  import math
+  ancien = getattr(math, "pi")
+  setattr(math, "pi", 3)
+  hasattr(math, "tau")         # True
+  delattr(objet, "nom")        # supprime l'attribut
+  getattr(objet, "x", None)    # valeur par défaut si absent
+  ```
+
+  Pour distinguer « absent » de « vaut None », on utilise une **sentinelle** (`_ABSENT =
+  object()`) comme valeur par défaut de `getattr`.
+
+  ## Restaurer quoi qu'il arrive
+
+  `__exit__` est appelé même si le bloc lève une exception ; il doit restaurer puis renvoyer
+  une valeur fausse pour laisser l'exception se propager.
+
+  ## Imbrication et réutilisation : une pile
+
+  Si le même objet `remplacer` est utilisé dans deux `with` imbriqués, ou réutilisé ensuite,
+  une seule variable « ancienne valeur » ne suffit pas : la seconde entrée écraserait la
+  première. Une **pile** des anciennes valeurs (empilée à l'entrée, dépilée à la sortie)
+  gère tous les cas.
+
+  ## Décorateur et gestionnaire à la fois
+
+  En définissant `__call__(self, fonction)`, l'objet peut aussi décorer une fonction :
+  l'enveloppe exécute l'appel dans un `with self:`. `contextlib.ContextDecorator` fournit ce
+  comportement tout fait.
+
+  ## Dictionnaires
+
+  Pour un dictionnaire (comme `os.environ`), on ne manipule pas des attributs mais des clés :
+  `d[cle]`, `cle in d`, `del d[cle]`. Le principe (mémoriser, remplacer, restaurer ou
+  supprimer) est identique.
+
+  ## L'outil standard
+
+  `unittest.mock.patch` et `patch.dict` font tout cela (avec des objets simulés en prime).
+  Les réécrire une fois permet de comprendre ce qu'ils font réellement.
+docs:
+  - title: unittest.mock.patch (l'outil réel)
+    url: https://docs.python.org/fr/3/library/unittest.mock.html
+  - title: contextlib.ContextDecorator
+    url: https://docs.python.org/fr/3/library/contextlib.html#contextlib.ContextDecorator

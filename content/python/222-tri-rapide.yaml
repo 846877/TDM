@@ -1,0 +1,196 @@
+title: Tri rapide et sélection rapide
+level: avance
+order: 22
+tags: [algorithmes, tri, récursivité, complexité]
+summary: Quicksort robuste (doublons, listes déjà triées) et quickselect.
+description: |
+  1. Écris `tri_rapide(elements, cle=None, inverse=False)` qui renvoie une **nouvelle** liste triée
+     avec l'algorithme du **tri rapide**, sans utiliser `sorted` ni `list.sort`.
+     - `cle` : fonction appliquée à chaque élément pour la comparaison (comme dans `sorted`) ;
+     - `inverse=True` : ordre décroissant ;
+     - le tri doit être **stable** (deux éléments de même clé gardent leur ordre d'origine),
+       y compris avec `inverse=True` — exactement comme `sorted`.
+
+     La moulinette teste des listes de 50 000 éléments **déjà triées** et avec **énormément de doublons** :
+     - un pivot toujours pris au début donne une récursion trop profonde → choisis-le au hasard ;
+     - une partition en deux donne un temps quadratique avec les doublons → partitionne en **trois**
+       (plus petits / égaux / plus grands).
+
+  2. Écris `kieme_plus_petit(elements, k)` (k commence à 1) avec l'algorithme de **sélection rapide**
+     (quickselect) : en moyenne O(n), sans trier toute la liste. `ValueError` si `k` est hors limites.
+
+  ```python
+  tri_rapide([3, 1, 2])                          # [1, 2, 3]
+  tri_rapide(["bb", "a", "ccc"], cle=len, inverse=True)   # ["ccc", "bb", "a"]
+  kieme_plus_petit([7, 2, 9, 4], 2)              # 4
+  ```
+starter: |
+  import random
+
+
+  def tri_rapide(elements, cle=None, inverse=False):
+      pass
+
+
+  def kieme_plus_petit(elements, k):
+      pass
+tests: |
+  import random
+
+  def interdit(*a, **k):
+      raise AssertionError("sorted est interdit : écris ton propre tri")
+
+  def trier(*args, **kwargs):
+      solution.sorted = interdit
+      try:
+          return solution.tri_rapide(*args, **kwargs)
+      finally:
+          del solution.sorted
+
+  def test_simple():
+      "Tri d'entiers"
+      assert trier([3, 1, 2]) == [1, 2, 3]
+      assert trier([]) == [] and trier([5]) == [5]
+
+  def test_nouvelle_liste():
+      "La liste d'origine n'est pas modifiée"
+      l = [3, 1, 2]
+      r = trier(l)
+      assert l == [3, 1, 2] and r is not l
+
+  def test_cle_inverse():
+      "Paramètres cle et inverse"
+      assert trier(["bb", "a", "ccc"], cle=len, inverse=True) == ["ccc", "bb", "a"]
+      assert trier([3, -5, 1], cle=abs) == [1, 3, -5]
+      assert trier((4, 1, 3), inverse=True) == [4, 3, 1]
+
+  def test_stable():
+      "Tri stable, même en ordre inverse"
+      rng = random.Random(1)
+      paires = [(rng.randint(0, 5), i) for i in range(300)]
+      cle = lambda p: p[0]
+      assert trier(paires, cle=cle) == sorted(paires, key=cle)
+      assert trier(paires, cle=cle, inverse=True) == sorted(paires, key=cle, reverse=True)
+
+  def test_aleatoire():
+      "Listes aléatoires"
+      rng = random.Random(42)
+      for _ in range(20):
+          l = [rng.randint(-100, 100) for _ in range(rng.randint(0, 200))]
+          assert trier(l) == sorted(l)
+
+  def test_deja_trie():
+      "50 000 éléments déjà triés (pivot aléatoire)"
+      l = list(range(50_000))
+      assert trier(l) == l
+      assert trier(l, inverse=True) == l[::-1]
+
+  def test_doublons():
+      "50 000 éléments avec beaucoup de doublons (partition en trois)"
+      rng = random.Random(7)
+      l = [rng.randint(0, 3) for _ in range(50_000)]
+      assert trier(l) == sorted(l)
+
+  def test_selection():
+      "kieme_plus_petit"
+      l = [7, 2, 9, 4, 4, 1]
+      assert [solution.kieme_plus_petit(l, k) for k in range(1, 7)] == [1, 2, 4, 4, 7, 9]
+      assert l == [7, 2, 9, 4, 4, 1], "la liste d'origine ne doit pas être modifiée"
+
+  def test_selection_grande():
+      "Sélection dans 100 000 éléments"
+      rng = random.Random(3)
+      l = [rng.randint(0, 10**6) for _ in range(100_000)]
+      assert solution.kieme_plus_petit(l, 50_000) == sorted(l)[49_999]
+
+  def test_selection_invalide():
+      "k hors limites"
+      for k in (0, 4):
+          try:
+              solution.kieme_plus_petit([1, 2, 3], k)
+          except ValueError:
+              continue
+          raise AssertionError(f"k={k} doit lever ValueError")
+solution: |
+  import random
+
+
+  def tri_rapide(elements, cle=None, inverse=False):
+      cle = cle or (lambda x: x)
+      paires = [(cle(e), e) for e in elements]
+
+      def trier(liste):
+          if len(liste) <= 1:
+              return liste
+          pivot = random.choice(liste)[0]
+          petits = [p for p in liste if p[0] < pivot]
+          egaux = [p for p in liste if p[0] == pivot]
+          grands = [p for p in liste if pivot < p[0]]
+          if inverse:
+              return trier(grands) + egaux + trier(petits)
+          return trier(petits) + egaux + trier(grands)
+
+      return [e for _, e in trier(paires)]
+
+
+  def kieme_plus_petit(elements, k):
+      if not 1 <= k <= len(elements):
+          raise ValueError("k hors limites")
+      liste = list(elements)
+      while True:
+          pivot = random.choice(liste)
+          petits = [x for x in liste if x < pivot]
+          nb_egaux = sum(1 for x in liste if x == pivot)
+          if k <= len(petits):
+              liste = petits
+          elif k <= len(petits) + nb_egaux:
+              return pivot
+          else:
+              k -= len(petits) + nb_egaux
+              liste = [x for x in liste if x > pivot]
+cours: |
+  ## Le principe
+
+  1. Choisir un **pivot**.
+  2. **Partitionner** : les éléments plus petits d'un côté, les plus grands de l'autre.
+  3. Trier récursivement chaque partie, puis concaténer.
+
+  En moyenne, le pivot coupe la liste en deux parts comparables : **O(n log n)**.
+
+  ## Le pire cas et comment l'éviter
+
+  Si le pivot est toujours le plus petit élément (premier élément d'une liste déjà triée),
+  une partie est vide et l'autre contient n − 1 éléments : O(n²) et une récursion de
+  profondeur n, qui dépasse la limite de Python. Solution : un pivot **aléatoire**
+  (`random.choice`), qui rend le pire cas extrêmement improbable quelle que soit l'entrée.
+
+  ## Les doublons : partition en trois
+
+  Si tous les éléments sont égaux, une partition « plus petits / plus grands ou égaux » ne
+  réduit jamais le problème : O(n²) à nouveau. La partition de **Dijkstra** (« drapeau
+  hollandais ») crée trois groupes : `<`, `==`, `>`. Le groupe des égaux est déjà à sa
+  place et n'est plus trié. Avec beaucoup de doublons, l'algorithme devient même plus
+  rapide.
+
+  ## Stabilité
+
+  Si la partition parcourt la liste **dans l'ordre** et ajoute chaque élément à la fin de
+  son groupe, l'ordre relatif des éléments égaux est préservé : le tri est stable. Pour un
+  ordre décroissant stable, inverser les groupes « plus petits » et « plus grands » suffit ;
+  inverser le résultat final casserait la stabilité.
+
+  ## Une clé calculée une seule fois
+
+  Avec `cle`, on compare `cle(x)` : calculer la clé une fois par élément (paires
+  `(clé, élément)` ou listes parallèles) évite de la recalculer à chaque comparaison.
+
+  ## Sélection rapide (Quickselect)
+
+  Pour trouver le k-ième plus petit, inutile de tout trier : après partition, on sait dans
+  quel groupe se trouve le rang k, et on ne continue que dans celui-là. Complexité moyenne
+  **O(n)** (n + n/2 + n/4 + …). Une boucle remplace facilement la récursion.
+docs:
+  - title: Wikipédia — Tri rapide
+    url: https://fr.wikipedia.org/wiki/Tri_rapide
+  - title: Module random (choice)
+    url: https://docs.python.org/fr/3/library/random.html

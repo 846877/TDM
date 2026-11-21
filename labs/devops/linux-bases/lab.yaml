@@ -1,0 +1,439 @@
+title: Les bases de Linux
+level: debutant
+order: 1
+tags: [linux, shell, permissions, processus]
+summary: Fichiers, droits, utilisateurs, filtres, archives, processus et environnement du shell.
+user: eleve
+workdir: /home/eleve
+setup: |
+  nohup /usr/local/bin/gourmand >/dev/null 2>&1 &
+description: |
+  Un conteneur Ubuntu rien que pour toi (utilisateur `eleve`, `sudo` sans mot de passe).
+  Réalise les exercices dans le terminal puis clique sur **Vérifier**.
+
+  Le lab avance du geste de base (créer des dossiers) jusqu'aux réflexes d'administrateur :
+  analyser des journaux, retrouver des fichiers, gérer les processus et personnaliser son shell.
+
+  Commandes utiles : `ls -l`, `mkdir -p`, `chmod`, `chown`, `grep`, `wc -l`, `useradd`, `find`, `tar`,
+  `ps`, `kill`, `awk`, `sort`, `uniq`.
+cours: |
+  ## Linux, le socle de tout le DevOps
+
+  Serveurs, conteneurs, runners de CI, nœuds Kubernetes : presque tout tourne sous Linux. Savoir naviguer,
+  lire des fichiers, gérer des droits et des processus est le prérequis de tous les autres labs.
+
+  ### L'arborescence
+
+  Tout part de la racine `/`. Il n'y a pas de lettres de lecteur : un disque est **monté** dans un dossier.
+
+  ```
+  /
+  ├── etc/      configuration (texte !) : /etc/passwd, /etc/nginx/...
+  ├── home/     dossiers personnels (/home/eleve = ~)
+  ├── var/      données variables : /var/log, /var/lib
+  ├── usr/      programmes et bibliothèques (/usr/bin)
+  ├── opt/      logiciels installés « à la main »
+  ├── tmp/      fichiers temporaires (vidé au redémarrage)
+  └── proc/     vue du noyau sur les processus (/proc/<PID>)
+  ```
+
+  Chemin **absolu** : commence par `/`. Chemin **relatif** : part du dossier courant (`pwd`).
+  `.` = dossier courant, `..` = dossier parent, `~` = ton dossier personnel.
+
+  ### Les droits
+
+  Chaque fichier a un **propriétaire**, un **groupe** et trois triplets de droits `rwx` :
+
+  ```
+  -rwxr-x---  1 eleve devops  120 deploy.sh
+   └┬┘└┬┘└┬┘
+    │  │  └── autres  : ---  = 0
+    │  └───── groupe  : r-x  = 4+1 = 5
+    └──────── proprio : rwx  = 4+2+1 = 7      →  chmod 750
+  ```
+
+  Sur un dossier, `x` signifie « pouvoir y entrer » et `r` « pouvoir lister ». `chmod` change les droits,
+  `chown utilisateur:groupe` change le propriétaire. Les commandes d'administration passent par `sudo`.
+
+  ### Le shell et ses flux
+
+  Chaque commande a trois flux : l'entrée standard (0), la sortie standard (1) et la sortie d'erreur (2).
+
+  | Syntaxe | Effet |
+  |---|---|
+  | `cmd > f` | écrit la sortie dans `f` (écrase) |
+  | `cmd >> f` | ajoute à la fin de `f` |
+  | `cmd 2> f` | redirige les erreurs |
+  | `cmd > f 2>&1` | sortie et erreurs dans `f` |
+  | `a \| b` | la sortie de `a` devient l'entrée de `b` |
+
+  La philosophie Unix : de petits outils qui font une chose bien, combinés par des tubes.
+  `grep` filtre des lignes, `wc -l` les compte, `sort` trie, `uniq -c` compte les doublons consécutifs,
+  `cut` et `awk` découpent en colonnes, `sed` remplace, `head`/`tail` gardent le début ou la fin.
+
+  ### Utilisateurs et groupes
+
+  Les comptes sont dans `/etc/passwd`, les groupes dans `/etc/group`, les mots de passe hachés dans
+  `/etc/shadow`. `id utilisateur` affiche ses groupes, `getent` interroge ces bases. Un service doit tourner
+  avec un compte dédié et non `root` : c'est le **principe du moindre privilège**.
+
+  ### Processus
+
+  Un processus a un **PID**, un parent, un utilisateur et un état. `ps aux` les liste, `pgrep` les trouve
+  par nom, `top` les observe en direct. `kill PID` envoie le signal `SIGTERM` (arrêt propre) ;
+  `kill -9` envoie `SIGKILL` (arrêt brutal, à éviter). `&` lance en arrière-plan, `nohup` détache la
+  commande du terminal pour qu'elle survive à sa fermeture.
+
+  ### Mémo
+
+  ```bash
+  mkdir -p a/b/c          # crée les parents
+  cp -r src dst ; mv a b ; rm -r dossier
+  find /var -name '*.log' -size +1M -mtime -7
+  tar -czf archive.tar.gz dossier ; tar -tzf archive.tar.gz ; tar -xzf archive.tar.gz -C dest
+  grep -rn motif dossier ; grep -c ERROR app.log
+  awk '{print $3}' app.log | sort | uniq -c | sort -rn
+  ```
+
+  ### Pièges courants
+
+  - Oublier les **guillemets** autour d'un nom contenant des espaces.
+  - `>` au lieu de `>>` : le fichier est écrasé sans prévenir.
+  - `rm -rf` avec une variable vide (`rm -rf $DIR/`) : catastrophe. Vérifie toujours.
+  - `chmod 777` pour « régler » un problème de droits : c'est ouvrir la porte à tout le monde.
+  - Un script sans ligne `#!` ou sans droit `x` ne se lance pas avec `./script`.
+
+  ### Bonnes pratiques
+
+  Lis le manuel (`man commande`, `commande --help`), teste une commande destructrice avec `ls` ou `echo`
+  avant de la lancer pour de bon, et préfère des chemins absolus dans les scripts.
+docs:
+  - title: Linux Journey (apprendre Linux pas à pas)
+    url: https://linuxjourney.com/
+  - title: Manuel de GNU Bash
+    url: https://www.gnu.org/software/bash/manual/bash.html
+  - title: Documentation Ubuntu Server
+    url: https://ubuntu.com/server/docs
+exercises:
+  - id: arborescence
+    title: Créer une arborescence
+    description: |
+      Dans ton dossier personnel, crée l'arborescence `projets/tdm/src` et `projets/tdm/docs`,
+      puis un fichier vide `projets/tdm/README.md`.
+    hint: "mkdir -p crée aussi les dossiers parents ; touch crée un fichier vide"
+    cours: |
+      `mkdir` crée un dossier, mais échoue si le dossier parent n'existe pas encore. L'option `-p` (*parents*)
+      crée toute la chaîne d'un coup et ne se plaint pas si le dossier existe déjà : c'est pour cela qu'on la
+      retrouve dans presque tous les scripts. Les accolades du shell permettent de créer plusieurs frères en une
+      commande : `mkdir -p x/{a,b}` crée `x/a` et `x/b`.
+
+      `touch` met à jour la date d'un fichier, et le crée vide s'il n'existe pas. Vérifie le résultat avec
+      `tree` (s'il est installé), `ls -R` ou `find projets`. Rappelle-toi que `~` désigne ton dossier personnel :
+      `~/projets` et `/home/eleve/projets` sont le même chemin.
+    checks:
+      - desc: Dossiers src et docs
+        run: test -d /home/eleve/projets/tdm/src && test -d /home/eleve/projets/tdm/docs
+      - desc: Fichier README.md
+        run: test -f /home/eleve/projets/tdm/README.md
+  - id: permissions
+    title: Droits d'accès
+    description: |
+      Crée un script `~/projets/tdm/deploy.sh` qui affiche `deploiement ok`, puis rends-le
+      exécutable **uniquement par toi** (droits `700`). Il doit fonctionner avec `./deploy.sh`.
+    hint: "chmod 700 deploy.sh — et n'oublie pas la première ligne #!/bin/bash"
+    cours: |
+      Un script est exécutable si deux conditions sont réunies : il porte le droit `x` pour l'utilisateur qui le
+      lance, et il commence par une ligne **shebang** (`#!/bin/bash`) qui indique l'interpréteur.
+
+      En notation octale, chaque chiffre est la somme de `r=4`, `w=2`, `x=1`, dans l'ordre propriétaire, groupe,
+      autres. `700` signifie donc « tout pour le propriétaire, rien pour les autres ». La notation symbolique
+      existe aussi : `chmod u+x`, `chmod go-rwx`.
+
+      `./deploy.sh` est nécessaire car le dossier courant n'est pas dans le `PATH` (par sécurité). Contrôle les
+      droits avec `ls -l` ou `stat -c %a fichier`.
+    checks:
+      - desc: Droits 700
+        run: test "$(stat -c %a /home/eleve/projets/tdm/deploy.sh)" = 700
+      - desc: Le script affiche « deploiement ok »
+        run: cd /home/eleve/projets/tdm && ./deploy.sh | grep -q "deploiement ok"
+  - id: filtres
+    title: Analyser un fichier de log
+    description: |
+      Le fichier `~/donnees/app.log` contient des logs applicatifs. Écris dans `~/erreurs.txt`
+      **le nombre** de lignes de niveau `ERROR` (juste le nombre), et dans `~/erreurs-service-2.log`
+      toutes les lignes `ERROR` du service `service-2`.
+    hint: "grep -c, et les redirections > ; pense à combiner deux grep avec |"
+    cours: |
+      `grep motif fichier` affiche les lignes qui contiennent le motif ; `-c` affiche seulement leur nombre,
+      `-v` inverse la sélection, `-i` ignore la casse. Pour combiner deux critères, on enchaîne deux `grep` avec
+      un tube `|` : le second filtre la sortie du premier.
+
+      Attention aux faux positifs : chercher `ERROR` trouve aussi `ERRORS` ou un message qui contient le mot.
+      Regarde la structure d'une ligne (`head -3 fichier`) et inclus les espaces autour du motif si besoin.
+      De même, `service-2` correspond aussi à `service-21`.
+
+      `>` envoie la sortie dans un fichier (en l'écrasant). Pour n'écrire que le nombre, assure-toi que ta
+      commande n'affiche rien d'autre.
+    checks:
+      - desc: Nombre d'erreurs correct
+        run: test "$(tr -d '[:space:]' < /home/eleve/erreurs.txt)" = "$(grep -c ' ERROR ' /home/eleve/donnees/app.log)"
+      - desc: Lignes du service-2 extraites
+        run: grep ' ERROR ' /home/eleve/donnees/app.log | grep 'service-2 ' | cmp -s - /home/eleve/erreurs-service-2.log
+  - id: utilisateurs
+    title: Utilisateurs et groupes
+    description: |
+      Crée le groupe `devops`, puis l'utilisateur `deployer` (avec un dossier personnel) membre de ce groupe.
+      Crée ensuite `/opt/app` appartenant à `deployer:devops` avec les droits `770`.
+    hint: "sudo groupadd, sudo useradd -m -G, sudo chown, sudo chmod"
+    cours: |
+      `groupadd` crée un groupe, `useradd` un utilisateur. Par défaut, `useradd` ne crée pas le dossier
+      personnel : il faut l'option `-m`. L'option `-G` ajoute l'utilisateur à des groupes **secondaires**
+      (`-g` change son groupe principal). Pour ajouter un groupe à un compte existant : `usermod -aG groupe user`
+      (sans `-a`, les autres groupes secondaires sont retirés !).
+
+      Un dossier partagé par une équipe appartient typiquement à un compte de service et à un groupe, avec des
+      droits `770` : le groupe peut lire, écrire et entrer, les autres rien. Toutes ces commandes modifient le
+      système : il faut `sudo`. Vérifie avec `id deployer`, `getent group devops` et `ls -ld /opt/app`.
+    checks:
+      - desc: Groupe devops
+        run: getent group devops
+      - desc: Utilisateur deployer dans devops
+        run: id -nG deployer | grep -qw devops && test -d /home/deployer
+      - desc: /opt/app appartient à deployer:devops en 770
+        run: test "$(stat -c '%U:%G %a' /opt/app)" = "deployer:devops 770"
+  - id: recherche
+    title: Retrouver des fichiers avec find
+    description: |
+      Le dossier `~/donnees/archives` (et ses sous-dossiers) contient des sauvegardes de tailles variées.
+      Le disque se remplit : écris dans `~/gros-fichiers.txt` le **nom** (sans le chemin) de chaque fichier
+      de **plus de 100 Kio**, un par ligne, **triés par ordre alphabétique**.
+
+      Ensuite, crée un lien symbolique `~/archives` qui pointe vers `~/donnees/archives`.
+    hint: "find ~/donnees/archives -type f -size +100k -printf '%f\\n' | sort ; ln -s cible nom_du_lien"
+    cours: |
+      `find` parcourt une arborescence et filtre selon des critères qui se combinent : `-type f` (fichiers
+      ordinaires), `-name '*.gz'`, `-size +100k` (plus de 100 Kio ; `M` pour Mio), `-mtime -7` (modifié il y a
+      moins de 7 jours). L'action `-printf` choisit l'affichage : `%p` est le chemin complet, `%f` le nom seul.
+
+      Pense à **trier** la sortie : `find` renvoie les fichiers dans l'ordre du disque, pas dans l'ordre
+      alphabétique.
+
+      Un **lien symbolique** est un petit fichier qui pointe vers un autre chemin, comme un raccourci.
+      `ln -s CIBLE NOM_DU_LIEN` : la cible vient en premier. `ls -l` affiche la flèche, `readlink -f` résout le
+      chemin final.
+    checks:
+      - desc: La liste des gros fichiers est exacte et triée
+        run: |
+          test "$(cat /home/eleve/gros-fichiers.txt)" = "$(find /home/eleve/donnees/archives -type f -size +100k -printf '%f\n' | sort)"
+      - desc: ~/archives est un lien vers ~/donnees/archives
+        run: test -L /home/eleve/archives && test "$(readlink -f /home/eleve/archives)" = /home/eleve/donnees/archives
+  - id: archives
+    title: Sauvegarder avec tar
+    description: |
+      Crée une archive compressée `~/sauvegarde-projets.tar.gz` qui contient tout le dossier `projets`
+      (les chemins dans l'archive doivent commencer par `projets/`).
+
+      Puis, pour t'entraîner à restaurer, extrais-la dans `~/restauration` : on doit y retrouver
+      `~/restauration/projets/tdm/README.md`.
+    hint: "cd ~ && tar -czf sauvegarde-projets.tar.gz projets ; mkdir restauration && tar -xzf sauvegarde-projets.tar.gz -C restauration"
+    cours: |
+      `tar` regroupe des fichiers en une archive ; avec `-z`, il la compresse en gzip. Les options courantes :
+      `-c` créer, `-x` extraire, `-t` lister, `-f` nom de l'archive, `-v` bavard, `-C dossier` se placer dans un
+      dossier avant d'agir.
+
+      Les chemins enregistrés dans l'archive sont ceux que tu donnes sur la ligne de commande. Si tu archives
+      `/home/eleve/projets`, l'archive contiendra `home/eleve/projets/...`. Pour obtenir des chemins qui
+      commencent par `projets/`, place-toi dans le dossier parent (ou utilise `-C`).
+
+      Une sauvegarde n'existe vraiment que si on sait la **restaurer** : liste toujours le contenu (`tar -tzf`)
+      et teste l'extraction dans un dossier séparé.
+    checks:
+      - desc: L'archive est bien un gzip
+        run: file /home/eleve/sauvegarde-projets.tar.gz | grep -q gzip
+      - desc: Elle contient projets/tdm/README.md
+        run: tar -tzf /home/eleve/sauvegarde-projets.tar.gz | sed 's#^\./##' | grep -qx 'projets/tdm/README.md'
+      - desc: La restauration a été faite
+        run: test -f /home/eleve/restauration/projets/tdm/README.md
+  - id: environnement
+    title: Personnaliser son shell
+    description: |
+      Rends ces réglages **permanents** pour tes prochaines sessions bash (fichier `~/.bashrc`) :
+      - un alias `lt` qui lance `ls -ltrh` (fichiers triés du plus ancien au plus récent) ;
+      - la variable d'environnement `EDITOR` qui vaut `nano` (exportée) ;
+      - le dossier `~/bin` ajouté au `PATH`.
+
+      Crée ensuite dans `~/bin` un script exécutable `bonjour` qui affiche `Bonjour eleve` :
+      dans un nouveau terminal, la commande `bonjour` doit fonctionner depuis n'importe quel dossier.
+    hint: "echo \"alias lt='ls -ltrh'\" >> ~/.bashrc ; export EDITOR=nano ; export PATH=\"$HOME/bin:$PATH\" ; puis source ~/.bashrc"
+    cours: |
+      Bash lit `~/.bashrc` au démarrage de chaque shell interactif : c'est là qu'on rend un réglage permanent.
+      Une modification ne s'applique pas au terminal déjà ouvert : recharge-le avec `source ~/.bashrc`.
+
+      - Un **alias** remplace un mot par une commande : `alias nom='commande'`.
+      - Une **variable d'environnement** doit être **exportée** (`export VAR=valeur`) pour être transmise aux
+        programmes lancés depuis le shell.
+      - `PATH` est la liste, séparée par `:`, des dossiers où le shell cherche les commandes. On l'étend sans
+        l'écraser : on réutilise `$PATH` dans la nouvelle valeur.
+
+      Un script placé dans un dossier du `PATH` devient une commande comme les autres, à condition d'être
+      exécutable.
+    checks:
+      - desc: L'alias lt existe dans un nouveau shell
+        run: bash -ic 'alias lt' 2>/dev/null | grep -q 'ls -ltrh'
+      - desc: EDITOR vaut nano et est exportée
+        run: test "$(bash -ic 'env' 2>/dev/null | grep '^EDITOR=')" = "EDITOR=nano"
+      - desc: La commande bonjour est trouvée via le PATH
+        run: cd / && bash -ic 'bonjour' 2>/dev/null | grep -qx 'Bonjour eleve'
+  - id: processus
+    title: Gérer les processus
+    description: |
+      Un processus nommé `gourmand` a été lancé en tâche de fond au démarrage du lab.
+      1. Retrouve son **PID** (`ps aux`, `pgrep`) et écris-le dans `~/gourmand.txt` (juste le nombre).
+      2. Arrête-le proprement avec `kill`.
+      3. Pour finir, lance toi-même `sleep 4242` **en arrière-plan** (il doit survivre à la fermeture du
+         terminal : utilise `nohup`).
+    hint: "pgrep -f gourmand > ~/gourmand.txt ; kill <PID> ; nohup sleep 4242 > /dev/null 2>&1 &"
+    cours: |
+      Chaque programme en cours d'exécution est un processus identifié par un **PID**. `ps aux` les liste tous,
+      `pgrep -f motif` cherche dans la ligne de commande complète et affiche les PID, `pgrep -a` montre aussi la
+      commande.
+
+      `kill PID` envoie le signal **SIGTERM** : le programme peut se terminer proprement. `kill -9` (SIGKILL) le
+      tue sans lui laisser le choix ; à réserver aux processus bloqués.
+
+      Le `&` final lance une commande en arrière-plan, mais elle reste liée au terminal : quand celui-ci se ferme,
+      elle reçoit SIGHUP et s'arrête. `nohup` l'immunise contre ce signal. Pense aussi à rediriger sa sortie
+      (`> /dev/null 2>&1`) pour ne pas créer de `nohup.out`.
+    checks:
+      - desc: Le PID noté est celui de gourmand
+        run: test "$(tr -d '[:space:]' < /home/eleve/gourmand.txt)" = "$(cat /var/tmp/.gourmand.pid)"
+      - desc: gourmand est arrêté
+        run: "! pgrep -fx '/bin/sh /usr/local/bin/gourmand'"
+      - desc: sleep 4242 tourne en arrière-plan
+        run: pgrep -fx 'sleep 4242'
+  - id: rapport
+    title: Rapport de logs avec awk
+    description: |
+      À partir de `~/donnees/app.log`, produis le fichier `~/rapport.csv` qui compte les lignes **par niveau**
+      de log (3ᵉ colonne : `ERROR`, `INFO`, `WARN`…), au format CSV, avec une ligne d'en-tête :
+
+      ```
+      niveau,nombre
+      ERROR,53
+      ...
+      ```
+
+      Les niveaux sont triés par ordre alphabétique. Bonus : fais-le en **une seule** ligne de commande.
+    hint: "awk '{print $3}' fichier | sort | uniq -c donne « nombre niveau » ; un second awk peut inverser les colonnes et ajouter la virgule"
+    cours: |
+      `awk` traite un texte ligne par ligne et découpe chaque ligne en champs (`$1`, `$2`… séparés par des
+      espaces) : `awk '{print $3}'` affiche la troisième colonne. L'option `-F,` change le séparateur et
+      `BEGIN { ... }` s'exécute avant la première ligne, idéal pour une en-tête.
+
+      La chaîne classique pour compter des occurrences : extraire la colonne, `sort` (car `uniq` ne regroupe que
+      des lignes **consécutives**), puis `uniq -c` qui préfixe chaque valeur de son nombre. Il reste à remettre
+      les colonnes dans l'ordre voulu et à insérer la virgule.
+
+      Les accolades `{ cmd1; cmd2; } > fichier` regroupent plusieurs commandes vers une même redirection.
+    checks:
+      - desc: L'en-tête est niveau,nombre
+        run: test "$(head -1 /home/eleve/rapport.csv)" = "niveau,nombre"
+      - desc: Les comptes par niveau sont exacts
+        run: |
+          test "$(tail -n +2 /home/eleve/rapport.csv | tr -d ' \r')" = "$(awk '{print $3}' /home/eleve/donnees/app.log | sort | uniq -c | awk '{print $2","$1}')"
+  - id: lb-sed
+    title: Modifier une configuration avec sed
+    description: |
+      Le fichier `~/donnees/app.conf` doit passer en production. **Sans éditeur**, avec `sed -i` :
+      1. remplace `debug=true` par `debug=false` et `env=dev` par `env=prod` ;
+      2. remplace la valeur de `db_host` par `db.tdm.lab` (quelle que soit sa valeur actuelle) ;
+      3. ajoute la ligne `log_level=warn` à la fin du fichier.
+
+      Enfin, produis `~/app-propre.conf` : le même contenu **sans** les lignes de commentaire (`#`) ni les
+      lignes vides.
+    hint: "sed -i 's/^debug=.*/debug=false/' fichier ; sed -i '$a log_level=warn' fichier ; grep -v -e '^#' -e '^$'"
+    cours: |
+      `sed` (*stream editor*) transforme un texte ligne par ligne. Sa commande la plus utilisée est la
+      substitution `s/motif/remplacement/` : le motif est une **expression régulière**. Ajoute `g` à la fin
+      pour remplacer toutes les occurrences d'une ligne, pas seulement la première.
+
+      Par défaut, `sed` affiche le résultat sans toucher au fichier : c'est idéal pour tester. L'option `-i`
+      (*in place*) modifie le fichier ; `-i.bak` garde une copie de sauvegarde.
+
+      Repères utiles dans un motif : `^` début de ligne, `$` fin de ligne, `.*` n'importe quelle suite de
+      caractères. Ainsi `^db_host=.*` désigne toute la ligne, quelle que soit la valeur. D'autres commandes
+      existent : `d` supprime une ligne (`/^#/d`), `$a texte` ajoute après la dernière ligne.
+
+      Pour filtrer plusieurs motifs avec `grep`, répète `-e`, et `-v` inverse la sélection.
+    checks:
+      - desc: debug et env sont passés en production
+        run: grep -qx 'debug=false' /home/eleve/donnees/app.conf && grep -qx 'env=prod' /home/eleve/donnees/app.conf && ! grep -q 'debug=true' /home/eleve/donnees/app.conf
+      - desc: db_host vaut db.tdm.lab
+        run: grep -qx 'db_host=db.tdm.lab' /home/eleve/donnees/app.conf
+      - desc: log_level=warn est la dernière ligne
+        run: test "$(tail -n 1 /home/eleve/donnees/app.conf)" = "log_level=warn"
+      - desc: app-propre.conf ne contient ni commentaire ni ligne vide
+        run: test -s /home/eleve/app-propre.conf && ! grep -qE '^(#|$)' /home/eleve/app-propre.conf && test "$(cat /home/eleve/app-propre.conf)" = "$(grep -vE '^(#|$)' /home/eleve/donnees/app.conf)"
+  - id: lb-disque
+    title: Espace disque et systèmes de fichiers
+    description: |
+      Un disque plein est l'incident le plus fréquent en production. Prends tes repères :
+      1. écris dans `~/taille-archives.txt` la **taille totale** du dossier `~/donnees/archives`, en Kio
+         (juste le nombre, tel que l'affiche `du -sk`) ;
+      2. écris dans `~/plus-gros.txt` le **nom** (sans chemin) du plus gros fichier de `~/donnees/archives`
+         et de ses sous-dossiers ;
+      3. écris dans `~/type-racine.txt` le **type** du système de fichiers monté sur `/` (colonne `Type` de `df -T`).
+    hint: "du -sk dossier | cut -f1 ; find ... -type f -printf '%s %f\\n' | sort -n | tail -1 ; df -T / | awk 'NR==2 {print $2}'"
+    cours: |
+      Deux commandes répondent à deux questions différentes :
+      - `df` (*disk free*) montre l'occupation de chaque **système de fichiers** monté : taille, utilisé,
+        disponible, pourcentage, point de montage. `-h` affiche des unités lisibles, `-T` ajoute le type
+        (`ext4`, `xfs`, `overlay` dans un conteneur, `tmpfs` en mémoire) ;
+      - `du` (*disk usage*) calcule la place occupée par des **fichiers et dossiers**. `-s` résume un dossier
+        en une ligne, `-k` affiche en Kio, `-h` en unités lisibles ; `du -sh * | sort -h` classe le contenu
+        d'un dossier.
+
+      Pour trouver les plus gros fichiers, `find -printf '%s %f\n'` affiche la taille en octets suivie du nom ;
+      un tri numérique (`sort -n`) puis `tail -1` donne le plus gros. `ncdu`, quand il est installé, propose
+      la même analyse de façon interactive.
+
+      Attention : un fichier supprimé mais encore ouvert par un processus occupe toujours de la place
+      (`lsof +L1` les retrouve).
+    checks:
+      - desc: La taille des archives est exacte
+        run: test -s /home/eleve/taille-archives.txt && test "$(tr -d '[:space:]' < /home/eleve/taille-archives.txt)" = "$(du -sk /home/eleve/donnees/archives | cut -f1)"
+      - desc: Le plus gros fichier est identifié
+        run: test -s /home/eleve/plus-gros.txt && test "$(tr -d '[:space:]' < /home/eleve/plus-gros.txt)" = "$(find /home/eleve/donnees/archives -type f -printf '%s %f\n' | sort -n | tail -1 | cut -d' ' -f2)"
+      - desc: Le type du système de fichiers racine est correct
+        run: test -s /home/eleve/type-racine.txt && test "$(tr -d '[:space:]' < /home/eleve/type-racine.txt)" = "$(df -T / | awk 'NR==2 {print $2}')"
+  - id: lb-systeme
+    title: Interroger le système
+    description: |
+      Un administrateur sait retrouver l'information dans les fichiers du système :
+      1. `~/comptes-bash.txt` : le **nombre** de comptes dont le shell est `/bin/bash` (dernier champ de `/etc/passwd`) ;
+      2. `~/version-os.txt` : la version de la distribution, c'est-à-dire la valeur de `VERSION_ID` dans
+         `/etc/os-release`, **sans les guillemets** ;
+      3. `~/noyau.txt` : la version du **noyau** Linux (`uname -r`).
+    hint: "awk -F: '$7 == \"/bin/bash\"' /etc/passwd | wc -l ; grep VERSION_ID /etc/os-release | cut -d= -f2 | tr -d '\"'"
+    cours: |
+      Sous Linux, une grande partie de la configuration et de l'état du système est lisible sous forme de
+      fichiers texte :
+      - `/etc/passwd` : une ligne par compte, sept champs séparés par `:` (nom, `x`, UID, GID, description,
+        dossier personnel, **shell**) ;
+      - `/etc/os-release` : l'identité de la distribution sous forme `CLE=valeur` (`ID`, `VERSION_ID`,
+        `PRETTY_NAME`), conçue pour être lue par des scripts (`. /etc/os-release` la charge même en variables) ;
+      - `/proc` : une vue du noyau (`/proc/cpuinfo`, `/proc/meminfo`, `/proc/uptime`).
+
+      `awk -F:` change le séparateur de champs : `$7` désigne alors le shell. Une condition avant les
+      accolades filtre les lignes. `cut -d= -f2` découpe sur le signe égal, `tr -d '"'` supprime les guillemets.
+
+      `uname -r` donne la version du noyau. Dans un conteneur, c'est celui de l'**hôte** : un conteneur ne
+      possède pas son propre noyau.
+    checks:
+      - desc: Le nombre de comptes bash est exact
+        run: |
+          test -s /home/eleve/comptes-bash.txt && test "$(tr -d '[:space:]' < /home/eleve/comptes-bash.txt)" = "$(awk -F: '$7 == "/bin/bash"' /etc/passwd | wc -l)"
+      - desc: La version de la distribution est correcte
+        run: . /etc/os-release && test -s /home/eleve/version-os.txt && test "$(tr -d '[:space:]' < /home/eleve/version-os.txt)" = "$VERSION_ID"
+      - desc: La version du noyau est correcte
+        run: test -s /home/eleve/noyau.txt && test "$(tr -d '[:space:]' < /home/eleve/noyau.txt)" = "$(uname -r)"

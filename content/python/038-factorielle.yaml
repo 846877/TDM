@@ -1,0 +1,138 @@
+title: Factorielle et produits
+level: debutant
+order: 38
+tags: [boucles, for, accumulateur]
+summary: Accumuler un produit dans une boucle for.
+description: |
+  1. `factorielle(n)` renvoie `n! = 1 × 2 × … × n` pour `n ≥ 0`, avec `0! = 1`.
+  2. `produit(nombres)` renvoie le produit des éléments d'une liste (le produit d'une liste
+     vide vaut `1`).
+  3. `nombre_de_mots_de_passe(longueur, alphabet)` renvoie le nombre de mots de passe
+     possibles de cette longueur avec un alphabet de `alphabet` caractères, c'est-à-dire
+     `alphabet × alphabet × … × alphabet` (`longueur` fois), **calculé avec une boucle**
+     (sans `**` ni `pow`).
+
+  ```python
+  factorielle(5)                       # 120
+  produit([2, 3, 7])                   # 42
+  nombre_de_mots_de_passe(4, 10)       # 10000 (code PIN à 4 chiffres)
+  ```
+
+  N'utilise pas `math.factorial` ni `math.prod`.
+starter: |
+  def factorielle(n):
+      pass
+
+
+  def produit(nombres):
+      pass
+
+
+  def nombre_de_mots_de_passe(longueur, alphabet):
+      pass
+tests: |
+  def test_factorielle():
+      "factorielle(5) == 120"
+      assert solution.factorielle(5) == 120, solution.factorielle(5)
+
+  def test_factorielle_bords():
+      "0! = 1 et 1! = 1"
+      assert solution.factorielle(0) == 1, solution.factorielle(0)
+      assert solution.factorielle(1) == 1
+
+  def test_grande_factorielle():
+      "20! (les entiers Python n'ont pas de limite)"
+      assert solution.factorielle(20) == 2432902008176640000
+
+  def test_produit():
+      "produit"
+      assert solution.produit([2, 3, 7]) == 42
+      assert solution.produit([5]) == 5
+      assert solution.produit([]) == 1, "le produit d'une liste vide vaut 1"
+      assert solution.produit([4, 0, 9]) == 0
+
+  def test_mots_de_passe():
+      "nombre_de_mots_de_passe"
+      assert solution.nombre_de_mots_de_passe(4, 10) == 10000
+      assert solution.nombre_de_mots_de_passe(8, 62) == 218340105584896
+      assert solution.nombre_de_mots_de_passe(0, 26) == 1
+solution: |
+  def factorielle(n):
+      resultat = 1
+      for k in range(2, n + 1):
+          resultat *= k
+      return resultat
+
+
+  def produit(nombres):
+      resultat = 1
+      for x in nombres:
+          resultat *= x
+      return resultat
+
+
+  def nombre_de_mots_de_passe(longueur, alphabet):
+      total = 1
+      for _ in range(longueur):
+          total *= alphabet
+      return total
+cours: |
+  ## Le motif de l'accumulateur
+
+  Une boucle qui calcule un résultat global suit toujours la même structure :
+
+  ```python
+  resultat = VALEUR_INITIALE
+  for element in sequence:
+      resultat = COMBINER(resultat, element)
+  return resultat
+  ```
+
+  La valeur initiale est l'**élément neutre** de l'opération : 0 pour une somme (x + 0 = x),
+  1 pour un produit (x × 1 = x), `""` pour une concaténation, `[]` pour une liste.
+  Initialiser un produit à 0 est un bug classique : le résultat vaut toujours 0.
+
+  ## Les opérateurs d'affectation augmentée
+
+  ```python
+  total += x     # total = total + x
+  total *= x     # total = total * x
+  texte += "!"   # concaténation
+  ```
+
+  ## Le neutre comme réponse au cas vide
+
+  Avec ce motif, les cas limites se gèrent tout seuls : si la séquence est vide, la boucle ne
+  fait aucun tour et on renvoie la valeur initiale. C'est pourquoi, en mathématiques, la
+  somme vide vaut 0 et le produit vide vaut 1 (et donc 0! = 1).
+
+  ## Répéter sans utiliser l'indice
+
+  Quand on veut seulement répéter une action `n` fois, on nomme la variable de boucle `_`
+  pour signaler qu'elle ne sert pas :
+
+  ```python
+  for _ in range(3):
+      print("ping")
+  ```
+
+  ## Des nombres qui grandissent vite
+
+  La factorielle et les puissances croissent extrêmement vite : 20! dépasse 2 × 10¹⁸, et
+  70! dépasse le nombre d'atomes estimé dans l'univers observable… Python gère des entiers
+  **de taille arbitraire**, sans débordement (contrairement au C ou au Java avec `int`).
+
+  ## Lien avec la sécurité
+
+  Le nombre de mots de passe possibles est `alphabet ** longueur`. Ajouter un caractère
+  multiplie ce nombre par la taille de l'alphabet, alors qu'enrichir l'alphabet de 26 à 62
+  caractères ne fait « que » multiplier chaque facteur par 2,4. C'est pourquoi la
+  **longueur** est le facteur le plus important pour résister à une attaque par force brute.
+
+  En vrai code, on utiliserait `math.factorial(n)`, `math.prod(liste)` et `alphabet **
+  longueur`.
+docs:
+  - title: Tutoriel — l'instruction for
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html#for-statements
+  - title: Module math (factorial, prod)
+    url: https://docs.python.org/fr/3/library/math.html

@@ -1,0 +1,74 @@
+title: Pair ou impair
+level: debutant
+order: 4
+tags: [conditions, modulo]
+summary: Utiliser if/else et l'opérateur modulo.
+description: |
+  Écris `pair_ou_impair(n)` qui renvoie la chaîne `"pair"` si `n` est pair, sinon `"impair"`.
+
+  Indice : l'opérateur `%` donne le reste d'une division (`7 % 2 == 1`).
+starter: |
+  def pair_ou_impair(n):
+      pass
+tests: |
+  def test_pair():
+      "4 est pair"
+      assert solution.pair_ou_impair(4) == "pair"
+
+  def test_impair():
+      "7 est impair"
+      assert solution.pair_ou_impair(7) == "impair"
+
+  def test_zero():
+      "0 est pair"
+      assert solution.pair_ou_impair(0) == "pair"
+
+  def test_negatif():
+      "-3 est impair"
+      assert solution.pair_ou_impair(-3) == "impair"
+solution: |
+  def pair_ou_impair(n):
+      return "pair" if n % 2 == 0 else "impair"
+cours: |
+  ## Le modulo `%`
+
+  `a % b` donne le **reste** de la division entière de `a` par `b` :
+
+  ```python
+  17 % 5    # 2   (17 = 3 × 5 + 2)
+  12 % 4    # 0   -> 12 est divisible par 4
+  -7 % 3    # 2   en Python, le résultat a le signe du diviseur
+  ```
+
+  Un nombre `n` est divisible par `d` exactement quand `n % d == 0`. C'est l'outil de base
+  pour tester la parité, trouver le chiffre des unités (`n % 10`), faire « tourner » un index
+  dans une liste circulaire (`(i + 1) % taille`), etc.
+
+  ## Les conditions : `if` / `else`
+
+  ```python
+  temperature = 25
+  if temperature > 30:
+      print("Canicule")
+  else:
+      print("Ça va")
+  ```
+
+  - La condition est une expression qui vaut `True` ou `False`.
+  - Les opérateurs de comparaison : `==` (égal), `!=` (différent), `<`, `<=`, `>`, `>=`.
+  - **Piège** : `=` affecte une valeur, `==` compare. `if n = 0:` est une erreur de syntaxe.
+
+  ## Renvoyer une chaîne
+
+  Une fonction peut renvoyer n'importe quel type de valeur, y compris du texte. Les guillemets
+  font partie de la syntaxe : `return "oui"` renvoie la chaîne `oui`. Vérifie
+  l'orthographe exacte demandée par l'énoncé : la moulinette compare les chaînes caractère
+  par caractère (`"Pair"` ≠ `"pair"`).
+
+  Astuce : comme `return` arrête la fonction, le `else` est parfois facultatif :
+  si le premier `return` a été exécuté, la suite n'est jamais atteinte.
+docs:
+  - title: Tutoriel — l'instruction if
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html#if-statements
+  - title: Opérations sur les nombres (types numériques)
+    url: https://docs.python.org/fr/3/library/stdtypes.html#numeric-types-int-float-complex

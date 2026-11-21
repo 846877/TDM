@@ -1,0 +1,290 @@
+title: Mini-moteur de templates
+level: expert
+order: 25
+tags: [parsing, regex, récursivité, chaînes]
+summary: Variables, filtres, boucles et conditions imbriquées, à la Jinja.
+description: |
+  Écris `rendre(modele, contexte)` qui produit une chaîne à partir d'un modèle et d'un dictionnaire,
+  avec une syntaxe inspirée de Jinja/Django :
+
+  **Expressions** `{{ expr }}` — les espaces autour de `expr` sont facultatifs :
+
+  - `nom` : valeur du contexte ;
+  - `nom.attribut.cle.0` : accès en chaîne ; à chaque étape on essaie la **clé** de dictionnaire, puis
+    l'**indice** de liste (si c'est un entier), puis l'**attribut** de l'objet ;
+  - une variable ou un chemin introuvable donne une chaîne **vide** ;
+  - filtres chaînables `{{ nom | lower | capitalize }}` : `upper`, `lower`, `capitalize`, `title`,
+    `len`, `strip` ; un filtre inconnu lève `ValueError` ;
+  - la valeur finale est convertie avec `str()`.
+
+  **Boucles** `{% for x in expr %}...{% endfor %}` : le corps est rendu pour chaque élément, avec en plus
+  la variable `boucle` contenant `index` (à partir de 1), `premier` et `dernier` (booléens).
+  Les boucles peuvent être imbriquées, et la variable de boucle masque temporairement une variable du
+  même nom.
+
+  **Conditions** `{% if expr %}...{% else %}...{% endif %}` (le `else` est facultatif) : test de
+  vérité Python sur la valeur ; `{% if not expr %}` inverse le test.
+
+  Le texte hors balises est recopié **tel quel** (espaces et retours à la ligne compris).
+  Une balise mal fermée, un `endfor` sans `for`, un `else` hors d'un `if`, ou une balise inconnue
+  lèvent `SyntaxError`.
+
+  ```python
+  rendre("{% for p in produits %}{{ p.nom | upper }}{% if not boucle.dernier %}, {% endif %}{% endfor %}",
+         {"produits": [{"nom": "pomme"}, {"nom": "poire"}]})
+  # "POMME, POIRE"
+  ```
+
+  Conseil : découpe le modèle en jetons (texte / `{{...}}` / `{%...%}`) avec `re.split`, construis un
+  arbre de nœuds avec un parser récursif, puis rends l'arbre.
+starter: |
+  import re
+
+
+  def rendre(modele, contexte):
+      pass
+tests: |
+  R = lambda m, c=None: solution.rendre(m, c or {})
+
+  def leve_syntaxe(modele):
+      try:
+          R(modele, {"x": [1]})
+      except SyntaxError:
+          pass
+      else:
+          raise AssertionError(f"SyntaxError attendue pour {modele!r}")
+
+  def test_texte():
+      "Texte brut recopié tel quel"
+      assert R("Bonjour\n  le monde ") == "Bonjour\n  le monde "
+      assert R("") == ""
+
+  def test_variables():
+      "Variables simples"
+      assert R("Salut {{nom}} !", {"nom": "Ada"}) == "Salut Ada !"
+      assert R("{{ n }}+{{ n }}", {"n": 2}) == "2+2"
+      assert R("[{{ absent }}]") == "[]"
+
+  def test_chemins():
+      "Chemins pointés : clé, indice, attribut"
+      class Utilisateur:
+          def __init__(self):
+              self.email = "ada@ex.fr"
+      ctx = {"u": {"profil": {"ville": "Lyon"}, "tags": ["a", "b"], "obj": Utilisateur()}}
+      assert R("{{ u.profil.ville }}", ctx) == "Lyon"
+      assert R("{{ u.tags.1 }}", ctx) == "b"
+      assert R("{{ u.obj.email }}", ctx) == "ada@ex.fr"
+      assert R("[{{ u.profil.pays }}][{{ u.tags.9 }}]", ctx) == "[][]"
+
+  def test_filtres():
+      "Filtres chaînables"
+      ctx = {"nom": "  aDa lovelace ", "liste": [1, 2, 3]}
+      assert R("{{ nom | strip | upper }}", ctx) == "ADA LOVELACE"
+      assert R("{{ nom|strip|title }}", ctx) == "Ada Lovelace"
+      assert R("{{ nom | strip | lower | capitalize }}", ctx) == "Ada lovelace"
+      assert R("{{ liste | len }}", ctx) == "3"
+      try:
+          R("{{ nom | inconnu }}", ctx)
+      except ValueError:
+          pass
+      else:
+          raise AssertionError("un filtre inconnu doit lever ValueError")
+
+  def test_for():
+      "Boucle for et variable boucle"
+      m = "{% for x in l %}{{ boucle.index }}:{{ x }}{% if not boucle.dernier %}, {% endif %}{% endfor %}"
+      assert R(m, {"l": ["a", "b", "c"]}) == "1:a, 2:b, 3:c"
+      assert R("{% for x in l %}{{ x }}{% endfor %}", {"l": []}) == ""
+      assert R("{% for x in l %}{% if boucle.premier %}>{% endif %}{{ x }}{% endfor %}", {"l": [1, 2]}) == ">12"
+
+  def test_for_imbrique():
+      "Boucles imbriquées et masquage"
+      ctx = {"x": "dehors", "lignes": [[1, 2], [3]]}
+      m = "{% for l in lignes %}[{% for x in l %}{{ x }}{% endfor %}]{% endfor %}{{ x }}"
+      assert R(m, ctx) == "[12][3]dehors"
+
+  def test_if_else():
+      "Conditions"
+      m = "{% if connecte %}Bonjour {{ nom }}{% else %}Connexion{% endif %}"
+      assert R(m, {"connecte": True, "nom": "Ada"}) == "Bonjour Ada"
+      assert R(m, {"connecte": False}) == "Connexion"
+      assert R("{% if liste %}non vide{% endif %}", {"liste": []}) == ""
+      assert R("{% if not liste %}vide{% endif %}", {"liste": []}) == "vide"
+
+  def test_complet():
+      "Exemple complet multi-lignes"
+      m = ("Commande de {{ client.nom | title }} :\n"
+           "{% for a in client.articles %}- {{ a.nom }} x{{ a.qte }}"
+           "{% if a.promo %} (promo){% endif %}\n{% endfor %}"
+           "{% if client.articles %}Total : {{ client.articles | len }} article(s){% else %}Panier vide{% endif %}")
+      ctx = {"client": {"nom": "ada lovelace", "articles": [{"nom": "stylo", "qte": 2, "promo": True}, {"nom": "cahier", "qte": 1}]}}
+      attendu = "Commande de Ada Lovelace :\n- stylo x2 (promo)\n- cahier x1\nTotal : 2 article(s)"
+      assert R(m, ctx) == attendu, f"obtenu :\n{R(m, ctx)}"
+
+  def test_erreurs_syntaxe():
+      "Erreurs de syntaxe"
+      for m in ["{% for x in x %}sans fin", "{% endfor %}", "{% if x %}a{% endfor %}", "{% else %}",
+                "{% while x %}{% endwhile %}", "{% if x %}{% else %}{% else %}{% endif %}", "{% for x %}{% endfor %}"]:
+          leve_syntaxe(m)
+solution: |
+  import re
+
+  JETONS = re.compile(r"(\{\{.*?\}\}|\{%.*?%\})", re.S)
+  FILTRES = {
+      "upper": lambda v: str(v).upper(),
+      "lower": lambda v: str(v).lower(),
+      "capitalize": lambda v: str(v).capitalize(),
+      "title": lambda v: str(v).title(),
+      "strip": lambda v: str(v).strip(),
+      "len": len,
+  }
+  _ABSENT = object()
+
+
+  def _resoudre(chemin, contexte):
+      morceaux = chemin.split(".")
+      valeur = contexte.get(morceaux[0], _ABSENT)
+      for morceau in morceaux[1:]:
+          if valeur is _ABSENT:
+              break
+          if isinstance(valeur, dict):
+              valeur = valeur.get(morceau, _ABSENT)
+          elif isinstance(valeur, (list, tuple)) and morceau.lstrip("-").isdigit():
+              try:
+                  valeur = valeur[int(morceau)]
+              except IndexError:
+                  valeur = _ABSENT
+          else:
+              valeur = getattr(valeur, morceau, _ABSENT)
+      return valeur
+
+
+  def _evaluer(expression, contexte):
+      morceaux = [m.strip() for m in expression.split("|")]
+      valeur = _resoudre(morceaux[0], contexte)
+      if valeur is _ABSENT:
+          valeur = ""
+      for nom in morceaux[1:]:
+          if nom not in FILTRES:
+              raise ValueError(f"filtre inconnu : {nom}")
+          valeur = FILTRES[nom](valeur)
+      return valeur
+
+
+  def _analyser(jetons, i, fins):
+      """Construit la liste de nœuds jusqu'à une balise de `fins` ; renvoie (noeuds, i, balise)."""
+      noeuds = []
+      while i < len(jetons):
+          jeton = jetons[i]
+          i += 1
+          if jeton.startswith("{{"):
+              noeuds.append(("expr", jeton[2:-2].strip()))
+          elif jeton.startswith("{%"):
+              mots = jeton[2:-2].split()
+              mot = mots[0] if mots else ""
+              if mot in fins:
+                  return noeuds, i, mot
+              if mot == "for":
+                  if len(mots) != 4 or mots[2] != "in":
+                      raise SyntaxError(f"boucle invalide : {jeton}")
+                  corps, i, _ = _analyser(jetons, i, {"endfor"})
+                  noeuds.append(("for", mots[1], mots[3], corps))
+              elif mot == "if":
+                  inverse = len(mots) == 3 and mots[1] == "not"
+                  if len(mots) != (3 if inverse else 2):
+                      raise SyntaxError(f"condition invalide : {jeton}")
+                  alors, i, fin = _analyser(jetons, i, {"else", "endif"})
+                  sinon = []
+                  if fin == "else":
+                      sinon, i, _ = _analyser(jetons, i, {"endif"})
+                  noeuds.append(("if", mots[-1], inverse, alors, sinon))
+              else:
+                  raise SyntaxError(f"balise inattendue : {jeton}")
+          elif jeton:
+              noeuds.append(("texte", jeton))
+      if fins:
+          raise SyntaxError(f"balise non fermée : {' ou '.join(sorted(fins))} attendu")
+      return noeuds, i, None
+
+
+  def _rendre(noeuds, contexte):
+      morceaux = []
+      for noeud in noeuds:
+          genre = noeud[0]
+          if genre == "texte":
+              morceaux.append(noeud[1])
+          elif genre == "expr":
+              morceaux.append(str(_evaluer(noeud[1], contexte)))
+          elif genre == "for":
+              _, variable, source, corps = noeud
+              elements = list(_evaluer(source, contexte) or [])
+              for index, element in enumerate(elements, start=1):
+                  local = dict(contexte)
+                  local[variable] = element
+                  local["boucle"] = {"index": index, "premier": index == 1, "dernier": index == len(elements)}
+                  morceaux.append(_rendre(corps, local))
+          else:
+              _, expression, inverse, alors, sinon = noeud
+              vrai = bool(_evaluer(expression, contexte)) != inverse
+              morceaux.append(_rendre(alors if vrai else sinon, contexte))
+      return "".join(morceaux)
+
+
+  def rendre(modele, contexte):
+      noeuds, _, _ = _analyser(JETONS.split(modele), 0, set())
+      return _rendre(noeuds, contexte)
+cours: |
+  ## À quoi sert un moteur de templates ?
+
+  Séparer la **présentation** (le modèle) des **données** (le contexte) : pages HTML,
+  e-mails, fichiers de configuration générés (Ansible et Salt utilisent Jinja pour produire
+  des `nginx.conf` ou des configurations d'équipements réseau à partir d'inventaires).
+
+  ## Découper le modèle en jetons
+
+  Une regex repère les balises et laisse le texte entre elles :
+
+  ```python
+  import re
+  BALISE = re.compile(r"\{\{(.*?)\}\}|\{%(.*?)%\}")
+  ```
+
+  `re.split` avec des groupes capturants conserve les séparateurs, et `re.finditer` donne
+  les positions : on obtient une suite « texte / expression / instruction ».
+
+  ## Construire un arbre
+
+  Les blocs (`for`, `if`) s'imbriquent : on les analyse **récursivement**. La fonction
+  d'analyse lit les jetons jusqu'à rencontrer une balise de fin attendue (`endfor`,
+  `endif`, ou `else`) et renvoie la liste des nœuds lus. Une **pile** ou la récursion
+  détecte les blocs mal fermés (`ValueError`).
+
+  Séparer l'analyse (une fois) du rendu (à chaque appel) est le choix de tous les moteurs
+  sérieux : le modèle compilé peut être réutilisé.
+
+  ## Résoudre un chemin `a.b.0`
+
+  À chaque segment : essayer la clé de dictionnaire, puis l'indice de liste, puis l'attribut
+  (`getattr`). Un échec à n'importe quelle étape donne une valeur vide plutôt qu'une
+  exception (choix de conception « tolérant » de Jinja).
+
+  ## Portée des variables
+
+  Dans une boucle, la variable de boucle ne doit pas écraser définitivement le contexte
+  extérieur : on rend le corps avec un **nouveau** contexte (`{**contexte, nom: element}`)
+  ou un `ChainMap`.
+
+  ## Filtres
+
+  Un dictionnaire `nom → fonction` (`str.upper`, `len`…) ; un filtre inconnu est une erreur
+  du modèle.
+
+  ## Sécurité
+
+  Un moteur qui insère des données dans du HTML doit **échapper** `<`, `>`, `&` (sinon :
+  injection XSS). Et n'utilise jamais `eval` pour évaluer les expressions d'un modèle.
+docs:
+  - title: Module string (Template)
+    url: https://docs.python.org/fr/3/library/string.html#template-strings
+  - title: Documentation Jinja (anglais)
+    url: https://jinja.palletsprojects.com/

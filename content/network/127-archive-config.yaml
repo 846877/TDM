@@ -1,0 +1,99 @@
+title: Archiver automatiquement la configuration
+level: intermediaire
+order: 27
+device: router
+hostname: R-SIEGE
+tags: [archive, sauvegarde, configuration, exploitation]
+summary: Garder un historique des configurations pour pouvoir revenir en arrière.
+description: |
+  Après une mauvaise manipulation, personne n'a su dire quelle était la configuration de la
+  veille. Mets en place l'**archivage** des configurations de `R-SIEGE` :
+
+  1. entre dans le mode `archive` ;
+  2. chemin `flash:archives/$h` (`$h` est remplacé par le nom d'hôte) ;
+  3. garder au plus `14` archives (`maximum 14`) ;
+  4. archiver à chaque `write memory` (`write-memory`) ;
+  5. archiver aussi automatiquement toutes les 24 h (`time-period 1440`, en minutes) ;
+  6. de retour en mode privilégié, crée une première archive avec `archive config`.
+
+  Contrôle avec `show archive`.
+checks:
+  - desc: Chemin d'archivage flash:archives/$h
+    expr: d.archive.get("path") == "flash:archives/$h"
+  - desc: 14 archives au plus
+    expr: d.archive.get("maximum") == 14
+  - desc: Archivage à chaque write memory et toutes les 1440 minutes
+    expr: d.archive.get("write_memory") and d.archive.get("time_period") == 1440
+  - desc: Une première archive a été créée
+    expr: len(d.archive_copies) >= 1
+    hint: "En mode privilégié : archive config"
+solution: |
+  configure terminal
+  archive
+  path flash:archives/$h
+  maximum 14
+  write-memory
+  time-period 1440
+  end
+  archive config
+cours: |
+  ## Pourquoi archiver ?
+
+  `startup-config` ne contient qu'**une** version : la dernière sauvegardée. En cas d'erreur, on
+  ne sait ni ce qui a changé ni comment revenir à l'état d'avant. La fonction **archive** d'IOS
+  conserve plusieurs versions horodatées de la configuration, localement ou sur un serveur.
+
+  ### Configuration
+
+  ```
+  R1(config)# archive
+  R1(config-archive)# path tftp://192.0.2.50/$h-$t
+  R1(config-archive)# maximum 8
+  R1(config-archive)# write-memory
+  R1(config-archive)# time-period 720
+  R1(config-archive)# end
+  R1# archive config
+  R1# show archive
+  The maximum archive configurations allowed is 8.
+  The next archive file will be named tftp://192.0.2.50/R1-Oct-19-2026-10-00-00-2
+   Archive #  Name
+     1        tftp://192.0.2.50/R1-Oct-19-2026-10-00-00-1 <- Most Recent
+  ```
+
+  | Commande       | Rôle                                                     |
+  |----------------|----------------------------------------------------------|
+  | `path`         | emplacement et préfixe ; `$h` = hostname, `$t` = date    |
+  | `maximum`      | nombre de versions conservées (rotation) — seulement sur un stockage local |
+  | `write-memory` | crée une archive à chaque `write memory` / `copy run start` |
+  | `time-period`  | archive périodique, en **minutes**                       |
+
+  ### Exploiter les archives
+
+  - `show archive config differences flash:archives/R1-1 system:running-config` compare deux
+    versions ;
+  - `configure replace flash:archives/R1-1` remplace la configuration courante par une archive
+    (retour arrière complet, sans redémarrer) ;
+  - `configure terminal revert timer 10` (couplé à `configure confirm`) annule automatiquement
+    les changements si on perd l'accès.
+
+  ### Journaliser les modifications
+
+  Dans le même mode, `log config` puis `logging enable` enregistrent **qui** a tapé **quelle**
+  commande : précieux pour comprendre un incident.
+
+  ### Pièges fréquents
+
+  - Oublier la création du dossier sur la flash (`mkdir flash:archives`) sur un vrai équipement.
+  - Confondre `time-period 1440` (minutes) avec des secondes ou des heures.
+  - Archiver uniquement sur la flash : si le routeur meurt, les archives aussi. Préférer un
+    serveur distant (TFTP, SCP, FTP).
+
+  ### Pour le CCNA / CCNP ENCOR
+
+  La gestion des configurations (sauvegarde, restauration, archive) fait partie des tâches
+  d'exploitation attendues ; ENCOR ajoute `configure replace` et les outils d'automatisation.
+docs:
+  - title: Cisco IOS 15.4M&T — références de commandes
+    url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-4m-t/products-command-reference-list.html
+  - title: Wikipédia — Cisco IOS
+    url: https://fr.wikipedia.org/wiki/Cisco_IOS

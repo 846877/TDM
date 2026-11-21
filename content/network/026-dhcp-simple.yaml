@@ -1,0 +1,104 @@
+title: Mon premier serveur DHCP
+level: debutant
+order: 26
+device: router
+hostname: R-BUREAU
+tags: [dhcp, services, ipv4]
+summary: Distribuer automatiquement adresse, passerelle et DNS aux postes du bureau.
+description: |
+  Les postes du bureau (`192.168.20.0/24`, derrière `G0/0`) doivent recevoir leur configuration
+  IP automatiquement. Configure le routeur comme serveur DHCP :
+
+  1. exclus les adresses `192.168.20.1` à `192.168.20.20` (routeur, imprimantes, serveur) ;
+  2. crée le pool `BUREAU` :
+     - réseau `192.168.20.0 255.255.255.0`,
+     - passerelle `192.168.20.1`,
+     - DNS `192.168.20.10`,
+     - domaine `bureau.local`,
+     - bail de `2` jours (`lease 2`).
+
+  Contrôle avec `show ip dhcp pool` (et, sur un vrai réseau, `show ip dhcp binding`).
+initial: |
+  interface g0/0
+  ip address 192.168.20.1 255.255.255.0
+  no shutdown
+checks:
+  - desc: Adresses .1 à .20 exclues
+    expr: ("192.168.20.1", "192.168.20.20") in d.dhcp_excluded
+    hint: "ip dhcp excluded-address 192.168.20.1 192.168.20.20"
+  - desc: Pool BUREAU sur 192.168.20.0/24
+    expr: d.dhcp_pools["BUREAU"].network == "192.168.20.0" and d.dhcp_pools["BUREAU"].mask == "255.255.255.0"
+  - desc: Passerelle 192.168.20.1 et DNS 192.168.20.10 distribués
+    expr: d.dhcp_pools["BUREAU"].default_router == "192.168.20.1" and d.dhcp_pools["BUREAU"].dns_servers == ["192.168.20.10"]
+  - desc: Domaine bureau.local et bail de 2 jours
+    expr: d.dhcp_pools["BUREAU"].domain_name == "bureau.local" and d.dhcp_pools["BUREAU"].lease == "2"
+solution: |
+  configure terminal
+  ip dhcp excluded-address 192.168.20.1 192.168.20.20
+  ip dhcp pool BUREAU
+  network 192.168.20.0 255.255.255.0
+  default-router 192.168.20.1
+  dns-server 192.168.20.10
+  domain-name bureau.local
+  lease 2
+  end
+cours: |
+  ## DHCP en quatre messages : DORA
+
+  Un poste qui démarre sans adresse IP utilise **DHCP** (UDP 67 côté serveur, 68 côté client) :
+
+  1. **D**iscover : le client cherche un serveur, en **broadcast** (il n'a pas encore d'adresse) ;
+  2. **O**ffer : le serveur propose une adresse et des options ;
+  3. **R**equest : le client demande officiellement l'adresse proposée (toujours en broadcast,
+     pour prévenir les autres serveurs éventuels) ;
+  4. **A**ck : le serveur confirme ; le **bail** (*lease*) commence.
+
+  À mi-bail, le client tente de le renouveler directement auprès du serveur.
+
+  ### Configurer un routeur Cisco en serveur DHCP
+
+  ```
+  R1(config)# ip dhcp excluded-address 10.30.0.1 10.30.0.9
+  R1(config)# ip dhcp pool INVITES
+  R1(dhcp-config)# network 10.30.0.0 255.255.255.0
+  R1(dhcp-config)# default-router 10.30.0.1
+  R1(dhcp-config)# dns-server 1.1.1.1 9.9.9.9
+  R1(dhcp-config)# domain-name invites.lan
+  R1(dhcp-config)# lease 0 8
+  ```
+
+  - les **exclusions** se configurent en mode global, **hors** du pool ;
+  - `lease <jours> [heures] [minutes]` : `lease 0 8` = 8 heures (bon choix pour des invités),
+    par défaut 1 jour ;
+  - le routeur doit avoir une interface dans le réseau du pool, sinon les requêtes ne lui
+    parviennent pas (ou il faut un **relais** : `ip helper-address`, niveau intermédiaire).
+
+  ### Vérifier
+
+  ```
+  R1# show ip dhcp pool
+  R1# show ip dhcp binding          (adresses attribuées)
+  R1# show ip dhcp conflict         (adresses déjà utilisées détectées par ping)
+  R1# clear ip dhcp binding *
+  ```
+
+  Côté poste Windows : `ipconfig /release` puis `ipconfig /renew` ; sous Linux : `dhclient -r`
+  puis `dhclient`.
+
+  ### Pièges fréquents
+
+  - Oublier d'exclure l'adresse du routeur ou des imprimantes : conflit d'adresses.
+  - Se tromper de passerelle (`default-router`) : les postes ont une adresse mais ne sortent pas
+    de leur réseau.
+  - Un deuxième serveur DHCP non autorisé (box personnelle) : la parade est le **DHCP snooping**.
+  - Exclure toute une plage par erreur avec un masque de pool trop petit.
+
+  ### Pour le CCNA
+
+  DORA, le rôle des exclusions et des options (passerelle, DNS, bail) et les commandes de
+  vérification sont au programme, tout comme le relais DHCP et le DHCP snooping.
+docs:
+  - title: Wikipédia — Dynamic Host Configuration Protocol
+    url: https://fr.wikipedia.org/wiki/Dynamic_Host_Configuration_Protocol
+  - title: RFC 2131 — Dynamic Host Configuration Protocol
+    url: https://www.rfc-editor.org/rfc/rfc2131

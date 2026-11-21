@@ -1,0 +1,10 @@
+# Nouveau serveur de fichiers srv-fichiers2 : disques ajoutés et formatés par le prestataire.
+# Résultat de la commande blkid sur ce serveur :
+/dev/sdb1: LABEL="DONNEES" UUID="3f2b6c1e-8a4d-4f1e-9c2a-7d5e1b0a9f34" TYPE="ext4" PARTUUID="a1b2c3d4-01"
+/dev/sdb2: UUID="9c1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f" TYPE="swap" PARTUUID="a1b2c3d4-02"
+/dev/sdc1: LABEL="SAUVEGARDES" UUID="d4e5f6a7-b8c9-4d0e-a1f2-b3c4d5e6f708" TYPE="xfs" PARTUUID="e5f6a7b8-01"
+#
+# Montages attendus :
+#   DONNEES      -> /srv/donnees       (options : defaults,noatime ; vérifié au démarrage, ordre 2)
+#   swap         -> espace d'échange   (options : sw)
+#   SAUVEGARDES  -> /srv/sauvegardes   (options : defaults,nofail ; disque USB, le serveur doit démarrer sans lui ; ordre 2)

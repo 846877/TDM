@@ -1,0 +1,207 @@
+title: Recherche de chemin A*
+level: expert
+order: 19
+tags: [graphes, algorithmes, heapq, heuristique]
+summary: Le plus court chemin sur un terrain à coûts variables, guidé par une heuristique.
+description: |
+  Écris `a_etoile(grille)` qui trouve un chemin de coût minimal sur une carte :
+
+  - `grille` est une liste de chaînes de même longueur ;
+  - `S` : départ, `E` : arrivée, `#` : obstacle infranchissable ;
+  - `.` coûte 1 à traverser, un chiffre `1` à `9` coûte sa valeur (boue, forêt…) ;
+    entrer sur `S` ou `E` coûte 1 ;
+  - le coût d'un chemin est la somme des coûts des cases **sur lesquelles on entre** (la case de départ
+    ne compte pas) ; déplacements en haut, bas, gauche, droite.
+
+  Renvoie `(cout, chemin)` où `chemin` est la liste des positions `(ligne, colonne)` de `S` à `E`
+  inclus, ou `None` si l'arrivée est inaccessible.
+
+  **A\*** est un Dijkstra guidé : on explore en priorité les cases qui minimisent
+  `f = g + h`, où `g` est le coût déjà parcouru et `h` une **estimation optimiste** du coût restant.
+  Ici, la distance de Manhattan jusqu'à `E` convient (chaque case coûte au moins 1), ce qui garantit
+  un chemin optimal. Utilise `heapq`.
+
+  La moulinette compare tes coûts à un Dijkstra de référence sur des cartes aléatoires et teste une
+  carte de 200 × 200.
+starter: |
+  import heapq
+
+
+  def a_etoile(grille):
+      pass
+tests: |
+  import heapq, random
+
+  def cout_case(c):
+      return int(c) if c.isdigit() else 1
+
+  def dijkstra(grille):
+      L, C = len(grille), len(grille[0])
+      cases = {(l, c): ch for l, ligne in enumerate(grille) for c, ch in enumerate(ligne)}
+      s = next(p for p, ch in cases.items() if ch == "S")
+      dist = {s: 0}; tas = [(0, s)]
+      while tas:
+          d, (l, c) = heapq.heappop(tas)
+          if cases[(l, c)] == "E":
+              return d
+          if d > dist[(l, c)]:
+              continue
+          for v in ((l + 1, c), (l - 1, c), (l, c + 1), (l, c - 1)):
+              if v in cases and cases[v] != "#":
+                  nd = d + cout_case(cases[v])
+                  if nd < dist.get(v, float("inf")):
+                      dist[v] = nd; heapq.heappush(tas, (nd, v))
+      return None
+
+  def verifier(grille, attendu):
+      r = solution.a_etoile(grille)
+      if attendu is None:
+          assert r is None, f"aucun chemin n'existe, obtenu {r}"
+          return
+      assert r is not None, "un chemin existe"
+      cout, chemin = r
+      assert cout == attendu, f"coût {cout}, attendu {attendu}"
+      assert grille[chemin[0][0]][chemin[0][1]] == "S" and grille[chemin[-1][0]][chemin[-1][1]] == "E"
+      total = 0
+      for (l1, c1), (l2, c2) in zip(chemin, chemin[1:]):
+          assert abs(l1 - l2) + abs(c1 - c2) == 1, f"déplacement invalide {(l1, c1)} → {(l2, c2)}"
+          assert 0 <= l2 < len(grille) and 0 <= c2 < len(grille[0]) and grille[l2][c2] != "#", f"case interdite {(l2, c2)}"
+          total += cout_case(grille[l2][c2])
+      assert total == cout, f"le chemin coûte {total}, pas {cout}"
+
+  def test_simple():
+      "Ligne droite"
+      verifier(["S..E"], 3)
+
+  def test_obstacles():
+      "Contourner un mur"
+      verifier(["S.#.",
+                "..#.",
+                "...E"], 5)
+
+  def test_couts():
+      "La boue coûte cher : mieux vaut faire un détour"
+      verifier(["S99E",
+                "...."], 5)
+      verifier(["S2E",
+                "#.#"], 3)
+
+  def test_impossible():
+      "Arrivée inaccessible"
+      verifier(["S#E"], None)
+      verifier(["S.",
+                "##",
+                "E."], None)
+
+  def test_aleatoire():
+      "Comparaison avec Dijkstra"
+      rng = random.Random(19)
+      for _ in range(25):
+          L, C = rng.randint(2, 15), rng.randint(2, 15)
+          g = [[rng.choice("....123#9#") for _ in range(C)] for _ in range(L)]
+          cases = rng.sample([(l, c) for l in range(L) for c in range(C)], 2)
+          g[cases[0][0]][cases[0][1]] = "S"; g[cases[1][0]][cases[1][1]] = "E"
+          grille = ["".join(l) for l in g]
+          verifier(grille, dijkstra(grille))
+
+  def test_grande_carte():
+      "Carte de 200 × 200"
+      n = 200
+      rng = random.Random(1)
+      g = [["#" if rng.random() < 0.2 else rng.choice(".....2") for _ in range(n)] for _ in range(n)]
+      g[0][0] = "S"; g[n - 1][n - 1] = "E"
+      for i in range(n):           # un couloir garanti
+          g[i][0] = g[i][0] if g[i][0] == "S" else "."
+          g[n - 1][i] = g[n - 1][i] if g[n - 1][i] == "E" else "."
+      grille = ["".join(l) for l in g]
+      verifier(grille, dijkstra(grille))
+solution: |
+  import heapq
+
+
+  def a_etoile(grille):
+      lignes, colonnes = len(grille), len(grille[0])
+      depart = arrivee = None
+      for l, ligne in enumerate(grille):
+          for c, case in enumerate(ligne):
+              if case == "S":
+                  depart = (l, c)
+              elif case == "E":
+                  arrivee = (l, c)
+
+      def h(position):
+          return abs(position[0] - arrivee[0]) + abs(position[1] - arrivee[1])
+
+      g = {depart: 0}
+      parent = {depart: None}
+      tas = [(h(depart), 0, depart)]
+      while tas:
+          _, cout, position = heapq.heappop(tas)
+          if position == arrivee:
+              chemin = []
+              while position is not None:
+                  chemin.append(position)
+                  position = parent[position]
+              return cout, chemin[::-1]
+          if cout > g[position]:
+              continue
+          l, c = position
+          for voisin in ((l + 1, c), (l - 1, c), (l, c + 1), (l, c - 1)):
+              vl, vc = voisin
+              if 0 <= vl < lignes and 0 <= vc < colonnes and grille[vl][vc] != "#":
+                  case = grille[vl][vc]
+                  nouveau = cout + (int(case) if case.isdigit() else 1)
+                  if nouveau < g.get(voisin, float("inf")):
+                      g[voisin] = nouveau
+                      parent[voisin] = position
+                      heapq.heappush(tas, (nouveau + h(voisin), nouveau, voisin))
+      return None
+cours: |
+  ## Dijkstra guidé
+
+  Dijkstra explore dans toutes les directions par coût croissant. **A\*** ajoute une
+  **heuristique** `h(n)` qui estime le coût restant jusqu'au but, et explore en priorité les
+  nœuds qui minimisent `f(n) = g(n) + h(n)`, où `g(n)` est le coût réel depuis le départ.
+  L'exploration est attirée vers la cible : beaucoup moins de nœuds visités.
+
+  ## Heuristique admissible
+
+  Si `h` ne **surestime jamais** le coût réel restant (heuristique *admissible*), A\* trouve
+  un chemin optimal. Sur une grille à 4 directions où chaque case coûte au moins 1, la
+  **distance de Manhattan** `|l1 − l2| + |c1 − c2|` est admissible.
+
+  - `h = 0` : on retrouve exactement Dijkstra ;
+  - `h` trop grande (non admissible) : plus rapide mais chemin parfois sous-optimal.
+
+  Si de plus `h` est *cohérente* (`h(a) ≤ coût(a, b) + h(b)`), un nœud extrait du tas a son
+  coût définitif, comme dans Dijkstra. Manhattan est cohérente ici.
+
+  ## Implémentation
+
+  ```python
+  import heapq
+  tas = [(h(depart), 0, depart)]          # (f, g, position)
+  g = {depart: 0}
+  parent = {}
+  ```
+
+  À chaque extraction : ignorer les entrées périmées (`g` extrait plus grand que le meilleur
+  connu), s'arrêter si c'est le but, sinon examiner les 4 voisins : coût d'entrée selon la
+  case, mise à jour de `g` et `parent` si on améliore, et insertion avec la nouvelle priorité
+  `f`. Le chemin se reconstruit en remontant `parent`.
+
+  ## Départager les égalités
+
+  À `f` égal, préférer le plus grand `g` (le nœud le plus proche du but) réduit souvent
+  l'exploration. Dans le tuple, un compteur évite de comparer des objets non comparables.
+
+  ## Applications
+
+  Jeux vidéo (déplacement des personnages), GPS et calcul d'itinéraire (avec des heuristiques
+  géographiques), robotique, résolution de puzzles (taquin). La qualité de l'heuristique fait
+  toute la différence de performance.
+docs:
+  - title: Wikipédia — Algorithme A*
+    url: https://fr.wikipedia.org/wiki/Algorithme_A*
+  - title: Module heapq
+    url: https://docs.python.org/fr/3/library/heapq.html

@@ -1,0 +1,163 @@
+title: Surveiller l'espace disque
+level: debutant
+order: 50
+tags: [projet, listes, f-string, sysadmin]
+summary: Un rapport d'occupation des disques avec alertes, comme un script de supervision.
+mode: stdio
+description: |
+  Tu écris un petit script de supervision. La première ligne contient le **seuil d'alerte**
+  en pourcentage (entier). Chaque ligne suivante, jusqu'à la fin de l'entrée, décrit un
+  volume : `point_de_montage taille_go utilise_go` (tailles entières).
+
+  Pour chaque volume, affiche une ligne :
+
+  ```
+  <point de montage> : <pourcentage> %
+  ```
+
+  où le pourcentage est **arrondi à l'entier** (`round`), suivi de ` ALERTE` si ce
+  pourcentage est **supérieur ou égal** au seuil. Puis affiche un résumé :
+
+  ```
+  Total : <utilisé total>/<taille totale> Go (<pourcentage global> %)
+  Alertes : <nombre>
+  ```
+
+  Exemple d'entrée :
+
+  ```
+  90
+  / 50 23
+  /var 100 95
+  /home 500 120
+  ```
+
+  Sortie :
+
+  ```
+  / : 46 %
+  /var : 95 % ALERTE
+  /home : 24 %
+  Total : 238/650 Go (37 %)
+  Alertes : 1
+  ```
+
+  Pour lire jusqu'à la fin : `import sys` puis `for ligne in sys.stdin:` (ignore les lignes
+  vides). Un volume de taille 0 compte comme 0 %. S'il n'y a aucun volume, le pourcentage
+  global vaut 0.
+starter: |
+  # Écris ton code ici
+cases:
+  - name: Exemple de l'énoncé
+    input: |
+      90
+      / 50 23
+      /var 100 95
+      /home 500 120
+    output: |
+      / : 46 %
+      /var : 95 % ALERTE
+      /home : 24 %
+      Total : 238/650 Go (37 %)
+      Alertes : 1
+  - name: Seuil atteint pile et arrondis
+    input: |
+      80
+      /data 1000 800
+      /backup 3 2
+      /tmp 0 0
+
+      /srv 7 6
+    output: |
+      /data : 80 % ALERTE
+      /backup : 67 %
+      /tmp : 0 %
+      /srv : 86 % ALERTE
+      Total : 808/1010 Go (80 %)
+      Alertes : 2
+  - name: Aucun volume
+    input: |
+      75
+    output: |
+      Total : 0/0 Go (0 %)
+      Alertes : 0
+solution: |
+  import sys
+
+  seuil = int(sys.stdin.readline())
+  total_taille = 0
+  total_utilise = 0
+  alertes = 0
+  for ligne in sys.stdin:
+      morceaux = ligne.split()
+      if not morceaux:
+          continue
+      point, taille, utilise = morceaux[0], int(morceaux[1]), int(morceaux[2])
+      total_taille += taille
+      total_utilise += utilise
+      pourcentage = round(utilise * 100 / taille) if taille else 0
+      texte = f"{point} : {pourcentage} %"
+      if pourcentage >= seuil:
+          texte += " ALERTE"
+          alertes += 1
+      print(texte)
+  global_pct = round(total_utilise * 100 / total_taille) if total_taille else 0
+  print(f"Total : {total_utilise}/{total_taille} Go ({global_pct} %)")
+  print(f"Alertes : {alertes}")
+cours: |
+  ## Un vrai besoin d'administrateur
+
+  Surveiller le remplissage des disques est une tâche de base : un `/var` plein empêche les
+  journaux de s'écrire, une base de données s'arrête, les sauvegardes échouent. Les outils de
+  supervision (Nagios, Zabbix, Centreon) lancent régulièrement de petits scripts qui
+  affichent un état et des alertes, exactement comme celui-ci.
+
+  ## Lire jusqu'à la fin de l'entrée
+
+  Quand on ne sait pas combien de lignes vont arriver, on lit l'entrée standard comme un
+  fichier :
+
+  ```python
+  import sys
+  premiere = sys.stdin.readline()     # une seule ligne
+  for ligne in sys.stdin:             # toutes les lignes restantes
+      ...
+  ```
+
+  La boucle s'arrête d'elle-même à la fin des données (fin de fichier, ou `Ctrl+D` au
+  clavier sous Linux, `Ctrl+Z` puis Entrée sous Windows). C'est ainsi qu'un script peut
+  recevoir la sortie d'une autre commande : `df -BG | python3 rapport.py`.
+
+  ## Découper et convertir
+
+  `ligne.split()` découpe sur les espaces et ignore le `\n` final ; une ligne vide donne une
+  liste vide, facile à ignorer. Les tailles doivent être converties avec `int()` avant tout
+  calcul.
+
+  ## Pourcentages et division par zéro
+
+  `utilise * 100 / taille` donne un pourcentage décimal ; `round()` l'arrondit à l'entier le
+  plus proche (avec l'arrondi bancaire sur les cas pile au milieu). Une taille nulle
+  provoquerait une `ZeroDivisionError` : l'expression conditionnelle
+  `valeur if condition else 0` règle le cas en une ligne.
+
+  ## Plusieurs accumulateurs
+
+  En un seul parcours, on met à jour plusieurs totaux : taille cumulée, espace utilisé
+  cumulé, nombre d'alertes. Le pourcentage global se calcule **à partir des totaux**, pas
+  comme une moyenne des pourcentages (un petit disque plein ne pèse pas autant qu'un grand).
+
+  ## Construire une ligne en plusieurs étapes
+
+  On peut préparer le texte dans une variable, puis lui ajouter une mention sous condition
+  avec `+=` avant de l'afficher.
+
+  ## Pour aller plus loin
+
+  En Python, `shutil.disk_usage("/")` renvoie directement la taille, l'espace utilisé et
+  l'espace libre d'un volume, et le module `psutil` (externe) liste toutes les partitions.
+docs:
+  - title: Module sys (sys.stdin)
+    url: https://docs.python.org/fr/3/library/sys.html#sys.stdin
+  - title: shutil.disk_usage
+    url: https://docs.python.org/fr/3/library/shutil.html#shutil.disk_usage

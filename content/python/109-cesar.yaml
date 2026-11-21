@@ -1,0 +1,93 @@
+title: Chiffre de César
+level: intermediaire
+order: 9
+tags: [chaînes, ord/chr]
+summary: Chiffrer un message en décalant les lettres.
+description: |
+  Écris `cesar(texte, decalage)` qui décale chaque lettre de `decalage` positions dans l'alphabet
+  (en revenant au début après `z`). Majuscules et minuscules sont conservées, les autres caractères
+  restent inchangés. Le décalage peut être négatif (déchiffrement).
+
+  ```python
+  cesar("Bonjour !", 3)   # "Erqmrxu !"
+  cesar("Erqmrxu !", -3)  # "Bonjour !"
+  ```
+
+  Indice : `ord("a")`, `chr(...)` et le modulo `% 26`.
+starter: |
+  def cesar(texte, decalage):
+      pass
+tests: |
+  def test_chiffrer():
+      "Chiffrement simple"
+      assert solution.cesar("Bonjour !", 3) == "Erqmrxu !"
+
+  def test_dechiffrer():
+      "Déchiffrement"
+      assert solution.cesar("Erqmrxu !", -3) == "Bonjour !"
+
+  def test_bouclage():
+      "On repart au début après z"
+      assert solution.cesar("xyz XYZ", 3) == "abc ABC"
+
+  def test_grand_decalage():
+      "Décalage supérieur à 26"
+      assert solution.cesar("abc", 29) == "def"
+solution: |
+  def cesar(texte, decalage):
+      resultat = []
+      for c in texte:
+          if c.isascii() and c.isalpha():
+              base = ord("A") if c.isupper() else ord("a")
+              resultat.append(chr((ord(c) - base + decalage) % 26 + base))
+          else:
+              resultat.append(c)
+      return "".join(resultat)
+cours: |
+  ## Caractères et codes
+
+  Chaque caractère a un numéro (son **point de code** Unicode). `ord` donne le numéro,
+  `chr` fait l'inverse :
+
+  ```python
+  ord("a")    # 97
+  ord("A")    # 65
+  chr(98)     # "b"
+  ```
+
+  Les lettres minuscules ASCII sont **consécutives** de 97 (`a`) à 122 (`z`), les
+  majuscules de 65 à 90. On obtient donc la position d'une lettre dans l'alphabet
+  (0 à 25) par `ord(c) - ord("a")`.
+
+  ## Arithmétique modulaire
+
+  Pour « revenir au début » après `z`, on travaille modulo 26 :
+
+  ```python
+  (24 + 5) % 26     # 3
+  (2 - 5) % 26      # 23 : en Python, le résultat est toujours positif
+  ```
+
+  Cette propriété de `%` en Python (le résultat a le signe du diviseur) rend le décalage
+  négatif gratuit. Dans d'autres langages (C, Java), `-3 % 26` vaut `-3` : prudence.
+
+  Le schéma général : **position** = code − base ; **nouvelle position** = (position +
+  décalage) % 26 ; **caractère** = chr(base + nouvelle position), avec `base` égal à
+  `ord("a")` ou `ord("A")` selon la casse.
+
+  ## Ne chiffrer que les lettres ASCII
+
+  Utilise une condition pour choisir la base : `"a" <= c <= "z"` compare les caractères par
+  code. `c.isalpha()` serait vrai aussi pour `é`, qui ne doit pas être décalé ici.
+
+  ## Sécurité
+
+  César n'offre **aucune** sécurité : il n'y a que 25 clés possibles, une attaque par force
+  brute est immédiate, et l'analyse de fréquence (le `e` est la lettre la plus courante en
+  français) trahit le décalage. Pour du vrai chiffrement, on utilise des bibliothèques
+  éprouvées (AES via `cryptography`), jamais un algorithme maison.
+docs:
+  - title: Documentation Python — ord() et chr()
+    url: https://docs.python.org/fr/3/library/functions.html#ord
+  - title: Wikipédia — Chiffrement par décalage
+    url: https://fr.wikipedia.org/wiki/Chiffrement_par_d%C3%A9calage

@@ -1,0 +1,105 @@
+title: Initiales
+level: debutant
+order: 21
+tags: [chaînes, méthodes, listes]
+summary: Découper une chaîne avec split et la reconstruire.
+description: |
+  Écris `initiales(nom_complet)` qui renvoie les initiales d'un nom, en majuscules, chacune
+  suivie d'un point. Les prénoms composés avec un tiret comptent pour plusieurs initiales, et
+  les espaces en trop sont ignorés.
+
+  ```python
+  initiales("ada lovelace")        # "A.L."
+  initiales("Jean-Luc  Picard")    # "J.L.P."
+  initiales("  grace hopper ")     # "G.H."
+  ```
+
+  Astuces : `split()` sans argument découpe sur les espaces (même multiples),
+  `replace("-", " ")` transforme les tirets et `upper()` met en majuscule.
+starter: |
+  def initiales(nom_complet):
+      pass
+tests: |
+  def test_simple():
+      "ada lovelace -> A.L."
+      r = solution.initiales("ada lovelace")
+      assert r == "A.L.", f"attendu 'A.L.', obtenu {r!r}"
+
+  def test_tiret():
+      "Prénom composé avec un tiret"
+      r = solution.initiales("Jean-Luc Picard")
+      assert r == "J.L.P.", f"attendu 'J.L.P.', obtenu {r!r}"
+
+  def test_espaces():
+      "Espaces multiples et en bordure"
+      r = solution.initiales("  grace   hopper ")
+      assert r == "G.H.", f"attendu 'G.H.', obtenu {r!r}"
+
+  def test_un_mot():
+      "Un seul mot"
+      r = solution.initiales("linus")
+      assert r == "L.", f"attendu 'L.', obtenu {r!r}"
+
+  def test_vide():
+      "Chaîne vide -> chaîne vide"
+      r = solution.initiales("")
+      assert r == "", f"attendu '', obtenu {r!r}"
+solution: |
+  def initiales(nom_complet):
+      resultat = ""
+      for mot in nom_complet.replace("-", " ").split():
+          resultat += mot[0].upper() + "."
+      return resultat
+cours: |
+  ## Découper une chaîne : `split`
+
+  `texte.split(sep)` renvoie la **liste** des morceaux séparés par `sep` :
+
+  ```python
+  "a,b,,c".split(",")       # ['a', 'b', '', 'c']
+  "  un   deux ".split()    # ['un', 'deux']
+  "192.168.1.10".split(".") # ['192', '168', '1', '10']
+  ```
+
+  Différence importante :
+
+  - **sans argument**, `split()` coupe sur n'importe quelle suite d'espaces (espaces,
+    tabulations, retours à la ligne) et ignore les espaces au début et à la fin ;
+  - **avec un séparateur explicite**, chaque occurrence compte : deux séparateurs collés
+    produisent une chaîne vide.
+
+  ## Recoller : `join`
+
+  `sep.join(liste)` fait l'inverse : il assemble une liste de **chaînes** avec un
+  séparateur.
+
+  ```python
+  "-".join(["2026", "10", "19"])   # "2026-10-19"
+  "".join(["a", "b", "c"])         # "abc"
+  ```
+
+  Tous les éléments doivent être des chaînes, sinon `TypeError`.
+
+  ## Accéder au premier caractère
+
+  `mot[0]` donne le premier caractère. Sur une chaîne vide, c'est une `IndexError` : c'est
+  une raison de plus de préférer `split()` sans argument, qui ne produit jamais de morceau
+  vide.
+
+  ## Normaliser avant de traiter
+
+  Une stratégie robuste pour traiter du texte saisi par un humain :
+
+  1. remplacer les séparateurs « exotiques » par un séparateur unique (`replace`) ;
+  2. découper (`split`) ;
+  3. transformer chaque morceau (`upper`, `capitalize`, `title`…) ;
+  4. recoller (`join` ou concaténation).
+
+  `"jean-luc".title()` donne `"Jean-Luc"` : `title()` met une majuscule après chaque
+  caractère non alphabétique. Pratique, mais attention à `"l'été".title()` qui donne
+  `"L'Été"`.
+docs:
+  - title: Méthode str.split
+    url: https://docs.python.org/fr/3/library/stdtypes.html#str.split
+  - title: Méthode str.join
+    url: https://docs.python.org/fr/3/library/stdtypes.html#str.join

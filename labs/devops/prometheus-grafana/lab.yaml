@@ -1,0 +1,329 @@
+title: Supervision avec Prometheus et Grafana
+level: avance
+order: 4
+tags: [prometheus, grafana, alertmanager, promql, supervision, observabilité]
+summary: Cibles, PromQL, règles d'enregistrement, alertes, Alertmanager, source de données et tableau de bord Grafana.
+compose: docker-compose.yml
+service: ops
+shell: bash
+workdir: /etc/prometheus
+description: |
+  Une pile de supervision complète. Ton terminal est sur **ops**, où tourne **Prometheus**
+  (configuration : `/etc/prometheus/prometheus.yml`). Autour :
+
+  | Service | Adresse | Rôle |
+  |---|---|---|
+  | `node` | `node:9100` | node-exporter : métriques système (CPU, mémoire, disque) |
+  | `app` | `app:8000` | application de démo : `/metrics`, et `/charge?n=150` pour remplir sa file d'attente |
+  | `alertmanager` | `alertmanager:9093` | reçoit et regroupe les alertes |
+  | `grafana` | `grafana:3000` | tableaux de bord (utilisateur `admin`, mot de passe `tdm`) |
+
+  Interfaces web : Prometheus sur **http://localhost:9390**, Grafana sur **http://localhost:3300**.
+
+  Après chaque modification de la configuration : `promtool check config prometheus.yml`, puis
+  `curl -X POST http://localhost:9090/-/reload`. Si Prometheus s'est arrêté : `demarrer-prometheus`
+  (journal dans `/var/log/prometheus.log`). L'API se consulte avec `curl` et `jq`, par exemple
+  `curl -s localhost:9090/api/v1/targets | jq`.
+cours: |
+  ## Supervision : Prometheus, Alertmanager et Grafana
+
+  Superviser, c'est savoir **avant les utilisateurs** que quelque chose ne va pas, et comprendre pourquoi.
+  L'observabilité repose sur trois piliers : les **métriques** (des nombres dans le temps), les **journaux**
+  (des événements) et les **traces** (le parcours d'une requête). Ce lab traite des métriques, avec la pile
+  open source de référence.
+
+  ### Architecture
+
+  ```
+   node-exporter :9100 ─┐                         ┌─▶ Alertmanager :9093 ─▶ mail, Slack, webhook
+   app :8000/metrics ───┼──scrape (pull)──▶ Prometheus :9090 (TSDB, règles, PromQL)
+   autres exporters ────┘                         └─▶ Grafana :3000 (tableaux de bord)
+  ```
+
+  Prometheus **tire** (*pull*) les métriques : à intervalle régulier, il interroge l'URL `/metrics` de
+  chaque **cible**. Les applications exposent leurs métriques au format texte ; les **exporters** traduisent
+  celles de systèmes existants (machine, base de données, HAProxy…).
+
+  ### Le modèle de données
+
+  ```
+  http_requests_total{job="app", instance="app:8000", code="200"}  1543   @1718000000
+  └── nom de la métrique ┘└────────────── étiquettes ─────────────┘ valeur  horodatage
+  ```
+
+  | Type | Exemple | Usage |
+  |---|---|---|
+  | **Counter** | `tdm_requests_total` | ne fait que croître ; on en calcule le taux avec `rate()` |
+  | **Gauge** | `tdm_queue_size`, mémoire libre | monte et descend |
+  | **Histogram** | `http_request_duration_seconds_bucket` | distribution, percentiles avec `histogram_quantile()` |
+
+  Chaque combinaison d'étiquettes est une **série** distincte : évite les étiquettes à valeurs infinies
+  (identifiant utilisateur, URL complète), qui font exploser la cardinalité.
+
+  ### PromQL en bref
+
+  ```promql
+  up                                              # 1 si la cible répond
+  rate(tdm_requests_total[1m])                    # requêtes par seconde
+  sum by (instance) (rate(node_cpu_seconds_total{mode!="idle"}[1m]))
+  100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[1m])))
+  100 * node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes
+  histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))
+  ```
+
+  ### Règles et alertes
+
+  - Une **règle d'enregistrement** pré-calcule une requête coûteuse sous un nouveau nom
+    (convention `niveau:métrique:opérations`).
+  - Une **règle d'alerte** évalue une expression ; si elle est vraie pendant `for`, l'alerte passe de
+    *Pending* à *Firing* et part vers Alertmanager, qui **regroupe**, **déduplique**, applique les
+    **silences** et **route** vers le bon canal.
+
+  ```yaml
+  groups:
+    - name: tdm
+      rules:
+        - alert: FileAttenteSaturee
+          expr: tdm_queue_size > 100
+          for: 30s
+          labels: { severity: warning }
+          annotations: { summary: "File d'attente saturée sur {{ $labels.instance }}" }
+  ```
+
+  ### Mémo
+
+  ```bash
+  promtool check config /etc/prometheus/prometheus.yml
+  promtool check rules /etc/prometheus/rules/*.yml
+  curl -X POST http://localhost:9090/-/reload        # si --web.enable-lifecycle
+  curl -s 'http://localhost:9090/api/v1/query?query=up' | jq
+  curl -s http://localhost:9090/api/v1/targets | jq '.data.activeTargets[].health'
+  amtool alert query --alertmanager.url=http://alertmanager:9093
+  ```
+
+  ### Pièges courants
+
+  - `rate()` sur une gauge, ou un compteur affiché brut (il ne fait que monter).
+  - Une fenêtre de `rate` plus courte que deux intervalles de collecte : résultat vide.
+  - Alerter sur tout : la fatigue d'alerte fait ignorer les vraies urgences.
+  - Oublier de recharger Prometheus après une modification.
+
+  ### Bonnes pratiques
+
+  Alerter sur les **symptômes** vus par l'utilisateur (méthodes RED : taux, erreurs, durée ; USE pour les
+  ressources), des alertes actionnables avec un lien vers une procédure, la configuration et les tableaux de
+  bord versionnés (provisioning Grafana), et une rétention adaptée.
+
+  ### Pour réviser
+
+  - Pourquoi applique-t-on `rate()` à un compteur et jamais à une jauge ?
+  - À quoi sert la clause `for` d'une règle d'alerte ?
+  - Quel est le rôle d'Alertmanager par rapport à Prometheus ?
+  - Pourquoi l'URL de la source de données dans Grafana n'est-elle pas `localhost:9090` ?
+docs:
+  - title: Documentation Prometheus
+    url: https://prometheus.io/docs/introduction/overview/
+  - title: Les bases de PromQL
+    url: https://prometheus.io/docs/prometheus/latest/querying/basics/
+  - title: Règles d'alerte
+    url: https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/
+  - title: Documentation Grafana
+    url: https://grafana.com/docs/grafana/latest/
+exercises:
+  - id: cible-node
+    title: Collecter les métriques système
+    description: |
+      Ajoute dans `prometheus.yml` un job `node` qui collecte `node:9100`, valide la configuration et recharge
+      Prometheus. Dans l'interface (*Status > Targets*), la cible doit être **UP**.
+    hint: "Sous scrape_configs, ajoute un élément avec job_name: node et static_configs: - targets: [\"node:9100\"]"
+    cours: |
+      La section `scrape_configs` de `prometheus.yml` liste les **jobs** de collecte. Chaque job a un
+      `job_name` et une liste de cibles, ici statiques : `static_configs: - targets: ['hote:port']`. Prometheus
+      ajoute automatiquement les étiquettes `job` et `instance` à toutes les séries collectées.
+
+      `promtool check config` valide le fichier (indentation YAML comprise) avant le rechargement. Prometheus
+      relit sa configuration sur le signal `SIGHUP` ou sur un `POST /-/reload` si l'API de cycle de vie est
+      activée.
+
+      La métrique `up{job="node"}` vaut 1 quand la dernière collecte a réussi, 0 sinon : c'est la première chose
+      à superviser.
+    checks:
+      - desc: La configuration est valide
+        run: promtool check config /etc/prometheus/prometheus.yml
+      - desc: La cible node est UP
+        run: curl -fsS http://localhost:9090/api/v1/targets | jq -e '[.data.activeTargets[] | select(.labels.job == "node" and .health == "up")] | length > 0' >/dev/null
+  - id: promql
+    title: Écrire des requêtes PromQL
+    description: |
+      Écris deux requêtes PromQL, chacune dans un fichier de `/root/requetes/` :
+      - `cpu.promql` : le **pourcentage d'utilisation CPU** (tous cœurs confondus) par instance, sur 1 minute,
+        à partir de `node_cpu_seconds_total` (indice : 100 moins le pourcentage de temps `idle`) ;
+      - `memoire.promql` : le **pourcentage de mémoire disponible**, à partir de `node_memory_MemAvailable_bytes`
+        et `node_memory_MemTotal_bytes`.
+
+      Mets-les au point dans l'onglet *Graph* de Prometheus : chaque requête doit renvoyer une valeur entre 0 et 100.
+    hint: "100 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[1m])) * 100"
+    cours: |
+      `node_cpu_seconds_total` est un **compteur** : le temps cumulé passé par chaque cœur dans chaque mode
+      (`idle`, `user`, `system`…). Pour obtenir un pourcentage, on calcule son taux d'augmentation avec
+      `rate(...[1m])`, qui donne la fraction de temps par seconde.
+
+      Le pourcentage d'utilisation est le complément du temps `idle`. Il faut **agréger** les cœurs : `avg by
+      (instance)` fait la moyenne en gardant l'étiquette `instance`. Un filtre sur une étiquette s'écrit entre
+      accolades : `{mode="idle"}`.
+
+      La mémoire est plus simple : deux **gauges** que l'on divise, puis multiplie par 100. Les opérations entre
+      séries se font sur les étiquettes communes.
+    checks:
+      - desc: cpu.promql utilise node_cpu_seconds_total et rate
+        run: grep -q 'node_cpu_seconds_total' /root/requetes/cpu.promql && grep -q 'rate\|irate' /root/requetes/cpu.promql
+      - desc: cpu.promql renvoie un pourcentage
+        run: |
+          curl -fsS --data-urlencode "query=$(cat /root/requetes/cpu.promql)" http://localhost:9090/api/v1/query | jq -e '.status == "success" and (.data.result | length) > 0 and all(.data.result[]; (.value[1] | tonumber) >= 0 and (.value[1] | tonumber) <= 100)' >/dev/null
+      - desc: memoire.promql renvoie un pourcentage
+        run: |
+          grep -q 'node_memory_MemAvailable_bytes' /root/requetes/memoire.promql && curl -fsS --data-urlencode "query=$(cat /root/requetes/memoire.promql)" http://localhost:9090/api/v1/query | jq -e '.status == "success" and (.data.result | length) > 0 and all(.data.result[]; (.value[1] | tonumber) > 0 and (.value[1] | tonumber) <= 100)' >/dev/null
+  - id: app
+    title: Superviser l'application
+    description: |
+      Ajoute un job `app` qui collecte `app:8000` **toutes les 5 secondes** (`scrape_interval` propre au job) et
+      ajoute à ses séries l'étiquette `env="lab"` (dans `static_configs`). Recharge, puis explore les métriques
+      `tdm_queue_size` et `tdm_requests_total` (essaie `rate(tdm_requests_total[1m])`).
+    cours: |
+      Un job peut redéfinir les réglages globaux : `scrape_interval: 5s` sous le job ne concerne que lui.
+      `metrics_path` (par défaut `/metrics`) et `scheme` se règlent de la même façon.
+
+      Dans `static_configs`, la clé `labels:` ajoute des étiquettes fixes à toutes les séries des cibles du
+      groupe, par exemple l'environnement ou l'équipe. Elles servent ensuite à filtrer et agréger.
+
+      `tdm_requests_total` est un compteur : sa valeur brute ne dit pas grand-chose, son **taux**
+      (`rate(...[1m])`, en requêtes par seconde) est l'indicateur utile. `tdm_queue_size` est une jauge, à lire
+      directement.
+    checks:
+      - desc: La cible app est UP avec l'étiquette env=lab
+        run: curl -fsS http://localhost:9090/api/v1/targets | jq -e '[.data.activeTargets[] | select(.labels.job == "app" and .health == "up" and .labels.env == "lab")] | length > 0' >/dev/null
+      - desc: Elle est collectée toutes les 5 s
+        run: curl -fsS http://localhost:9090/api/v1/targets | jq -e '[.data.activeTargets[] | select(.labels.job == "app" and .scrapeInterval == "5s")] | length > 0' >/dev/null
+  - id: enregistrement
+    title: Règles d'enregistrement
+    description: |
+      Les requêtes coûteuses se pré-calculent avec des **règles d'enregistrement**. Crée
+      `/etc/prometheus/rules/tdm.yml` avec un groupe `tdm` contenant la règle
+      `instance:node_cpu_utilisation:ratio` = la fraction de CPU utilisée (entre 0 et 1) par instance.
+      Déclare le fichier dans `prometheus.yml` (`rule_files`), vérifie-le avec `promtool check rules` et recharge.
+    hint: "rule_files: [\"rules/*.yml\"] ; groups: - name: tdm / rules: - record: instance:node_cpu_utilisation:ratio / expr: 1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[1m]))"
+    cours: |
+      Une **règle d'enregistrement** évalue une expression PromQL à chaque intervalle et stocke le résultat sous
+      un nouveau nom de métrique. Les tableaux de bord et alertes qui l'utilisent sont plus rapides et plus
+      lisibles.
+
+      Format du fichier : `groups:` → un groupe avec `name` et `rules:` → chaque règle avec `record:` (le nom)
+      et `expr:` (l'expression). La convention de nommage `niveau:métrique:opérations` indique le niveau
+      d'agrégation (`instance`), la métrique et le calcul (`ratio`).
+
+      `rule_files:` dans `prometheus.yml` charge les fichiers (les motifs `*.yml` sont acceptés). L'onglet
+      *Status > Rules* montre l'état et la dernière évaluation de chaque règle.
+    checks:
+      - desc: Les règles sont valides
+        run: promtool check rules /etc/prometheus/rules/tdm.yml
+      - desc: La règle est chargée par Prometheus
+        run: curl -fsS http://localhost:9090/api/v1/rules | jq -e '[.data.groups[].rules[] | select(.type == "recording" and .name == "instance:node_cpu_utilisation:ratio")] | length > 0' >/dev/null
+      - desc: La série enregistrée a des valeurs
+        run: |
+          curl -fsS --data-urlencode 'query=instance:node_cpu_utilisation:ratio' http://localhost:9090/api/v1/query | jq -e '(.data.result | length) > 0' >/dev/null
+  - id: alerte
+    title: Écrire une règle d'alerte
+    description: |
+      Ajoute au fichier de règles un groupe d'alertes avec l'alerte `FileAttenteSaturee` :
+      elle se déclenche quand `tdm_queue_size` dépasse **100** pendant **30 secondes**, avec l'étiquette
+      `severity: warning` et une annotation `summary`. Recharge, puis remplis la file :
+      `curl app:8000/charge?n=150`. Observe l'alerte passer de *Pending* à **Firing** (onglet *Alerts*).
+    hint: "- alert: FileAttenteSaturee / expr: tdm_queue_size > 100 / for: 30s / labels: severity: warning / annotations: summary: …"
+    cours: |
+      Une **règle d'alerte** a la même structure qu'une règle d'enregistrement, avec `alert:` au lieu de
+      `record:`. L'alerte est **active** tant que l'expression renvoie au moins une série.
+
+      `for: 30s` impose que la condition soit vraie pendant 30 secondes avant le déclenchement : l'alerte est
+      d'abord *Pending*, puis *Firing*. Cela évite d'alerter sur un pic passager.
+
+      Les `labels` (comme `severity`) servent au routage dans Alertmanager ; les `annotations` (`summary`,
+      `description`, `runbook_url`) sont des textes pour les humains et peuvent utiliser `{{ $labels.instance }}`
+      et `{{ $value }}`. Pense à recharger et attends au moins la durée du `for`.
+    checks:
+      - desc: L'alerte est définie avec un délai de 30 s
+        run: curl -fsS http://localhost:9090/api/v1/rules | jq -e '[.data.groups[].rules[] | select(.type == "alerting" and .name == "FileAttenteSaturee" and .duration == 30 and .labels.severity == "warning")] | length > 0' >/dev/null
+      - desc: L'alerte est en cours (firing)
+        run: curl -fsS http://localhost:9090/api/v1/alerts | jq -e '[.data.alerts[] | select(.labels.alertname == "FileAttenteSaturee" and .state == "firing")] | length > 0' >/dev/null
+  - id: alertmanager
+    title: Envoyer les alertes à Alertmanager
+    description: |
+      Prometheus détecte, **Alertmanager** notifie (regroupement, silences, routage vers mail, chat…).
+      Déclare `alertmanager:9093` dans la section `alerting` de `prometheus.yml` et recharge.
+      L'alerte `FileAttenteSaturee` doit apparaître dans Alertmanager :
+      `amtool alert query --alertmanager.url=http://alertmanager:9093`.
+    hint: "alerting: / alertmanagers: / - static_configs: / - targets: [\"alertmanager:9093\"]"
+    cours: |
+      Prometheus évalue les alertes mais ne notifie personne : il les envoie à **Alertmanager**, déclaré dans la
+      section `alerting: alertmanagers: - static_configs: - targets: [...]` de `prometheus.yml`.
+
+      Alertmanager **regroupe** les alertes semblables (une notification pour dix serveurs), les **déduplique**
+      (plusieurs Prometheus en haute disponibilité), gère les **silences** (maintenance) et les **inhibitions**
+      (une alerte critique masque les alertes secondaires), et **route** selon les étiquettes vers des
+      récepteurs : e-mail, Slack, PagerDuty, webhook.
+
+      `amtool` interroge son API en ligne de commande ; la page *Status > Runtime* de Prometheus montre les
+      Alertmanagers découverts.
+    checks:
+      - desc: Prometheus connaît Alertmanager
+        run: curl -fsS http://localhost:9090/api/v1/alertmanagers | jq -e '(.data.activeAlertmanagers | length) > 0' >/dev/null
+      - desc: Alertmanager a reçu l'alerte
+        run: curl -fsS http://alertmanager:9093/api/v2/alerts | jq -e '[.[] | select(.labels.alertname == "FileAttenteSaturee")] | length > 0' >/dev/null
+        timeout: 90
+  - id: grafana-source
+    title: Brancher Grafana sur Prometheus
+    description: |
+      Dans Grafana (http://localhost:3300, `admin` / `tdm`), ajoute une source de données **Prometheus** nommée
+      exactement `Prometheus`, d'URL `http://ops:9090` (le nom du conteneur, vu depuis Grafana). Teste-la
+      avec *Save & test*. Tu peux aussi le faire par l'API :
+      `curl -u admin:tdm -H 'Content-Type: application/json' -d '{...}' http://grafana:3000/api/datasources`.
+    cours: |
+      Grafana n'enregistre pas de métriques : il interroge des **sources de données** (Prometheus, Loki,
+      PostgreSQL…). Une source Prometheus a besoin d'une URL joignable **depuis le serveur Grafana** : ici, le
+      nom du conteneur Prometheus sur le réseau Docker, et non `localhost` (qui serait Grafana lui-même).
+
+      *Save & test* lance une requête de vérification. Par l'API, une source se crée avec un `POST` JSON sur
+      `/api/datasources` (champs `name`, `type: "prometheus"`, `url`, `access: "proxy"`).
+
+      En production, les sources et les tableaux de bord sont **provisionnés** par des fichiers YAML au démarrage
+      de Grafana, ce qui les rend versionnables.
+    checks:
+      - desc: La source Prometheus pointe vers ops:9090
+        run: curl -fsS -u admin:tdm http://grafana:3000/api/datasources/name/Prometheus | jq -e '.type == "prometheus" and (.url | test("ops:9090"))' >/dev/null
+      - desc: Grafana interroge Prometheus avec succès
+        run: |
+          uid=$(curl -fsS -u admin:tdm http://grafana:3000/api/datasources/name/Prometheus | jq -r .uid); test -n "$uid" && curl -fsS -u admin:tdm "http://grafana:3000/api/datasources/uid/$uid/health" | jq -e '.status == "OK"' >/dev/null
+  - id: tableau-de-bord
+    title: Tableau de bord Grafana
+    description: |
+      Crée un tableau de bord intitulé exactement `TDM Supervision` avec **au moins deux panneaux** :
+      - l'utilisation CPU (ta requête de `cpu.promql` ou la règle `instance:node_cpu_utilisation:ratio`) ;
+      - la taille de la file d'attente de l'application (`tdm_queue_size`).
+
+      Enregistre-le. Bonus : exporte son JSON (*Share > Export*) pour le versionner dans Git.
+    cours: |
+      Un tableau de bord Grafana est un ensemble de **panneaux**, chacun associé à une ou plusieurs requêtes sur
+      une source de données et à une visualisation (*Time series*, *Stat*, *Gauge*, *Table*…).
+
+      Pour chaque panneau : choisis la source, écris la requête PromQL, règle le titre, l'unité (pourcentage,
+      octets) et éventuellement des seuils de couleur. Les **variables** de tableau de bord (`$instance`)
+      permettent de filtrer dynamiquement.
+
+      Un tableau de bord est stocké en JSON : on peut l'exporter, le versionner et l'importer ailleurs. L'API
+      `/api/search?query=...` permet de vérifier qu'il existe.
+    checks:
+      - desc: Le tableau de bord TDM Supervision existe
+        run: |
+          curl -fsS -u admin:tdm 'http://grafana:3000/api/search?query=TDM%20Supervision&type=dash-db' | jq -e '[.[] | select(.title == "TDM Supervision")] | length > 0' >/dev/null
+      - desc: Il a au moins deux panneaux dont un sur tdm_queue_size
+        run: |
+          uid=$(curl -fsS -u admin:tdm 'http://grafana:3000/api/search?query=TDM%20Supervision&type=dash-db' | jq -r '[.[] | select(.title == "TDM Supervision")][0].uid'); test -n "$uid" && test "$uid" != null && d=$(curl -fsS -u admin:tdm "http://grafana:3000/api/dashboards/uid/$uid") && echo "$d" | jq -e '([.dashboard.panels[]?, .dashboard.panels[]?.panels[]?] | length) >= 2' >/dev/null && echo "$d" | grep -q 'tdm_queue_size'

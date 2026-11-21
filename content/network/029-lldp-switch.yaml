@@ -1,0 +1,92 @@
+title: LLDP dans un réseau multi-constructeurs
+level: debutant
+order: 29
+device: switch
+hostname: SW-LABO
+tags: [lldp, cdp, découverte]
+summary: Remplacer CDP par le protocole standard LLDP.
+description: |
+  Le switch Cisco `SW-LABO` est installé au milieu de switchs HP et de téléphones Yealink, qui ne
+  comprennent pas **CDP** (protocole propriétaire Cisco). Ils parlent **LLDP** (standard IEEE).
+
+  1. active LLDP globalement : `lldp run` ;
+  2. CDP ne sert à rien ici et dévoile des informations : désactive-le globalement
+     (`no cdp run`) ;
+  3. documente l'uplink `Gi0/1` : description `UPLINK-HP-CORE`.
+
+  Sur un vrai réseau : `show lldp neighbors` pour voir les voisins.
+checks:
+  - desc: LLDP activé globalement
+    expr: d.lldp_run
+  - desc: CDP désactivé globalement
+    expr: not d.cdp_run
+    hint: "no cdp run"
+  - desc: Description UPLINK-HP-CORE sur Gi0/1
+    expr: intf("g0/1").description == "UPLINK-HP-CORE"
+solution: |
+  configure terminal
+  lldp run
+  no cdp run
+  interface g0/1
+  description UPLINK-HP-CORE
+  end
+cours: |
+  ## Les protocoles de découverte de voisins
+
+  Un protocole de découverte envoie périodiquement, sur chaque port, une trame de niveau 2 qui
+  décrit l'équipement : nom, modèle, version logicielle, port, adresse de gestion, VLAN natif...
+  Le voisin la stocke sans la transmettre plus loin. Résultat : on cartographie le réseau sans se
+  déplacer.
+
+  | | CDP | LLDP |
+  |---|---|---|
+  | Éditeur | Cisco (propriétaire) | standard IEEE 802.1AB |
+  | Actif par défaut sur Cisco | oui | non |
+  | Envoi / durée de vie | 60 s / 180 s | 30 s / 120 s |
+  | Commande | `show cdp neighbors [detail]` | `show lldp neighbors [detail]` |
+
+  LLDP-MED, une extension, permet aussi d'annoncer le **VLAN voix** aux téléphones IP de toutes
+  marques.
+
+  ### Commandes
+
+  ```
+  SW1(config)# lldp run
+  SW1(config)# no cdp run
+  SW1(config)# interface fa0/24
+  SW1(config-if)# no lldp transmit
+  SW1(config-if)# no lldp receive
+  SW1# show lldp neighbors
+  Device ID     Local Intf   Hold-time  Capability  Port ID
+  HP-2530       Gi0/1        120        B           25
+  ```
+
+  - `lldp run` / `no lldp run` : activation globale ;
+  - `lldp transmit` / `lldp receive` : par interface, dans chaque sens ;
+  - `cdp run` / `cdp enable` : les équivalents CDP (global / interface) ;
+  - `lldp timer` et `lldp holdtime` règlent les intervalles.
+
+  ### Sécurité
+
+  Ces protocoles révèlent des informations précieuses pour un attaquant (modèle et version
+  d'IOS, donc failles connues ; adresses de gestion). Règle d'usage :
+
+  - les **garder** vers les équipements internes de confiance (ça aide au dépannage) ;
+  - les **couper** sur les ports vers Internet, les partenaires, et souvent les ports
+    utilisateurs.
+
+  ### Pièges fréquents
+
+  - Penser que `lldp run` coupe CDP : les deux peuvent tourner en même temps.
+  - Désactiver CDP alors que des téléphones Cisco s'en servent pour apprendre le VLAN voix.
+  - Ne voir aucun voisin LLDP parce que l'autre équipement l'a désactivé de son côté.
+
+  ### Pour le CCNA
+
+  Comparer CDP et LLDP, savoir les activer/désactiver globalement et par interface, et lire
+  `show cdp neighbors detail` pour retrouver l'adresse IP d'un voisin.
+docs:
+  - title: Wikipédia — Link Layer Discovery Protocol
+    url: https://fr.wikipedia.org/wiki/Link_Layer_Discovery_Protocol
+  - title: Wikipédia — Cisco Discovery Protocol
+    url: https://fr.wikipedia.org/wiki/Cisco_Discovery_Protocol

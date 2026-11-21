@@ -1,0 +1,406 @@
+title: Projet de synthèse – l'infrastructure complète d'une PME
+level: expert
+order: 4
+tags: [projet, dhcp, dns, nat, nftables, dnat, samba, ssh, sauvegarde, rsync, cron]
+summary: Construire de bout en bout le réseau d'une PME de 15 personnes, passerelle DHCP/DNS/NAT/pare-feu, publication web, serveur de fichiers, SSH durci, sauvegarde automatique, puis recette finale.
+compose: docker-compose.yml
+service: admin
+shell: bash
+workdir: /root
+description: |
+  **Contexte.** *PME Durand* (15 salariés) emménage dans de nouveaux locaux. Le câblage est fait et les
+  machines sont installées, **mais rien n'est configuré**. Tu es le prestataire : à la fin de la journée,
+  les postes doivent obtenir leur adresse, résoudre les noms internes, sortir sur Internet, partager des
+  fichiers, et le serveur doit être protégé et sauvegardé. Le cahier des charges est donné exercice par
+  exercice ; à toi de choisir les commandes.
+
+  | Machine    | LAN 192.168.100.0/24 | Serveurs 10.100.0.0/24 | WAN 203.0.113.0/24 | Rôle |
+  |------------|----------------------|------------------------|--------------------|------|
+  | `admin`    | .5                   |                        |                    | ton poste |
+  | `poste`    | .20 + adresse DHCP   |                        |                    | poste d'un salarié (client DHCP, publie son bail sur `http://192.168.100.20/bail.txt`) |
+  | `gw`       | .254                 | .254                   | .2 (IP publique)   | passerelle : nftables, dnsmasq installés |
+  | `srv`      |                      | .10                    |                    | serveur : nginx (site public), Samba installé |
+  | `nas`      |                      | .20                    |                    | NAS de sauvegarde (compte `sauvegarde`) |
+  | `internet` |                      |                        | .80                | « Internet » : `http://203.0.113.80` renvoie l'IP source vue de l'extérieur |
+
+  - `ssh <machine>` depuis admin (root, par clé) passe par le réseau d'administration **10.99.6.0/24**
+    (interface `mgmt` de chaque machine) : ne le coupe jamais, les vérifications l'utilisent.
+  - Les interfaces de gw s'appellent `lan`, `serveurs`, `wan` et `mgmt`. Le routage IP y est activé.
+  - Pas de systemd : `dnsmasq` (`pkill dnsmasq; dnsmasq`), `nft -f /etc/nftables.conf`, `smbd`,
+    `kill -HUP $(cat /run/sshd.pid)`.
+cours: |
+  ## Monter l'infrastructure d'une PME : l'ordre compte
+
+  Une petite entreprise a besoin des mêmes briques qu'une grande, en plus simple. On les monte dans
+  l'ordre des **dépendances** : sans adresse, pas de nom ; sans nom, pas de service confortable ; sans
+  pare-feu, pas de publication sur Internet.
+
+  ```
+                      Internet (WAN 203.0.113.0/24)
+                               │ .2 (IP publique)
+                      ┌────────┴────────┐
+                      │       gw        │  DHCP + DNS (dnsmasq), NAT, DNAT, pare-feu (nftables)
+                      └──┬───────────┬──┘
+           lan .254      │           │    serveurs .254
+     192.168.100.0/24    │           │    10.100.0.0/24
+        ┌──────┬─────────┘           └──────┬──────────┐
+      admin  poste                         srv        nas
+                                   (web, Samba, SSH)  (sauvegardes)
+  ```
+
+  | Étape | Brique              | Question à laquelle elle répond                         |
+  |-------|---------------------|---------------------------------------------------------|
+  | 1     | DHCP                | comment un poste obtient-il son adresse ?               |
+  | 2     | DNS interne         | comment trouve-t-il `srv.pme.lan` ?                     |
+  | 3     | NAT (masquerade)    | comment sort-il sur Internet avec une adresse privée ?  |
+  | 4     | Pare-feu            | qui a le droit de parler à qui ?                        |
+  | 5     | DNAT                | comment Internet atteint-il le site hébergé en interne ? |
+  | 6     | Partage de fichiers | où les salariés rangent-ils leurs documents ?           |
+  | 7     | Durcissement SSH    | comment l'administration reste-t-elle sûre ?            |
+  | 8     | Sauvegarde          | que se passe-t-il si le serveur meurt ?                 |
+  | 9     | Recette             | tout cela survit-il à un redémarrage ? est-ce documenté ? |
+
+  ## Une passerelle Linux : les quatre chaînes utiles
+
+  ```
+  paquet entrant ─▶ prerouting (DNAT) ─▶ routage ─┬─▶ input   (vers gw lui-même)
+                                                  └─▶ forward (traverse gw) ─▶ postrouting (SNAT/masquerade) ─▶ sortie
+  ```
+
+  ```
+  flush ruleset
+  table ip nat {
+    chain prerouting  { type nat hook prerouting priority dstnat; ... }
+    chain postrouting { type nat hook postrouting priority srcnat; oifname "wan" masquerade }
+  }
+  table inet filtre {
+    chain input   { type filter hook input priority filter; policy drop; ... }
+    chain forward { type filter hook forward priority filter; policy drop; ... }
+  }
+  ```
+
+  Une politique `drop` par défaut impose de **lister ce qui est permis** : la règle
+  `ct state established,related accept` en tête laisse passer toutes les réponses, puis chaque flux
+  autorisé est décrit par interface d'entrée, de sortie, protocole et port. C'est la **matrice des flux**
+  du cahier des charges traduite en règles.
+
+  ## Mémo des vérifications
+
+  | Brique      | Test                                                       |
+  |-------------|------------------------------------------------------------|
+  | DHCP        | bail du poste, `/var/lib/misc/dnsmasq.leases` sur gw       |
+  | DNS         | `dig @192.168.100.254 srv.pme.lan`, `dig -x 10.100.0.10`   |
+  | NAT         | `curl http://203.0.113.80` (renvoie l'IP source vue d'Internet) |
+  | Pare-feu    | `nft list ruleset`, tests autorisés **et** interdits        |
+  | DNAT        | `ssh internet curl http://203.0.113.2/`                    |
+  | Samba       | `testparm -s`, `smbclient //10.100.0.10/commun -U alice`   |
+  | SSH         | `sshd -t`, `sshd -T \| grep -i passwordauth`               |
+  | Sauvegarde  | lancer le script à la main, comparer source et NAS         |
+
+  ## Pièges courants
+
+  - Se couper l'accès : un pare-feu `policy drop` appliqué sans règle pour SSH sur `mgmt`, ou un
+    `sshd_config` invalide rechargé sans `sshd -t`.
+  - Tester seulement ce qui doit marcher : un pare-feu se recette aussi par ce qui doit **échouer**.
+  - Laisser dnsmasq répondre sur le WAN : un résolveur ouvert sur Internet sert aux attaques par
+    amplification.
+  - Une sauvegarde par cron qui bloque sur « Are you sure you want to continue connecting? ».
+  - Configurer en mémoire et oublier les fichiers : tout disparaît au redémarrage.
+
+  ## Bonnes pratiques en entreprise
+
+  - Un **dossier d'exploitation** remis au client : plan d'adressage, schéma, matrice des flux,
+    comptes de service, procédure de sauvegarde et de restauration, contacts.
+  - Une recette formelle signée : liste des tests, résultat attendu, résultat obtenu.
+  - Règle 3-2-1 pour les sauvegardes, et un test de restauration planifié.
+  - Comptes nominatifs, mots de passe dans un coffre, et pas de mot de passe par défaut.
+docs:
+  - title: dnsmasq(8) - DHCP et DNS légers (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man8/dnsmasq.8.html
+  - title: Wiki officiel de nftables
+    url: https://wiki.nftables.org/
+  - title: smb.conf(5) - configuration de Samba (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man5/smb.conf.5.html
+  - title: rsync(1) - synchronisation de fichiers (Ubuntu 24.04)
+    url: https://manpages.ubuntu.com/manpages/noble/man1/rsync.1.html
+exercises:
+  - id: pme-dhcp
+    title: Distribution d'adresses (DHCP)
+    cours: |
+      dnsmasq fait serveur DHCP dès qu'une ligne `dhcp-range` existe. Les directives utiles :
+
+      - `interface=` limite l'écoute à une interface (répète la ligne pour en ajouter) ;
+      - `dhcp-range=<début>,<fin>,<masque>,<durée>` ; la durée s'écrit `12h`, `30m`... ;
+      - `dhcp-option=option:router,<ip>` et `dhcp-option=option:dns-server,<ip>` ;
+      - `domain=` donne le suffixe DNS transmis aux clients.
+
+      `dnsmasq --test` valide la syntaxe. Sans systemd, on relance par `pkill dnsmasq` puis `dnsmasq`. Les
+      baux attribués s'écrivent dans `/var/lib/misc/dnsmasq.leases`.
+
+      Teste avec un vrai client qui demande un bail, puis vérifie qu'il reçoit aussi la passerelle et le DNS.
+    description: |
+      Configure **dnsmasq sur gw** (fichier `/etc/dnsmasq.d/pme.conf`) pour distribuer, **uniquement sur
+      l'interface `lan`** :
+
+      - les adresses `192.168.100.100` à `192.168.100.199`, bail de **12 heures** ;
+      - la passerelle et le DNS `192.168.100.254`, le domaine `pme.lan`.
+
+      Démarre dnsmasq. poste redemande une adresse toutes les 10 secondes : surveille
+      `curl http://192.168.100.20/bail.txt`.
+    hint: "interface=lan / dhcp-range=192.168.100.100,192.168.100.199,255.255.255.0,12h / dhcp-option=option:router,192.168.100.254 / dhcp-option=option:dns-server,192.168.100.254 / domain=pme.lan"
+    checks:
+      - desc: poste a obtenu un bail dans la plage prévue, de 12 h
+        timeout: 40
+        run: |
+          for i in 1 2 3; do b=$(curl -sf --max-time 3 http://192.168.100.20/bail.txt); echo "$b" | grep -qx 'etat=ok' && echo "$b" | grep -Eqx 'ip=192\.168\.100\.1[0-9][0-9]' && echo "$b" | grep -qx 'bail=43200' && exit 0; sleep 10; done; exit 1
+      - desc: Passerelle, DNS et domaine distribués
+        run: |
+          b=$(curl -sf --max-time 3 http://192.168.100.20/bail.txt) && echo "$b" | grep -qx 'routeur=192.168.100.254' && echo "$b" | grep -qx 'dns=192.168.100.254' && echo "$b" | grep -qx 'domaine=pme.lan'
+      - desc: dnsmasq n'écoute pas côté WAN
+        run: ssh gw cat /etc/dnsmasq.d/pme.conf | grep -Eq '^\s*(interface\s*=\s*lan|except-interface\s*=\s*wan)'
+
+  - id: pme-dns
+    title: Noms internes (DNS)
+    cours: |
+      dnsmasq sert d'abord ce qu'il connaît localement (`/etc/hosts`, `host-record`, `address`...), puis
+      transmet le reste aux serveurs amont.
+
+      - `local=/<domaine>/` : ne jamais transmettre ce domaine à l'extérieur ;
+      - `host-record=<nom>,<ip>` crée l'enregistrement A **et** le PTR inverse ;
+      - `cname=<alias>,<cible>` crée un alias vers un nom connu de dnsmasq ;
+      - avec `domain=`, les clients DHCP sont enregistrés sous `<leur nom>.<domaine>`.
+
+      Pour répondre aux serveurs, dnsmasq doit aussi écouter sur leur interface. Teste avec `dig` en
+      précisant le serveur, et `dig -x` pour l'inverse.
+    description: |
+      Toujours avec dnsmasq sur gw, sers la zone **`pme.lan`** (sans transmettre ces noms à l'extérieur) :
+
+      | Nom                    | Type  | Valeur          |
+      |------------------------|-------|-----------------|
+      | `gw.pme.lan`           | A     | 192.168.100.254 |
+      | `srv.pme.lan`          | A + PTR | 10.100.0.10   |
+      | `nas.pme.lan`          | A + PTR | 10.100.0.20   |
+      | `intranet.pme.lan`     | CNAME | srv.pme.lan     |
+
+      Les postes clients DHCP doivent aussi être enregistrés automatiquement (`poste.pme.lan`).
+      Le DNS doit répondre aux réseaux LAN et serveurs.
+    hint: "local=/pme.lan/ ; domain=pme.lan ; host-record=srv.pme.lan,10.100.0.10 (crée aussi le PTR) ; cname=intranet.pme.lan,srv.pme.lan ; no-resolv ; interface=serveurs (en plus de lan)"
+    checks:
+      - desc: srv, nas et gw résolvent
+        run: |
+          test "$(dig +short @192.168.100.254 srv.pme.lan A)" = 10.100.0.10 && test "$(dig +short @192.168.100.254 nas.pme.lan A)" = 10.100.0.20 && test "$(dig +short @192.168.100.254 gw.pme.lan A)" = 192.168.100.254
+      - desc: intranet.pme.lan est un alias de srv.pme.lan
+        run: dig +noall +answer @192.168.100.254 intranet.pme.lan | grep -Eq 'CNAME\s+srv\.pme\.lan\.'
+      - desc: Résolution inverse de 10.100.0.10
+        run: test "$(dig +short @192.168.100.254 -x 10.100.0.10)" = srv.pme.lan.
+      - desc: poste.pme.lan pointe sur l'adresse DHCP de poste
+        run: |
+          ip=$(curl -sf --max-time 3 http://192.168.100.20/bail.txt | sed -n 's/^ip=//p') && test -n "$ip" && test "$(dig +short @192.168.100.254 poste.pme.lan A)" = "$ip"
+      - desc: Le DNS répond aussi côté serveurs
+        run: test "$(ssh srv dig +short +time=2 +tries=1 @10.100.0.254 nas.pme.lan A)" = 10.100.0.20
+
+  - id: pme-nat
+    title: Accès à Internet (NAT)
+    cours: |
+      Les adresses RFC 1918 ne sont pas routées sur Internet. La passerelle remplace donc l'adresse source des
+      paquets sortants par sa propre adresse publique et mémorise la correspondance (suivi de connexions)
+      pour les réponses.
+
+      Dans nftables, cela se fait dans une table de famille `ip`, chaîne de type `nat` accrochée au hook
+      `postrouting`. Le mot-clé `masquerade` prend automatiquement l'adresse de l'interface de sortie,
+      pratique quand elle change ; `snat to <ip>` fixe une adresse précise.
+
+      `nft -c -f <fichier>` valide sans appliquer. Le serveur de test affiche l'adresse source qu'il voit.
+    description: |
+      Les réseaux LAN et serveurs utilisent des adresses privées. Sur gw, mets en place la **traduction
+      d'adresses source** (masquerade) pour tout ce qui sort par `wan`, dans une table nftables écrite dans
+      `/etc/nftables.conf`. Vérifie avec `curl http://203.0.113.80` depuis admin et depuis srv.
+    hint: "table ip nat { chain postrouting { type nat hook postrouting priority srcnat; oifname \"wan\" masquerade } }"
+    checks:
+      - desc: admin sort avec l'IP publique de gw
+        run: curl -sf --max-time 5 http://203.0.113.80/ | grep -qx 'client=203\.0\.113\.2'
+      - desc: srv aussi
+        run: ssh srv curl -sf --max-time 5 http://203.0.113.80/ | grep -qx 'client=203\.0\.113\.2'
+
+  - id: pme-parefeu
+    title: Pare-feu de la passerelle
+    cours: |
+      Une politique **fermée par défaut** (`policy drop`) ne laisse passer que ce qui est écrit. On distingue :
+
+      - **input** : ce qui est destiné à la passerelle elle-même (DNS, DHCP, SSH d'administration) ;
+      - **forward** : ce qui la traverse d'un réseau à l'autre.
+
+      Ordre conseillé : boucle locale, `ct state established,related accept`, ICMP, puis les flux autorisés
+      décrits par `iifname`, `oifname`, protocole et `dport` (les ensembles `{ 22, 80, 445 }` évitent de
+      répéter les règles).
+
+      Ajoute la règle SSH sur `mgmt` **avant** d'appliquer, et teste aussi un flux qui doit être refusé.
+    description: |
+      Le fournisseur d'accès route (à tort) les réseaux internes de la PME vers gw : aujourd'hui,
+      `internet` peut joindre directement srv ! Écris une politique de filtrage **par défaut fermée**
+      dans `/etc/nftables.conf` :
+
+      - **input** (vers gw), politique `drop` : boucle locale, connexions établies, ICMP, DHCP et DNS
+        depuis `lan` (et DNS depuis `serveurs`), SSH **uniquement depuis `mgmt`** ;
+      - **forward**, politique `drop` : connexions établies ; `lan` → `serveurs` en TCP 22, 80 et 445 et
+        ICMP ; `lan` → `wan` tout ; `serveurs` → `wan` en TCP 80/443 et ICMP ;
+      - rien n'entre depuis `wan`, sauf ce qui sera publié à l'exercice suivant.
+    hint: "chain input { type filter hook input priority filter; policy drop; iif lo accept; ct state established,related accept; iifname \"mgmt\" tcp dport 22 accept; iifname \"lan\" udp dport { 53, 67 } accept; … }"
+    checks:
+      - desc: Les chaînes input et forward de gw sont en politique drop
+        run: |
+          r=$(ssh gw nft list ruleset) && echo "$r" | grep -Eq 'hook input .*policy drop' && echo "$r" | grep -Eq 'hook forward .*policy drop'
+      - desc: Internet ne joint ni srv ni le SSH de gw
+        run: "! ssh internet nc -z -w 2 10.100.0.10 22 && ! ssh internet nc -z -w 2 10.100.0.10 80 && ! ssh internet nc -z -w 2 203.0.113.2 22"
+      - desc: Le LAN joint toujours srv (SSH, web) et Internet
+        run: nc -z -w 2 10.100.0.10 22 && nc -z -w 2 10.100.0.10 80 && curl -sf --max-time 5 http://203.0.113.80/ | grep -q 'client=203.0.113.2'
+      - desc: DHCP et DNS fonctionnent toujours pour le LAN
+        timeout: 40
+        run: |
+          test "$(dig +short +time=2 +tries=1 @192.168.100.254 srv.pme.lan A)" = 10.100.0.10 || exit 1
+          for i in 1 2 3; do curl -sf --max-time 3 http://192.168.100.20/bail.txt | grep -qx 'etat=ok' && exit 0; sleep 10; done; exit 1
+
+  - id: pme-publication-web
+    title: Publier le site web (DNAT)
+    cours: |
+      Pour publier un serveur interne, la passerelle réécrit l'adresse de **destination** des paquets qui
+      arrivent sur son adresse publique : c'est le DNAT (ou « redirection de port »), dans une chaîne de type
+      `nat` accrochée au hook `prerouting`.
+
+      Le DNAT a lieu **avant** le routage : dans la chaîne forward, le paquet a déjà pour destination
+      l'adresse interne. Il faut donc l'y autoriser explicitement. `ct status dnat` restreint la règle aux
+      connexions qui ont réellement été traduites, ce qui évite d'ouvrir l'accès direct aux adresses
+      internes.
+    description: |
+      Le site public est hébergé sur srv (nginx, port 80). Publie-le sur l'**adresse publique** de gw
+      (`203.0.113.2`, port 80) par une **translation de destination** (DNAT), et autorise ce flux (et lui
+      seul) dans la chaîne forward. Teste depuis `internet` : `ssh internet curl http://203.0.113.2/`.
+    hint: "chain prerouting { type nat hook prerouting priority dstnat; iifname \"wan\" tcp dport 80 dnat to 10.100.0.10 } + dans forward : iifname \"wan\" ip daddr 10.100.0.10 tcp dport 80 ct status dnat accept"
+    checks:
+      - desc: Internet voit le site public via l'IP publique
+        run: ssh internet curl -sf --max-time 5 http://203.0.113.2/ | grep -q 'Site public PME Durand'
+      - desc: Aucun autre service de srv n'est exposé
+        run: "! ssh internet nc -z -w 2 203.0.113.2 445 && ! ssh internet nc -z -w 2 10.100.0.10 22"
+
+  - id: pme-partage-fichiers
+    title: Serveur de fichiers (Samba)
+    cours: |
+      Samba s'appuie sur les comptes Linux, mais garde **sa propre base de mots de passe** : un compte doit
+      exister côté système (`useradd`) puis être ajouté à Samba (`smbpasswd -a`, `-s` pour lire le mot de
+      passe sur l'entrée standard).
+
+      - un groupe porte les droits ; dans `smb.conf`, `valid users = @<groupe>` le désigne ;
+      - côté disque, le bit **setgid** (`2770`) sur le dossier fait hériter le groupe aux nouveaux fichiers ;
+      - `guest ok = no` interdit l'accès anonyme.
+
+      `testparm -s` valide la configuration ; `smbclient -L` et `smbclient //hôte/partage -U <compte>`
+      testent l'accès.
+    description: |
+      Sur srv, crée le groupe `employes` et les comptes **`alice`** (`Alice2024!`) et **`bob`**
+      (`Bob2024!`), membres de ce groupe. Partage **`commun`** (`/srv/commun`, propriétaire `root:employes`,
+      droits `2770`) en lecture/écriture pour le groupe `employes` uniquement, sans accès invité. Démarre
+      `smbd`.
+    hint: "useradd -m -G employes alice ; (echo 'Alice2024!'; echo 'Alice2024!') | smbpasswd -s -a alice ; [commun] path = /srv/commun / read only = no / valid users = @employes / guest ok = no ; smbd"
+    checks:
+      - desc: alice écrit dans commun
+        run: |
+          smbclient //10.100.0.10/commun -U 'alice%Alice2024!' -c 'put /etc/hostname verif-alice.txt; rm verif-alice.txt' >/dev/null 2>&1
+      - desc: bob liste commun, l'accès anonyme est refusé
+        run: |
+          smbclient //10.100.0.10/commun -U 'bob%Bob2024!' -c ls >/dev/null 2>&1 && ! smbclient -N //10.100.0.10/commun -c ls >/dev/null 2>&1
+      - desc: Droits Unix du dossier partagé
+        run: test "$(ssh srv stat -c %a:%U:%G /srv/commun)" = 2770:root:employes
+
+  - id: pme-ssh-durci
+    title: Durcir l'accès SSH au serveur
+    cours: |
+      Un fichier dans `/etc/ssh/sshd_config.d/` est inclus au début de la configuration ; pour chaque
+      directive, **la première valeur lue l'emporte**.
+
+      Les directives à connaître : `PermitRootLogin` (valeur `prohibit-password` = par clé seulement),
+      `PasswordAuthentication`, `KbdInteractiveAuthentication`, `MaxAuthTries`, `X11Forwarding`,
+      `ClientAliveInterval` / `ClientAliveCountMax`.
+
+      `sshd -t` valide, `sshd -T` affiche la configuration effective (en minuscules). Le signal HUP fait
+      relire la configuration sans couper les sessions ouvertes : garde toujours une session ouverte pendant
+      le test.
+
+      Garde toujours une session ouverte pendant que tu modifies sshd : si la nouvelle configuration te bloque, tu pourras encore corriger.
+    description: |
+      Sur srv, durcis sshd dans un fichier `/etc/ssh/sshd_config.d/durcissement.conf` :
+      root seulement par clé, **aucune** authentification par mot de passe, 3 essais maximum, pas de
+      redirection X11, déconnexion des sessions inactives (`ClientAliveInterval 300`,
+      `ClientAliveCountMax 2`). Teste (`sshd -t`) **avant** de recharger : une erreur te couperait l'accès.
+    hint: "PermitRootLogin prohibit-password / PasswordAuthentication no / KbdInteractiveAuthentication no / MaxAuthTries 3 / X11Forwarding no ; sshd -t && kill -HUP $(cat /run/sshd.pid)"
+    checks:
+      - desc: Configuration effective de sshd conforme
+        run: |
+          c=$(ssh srv sshd -T) && echo "$c" | grep -Eqx 'permitrootlogin (prohibit-password|without-password)' && echo "$c" | grep -qx 'passwordauthentication no' && echo "$c" | grep -qx 'maxauthtries 3' && echo "$c" | grep -qx 'x11forwarding no' && echo "$c" | grep -qx 'clientaliveinterval 300'
+      - desc: alice ne peut pas se connecter par mot de passe (le sshd rechargé l'applique)
+        run: |
+          ssh srv id alice >/dev/null && ssh srv cat /etc/ssh/sshd_config.d/durcissement.conf | grep -qi '^PasswordAuthentication no' && ! sshpass -p 'Alice2024!' ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive alice@10.99.6.10 true 2>/dev/null
+
+  - id: pme-sauvegarde
+    title: Sauvegarde automatique vers le NAS
+    cours: |
+      Une tâche planifiée ne peut ni taper un mot de passe ni répondre à une question : l'authentification se
+      fait par **clé sans phrase de passe**, et la clé d'hôte du serveur distant doit être connue d'avance
+      (`ssh-keyscan` alimente `known_hosts`).
+
+      - `rsync -a` conserve droits, dates et propriétaires ; `--delete` supprime à destination ce qui a
+        disparu de la source (miroir) ; la **barre oblique finale** de la source copie son contenu ;
+      - dans une crontab, les champs sont minute, heure, jour du mois, mois, jour de la semaine.
+
+      Lance le script à la main une première fois : c'est le meilleur test.
+    description: |
+      Le partage `commun` doit être copié chaque nuit sur le NAS :
+
+      1. sur srv, génère une clé SSH pour root et autorise-la pour le compte **`sauvegarde`** de nas ;
+         enregistre la clé d'hôte de nas (une tâche cron ne peut pas répondre « yes ») ;
+      2. écris `/usr/local/bin/sauvegarde-commun.sh` qui fait un miroir
+         (`rsync -a --delete`) de `/srv/commun/` vers `sauvegarde@10.100.0.20:/sauvegardes/commun/` ;
+      3. planifie-le dans la crontab de root de srv **chaque nuit à 2 h 30**.
+    hint: "ssh-keygen -t ed25519 -N '' -f /root/.ssh/id_ed25519 ; ssh-keyscan 10.100.0.20 >> /root/.ssh/known_hosts ; clé publique dans ~sauvegarde/.ssh/authorized_keys sur nas ; crontab : 30 2 * * * /usr/local/bin/sauvegarde-commun.sh"
+    checks:
+      - desc: Tâche planifiée à 2 h 30
+        run: ssh srv crontab -l 2>/dev/null | grep -Eq '^30 +2 +\* +\* +\* +/usr/local/bin/sauvegarde-commun\.sh'
+      - desc: Le script copie bien un nouveau fichier sur le NAS (en tant que sauvegarde)
+        timeout: 60
+        run: |
+          v=$(date +%s)
+          ssh srv "echo $v > /srv/commun/.verif-sauvegarde && /usr/local/bin/sauvegarde-commun.sh" </dev/null >/dev/null 2>&1
+          test "$(ssh nas cat /sauvegardes/commun/.verif-sauvegarde 2>/dev/null)" = "$v" && test "$(ssh nas stat -c %U /sauvegardes/commun/.verif-sauvegarde)" = sauvegarde
+      - desc: Le miroir supprime les fichiers effacés à la source
+        timeout: 60
+        run: |
+          ssh srv "rm -f /srv/commun/.verif-sauvegarde && /usr/local/bin/sauvegarde-commun.sh" </dev/null >/dev/null 2>&1
+          ! ssh nas test -e /sauvegardes/commun/.verif-sauvegarde
+
+  - id: pme-recette
+    title: Recette finale et persistance
+    cours: |
+      La **recette** prouve que l'installation répond au cahier des charges, et qu'elle survivra au premier
+      redémarrage. Le fichier `/etc/nftables.conf` doit contenir tout le jeu de règles et commencer par
+      `flush ruleset`, pour qu'un rechargement remplace proprement l'existant au lieu de s'y ajouter.
+
+      `nft list ruleset` affiche les règles actives dans un format directement réutilisable dans le fichier.
+      Le **dossier d'exploitation** est remis au client : il permet à n'importe quel technicien de reprendre
+      l'installation sans toi.
+
+      Une recette se fait avec une liste écrite de tests, cochée un par un : c'est le document que tu remettras au client.
+    description: |
+      Avant de partir, assure-toi que tout survivrait à un redémarrage de gw : le jeu de règles complet
+      (NAT, DNAT, filtrage) est dans `/etc/nftables.conf`, dont la syntaxe est valide. Les vérifications
+      **rechargent ce fichier** puis rejouent les tests clés. Rédige aussi le dossier d'exploitation
+      `/root/dossier-exploitation.txt` avec au minimum les lignes `passerelle=`, `dns=`, `plage_dhcp=`,
+      `serveur_fichiers=` et `sauvegarde=` (description libre de chaque élément).
+    hint: "nft -c -f /etc/nftables.conf ; nft -f /etc/nftables.conf (le fichier doit commencer par flush ruleset)"
+    checks:
+      - desc: nftables.conf est valide et se recharge
+        run: ssh gw 'nft -c -f /etc/nftables.conf && nft -f /etc/nftables.conf'
+      - desc: Après rechargement, NAT, DNAT et filtrage sont toujours en place
+        run: |
+          curl -sf --max-time 5 http://203.0.113.80/ | grep -q 'client=203.0.113.2' && ssh internet curl -sf --max-time 5 http://203.0.113.2/ | grep -q 'Site public PME Durand' && ! ssh internet nc -z -w 2 10.100.0.10 22
+      - desc: Le dossier d'exploitation est rempli
+        run: |
+          for k in passerelle dns plage_dhcp serveur_fichiers sauvegarde; do grep -Eq "^$k *= *.{3,}" /root/dossier-exploitation.txt || exit 1; done

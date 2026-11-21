@@ -1,0 +1,105 @@
+title: Raccorder une borne Wi-Fi en trunk
+level: intermediaire
+order: 33
+device: switch
+hostname: SW-ETAGE1
+tags: [trunk, wifi, vlan natif, portfast]
+summary: Préparer un port de switch pour une borne Wi-Fi qui diffuse plusieurs réseaux.
+description: |
+  Une borne Wi-Fi est installée sur `Fa0/24`. Elle diffuse deux réseaux : `PERSONNEL`
+  (VLAN `10`) et `INVITES` (VLAN `20`), et se gère par le VLAN `99`, qu'elle utilise **sans
+  étiquette**. Le port est actuellement un simple port d'accès.
+
+  Configure `Fa0/24` :
+
+  - description `BORNE-WIFI-ETG1` ;
+  - trunk forcé, DTP désactivé ;
+  - VLAN natif `99`, VLAN autorisés `10,20,99` uniquement (pas la voix, VLAN `30`) ;
+  - PortFast pour trunk (`spanning-tree portfast trunk`) : la borne n'est pas un switch.
+initial: |
+  vlan 10
+  name PERSONNEL
+  vlan 20
+  name INVITES
+  vlan 30
+  name VOIX
+  vlan 99
+  name MGMT
+  interface fa0/24
+  switchport mode access
+  switchport access vlan 10
+checks:
+  - desc: Description BORNE-WIFI-ETG1
+    expr: intf("fa0/24").description == "BORNE-WIFI-ETG1"
+  - desc: Trunk forcé sans DTP
+    expr: intf("fa0/24").mode == "trunk" and intf("fa0/24").nonegotiate
+  - desc: VLAN natif 99 et VLAN autorisés 10, 20, 99
+    expr: intf("fa0/24").native_vlan == 99 and intf("fa0/24").allowed_vlans() == {10, 20, 99}
+  - desc: PortFast activé sur le trunk
+    expr: intf("fa0/24").portfast
+solution: |
+  configure terminal
+  interface fa0/24
+  description BORNE-WIFI-ETG1
+  switchport mode trunk
+  switchport nonegotiate
+  switchport trunk native vlan 99
+  switchport trunk allowed vlan 10,20,99
+  spanning-tree portfast trunk
+  end
+cours: |
+  ## Une borne Wi-Fi, plusieurs VLAN
+
+  Une borne d'entreprise diffuse souvent plusieurs **SSID**, chacun associé à un VLAN : les
+  employés dans le VLAN interne, les visiteurs dans un VLAN isolé. Le câble vers le switch doit
+  donc transporter plusieurs VLAN : c'est un **trunk 802.1Q**, comme entre deux switchs.
+
+  La borne elle-même a une adresse de gestion. Beaucoup de bornes envoient ce trafic **sans
+  étiquette** : il arrive alors dans le **VLAN natif** du trunk. On choisit donc comme natif le
+  VLAN de gestion des bornes.
+
+  ### Configuration type (autres valeurs)
+
+  ```
+  SW1(config)# interface gi1/0/12
+  SW1(config-if)# description AP-HALL
+  SW1(config-if)# switchport mode trunk
+  SW1(config-if)# switchport nonegotiate
+  SW1(config-if)# switchport trunk native vlan 50
+  SW1(config-if)# switchport trunk allowed vlan 50,110,120
+  SW1(config-if)# spanning-tree portfast trunk
+  SW1# show interfaces gi1/0/12 trunk
+  Port        Mode   Encapsulation  Status    Native vlan
+  Gi1/0/12    on     802.1q         trunking  50
+  Port        Vlans allowed on trunk
+  Gi1/0/12    50,110,120
+  ```
+
+  - `nonegotiate` : la borne ne parle pas DTP, inutile d'envoyer ces trames ;
+  - limiter les **VLAN autorisés** : la borne ne doit recevoir ni la voix ni les VLAN serveurs ;
+  - `portfast trunk` : sans cela, le port reste ~30 s en écoute/apprentissage à chaque
+    redémarrage de la borne. PortFast ne doit être activé que vers un équipement **terminal**
+    (une borne, un serveur de virtualisation), jamais vers un switch.
+
+  ### Bornes autonomes et bornes gérées par contrôleur
+
+  - borne **autonome** ou en mode *FlexConnect* (commutation locale) : trunk, comme ici ;
+  - borne en mode **local** avec un contrôleur WLC : le trafic des clients est encapsulé dans un
+    tunnel **CAPWAP** vers le contrôleur ; un simple port **access** dans le VLAN des bornes
+    suffit.
+
+  ### Pièges fréquents
+
+  - VLAN natif différent entre la borne et le switch : la borne n'est plus joignable.
+  - VLAN autorisé oublié : un SSID fonctionne, l'autre donne des adresses APIPA.
+  - Alimentation : vérifier que le port fournit assez de PoE (`show power inline`).
+
+  ### Pour le CCNA
+
+  Le CCNA couvre les architectures Wi-Fi (autonome, contrôleur, CAPWAP) et la configuration des
+  ports de switch qui raccordent les bornes et le WLC.
+docs:
+  - title: Wikipédia — IEEE 802.1Q
+    url: https://fr.wikipedia.org/wiki/IEEE_802.1Q
+  - title: Wikipédia — Wi-Fi
+    url: https://fr.wikipedia.org/wiki/Wi-Fi

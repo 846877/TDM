@@ -1,0 +1,147 @@
+title: Penser récursif
+level: intermediaire
+order: 24
+tags: [récursivité, algorithmes]
+summary: Résoudre des problèmes en les découpant en sous-problèmes.
+description: |
+  Écris ces fonctions **récursivement** (sans boucle `for`/`while` pour les deux premières) :
+
+  1. `puissance(x, n)` : calcule `x ** n` pour `n ≥ 0` sans utiliser `**` ni `pow`, en
+     exploitant `x^n = (x^(n/2))²` quand `n` est pair (exponentiation rapide).
+  2. `somme_imbriquee(donnees)` : additionne tous les nombres d'une structure faite de listes
+     **et** de dictionnaires imbriqués (pour un dictionnaire, on additionne ses valeurs).
+  3. `permutations(texte)` : renvoie la liste **triée et sans doublons** de toutes les
+     permutations d'une chaîne (sans `itertools`).
+
+  ```python
+  puissance(2, 10)                             # 1024
+  somme_imbriquee([1, {"a": 2, "b": [3, 4]}])  # 10
+  permutations("aba")                          # ["aab", "aba", "baa"]
+  ```
+starter: |
+  def puissance(x, n):
+      pass
+
+
+  def somme_imbriquee(donnees):
+      pass
+
+
+  def permutations(texte):
+      pass
+tests: |
+  def test_puissance():
+      "Petites puissances"
+      assert solution.puissance(2, 10) == 1024
+      assert solution.puissance(3, 0) == 1, "x^0 vaut 1"
+      assert solution.puissance(5, 1) == 5
+      assert solution.puissance(-2, 3) == -8
+
+  def test_puissance_rapide():
+      "Grand exposant (il faut l'exponentiation rapide)"
+      r = solution.puissance(3, 5000)
+      assert r == 3 ** 5000, "résultat incorrect pour 3^5000"
+
+  def test_somme():
+      "Listes et dictionnaires imbriqués"
+      r = solution.somme_imbriquee([1, {"a": 2, "b": [3, 4]}])
+      assert r == 10, f"attendu 10, obtenu {r!r}"
+
+  def test_somme_profonde():
+      "Imbrication profonde et structures vides"
+      r = solution.somme_imbriquee({"x": [[[1.5]], {}, []], "y": {"z": {"w": 2}}})
+      assert r == 3.5, f"attendu 3.5, obtenu {r!r}"
+      assert solution.somme_imbriquee([]) == 0
+      assert solution.somme_imbriquee(7) == 7, "un nombre seul est sa propre somme"
+
+  def test_permutations():
+      "Permutations de abc"
+      r = solution.permutations("abc")
+      assert r == ["abc", "acb", "bac", "bca", "cab", "cba"], f"obtenu {r!r}"
+
+  def test_permutations_doublons():
+      "Sans doublons"
+      r = solution.permutations("aba")
+      assert r == ["aab", "aba", "baa"], f"obtenu {r!r}"
+
+  def test_permutations_bords():
+      "Chaîne d'un caractère et chaîne vide"
+      assert solution.permutations("z") == ["z"]
+      assert solution.permutations("") == [""]
+solution: |
+  def puissance(x, n):
+      if n == 0:
+          return 1
+      moitie = puissance(x, n // 2)
+      if n % 2 == 0:
+          return moitie * moitie
+      return moitie * moitie * x
+
+
+  def somme_imbriquee(donnees):
+      if isinstance(donnees, dict):
+          return sum(somme_imbriquee(v) for v in donnees.values())
+      if isinstance(donnees, list):
+          return sum(somme_imbriquee(v) for v in donnees)
+      return donnees
+
+
+  def permutations(texte):
+      if len(texte) <= 1:
+          return [texte]
+      resultat = set()
+      for i, c in enumerate(texte):
+          for reste in permutations(texte[:i] + texte[i + 1:]):
+              resultat.add(c + reste)
+      return sorted(resultat)
+cours: |
+  ## Penser « cas de base + réduction »
+
+  Pour écrire une fonction récursive, on suppose (par un acte de foi) que la fonction
+  **marche déjà** sur un problème plus petit, et on se demande comment en déduire la réponse
+  pour le problème courant.
+
+  ## Diviser pour régner
+
+  Réduire `n` de 1 à chaque appel donne n appels. Réduire `n` **de moitié** donne seulement
+  log₂(n) appels. Pour une puissance, la propriété `xⁿ = (x^(n/2))²` permet de calculer le
+  résultat de la moitié **une seule fois** puis de le mettre au carré. Le cas impair se
+  ramène au cas pair en sortant un facteur `x`. Attention à ne pas écrire deux appels
+  récursifs identiques (`f(n//2) * f(n//2)`), ce qui annulerait tout le gain : stocke le
+  résultat dans une variable.
+
+  Complexité : **O(log n)** multiplications au lieu de O(n). C'est l'algorithme utilisé par
+  `pow(a, b, m)` en cryptographie (RSA), sur des exposants de centaines de chiffres.
+
+  ## Récursion sur des structures hétérogènes
+
+  Quand une structure mélange plusieurs types de conteneurs, la fonction récursive teste le
+  type et agit en conséquence :
+
+  ```python
+  def profondeur(x):
+      if isinstance(x, dict):
+          x = list(x.values())
+      if isinstance(x, list):
+          return 1 + max((profondeur(e) for e in x), default=0)
+      return 0
+  ```
+
+  ## Énumérer des combinaisons
+
+  Pour générer toutes les permutations : on choisit chaque caractère possible comme
+  **premier**, puis on génère récursivement les permutations du **reste**, et on recolle.
+  Le cas de base est la chaîne de longueur 0 ou 1. Il y a n! permutations : 10 caractères
+  donnent déjà 3,6 millions de résultats.
+
+  Pour les doublons (`"aba"`), un `set` élimine les répétitions avant le tri final.
+
+  ## Limite de récursion
+
+  Python lève `RecursionError` au-delà d'environ 1000 appels imbriqués. Les algorithmes en
+  O(log n) n'ont pas ce problème.
+docs:
+  - title: Wikipédia — Exponentiation rapide
+    url: https://fr.wikipedia.org/wiki/Exponentiation_rapide
+  - title: Module sys (getrecursionlimit)
+    url: https://docs.python.org/fr/3/library/sys.html#sys.getrecursionlimit

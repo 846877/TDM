@@ -1,0 +1,193 @@
+title: Retour sur trace (backtracking)
+level: avance
+order: 38
+tags: [récursivité, backtracking, algorithmes]
+summary: Explorer un espace de solutions en construisant, testant et défaisant des choix.
+description: |
+  Écris trois fonctions par **retour sur trace** (sans `itertools`).
+
+  1. `parentheses(n)` renvoie la liste **triée** de toutes les chaînes de `n` paires de
+     parenthèses bien équilibrées. `parentheses(2)` → `["(())", "()()"]`, `parentheses(0)` →
+     `[""]`.
+  2. `remplir(fichiers, capacite)` : `fichiers` est un dictionnaire `{nom: taille}` (tailles
+     entières > 0). Renvoie la liste de toutes les combinaisons de fichiers (chaque fichier au
+     plus une fois) dont la taille totale vaut **exactement** `capacite`. Chaque combinaison
+     est une liste de noms **triée** ; la liste des combinaisons est triée. Elle doit rester
+     rapide pour une vingtaine de fichiers : élague les branches qui dépassent la capacité.
+  3. `chercher_mot(grille, mot)` : `grille` est une liste de chaînes de même longueur. Renvoie
+     `True` si `mot` peut s'écrire en partant d'une case et en se déplaçant d'une case à une
+     case **voisine** (haut, bas, gauche, droite), sans réutiliser une case. Un mot vide est
+     toujours trouvé.
+
+  ```python
+  remplir({"a": 3, "b": 5, "c": 2, "d": 8}, 10)   # [["a", "b", "c"], ["c", "d"]]
+  chercher_mot(["ABCE", "SFCS", "ADEE"], "ABCCED")  # True
+  chercher_mot(["ABCE", "SFCS", "ADEE"], "ABCB")    # False (B réutilisé)
+  ```
+starter: |
+  def parentheses(n):
+      pass
+
+
+  def remplir(fichiers, capacite):
+      pass
+
+
+  def chercher_mot(grille, mot):
+      pass
+tests: |
+  import time
+
+  def test_parentheses():
+      "parentheses"
+      assert solution.parentheses(0) == [""]
+      assert solution.parentheses(1) == ["()"]
+      assert solution.parentheses(2) == ["(())", "()()"]
+      assert solution.parentheses(3) == ["((()))", "(()())", "(())()", "()(())", "()()()"]
+      catalan = [1, 1, 2, 5, 14, 42, 132, 429, 1430, 4862, 16796]
+      assert len(solution.parentheses(10)) == catalan[10]
+
+  def test_remplir():
+      "remplir"
+      assert solution.remplir({"a": 3, "b": 5, "c": 2, "d": 8}, 10) == [["a", "b", "c"], ["c", "d"]]
+      assert solution.remplir({"x": 4, "y": 4}, 4) == [["x"], ["y"]]
+      assert solution.remplir({"x": 4}, 3) == []
+      assert solution.remplir({"x": 4, "y": 6}, 0) == [[]]
+
+  def test_remplir_rapide():
+      "remplir avec élagage"
+      fichiers = {f"f{i:02d}": 10 + 7 * i for i in range(24)}
+      debut = time.perf_counter()
+      r = solution.remplir(fichiers, 72)
+      assert time.perf_counter() - debut < 2, "trop lent : il faut élaguer"
+      assert r == [["f00", "f01", "f05"], ["f00", "f02", "f04"], ["f01", "f02", "f03"]], r
+
+  def test_chercher_mot():
+      "chercher_mot"
+      g = ["ABCE", "SFCS", "ADEE"]
+      assert solution.chercher_mot(g, "ABCCED")
+      assert solution.chercher_mot(g, "SEE")
+      assert not solution.chercher_mot(g, "ABCB")
+      assert solution.chercher_mot(g, "")
+      assert not solution.chercher_mot(g, "Z")
+      assert solution.chercher_mot(["A"], "A")
+      assert not solution.chercher_mot(["AA"], "AAA")
+
+  def test_chercher_mot_pas_en_diagonale():
+      "Pas de déplacement en diagonale"
+      assert not solution.chercher_mot(["AB", "CD"], "AD")
+      assert solution.chercher_mot(["AB", "CD"], "ABDC")
+solution: |
+  def parentheses(n):
+      resultats = []
+
+      def construire(prefixe, ouvertes, fermees):
+          if len(prefixe) == 2 * n:
+              resultats.append(prefixe)
+              return
+          if ouvertes < n:
+              construire(prefixe + "(", ouvertes + 1, fermees)
+          if fermees < ouvertes:
+              construire(prefixe + ")", ouvertes, fermees + 1)
+
+      construire("", 0, 0)
+      return sorted(resultats)
+
+
+  def remplir(fichiers, capacite):
+      elements = sorted(fichiers.items(), key=lambda kv: kv[1])
+      resultats = []
+      choix = []
+
+      def explorer(debut, reste):
+          if reste == 0:
+              resultats.append(sorted(choix))
+              return
+          for i in range(debut, len(elements)):
+              nom, taille = elements[i]
+              if taille > reste:
+                  break                      # trié : les suivants sont plus grands
+              choix.append(nom)
+              explorer(i + 1, reste - taille)
+              choix.pop()                    # on défait le choix
+
+      explorer(0, capacite)
+      return sorted(resultats)
+
+
+  def chercher_mot(grille, mot):
+      if not mot:
+          return True
+      hauteur, largeur = len(grille), len(grille[0]) if grille else 0
+      utilisees = set()
+
+      def depuis(l, c, k):
+          if not (0 <= l < hauteur and 0 <= c < largeur):
+              return False
+          if (l, c) in utilisees or grille[l][c] != mot[k]:
+              return False
+          if k == len(mot) - 1:
+              return True
+          utilisees.add((l, c))
+          trouve = any(depuis(l + dl, c + dc, k + 1) for dl, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+          utilisees.discard((l, c))
+          return trouve
+
+      return any(depuis(l, c, 0) for l in range(hauteur) for c in range(largeur))
+cours: |
+  ## Le principe
+
+  Le **retour sur trace** explore toutes les solutions possibles en construisant une solution
+  partielle pas à pas : à chaque étape, on essaie un choix, on **explore** récursivement la
+  suite, puis on **défait** ce choix pour essayer le suivant.
+
+  ```python
+  def explorer(etat):
+      if est_complet(etat):
+          noter(etat)
+          return
+      for choix in choix_possibles(etat):
+          if est_valide(etat, choix):
+              appliquer(etat, choix)
+              explorer(etat)
+              annuler(etat, choix)      # le « retour »
+  ```
+
+  Les N reines, le Sudoku, les mots croisés, la génération de combinaisons ou la résolution de
+  contraintes suivent tous ce schéma.
+
+  ## Élaguer, c'est tout
+
+  Sans précaution, l'arbre d'exploration est exponentiel : 2ⁿ sous-ensembles pour n
+  éléments. L'**élagage** consiste à abandonner une branche dès qu'on sait qu'elle ne peut
+  plus mener à une solution :
+
+  - les parenthèses : on n'ajoute `)` que s'il reste une `(` à fermer, ce qui évite de générer
+    puis rejeter des chaînes invalides ;
+  - la somme exacte : si les éléments sont **triés**, dès qu'un élément dépasse ce qui reste,
+    tous les suivants aussi, et on peut sortir de la boucle (`break`) ;
+  - un chemin dans une grille : on s'arrête à la première lettre qui ne correspond pas.
+
+  ## Éviter les doublons
+
+  Pour énumérer des **combinaisons** (l'ordre n'importe pas), on ne revient jamais en arrière
+  dans la liste : l'appel récursif repart de l'indice `i + 1`. Sinon `{a, b}` et `{b, a}`
+  seraient produits tous les deux.
+
+  ## État partagé et annulation
+
+  Utiliser une seule liste (`choix.append` / `choix.pop`) ou un seul ensemble de cases
+  visitées est bien plus efficace que de recopier l'état à chaque appel. Mais il faut alors
+  **copier** l'état au moment d'enregistrer une solution (`sorted(choix)` ou `choix[:]`),
+  sinon toutes les solutions enregistrées pointent vers la même liste, vide à la fin.
+
+  ## Limites
+
+  La récursion Python est limitée (environ 1000 niveaux, voir `sys.getrecursionlimit()`). La
+  profondeur d'un backtracking est généralement la taille d'une solution, ce qui reste
+  raisonnable.
+docs:
+  - title: Tutoriel — définir des fonctions
+    url: https://docs.python.org/fr/3/tutorial/controlflow.html
+  - title: Module sys (limite de récursion)
+    url: https://docs.python.org/fr/3/library/sys.html

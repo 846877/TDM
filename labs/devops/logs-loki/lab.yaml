@@ -1,0 +1,357 @@
+title: Journaux centralisés avec Loki
+level: intermediaire
+order: 11
+tags: [loki, alloy, logql, journaux, observabilité, grafana]
+summary: Centraliser des journaux avec Loki - démarrage, API d'envoi, collecte avec Grafana Alloy, labels, requêtes LogQL, métriques de journaux, rétention et export.
+build: .
+shell: bash
+workdir: /root
+setup: |
+  pgrep -x generer-logs.sh >/dev/null || setsid nohup /opt/boutique/generer-logs.sh >/dev/null 2>&1 < /dev/null &
+  sleep 1
+description: |
+  Un poste Ubuntu (tu es `root`) avec **Loki**, **logcli** et **Grafana Alloy**, installés dans
+  `/usr/local/bin`. Il n'y a pas de systemd : les services se lancent en arrière-plan, par exemple
+  `nohup loki -config.file=/etc/loki/loki.yaml > /var/log/loki.log 2>&1 &`.
+
+  L'application simulée **« boutique »** écrit en continu des journaux **JSON** dans
+  **`/var/log/boutique/app.log`** (champs `niveau`, `service`, `message`, `duree_ms`, `user`,
+  `requete_id`). Regarde-les : `tail -f /var/log/boutique/app.log`.
+
+  - Configuration de Loki : **`/etc/loki/loki.yaml`** (prête à l'emploi).
+  - Configuration d'Alloy : à écrire dans **`/etc/alloy/config.alloy`**.
+  - Tes requêtes LogQL : dans **`/root/requetes`** ; tes exports : dans **`/root/export`**.
+
+  `logcli` interroge Loki depuis le terminal : `logcli query --since=10m '{job="boutique"}'`.
+cours: |
+  ## Centraliser les journaux
+
+  Sur un serveur, on lit les journaux avec `tail` ou `journalctl`. Avec des dizaines de conteneurs qui
+  apparaissent et disparaissent, ce n'est plus possible : on **centralise** les journaux dans un système
+  qui les stocke, les indexe et permet de les interroger, de les corréler et d'alerter.
+
+  **Loki** (Grafana Labs) fait ce travail avec un parti pris : il n'indexe **pas le contenu** des lignes,
+  seulement un petit ensemble de **labels** (`job`, `service`, `level`…), comme Prometheus pour les
+  métriques. Les lignes sont compressées en *chunks* ; une requête choisit d'abord les flux par leurs
+  labels, puis filtre le texte. C'est économique, à condition de bien choisir ses labels.
+
+  ```
+   /var/log/boutique/app.log ──> Grafana Alloy ──push HTTP──> Loki :3100 ──> logcli / Grafana
+        (fichiers, journald,      (collecte,                   (stockage,       (requêtes LogQL,
+         conteneurs)               analyse, labels)             index des labels) tableaux, alertes)
+  ```
+
+  ### Flux et labels
+
+  Un **flux** (*stream*) est l'ensemble des lignes qui ont exactement les mêmes labels. Chaque
+  combinaison de valeurs crée un flux : un label à forte **cardinalité** (identifiant d'utilisateur, de
+  requête, adresse IP) crée des millions de petits flux et effondre les performances. Règle : des labels
+  aux valeurs **peu nombreuses et stables** ; le reste se filtre ou s'extrait à la requête.
+
+  ### La collecte
+
+  **Grafana Alloy** est le collecteur recommandé (Promtail, l'ancien agent, est en fin de vie). Sa
+  configuration décrit un graphe de **composants** reliés entre eux :
+
+  ```
+  local.file_match ──> loki.source.file ──> loki.process ──> loki.write ──> Loki
+   (quels fichiers)     (lecture, suivi)     (analyse JSON,    (envoi HTTP)
+                                              labels)
+  ```
+
+  D'autres sources existent : journald, conteneurs Docker, Kubernetes, syslog, et même OpenTelemetry.
+
+  ### LogQL en bref
+
+  | Élément | Exemple |
+  |---|---|
+  | sélecteur de flux | `{job="boutique", level="error"}` |
+  | filtre de ligne | `\|= "paiement"`, `!= "debug"`, `\|~ "time.?out"` |
+  | analyseur | `\| json`, `\| logfmt`, `\| pattern "<ip> - <_>"` |
+  | filtre de champ | `\| duree_ms > 500` |
+  | mise en forme | `\| line_format "{{.service}} {{.message}}"` |
+  | métrique | `count_over_time({...}[5m])`, `rate(...)`, `sum by (service) (...)` |
+
+  Une requête **de journaux** renvoie des lignes ; une requête **de métrique** transforme des lignes en
+  séries chiffrées, utilisables dans un tableau de bord ou une alerte (« plus de 10 erreurs de paiement
+  en 5 minutes »).
+
+  ### Pièges
+
+  - Trop de labels, ou des labels à forte cardinalité.
+  - Des journaux non structurés : préférez JSON ou logfmt, plus faciles à analyser.
+  - Une rétention non configurée : le disque se remplit.
+  - Des secrets ou des données personnelles dans les journaux : ils sont copiés partout.
+
+  ### Bonnes pratiques
+
+  Journaux structurés, horodatés et avec un niveau, labels peu nombreux, rétention adaptée aux
+  obligations, et corrélation avec les métriques et les traces (identifiant de requête commun).
+
+  ### Pour réviser
+
+  1. Pourquoi Loki n'indexe-t-il pas le contenu des lignes ?
+  2. Pourquoi `user` ne doit-il pas devenir un label ?
+  3. Quelle différence entre une requête de journaux et une requête de métrique ?
+  4. Quel composant de Loki applique la rétention, et comment vérifier qu'elle est active ?
+docs:
+  - title: Documentation de Loki
+    url: https://grafana.com/docs/loki/latest/
+  - title: Le langage LogQL
+    url: https://grafana.com/docs/loki/latest/query/
+  - title: API HTTP de Loki
+    url: https://grafana.com/docs/loki/latest/reference/loki-http-api/
+  - title: Documentation de Grafana Alloy
+    url: https://grafana.com/docs/alloy/latest/
+exercises:
+  - id: lk-demarrer
+    title: Démarrer Loki
+    description: |
+      Lis la configuration **`/etc/loki/loki.yaml`**, puis démarre Loki **en arrière-plan** avec ce fichier,
+      sa sortie redirigée vers **`/var/log/loki.log`**. Attends qu'il soit prêt :
+      `curl -s http://localhost:3100/ready` doit répondre `ready` (cela prend une quinzaine de secondes).
+    hint: "nohup loki -config.file=/etc/loki/loki.yaml > /var/log/loki.log 2>&1 &"
+    cours: |
+      Loki peut tourner en **binaire unique** (tous les composants dans un seul processus, idéal pour
+      apprendre et pour de petits volumes) ou en **microservices** (distributeur, ingesteur, interrogateur,
+      compacteur…) pour monter en charge.
+
+      La configuration décrit le port HTTP (**3100**), le stockage (ici le disque local ; en production, un
+      stockage objet comme S3), le **schéma** de l'index (`tsdb`, `v13`) et les **limites** (taille des
+      requêtes, rétention, âge maximal des lignes acceptées). `auth_enabled: false` désactive le mode
+      multi-locataire.
+
+      Sans gestionnaire de services, `nohup commande > fichier 2>&1 &` lance un processus qui survit à la
+      fermeture du terminal. Les points d'entrée `/ready` et `/metrics` servent aux sondes de santé et à la
+      supervision par Prometheus.
+    checks:
+      - desc: Loki est prêt
+        timeout: 90
+        run: |
+          for i in $(seq 1 40); do test "$(curl -s http://localhost:3100/ready)" = ready && exit 0; sleep 2; done; exit 1
+      - desc: Sa sortie est redirigée vers /var/log/loki.log
+        run: test -f /var/log/loki.log && ps -o args= -C loki | grep -q -- '-config.file=/etc/loki/loki.yaml'
+  - id: lk-push
+    title: Envoyer une ligne avec l'API
+    description: |
+      Sans collecteur, envoie toi-même à Loki une ligne de journal **`bonjour loki`** avec le label
+      **`job="test-manuel"`**, en appelant l'API **`POST /loki/api/v1/push`** avec `curl` (corps JSON,
+      horodatage en **nanosecondes**). Retrouve-la ensuite avec `logcli`.
+    hint: "curl -H 'Content-Type: application/json' -d '{\"streams\":[{\"stream\":{\"job\":\"test-manuel\"},\"values\":[[\"'$(date +%s%N)'\",\"bonjour loki\"]]}]}' http://localhost:3100/loki/api/v1/push"
+    cours: |
+      Tous les collecteurs (Alloy, Fluent Bit, Vector, le pilote Docker) finissent par appeler la même API :
+      **`POST /loki/api/v1/push`**. Le corps JSON contient des **flux** : chacun a ses labels (`stream`) et
+      une liste de valeurs `[horodatage, ligne]`. L'horodatage est une **chaîne** en nanosecondes depuis
+      1970 (`date +%s%N`).
+
+      Loki refuse les lignes trop anciennes (`reject_old_samples_max_age`) ou désordonnées au-delà d'une
+      certaine fenêtre : un horodatage faux est une cause fréquente de « lignes perdues ». Une réponse
+      **204** signifie que la ligne est acceptée.
+
+      Comprendre cette API permet d'envoyer des journaux depuis un script ou une tâche de CI, et de
+      déboguer un collecteur : l'interrogation se fait ensuite par `GET /loki/api/v1/query_range`, que
+      `logcli` appelle pour toi.
+    checks:
+      - desc: La ligne « bonjour loki » est stockée avec job="test-manuel"
+        run: |
+          logcli query --addr=http://localhost:3100 --quiet --output=raw --since=24h --limit=100 '{job="test-manuel"}' 2>/dev/null | grep -q 'bonjour loki'
+  - id: lk-alloy
+    title: Collecter les journaux avec Alloy
+    description: |
+      Écris **`/etc/alloy/config.alloy`** pour qu'Alloy lise **`/var/log/boutique/*.log`** et envoie les lignes
+      à Loki avec le label **`job="boutique"`**. Démarre ensuite Alloy en arrière-plan :
+      `nohup alloy run /etc/alloy/config.alloy --storage.path=/var/lib/alloy > /var/log/alloy.log 2>&1 &`.
+    hint: "local.file_match \"boutique\" { path_targets = [{\"__path__\" = \"/var/log/boutique/*.log\", \"job\" = \"boutique\"}] } ; loki.source.file \"boutique\" { targets = local.file_match.boutique.targets  forward_to = [loki.write.local.receiver] } ; loki.write \"local\" { endpoint { url = \"http://localhost:3100/loki/api/v1/push\" } }"
+    cours: |
+      La configuration d'Alloy est faite de **composants** : `type "nom" { arguments }`. Chacun exporte des
+      valeurs que d'autres utilisent, ce qui forme un graphe :
+      - **`local.file_match`** décrit les fichiers à suivre (`__path__`, accepte les jokers) et les labels
+        à leur associer ;
+      - **`loki.source.file`** lit ces fichiers, retient sa position (dans `--storage.path`) pour ne rien
+        relire ni perdre après un redémarrage, et transmet les lignes à ses destinataires (`forward_to`) ;
+      - **`loki.write`** envoie les lignes à l'API de Loki, par lots, en réessayant en cas d'erreur.
+
+      Les labels dont le nom commence par `__` sont internes et ne sont pas envoyés. `alloy fmt fichier`
+      vérifie la syntaxe ; l'interface web d'Alloy (port 12345) affiche le graphe et l'état de chaque
+      composant.
+    checks:
+      - desc: Les journaux de boutique arrivent dans Loki
+        timeout: 60
+        run: |
+          for i in $(seq 1 15); do n=$(logcli query --addr=http://localhost:3100 --quiet --output=raw --since=5m --limit=50 '{job="boutique"}' 2>/dev/null | grep -c '"niveau"'); test "${n:-0}" -gt 0 && exit 0; sleep 2; done; exit 1
+      - desc: Alloy utilise /etc/alloy/config.alloy
+        run: ps -o args= -C alloy | grep -q 'run /etc/alloy/config.alloy'
+  - id: lk-labels
+    title: Des labels utiles, sans excès
+    description: |
+      Complète la configuration d'Alloy avec un composant **`loki.process`** placé entre la source et
+      l'envoi, qui analyse chaque ligne **JSON** et ajoute deux labels :
+      - **`level`**, à partir du champ `niveau` ;
+      - **`service`**, à partir du champ `service`.
+
+      `user` et `requete_id` ne doivent **pas** devenir des labels. Redémarre Alloy (ou recharge-le :
+      `curl -X POST http://localhost:12345/-/reload`).
+    hint: "loki.process \"boutique\" { forward_to = [loki.write.local.receiver]  stage.json { expressions = { level = \"niveau\", service = \"\" } }  stage.labels { values = { level = \"\", service = \"\" } } } ; puis forward_to = [loki.process.boutique.receiver] dans la source"
+    cours: |
+      **`loki.process`** applique une suite d'**étapes** (*stages*) à chaque ligne avant l'envoi :
+      - `stage.json` extrait des champs d'une ligne JSON vers des valeurs temporaires ;
+      - `stage.labels` transforme certaines de ces valeurs en **labels** ;
+      - `stage.timestamp` utilise l'heure écrite dans la ligne plutôt que l'heure de lecture ;
+      - `stage.drop`, `stage.match`, `stage.replace`, `stage.structured_metadata`…
+
+      Le choix des labels est **la** décision importante avec Loki. `level` (3 valeurs) et `service` (3
+      valeurs) donnent au plus 9 flux : parfait pour sélectionner rapidement. `user` (500 valeurs) ou
+      `requete_id` (une valeur par ligne) créeraient des milliers de flux. Ces champs restent dans la ligne :
+      on les filtre à la requête avec `| json | user="u42"`, ou on les range dans les **métadonnées
+      structurées**, non indexées.
+    checks:
+      - desc: Le label level contient info, warn et error
+        timeout: 60
+        run: |
+          for i in $(seq 1 15); do v=$(curl -s 'http://localhost:3100/loki/api/v1/label/level/values?since=2m'); echo "$v" | grep -q '"error"' && echo "$v" | grep -q '"info"' && echo "$v" | grep -q '"warn"' && exit 0; sleep 2; done; exit 1
+      - desc: Le label service existe pour paiement
+        run: curl -s 'http://localhost:3100/loki/api/v1/label/service/values?since=5m' | grep -q '"paiement"'
+      - desc: Ni user ni requete_id ne sont des labels
+        run: |
+          l=$(curl -s 'http://localhost:3100/loki/api/v1/labels?since=1h') && echo "$l" | grep -q '"level"' && ! echo "$l" | grep -qE '"(user|requete_id)"'
+  - id: lk-filtre
+    title: Filtrer les lignes avec LogQL
+    description: |
+      Écris dans **`/root/requetes/erreurs-paiement.logql`** une requête LogQL qui renvoie uniquement les
+      lignes de `job="boutique"` de **niveau error** qui contiennent le mot **`paiement`**. Teste-la :
+      `logcli query --since=10m "$(cat /root/requetes/erreurs-paiement.logql)"`.
+    hint: "{job=\"boutique\", level=\"error\"} |= \"paiement\""
+    cours: |
+      Une requête LogQL commence toujours par un **sélecteur de flux** entre accolades : `{job="boutique"}`.
+      Les opérateurs `=`, `!=`, `=~` (expression régulière) et `!~` s'appliquent aux labels. Plus le
+      sélecteur est précis, moins Loki a de données à lire : utilise les labels dès que possible.
+
+      Viennent ensuite les **filtres de ligne**, appliqués au texte brut, dans l'ordre :
+      - `|= "texte"` : contient ;
+      - `!= "texte"` : ne contient pas ;
+      - `|~ "regex"` et `!~ "regex"` : expression régulière (syntaxe RE2).
+
+      Les filtres de ligne sont très rapides, car ils s'exécutent avant toute analyse. Une bonne requête
+      sélectionne avec les labels, réduit avec des filtres de ligne, et seulement ensuite analyse et filtre
+      sur des champs.
+    checks:
+      - desc: La requête renvoie des lignes, toutes de niveau error et sur le paiement
+        run: |
+          q=$(cat /root/requetes/erreurs-paiement.logql 2>/dev/null) && test -n "$q" && r=$(logcli query --addr=http://localhost:3100 --quiet --output=raw --since=15m --limit=500 "$q" 2>/dev/null) && test -n "$r" && ! echo "$r" | grep -v '"niveau":"error"' | grep -q . && ! echo "$r" | grep -v 'paiement' | grep -q .
+  - id: lk-json
+    title: Analyser le JSON et filtrer sur un champ
+    description: |
+      Les requêtes de plus de 500 ms sont trop lentes. Écris dans **`/root/requetes/lentes.logql`** une
+      requête qui renvoie les lignes de `job="boutique"` dont le champ **`duree_ms`** est **strictement
+      supérieur à 500**, en analysant les lignes avec l'analyseur **JSON** de LogQL.
+    hint: "{job=\"boutique\"} | json | duree_ms > 500"
+    cours: |
+      Les **analyseurs** extraient des champs de chaque ligne au moment de la requête : `| json` pour du
+      JSON, `| logfmt` pour `cle=valeur`, `| pattern` et `| regexp` pour du texte libre. Les champs extraits
+      deviennent des **labels temporaires**, utilisables dans des filtres : `| duree_ms > 500`,
+      `| service="paiement"`, `| user=~"u4.*"`. Les comparaisons numériques comprennent aussi les durées
+      (`> 500ms`) et les tailles (`> 1MB`).
+
+      C'est ce qui permet de garder peu de labels indexés tout en pouvant filtrer sur n'importe quel champ.
+      En contrepartie, l'analyse coûte du calcul : on réduit d'abord le volume avec le sélecteur et les
+      filtres de ligne.
+
+      `| line_format "{{.service}} {{.duree_ms}} ms"` réécrit la ligne affichée, et `| label_format` renomme
+      ou crée des labels.
+    checks:
+      - desc: La requête utilise l'analyseur json
+        run: grep -q '| *json' /root/requetes/lentes.logql
+      - desc: Elle renvoie des lignes, toutes au-dessus de 500 ms
+        run: |
+          r=$(logcli query --addr=http://localhost:3100 --quiet --output=raw --since=15m --limit=500 "$(cat /root/requetes/lentes.logql)" 2>/dev/null) && test -n "$r" && test -z "$(echo "$r" | jq -c 'select(.duree_ms <= 500)' 2>/dev/null)" && echo "$r" | head -1 | jq -e '.duree_ms > 500' >/dev/null
+  - id: lk-metrique
+    title: Des journaux aux métriques
+    description: |
+      Écris dans **`/root/requetes/erreurs-par-service.logql`** une requête **de métrique** qui donne, pour
+      chaque **service**, le **nombre de lignes de niveau error sur les 5 dernières minutes**.
+
+      Teste-la avec l'API : `curl -sG http://localhost:3100/loki/api/v1/query --data-urlencode
+      "query=$(cat /root/requetes/erreurs-par-service.logql)" | jq .data.result`.
+    hint: "sum by (service) (count_over_time({job=\"boutique\", level=\"error\"}[5m]))"
+    cours: |
+      Les **requêtes de métrique** transforment des lignes en nombres. On place une requête de journaux suivie
+      d'une **fenêtre** `[5m]` dans une fonction :
+      - `count_over_time(...)` : nombre de lignes dans la fenêtre ;
+      - `rate(...)` : lignes par seconde ;
+      - `bytes_over_time`, et avec `| unwrap duree_ms` : `avg_over_time`, `max_over_time`,
+        `quantile_over_time(0.95, ...)` pour exploiter une valeur numérique de la ligne.
+
+      Le résultat est une série par flux. Les **agrégations** de type Prometheus regroupent :
+      `sum by (service) (...)`, `topk(3, ...)`, `avg without (...)`.
+
+      Ces requêtes alimentent les tableaux de bord de Grafana et la **règle d'alerte** du composant *ruler*
+      de Loki : par exemple, alerter si `sum(rate({job="boutique", level="error"}[5m])) > 0.5`.
+    checks:
+      - desc: La requête renvoie une série par service, chacune avec une valeur
+        run: |
+          q=$(cat /root/requetes/erreurs-par-service.logql 2>/dev/null) && test -n "$q" && r=$(curl -sG http://localhost:3100/loki/api/v1/query --data-urlencode "query=$q") && echo "$r" | jq -e '.data.resultType == "vector" and (.data.result | length) == 3 and all(.data.result[]; (.metric | keys) == ["service"])' >/dev/null
+      - desc: Les valeurs correspondent bien aux erreurs (et pas à toutes les lignes)
+        run: |
+          q=$(cat /root/requetes/erreurs-par-service.logql) && e=$(curl -sG http://localhost:3100/loki/api/v1/query --data-urlencode "query=$q" | jq '[.data.result[].value[1] | tonumber] | add') && t=$(curl -sG http://localhost:3100/loki/api/v1/query --data-urlencode 'query=sum(count_over_time({job="boutique"}[5m]))' | jq '.data.result[0].value[1] | tonumber') && test "$(echo "$e $t" | awk '{print ($1 > 0 && $1 < $2 * 0.5)}')" = 1
+  - id: lk-retention
+    title: Limiter la durée de conservation
+    description: |
+      Par défaut, Loki ne supprime rien. Configure dans `/etc/loki/loki.yaml` une **rétention de 7 jours** :
+      - `retention_period: 168h` dans `limits_config` ;
+      - une section **`compactor`** avec `retention_enabled: true`, un dossier de travail
+        (`working_directory: /var/lib/loki/compactor`) et `delete_request_store: filesystem`.
+
+      Redémarre Loki pour appliquer la configuration (les données déjà reçues sont conservées).
+    hint: "Arrête Loki (pkill -x loki), édite le fichier, relance-le comme au premier exercice, puis vérifie avec curl -s localhost:3100/config | grep retention"
+    cours: |
+      Les journaux occupent vite beaucoup de place, et certaines données (personnelles notamment) ne doivent
+      pas être gardées indéfiniment. Dans Loki, la suppression des données anciennes est assurée par le
+      **compacteur** : il fusionne les index et, si `retention_enabled` est vrai, supprime les données plus
+      anciennes que `retention_period`. La rétention peut aussi être fixée par flux
+      (`retention_stream`), par exemple plus courte pour les journaux de débogage.
+
+      Le point d'entrée **`/config`** affiche la configuration effective, valeurs par défaut comprises
+      (les durées y sont normalisées : `168h` devient `1w`). C'est le moyen le plus sûr de vérifier qu'un
+      réglage a bien été pris en compte.
+
+      Avec un stockage objet, on peut aussi s'appuyer sur les règles de cycle de vie du compartiment, mais
+      la rétention de Loki garde l'index cohérent.
+    checks:
+      - desc: La rétention de 7 jours est active
+        timeout: 90
+        run: |
+          for i in $(seq 1 30); do c=$(curl -s http://localhost:3100/config) && echo "$c" | grep -Eq '^\s+retention_period: (1w|168h|7d)$' && exit 0; sleep 2; done; exit 1
+      - desc: Le compacteur applique la rétention
+        run: |
+          curl -s http://localhost:3100/config | awk '/^compactor:/{c=1;next} /^[a-z]/{c=0} c' | grep -Eq '^\s+retention_enabled: true$'
+      - desc: Loki est prêt et les journaux arrivent toujours
+        timeout: 90
+        run: |
+          for i in $(seq 1 30); do test "$(curl -s http://localhost:3100/ready)" = ready && logcli query --addr=http://localhost:3100 --quiet --output=raw --since=1m --limit=5 '{job="boutique"}' 2>/dev/null | grep -q niveau && exit 0; sleep 2; done; exit 1
+  - id: lk-export
+    title: Exporter des journaux avec logcli
+    description: |
+      L'équipe de développement veut les **100 dernières lignes d'erreur** pour les analyser. Avec `logcli`,
+      écris dans **`/root/export/erreurs.txt`** au plus 100 lignes de `job="boutique"` de niveau error,
+      **brutes** (le JSON d'origine, une ligne par entrée, sans horodatage ni labels ajoutés).
+    hint: "logcli query --since=1h --limit=100 --output=raw '{job=\"boutique\", level=\"error\"}' > /root/export/erreurs.txt"
+    cours: |
+      **logcli** est le client en ligne de commande de Loki : idéal pour les scripts, l'export ou le
+      dépannage sans interface graphique. Sous-commandes principales :
+      - `query` : requête de journaux ou de métrique sur une plage (`--since`, `--from`, `--to`), avec
+        `--limit` et `--forward` pour l'ordre ;
+      - `instant-query` : valeur d'une requête de métrique à un instant ;
+      - `labels` et `series` : explorer les labels et les flux existants.
+
+      L'option `--output` choisit le format : `default` (horodatage, labels et ligne), **`raw`** (la ligne
+      seule) ou `jsonl` (une entrée JSON par ligne). `--quiet` supprime les informations de requête
+      affichées sur la sortie d'erreur. L'adresse de Loki se donne par `--addr` ou la variable `LOKI_ADDR`.
+
+      Un export brut se retraite ensuite avec les outils habituels : `jq`, `grep`, `sort | uniq -c`.
+    checks:
+      - desc: erreurs.txt contient entre 1 et 100 lignes JSON
+        run: |
+          f=/root/export/erreurs.txt; n=$(grep -c . "$f" 2>/dev/null); test "${n:-0}" -ge 1 && test "$n" -le 100 && jq -e . "$f" >/dev/null 2>&1
+      - desc: Toutes sont de niveau error, sans préfixe ajouté
+        run: |
+          f=/root/export/erreurs.txt; test -s "$f" && ! grep -v '^{"ts":' "$f" | grep -q . && ! grep -v '"niveau":"error"' "$f" | grep -q .

@@ -1,0 +1,93 @@
+title: Niveaux de privilège
+level: debutant
+order: 25
+device: switch
+hostname: SW-ETAGE2
+tags: [privilège, username, sécurité]
+summary: Un compte de consultation qui peut lire la configuration sans la modifier.
+description: |
+  L'équipe d'astreinte doit pouvoir **lire** la configuration des switchs, mais pas la modifier.
+  IOS compte 16 niveaux : `1` (utilisateur) et `15` (tous les droits) par défaut, et les niveaux
+  `2` à `14` qu'on peut personnaliser.
+
+  1. crée le compte `astreinte`, niveau `5`, secret `Astr31nte!` ;
+  2. autorise le niveau 5 à afficher la configuration :
+     `privilege exec level 5 show running-config` ;
+  3. sur la console, demande identifiant et mot de passe (`login local`).
+
+  Avec `show privilege`, un utilisateur voit son niveau courant.
+checks:
+  - desc: Compte astreinte au niveau 5 avec un secret
+    expr: d.users.get("astreinte", {}).get("privilege") == 5 and "secret" in d.users.get("astreinte", {})
+    hint: "username astreinte privilege 5 secret Astr31nte!"
+  - desc: show running-config autorisé au niveau 5
+    expr: ("exec", 5, "show running-config") in d.privileges
+    hint: "privilege exec level 5 show running-config"
+  - desc: Console en authentification locale
+    expr: line("console").login == "local"
+solution: |
+  configure terminal
+  username astreinte privilege 5 secret Astr31nte!
+  privilege exec level 5 show running-config
+  line console 0
+  login local
+  end
+cours: |
+  ## Les niveaux de privilège d'IOS
+
+  Chaque commande IOS est associée à un **niveau de privilège** de 0 à 15, et chaque session
+  possède un niveau courant. On ne peut exécuter que les commandes de son niveau ou inférieures.
+
+  | Niveau | Par défaut                                                    |
+  |--------|---------------------------------------------------------------|
+  | 0      | quelques commandes (`logout`, `enable`, `exit`)               |
+  | 1      | mode utilisateur `>` : `ping`, `show` limités                 |
+  | 2 – 14 | vides : à personnaliser                                       |
+  | 15     | mode privilégié `#` : tout, y compris `configure terminal`    |
+
+  ### Attribuer un niveau
+
+  ```
+  SW1(config)# username lecteur privilege 7 secret L3cteur!
+  SW1(config)# privilege exec level 7 show running-config
+  SW1(config)# privilege exec level 7 show startup-config
+  SW1(config)# enable secret level 7 Niv7!Secret
+  SW1# show privilege
+  Current privilege level is 7
+  ```
+
+  - `username ... privilege N` : l'utilisateur arrive directement au niveau N après `login local` ;
+  - `privilege <mode> level N <commande>` déplace une commande vers le niveau N (`exec` pour le
+    mode privilégié, `configure` pour la configuration globale, `interface`...) ;
+  - `enable N` permet de monter à un niveau donné avec le mot de passe de ce niveau.
+
+  ### Le piège de `show running-config`
+
+  Un utilisateur de niveau intermédiaire qui affiche `show running-config` ne voit que les lignes
+  de configuration qu'il aurait le **droit de taper**. S'il n'a aucune commande de configuration,
+  la sortie est presque vide ! Pour une consultation complète, on préfère souvent
+  `show running-config view full` (IOS récents) ou un compte RADIUS/TACACS+ avec autorisation
+  commande par commande.
+
+  ### Aller plus loin : AAA
+
+  Les niveaux de privilège locaux deviennent vite difficiles à maintenir sur des dizaines
+  d'équipements. En entreprise, on centralise avec **AAA** et un serveur **TACACS+** qui autorise
+  chaque commande et en garde la trace (niveau avancé).
+
+  ### Pièges fréquents
+
+  - Donner `privilege 15` à tout le monde « pour simplifier ».
+  - Déplacer une commande d'un mot (`privilege exec level 5 show`) : tous les `show` passent au
+    niveau 5, y compris ceux du niveau 1 qui deviennent inaccessibles aux autres.
+  - Oublier `login local` : les comptes ne sont pas utilisés sur la ligne.
+
+  ### Pour le CCNA
+
+  Retenir les niveaux 1 et 15, la commande `username ... privilege` et le principe du **moindre
+  privilège** : chacun n'a que les droits nécessaires à son travail.
+docs:
+  - title: Cisco IOS — documentation de référence des commandes
+    url: https://www.cisco.com/c/en/us/support/ios-nx-os-software/ios-15-4m-t/products-command-reference-list.html
+  - title: Wikipédia — Cisco IOS
+    url: https://fr.wikipedia.org/wiki/Cisco_IOS

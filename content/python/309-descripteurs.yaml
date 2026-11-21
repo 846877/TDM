@@ -1,0 +1,281 @@
+title: Descripteurs de validation
+level: expert
+order: 9
+tags: [descripteurs, POO avancée, __set_name__]
+summary: Le mécanisme caché derrière property, et comment s'en servir.
+description: |
+  Un **descripteur** est un objet placé comme attribut de classe qui intercepte l'accès à l'attribut
+  sur les instances via `__get__`, `__set__` et `__delete__`. C'est ce qu'utilisent `property`,
+  les méthodes et `functools.cached_property`.
+
+  1. **`Entier(minimum=None, maximum=None)`** — descripteur de données :
+     - n'accepte que des `int` (mais **pas** `bool`) → sinon `TypeError` ;
+     - hors bornes → `ValueError` ;
+     - les messages d'erreur contiennent le **nom de l'attribut** : utilise `__set_name__` ;
+     - la valeur est stockée dans le `__dict__` de l'instance ;
+     - lire l'attribut avant de l'avoir défini lève `AttributeError` ;
+     - accédé depuis la classe (`Produit.stock`), il renvoie le descripteur lui-même.
+
+  2. **`Texte(longueur_max=None, non_vide=False)`** — même principe pour les `str` :
+     `TypeError` si ce n'est pas une chaîne, `ValueError` si trop longue ou vide alors que `non_vide=True`.
+
+     Factorise ce qui est commun dans une classe de base `Champ`.
+
+  3. **`ProprieteCachee(fonction)`** — descripteur **sans** `__set__` (*non-data descriptor*), utilisable
+     comme décorateur : la méthode est calculée au premier accès, puis le résultat est rangé dans le
+     `__dict__` de l'instance sous le même nom. Comme un descripteur sans `__set__` passe **après** le
+     `__dict__` de l'instance, les accès suivants ne l'appellent plus ; `del obj.attribut` force un
+     nouveau calcul.
+
+  ```python
+  class Produit:
+      nom = Texte(longueur_max=20, non_vide=True)
+      stock = Entier(minimum=0)
+
+      def __init__(self, nom, stock):
+          self.nom, self.stock = nom, stock
+
+      @ProprieteCachee
+      def code(self):
+          return self.nom.upper()[:3]
+
+  p = Produit("clavier", 3)
+  p.stock = -1      # ValueError: stock doit être >= 0
+  ```
+starter: |
+  class Champ:
+      pass
+
+
+  class Entier(Champ):
+      def __init__(self, minimum=None, maximum=None):
+          pass
+
+
+  class Texte(Champ):
+      def __init__(self, longueur_max=None, non_vide=False):
+          pass
+
+
+  class ProprieteCachee:
+      def __init__(self, fonction):
+          pass
+tests: |
+  def fabriquer():
+      class Produit:
+          nom = solution.Texte(longueur_max=10, non_vide=True)
+          stock = solution.Entier(minimum=0, maximum=1000)
+          note = solution.Entier()
+          calculs = 0
+
+          def __init__(self, nom, stock):
+              self.nom = nom
+              self.stock = stock
+
+          @solution.ProprieteCachee
+          def code(self):
+              type(self).calculs += 1
+              return self.nom.upper()[:3]
+      return Produit
+
+  def leve(exception, appel, mot=None):
+      try:
+          appel()
+      except exception as exc:
+          if mot:
+              assert mot in str(exc), f"le message {str(exc)!r} doit mentionner {mot!r}"
+      else:
+          raise AssertionError(f"{exception.__name__} attendue")
+
+  def test_valeurs():
+      "Lecture et écriture valides"
+      P = fabriquer()
+      p = P("clavier", 3)
+      assert p.nom == "clavier" and p.stock == 3
+      p.stock = 1000
+      assert p.stock == 1000
+
+  def test_stockage_instance():
+      "Valeurs stockées dans l'instance (pas partagées)"
+      P = fabriquer()
+      a, b = P("a", 1), P("b", 2)
+      assert (a.stock, b.stock) == (1, 2), "les valeurs sont partagées entre instances !"
+      assert a.__dict__.get("stock") == 1, "la valeur doit être rangée dans le __dict__ de l'instance"
+
+  def test_types():
+      "Types refusés (bool n'est pas un entier)"
+      P = fabriquer()
+      p = P("a", 1)
+      leve(TypeError, lambda: setattr(p, "stock", "3"), "stock")
+      leve(TypeError, lambda: setattr(p, "stock", True), "stock")
+      leve(TypeError, lambda: setattr(p, "nom", 42), "nom")
+
+  def test_bornes():
+      "Bornes et contraintes de texte"
+      P = fabriquer()
+      p = P("a", 1)
+      leve(ValueError, lambda: setattr(p, "stock", -1), "stock")
+      leve(ValueError, lambda: setattr(p, "stock", 1001), "stock")
+      leve(ValueError, lambda: setattr(p, "nom", ""), "nom")
+      leve(ValueError, lambda: setattr(p, "nom", "x" * 11), "nom")
+      leve(ValueError, lambda: P("ok", -5))
+      p.note = -10**9
+      assert p.note == -10**9, "sans bornes, tout entier est accepté"
+
+  def test_non_defini():
+      "Attribut non défini : AttributeError"
+      P = fabriquer()
+      p = P("a", 1)
+      leve(AttributeError, lambda: p.note)
+
+  def test_acces_classe():
+      "Accès depuis la classe : le descripteur"
+      P = fabriquer()
+      assert isinstance(P.stock, solution.Entier) and isinstance(P.stock, solution.Champ)
+      assert isinstance(P.nom, solution.Texte) and isinstance(P.nom, solution.Champ)
+
+  def test_cache():
+      "ProprieteCachee calcule une seule fois"
+      P = fabriquer()
+      p = P("clavier", 1)
+      assert p.code == "CLA" and p.code == "CLA"
+      assert P.calculs == 1, f"{P.calculs} calculs (attendu 1)"
+      assert p.__dict__.get("code") == "CLA", "le résultat doit être rangé dans le __dict__ de l'instance"
+
+  def test_cache_invalidation():
+      "del force un nouveau calcul"
+      P = fabriquer()
+      p = P("clavier", 1)
+      p.code
+      p.nom = "souris"
+      assert p.code == "CLA"
+      del p.code
+      assert p.code == "SOU" and P.calculs == 2
+
+  def test_cache_non_data():
+      "ProprieteCachee est un descripteur sans __set__"
+      assert not hasattr(solution.ProprieteCachee, "__set__"), "pas de __set__ : c'est le __dict__ qui doit prendre le relais"
+      P = fabriquer()
+      assert isinstance(P.code, solution.ProprieteCachee)
+solution: |
+  class Champ:
+      def __set_name__(self, proprietaire, nom):
+          self.nom = nom
+
+      def __get__(self, instance, proprietaire=None):
+          if instance is None:
+              return self
+          try:
+              return instance.__dict__[self.nom]
+          except KeyError:
+              raise AttributeError(f"{self.nom} n'est pas défini") from None
+
+      def __set__(self, instance, valeur):
+          self.valider(valeur)
+          instance.__dict__[self.nom] = valeur
+
+      def valider(self, valeur):
+          pass
+
+
+  class Entier(Champ):
+      def __init__(self, minimum=None, maximum=None):
+          self.minimum, self.maximum = minimum, maximum
+
+      def valider(self, valeur):
+          if not isinstance(valeur, int) or isinstance(valeur, bool):
+              raise TypeError(f"{self.nom} doit être un entier")
+          if self.minimum is not None and valeur < self.minimum:
+              raise ValueError(f"{self.nom} doit être >= {self.minimum}")
+          if self.maximum is not None and valeur > self.maximum:
+              raise ValueError(f"{self.nom} doit être <= {self.maximum}")
+
+
+  class Texte(Champ):
+      def __init__(self, longueur_max=None, non_vide=False):
+          self.longueur_max, self.non_vide = longueur_max, non_vide
+
+      def valider(self, valeur):
+          if not isinstance(valeur, str):
+              raise TypeError(f"{self.nom} doit être une chaîne")
+          if self.non_vide and not valeur:
+              raise ValueError(f"{self.nom} ne doit pas être vide")
+          if self.longueur_max is not None and len(valeur) > self.longueur_max:
+              raise ValueError(f"{self.nom} dépasse {self.longueur_max} caractères")
+
+
+  class ProprieteCachee:
+      def __init__(self, fonction):
+          self.fonction = fonction
+          self.nom = fonction.__name__
+          self.__doc__ = fonction.__doc__
+
+      def __set_name__(self, proprietaire, nom):
+          self.nom = nom
+
+      def __get__(self, instance, proprietaire=None):
+          if instance is None:
+              return self
+          valeur = self.fonction(instance)
+          instance.__dict__[self.nom] = valeur
+          return valeur
+cours: |
+  ## Le protocole des descripteurs
+
+  Un descripteur est un objet, placé comme **attribut de classe**, qui définit au moins une
+  des méthodes `__get__`, `__set__` ou `__delete__`. Quand on accède à `instance.attr`,
+  Python trouve le descripteur dans la classe et lui délègue l'opération.
+
+  ```python
+  class Positif:
+      def __set_name__(self, proprietaire, nom):
+          self.nom = nom                       # appelé à la création de la classe
+
+      def __get__(self, instance, proprietaire):
+          if instance is None:
+              return self                      # accès depuis la classe
+          return instance.__dict__[self.nom]
+
+      def __set__(self, instance, valeur):
+          if valeur <= 0:
+              raise ValueError(f"{self.nom} doit être positif")
+          instance.__dict__[self.nom] = valeur
+
+  class Disque:
+      taille_go = Positif()
+      def __init__(self, taille_go):
+          self.taille_go = taille_go           # passe par Positif.__set__
+  ```
+
+  ## Données ou non-données
+
+  Un descripteur qui définit `__set__` (ou `__delete__`) est un descripteur **de données** :
+  il a priorité sur le `__dict__` de l'instance. Sinon (seulement `__get__`), le `__dict__`
+  de l'instance gagne : c'est ainsi que fonctionnent les méthodes et
+  `functools.cached_property`. Comme notre descripteur de données a priorité, stocker la
+  valeur dans `instance.__dict__` **sous le même nom** ne crée pas de conflit.
+
+  ## Un descripteur, plusieurs instances
+
+  Le descripteur est **partagé** par toutes les instances de la classe : ne stocke jamais la
+  valeur sur `self` (le descripteur), sinon toutes les instances partageraient la même
+  valeur. On la stocke dans l'instance.
+
+  ## `__set_name__`
+
+  Python appelle `__set_name__(classe, nom)` au moment de la création de la classe : le
+  descripteur apprend sous quel nom il a été placé, sans qu'on ait à le répéter.
+
+  ## Héritage entre descripteurs
+
+  Une classe de base peut gérer stockage, lecture et messages d'erreur, et les sous-classes
+  ne définissent qu'une méthode de validation : pas de duplication.
+
+  `property`, `classmethod`, `staticmethod` et les méthodes elles-mêmes sont des
+  descripteurs : comprendre ce protocole, c'est comprendre comment fonctionne l'accès aux
+  attributs en Python.
+docs:
+  - title: HOWTO — guide des descripteurs
+    url: https://docs.python.org/fr/3/howto/descriptor.html
+  - title: Référence — implémentation de descripteurs
+    url: https://docs.python.org/fr/3/reference/datamodel.html#implementing-descriptors

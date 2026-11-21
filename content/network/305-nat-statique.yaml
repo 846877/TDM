@@ -1,0 +1,110 @@
+title: Publier des serveurs avec le NAT statique
+level: expert
+order: 5
+device: router
+hostname: R-EDGE
+tags: [nat, nat statique, pat, acl nommée]
+summary: Rendre le site web et la messagerie joignables depuis Internet.
+description: |
+  L'entreprise dispose du bloc public `203.0.113.0/29` sur `G0/1` (`203.0.113.2`). Le LAN
+  `192.168.1.0/24` est derrière `G0/0`.
+
+  1. déclare les interfaces NAT `inside` (`G0/0`) et `outside` (`G0/1`) ;
+  2. **NAT statique** du serveur web : `192.168.1.10` ↔ `203.0.113.5`
+     (`ip nat inside source static 192.168.1.10 203.0.113.5`) ;
+  3. **redirection de port** pour la messagerie : TCP `25` de `203.0.113.6` vers `192.168.1.20` port `25`
+     (`ip nat inside source static tcp 192.168.1.20 25 203.0.113.6 25`) ;
+  4. le reste du LAN sort en **PAT** sur l'adresse de `G0/1` : ACL standard nommée `NAT-LAN`
+     autorisant `192.168.1.0/24`, puis
+     `ip nat inside source list NAT-LAN interface g0/1 overload`.
+
+  Contrôle avec `show ip nat translations`.
+initial: |
+  interface g0/0
+  ip address 192.168.1.1 255.255.255.0
+  no shutdown
+  interface g0/1
+  ip address 203.0.113.2 255.255.255.248
+  no shutdown
+  ip route 0.0.0.0 0.0.0.0 203.0.113.1
+checks:
+  - desc: G0/0 inside, G0/1 outside
+    expr: intf("g0/0").nat == "inside" and intf("g0/1").nat == "outside"
+  - desc: NAT statique 192.168.1.10 ↔ 203.0.113.5
+    expr: nat("ip nat inside source static 192.168.1.10 203.0.113.5")
+  - desc: Redirection TCP 25 vers 192.168.1.20
+    expr: nat("ip nat inside source static tcp 192.168.1.20 25 203.0.113.6 25")
+    hint: "ip nat inside source static tcp 192.168.1.20 25 203.0.113.6 25"
+  - desc: ACL NAT-LAN autorisant 192.168.1.0/24
+    expr: '"permit 192.168.1.0 0.0.0.255" in acl("NAT-LAN")'
+  - desc: PAT du LAN sur l'interface G0/1
+    expr: nat("ip nat inside source list NAT-LAN interface g0/1 overload")
+solution: |
+  configure terminal
+  interface g0/0
+  ip nat inside
+  interface g0/1
+  ip nat outside
+  exit
+  ip nat inside source static 192.168.1.10 203.0.113.5
+  ip nat inside source static tcp 192.168.1.20 25 203.0.113.6 25
+  ip access-list standard NAT-LAN
+  permit 192.168.1.0 0.0.0.255
+  exit
+  ip nat inside source list NAT-LAN interface g0/1 overload
+  end
+cours: |
+  ## Rendre un serveur joignable depuis Internet
+
+  Le PAT permet aux postes internes de **sortir**, mais il ne permet pas à un client d'Internet
+  d'**entrer** : le routeur ne sait pas vers quel poste envoyer une connexion qu'il n'a pas vu
+  partir. Pour publier un serveur, on crée une traduction **permanente** :
+
+  - **NAT statique** un pour un : une adresse publique entière est associée à une adresse
+    privée (tous les ports) ;
+  - **redirection de port** (*port forwarding*, PAT statique) : un seul port d'une adresse
+    publique est redirigé vers un serveur interne. Plusieurs serveurs peuvent ainsi partager une
+    adresse publique sur des ports différents.
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# ip nat inside source static 172.16.100.80 198.51.100.10
+  R1(config)# ip nat inside source static tcp 172.16.100.25 25 198.51.100.11 25
+  R1(config)# ip nat inside source static tcp 172.16.100.30 443 198.51.100.11 8443
+  R1(config)# ip access-list standard LAN-SORTIE
+  R1(config-std-nacl)# permit 172.16.0.0 0.0.255.255
+  R1(config)# ip nat inside source list LAN-SORTIE interface gi0/2 overload
+  R1# show ip nat translations
+  Pro Inside global       Inside local        Outside local  Outside global
+  --- 198.51.100.10       172.16.100.80       ---            ---
+  tcp 198.51.100.11:25    172.16.100.25:25    ---            ---
+  ```
+
+  Les traductions statiques apparaissent **en permanence** dans la table, même sans trafic. Elles
+  coexistent avec le PAT des postes.
+
+  ### Sécurité
+
+  Publier un serveur l'expose à tout Internet. On l'accompagne :
+
+  - d'une ACL d'entrée (ou d'un pare-feu) qui n'autorise que le port publié ;
+  - d'un placement du serveur en **DMZ**, séparée du LAN interne ;
+  - de la mise à jour régulière du service exposé.
+
+  ### Pièges fréquents
+
+  - Oublier `ip nat inside` / `outside` sur les interfaces.
+  - Utiliser comme adresse statique l'adresse de l'interface WAN déjà utilisée par le PAT
+    (possible seulement avec des redirections de ports).
+  - Tester depuis le LAN avec l'adresse publique : le *hairpinning* n'est pas pris en charge par
+    défaut.
+
+  ### Pour le CCNA
+
+  Le NAT statique et sa différence avec le NAT dynamique et le PAT sont au programme.
+docs:
+  - title: "Cisco — NAT Frequently Asked Questions"
+    url: https://www.cisco.com/c/en/us/support/docs/ip/network-address-translation-nat/26704-nat-faq-00.html
+  - title: "Wikipédia — Network address translation"
+    url: https://fr.wikipedia.org/wiki/Network_address_translation

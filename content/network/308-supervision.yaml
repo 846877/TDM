@@ -1,0 +1,107 @@
+title: Supervision SNMP, syslog et NTP
+level: expert
+order: 8
+device: router
+hostname: R-CORE
+tags: [snmp, syslog, ntp, acl, supervision]
+summary: Raccorder un routeur à la plateforme de supervision, sans laisser de faille.
+description: |
+  La plateforme de supervision (`10.0.0.30`) interroge les équipements en SNMP. Sur `R-CORE`,
+  un prestataire a laissé une communauté `public` en **lecture-écriture** : n'importe qui
+  pourrait modifier la configuration !
+
+  1. supprime la communauté `public` ;
+  2. ACL standard nommée `SNMP-NMS` qui n'autorise que l'hôte `10.0.0.30` ;
+  3. communauté `Tdm-M0nit` en **lecture seule** limitée par cette ACL :
+     `snmp-server community Tdm-M0nit RO SNMP-NMS` ;
+  4. `snmp-server location Lyon-Salle-Serveur` et `snmp-server contact noc@tdm.local` ;
+  5. syslog vers `10.0.0.20` au niveau `informational` ;
+  6. NTP vers `10.0.0.10`, fuseau `CET 1`.
+initial: |
+  interface g0/0
+  ip address 10.0.0.1 255.255.255.0
+  no shutdown
+  snmp-server community public RW
+checks:
+  - desc: Communauté public supprimée
+    expr: '"public" not in d.snmp_communities'
+    hint: "no snmp-server community public"
+  - desc: ACL SNMP-NMS limitée à l'hôte 10.0.0.30
+    expr: acl("SNMP-NMS") in (["permit host 10.0.0.30"], ["permit 10.0.0.30 0.0.0.0"], ["permit 10.0.0.30"])
+  - desc: Communauté Tdm-M0nit en lecture seule, filtrée par SNMP-NMS
+    expr: d.snmp_communities.get("Tdm-M0nit") == ("RO", "SNMP-NMS")
+  - desc: Emplacement et contact renseignés
+    expr: d.snmp_location == "Lyon-Salle-Serveur" and d.snmp_contact == "noc@tdm.local"
+  - desc: Syslog vers 10.0.0.20 au niveau informational
+    expr: '"10.0.0.20" in d.logging_hosts and d.logging_trap == "informational"'
+  - desc: NTP 10.0.0.10 et fuseau CET 1
+    expr: '"10.0.0.10" in d.ntp_servers and d.clock_timezone == ("CET", 1)'
+solution: |
+  configure terminal
+  no snmp-server community public
+  ip access-list standard SNMP-NMS
+  permit host 10.0.0.30
+  exit
+  snmp-server community Tdm-M0nit RO SNMP-NMS
+  snmp-server location Lyon-Salle-Serveur
+  snmp-server contact noc@tdm.local
+  logging host 10.0.0.20
+  logging trap informational
+  ntp server 10.0.0.10
+  clock timezone CET 1
+  end
+cours: |
+  ## Superviser sans ouvrir de faille
+
+  Un équipement supervisé informe la plateforme de son état par trois canaux :
+
+  - **SNMP** : la plateforme interroge l'équipement (UDP 161) et reçoit ses alertes (traps,
+    UDP 162) ; elle lit les compteurs d'interfaces, le processeur, la mémoire ;
+  - **syslog** : l'équipement envoie ses messages (UDP 514) ;
+  - **NTP** : pour que tout soit horodaté de façon cohérente.
+
+  ### SNMPv2c : les communautés
+
+  En v1/v2c, l'accès est protégé par une **communauté**, un simple mot de passe transmis en
+  clair. Les valeurs par défaut `public` (lecture) et `private` (écriture) sont les premières
+  testées par les attaquants. Règles :
+
+  - supprimer les communautés par défaut ;
+  - **lecture seule** (`RO`) uniquement ;
+  - limiter les clients autorisés par une **ACL** ;
+  - passer à SNMPv3 dès que possible (authentification et chiffrement).
+
+  ### Configuration (autres valeurs)
+
+  ```
+  R1(config)# no snmp-server community public
+  R1(config)# ip access-list standard SUPERVISEURS
+  R1(config-std-nacl)# permit host 172.16.100.60
+  R1(config)# snmp-server community Sup3rv-Lect RO SUPERVISEURS
+  R1(config)# snmp-server location Nantes-Baie-B2
+  R1(config)# snmp-server contact reseau@exemple.lan
+  R1(config)# logging host 172.16.100.61
+  R1(config)# logging trap notifications
+  R1(config)# ntp server 172.16.100.1
+  R1(config)# clock timezone CET 1
+  R1# show snmp community
+  R1# show logging | include Logging to
+  ```
+
+  `location` et `contact` apparaissent dans l'outil de supervision et aident l'astreinte à
+  savoir où intervenir et qui prévenir.
+
+  ### Pièges fréquents
+
+  - Une communauté `RW` : quiconque la connaît peut modifier la configuration.
+  - Oublier l'ACL : n'importe qui peut interroger l'équipement.
+  - `logging trap debugging` : le serveur est inondé.
+
+  ### Pour le CCNA
+
+  SNMP (gestionnaire, agent, MIB, versions), syslog et NTP sont au programme des services IP.
+docs:
+  - title: "Wikipédia — Simple Network Management Protocol"
+    url: https://fr.wikipedia.org/wiki/Simple_Network_Management_Protocol
+  - title: "RFC 5424 — The Syslog Protocol"
+    url: https://www.rfc-editor.org/rfc/rfc5424
